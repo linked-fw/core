@@ -195,6 +195,34 @@ export const {
 } = linkedPackage('my-package-name');
 ```
 
+### Package identity and canonical Shape ownership
+
+An externally owned package keeps its owner-controlled npm name and URI root when another
+application installs or hosts it. For example:
+
+```typescript
+export const {linkedShape, packageName} = linkedPackage(
+  '@serve.earth/schedule',
+  {baseUri: 'https://id.serve.earth/'},
+);
+```
+
+The trailing slash is part of the `baseUri` contract. Linked derives the package IRI
+`https://id.serve.earth/pkg/schedule` and Shape IRIs such as
+`https://id.serve.earth/shape/schedule/AssignmentShape`. Moving or hosting the source in Create
+Now does not re-mint those identities.
+
+Each Shape has one registration authority: exactly one owning module applies that package's
+`@linkedShape`. Consumers import or re-export that class; they never copy and redecorate a twin.
+For cross-package properties:
+
+- `class: {id: canonicalClassIri}` is the durable RDF `sh:class` contract.
+- `shape: ImportedShape` or `shape: [packageName, shapeName]` additionally applies the owner's
+  `sh:node` validation when that package is an intentional dependency.
+
+Tuple Shape lookup depends on the owner's registered package configuration being loaded. It is not
+a reason to manufacture a local Shape twin. Class IRIs remain the stable semantic boundary.
+
 **Decorators and helpers**
 - `@linkedShape`: registers a Shape class and generates SHACL shape metadata
 - `@linkedUtil`: exposes utilities to other Linked modules
@@ -205,7 +233,9 @@ export const {
 
 ## Shapes
 
-Linked uses Shape classes to generate SHACL metadata. Paths, target classes, and node kinds are expressed as `NodeReferenceValue` objects: `{id: string}`.
+Linked uses the [single owning Shape registration](#package-identity-and-canonical-shape-ownership)
+to generate SHACL metadata. Paths, target classes, and node kinds are expressed as
+`NodeReferenceValue` objects: `{id: string}`.
 
 ```typescript
 import {Shape} from '@_linked/core';
@@ -364,7 +394,14 @@ Each store class must accept a single config-object argument (`new StoreClass(co
 
 ## Automatic data validation
 
-SHACL shapes are ideal for data validation. Linked generates SHACL shapes from your TypeScript Shape classes, which you can sync to your store for schema-level validation. When your store enforces those shapes at runtime, you get both schema validation and runtime enforcement for extra safety.
+SHACL shapes are ideal for data validation. The decorated TypeScript Shape is the canonical
+structural definition. `syncShape`/`syncShapes` materializes its pure `sh:NodeShape` into the target
+application dataset as an idempotently rebuildable validation and query projection. Do not keep an
+independently hand-authored TTL schema beside the decorators.
+
+Domain instances, policy, and configuration remain graph-canonical RDF. Materialized SHACL is not a
+second schema authority, and a consuming package must follow the
+[single-registration rule](#package-identity-and-canonical-shape-ownership).
 
 ## Schema-Parameterized Query DSL
 
