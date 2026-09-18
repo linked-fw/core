@@ -7,7 +7,7 @@
   "description": "Linked.js core query and SHACL shape DSL (copy-then-prune baseline)",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/linked-cm/core.git"
+    "url": "git+https://github.com/linked-fw/core.git"
   },
   "main": "lib/esm/index.js",
   "module": "lib/esm/index.js",
