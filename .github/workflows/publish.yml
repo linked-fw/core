@@ -1,271 +1,30 @@
+# Calls the shared workflow in linked-fw/.github.
+#
+# This FILENAME is what npm's trusted-publisher check validates — not the shared workflow's.
+# Renaming this file invalidates this package's trusted publisher, and the only symptom is
+# that releases quietly start needing manual approval again.
 name: Publish
 
 on:
   push:
     branches:
       - main
-      - dev
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
   release:
-    name: Publish Stable Release
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    uses: linked-fw/.github/.github/workflows/publish.yml@v1
     permissions:
       contents: write
       pull-requests: write
-      # `npm stage publish --provenance` signs the tarball with a GitHub OIDC token, so the
-      # job needs to be able to mint one. This does NOT switch the package to OIDC trusted
-      # publishing — authentication is still the org npm token. It only lets npm attest where
-      # the tarball was built, which is worth having on a package a human is about to approve
-      # sight-unseen.
+      # Needed HERE as well as in the shared workflow: a reusable workflow cannot widen the
+      # permissions its caller was granted, and without this npm never gets an id-token and
+      # every release silently falls back to the approval queue.
       id-token: write
-    steps:
-      # Author the version PR as the org release App (not the default GITHUB_TOKEN) so its
-      # CI runs without a manual "Approve and run" gate. Requires org secrets RELEASE_APP_ID
-      # and RELEASE_APP_PRIVATE_KEY (one GitHub App installed org-wide).
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.16.0
-          registry-url: "https://registry.npmjs.org"
-
-      # `npm stage` landed in CLI 11.15.0; Node 22.16 ships npm 10.x, so the bundled one
-      # cannot stage. Pinned rather than `@latest` so a future npm release cannot change how
-      # releases behave without a commit here.
-      - name: Use an npm that can stage
-        run: npm i -g npm@^11.15.0
-
-      - name: Install dependencies
-        run: npm ci --legacy-peer-deps
-
-      - name: Build
-        run: npm run build
-
-      # No `publish:` — changesets only opens/updates the version PR here. Publishing is the
-      # step below, because `changeset publish` shells out to `npm publish`, which a
-      # stage-only token cannot do (changesets/changesets#2025 is open for first-class
-      # support). Splitting them keeps changesets doing what it is good at — versions and
-      # changelogs — and leaves the registry call to us.
-      - name: Create release Pull Request
-        id: changesets
-        uses: changesets/action@v1
-        with:
-          title: "chore: version package for release"
-          commit: "chore: version package for release"
-        env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-
-      # Stage the version for a human to approve.
-      #
-      # A staged version is uploaded but NOT public: a maintainer reviews it and approves with
-      # 2FA, from the Staged Packages tab in the npm user menu or `npm stage approve`. That is
-      # the point — every release keeps a proof-of-presence step even though CI is
-      # unattended — and it is why the org token is scoped "read and write (stage only)".
-      #
-      # Idempotent: this workflow runs on every push to main, including the merge of the
-      # version PR and any later commit, so it must do nothing when the version is already on
-      # the registry or already sitting in the queue.
-      - name: Stage the release for approval
-        if: steps.changesets.outputs.hasChangesets != 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
-        run: |
-          set -euo pipefail
-          name=$(node -p "require('./package.json').name")
-          version=$(node -p "require('./package.json').version")
-          private=$(node -p "require('./package.json').private === true")
-          if [ "$private" = "true" ]; then
-            echo "$name is private — nothing to publish."; exit 0
-          fi
-
-          if npm view "$name@$version" version >/dev/null 2>&1; then
-            echo "$name@$version is already on the registry — nothing to do."
-            exit 0
-          fi
-
-          if npm stage list "$name" 2>/dev/null | grep -q "$version"; then
-            echo "$name@$version is already staged and waiting for approval."
-            exit 0
-          fi
-
-          echo "Staging $name@$version…"
-          # Capture the output: `npm stage publish` prints the stage id, and `npm stage
-          # approve` takes ONLY that id — a package spec is rejected with "stage-id must be a
-          # valid UUID". Without this the notice below hands out a command that does not work.
-          out=$(npm stage publish --access public --provenance 2>&1 | tee /dev/stderr)
-          uuid='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-          # `|| true` because the script runs under `set -euo pipefail`: a grep that matches
-          # nothing exits 1 and would fail the step even though the staging itself succeeded.
-          stage_id=$(printf '%s' "$out" | grep -oE "$uuid" | tail -1 || true)
-
-          {
-            echo "### 📦 \`$name@$version\` is staged, not published"
-            echo
-            echo "It is uploaded and held for review. **Approve it to make it public:**"
-            echo
-            if [ -n "$stage_id" ]; then
-              echo "- **CLI:** \`npm stage approve $stage_id\`"
-            else
-              echo "- **CLI:** \`npm stage list $name\` to find the id, then"
-              echo "  \`npm stage approve <stage-id>\`"
-            fi
-            echo "- **Web:** [npmjs.com](https://www.npmjs.com) → your avatar → **Staged"
-            echo "  Packages** → **Approve**. The button stays disabled until npm has"
-            echo "  finished scanning the tarball; the page refreshes every minute."
-            echo
-            echo "Both prompt for 2FA. Until then \`npm install $name\` still resolves"
-            echo "\`$(npm view "$name" version 2>/dev/null || echo 'nothing')\`."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ -n "$stage_id" ]; then
-            echo "::notice title=Approval needed::$name@$version is staged. Run: npm stage approve $stage_id"
-          else
-            echo "::notice title=Approval needed::$name@$version is staged, but the stage id could not be read from the output. Run: npm stage list $name"
-          fi
-
-      # When changesets opened/updated the version PR, merge it so the release reaches the
-      # staging queue without a manual click. The App token is used so the merge's push to
-      # `main` re-triggers this workflow, which — now that no changesets remain — stages it.
-      #
-      # NB: we DIRECT-merge (not `--auto`). The App is on `main`'s review-bypass list, which lets
-      # it merge past the required approval — but that bypass is only honored for a *direct* merge;
-      # GitHub's auto-merge queue ignores it and would wait forever on REVIEW_REQUIRED. The required
-      # "Build & Test" status check is NOT bypassable, so we retry until the ci-gate goes green.
-      - name: Merge the version PR to stage the release
-        if: steps.changesets.outputs.hasChangesets == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          pr=$(gh pr list --base main --head changeset-release/main --state open --json number --jq '.[0].number // empty')
-          if [ -z "$pr" ]; then echo "No open version PR (nothing to merge)."; exit 0; fi
-          for i in $(seq 1 40); do
-            if gh pr merge "$pr" --merge 2>/tmp/merge_err; then
-              echo "Merged version PR #$pr on attempt $i — staging will run on the resulting push to main."
-              exit 0
-            fi
-            echo "Attempt $i/40: version PR #$pr not mergeable yet ($(tr -d '\n' < /tmp/merge_err)); waiting for the Build & Test gate…"
-            sleep 15
-          done
-          echo "::warning::Version PR #$pr not merged after retries — merge it manually to stage the release."
-
-  backmerge-to-dev:
-    # Full back-merge of main into dev after a release. Unlike a version-only sync, this also
-    # carries the CHANGELOG and — critically — the changeset *deletions* the release made, so dev
-    # never keeps already-released changesets that would otherwise re-release on the next dev->main.
-    name: Back-merge main into dev
-    needs: release
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
-
-      - name: Open & auto-merge back-merge PR (main -> dev)
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          git fetch origin main dev
-          # Nothing to do when dev already contains main.
-          if git merge-base --is-ancestor origin/main origin/dev; then
-            echo "dev already contains main — nothing to back-merge."
-            exit 0
-          fi
-          # Reuse an existing open back-merge PR if present, else open one.
-          pr=$(gh pr list --base dev --head main --state open --json number --jq '.[0].number // empty')
-          if [ -z "$pr" ]; then
-            url=$(gh pr create --base dev --head main \
-              --title "chore: back-merge main into dev (post-release sync)" \
-              --body "Automated post-release back-merge: brings the version bump, CHANGELOG, and changeset deletions from main into dev so dev stays clean and a future dev->main never re-releases consumed changesets.")
-            pr="${url##*/}"
-            echo "Opened back-merge PR #$pr"
-          else
-            echo "Reusing existing back-merge PR #$pr"
-          fi
-          # Auto-merge once required checks pass (needs "Allow auto-merge" enabled on the repo).
-          gh pr merge "$pr" --auto --merge \
-            || echo "Auto-merge unavailable (disabled or conflicts) — PR #$pr left open for manual merge."
-
-  dev-build:
-    name: Verify Dev Build
-    if: github.ref == 'refs/heads/dev'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.16.0
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Setup npm
-        run: npm install -g npm@^11.5.1
-
-      - name: Install dependencies
-        run: npm ci --legacy-peer-deps
-
-      - name: Build
-        run: npm run build
-
-      # Prerelease publishing is commented out, NOT deleted — the machinery is correct and
-      # the decision is reversible.
-      #
-      # It published `X.Y.Z-next.<timestamp>` under the `next` dist-tag on every push to `dev`.
-      # The org npm token is now stage-only, so `npm publish` cannot run at all; the nearest
-      # equivalent, `npm stage publish`, would queue a version for a maintainer's 2FA approval
-      # on EVERY push — an approval queue nobody can drain, mostly of artifacts nothing
-      # installs. A gate nobody keeps up with is a gate that gets skimmed, so the prerelease
-      # goes rather than the gate.
-      #
-      # To bring it back for a package that genuinely needs prereleases, uncomment and change
-      # the last line to `npm stage publish --tag next`. Better still, move this job to
-      # `workflow_dispatch` so a prerelease is cut deliberately rather than on every push.
-      #
-      # - name: Publish next release
-      #   run: |
-      #     # Start from main's version so changesets apply on top of the latest stable
-      #     git fetch origin main --depth=1
-      #     MAIN_VERSION=$(git show origin/main:package.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
-      #     npm version "$MAIN_VERSION" --no-git-tag-version --allow-same-version
-      #     # Apply pending changesets to get the next version
-      #     npx changeset version
-      #     NEXT_VERSION=$(node -p "require('./package.json').version")
-      #     # Append dev prerelease identifier
-      #     DEV_VERSION="${NEXT_VERSION}-next.$(date +%Y%m%d%H%M%S)"
-      #     npm version "$DEV_VERSION" --no-git-tag-version
-      #     npm publish --tag next
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # Named rather than `inherit`: `inherit` forwards everything this repo can see, which is
+    # how a community repo would end up forwarding a first-party token.
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
