@@ -1,0 +1,18 @@
+name: PR
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  checks:
+    uses: linked-fw/.github/.github/workflows/pr.yml@v1
+    # The changeset reminder posts a PR comment. A reusable workflow only holds what its
+    # caller granted, and the org default is read-only.
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      require-tests: true
+      run-e2e: false
