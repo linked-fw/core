@@ -32,16 +32,16 @@ setBuildSelectQueryHook((raw: any) => {
 
 setQueryDispatch({
   selectQuery: async (query) => {
-    _lastQuery = toIR(query);
-    return [] as any;
+    const ir = toIR(query);
+    _lastQuery = ir;
+    // A count rides the select channel, and its answer is a number: `resolveCount`
+    // refuses the `[]` a row query returns (which is how it catches a store that ran
+    // the pattern as a select instead of counting it).
+    return (ir?.kind === 'count' ? 0 : []) as any;
   },
   askQuery: async (query) => {
     _lastQuery = toIR(query);
     return false;
-  },
-  countQuery: async (query) => {
-    _lastQuery = toIR(query);
-    return 0;
   },
   createQuery: async (query) => {
     _lastQuery = toIR(query);

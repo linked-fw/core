@@ -6,6 +6,8 @@ import type {CreateQuery} from '../queries/CreateQuery.js';
 import type {UpdateQuery} from '../queries/UpdateQuery.js';
 import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
 import type {
+  IRSelectQuery,
+  IRCountQuery,
   SelectResult,
   CreateResult,
   UpdateResult,
@@ -86,8 +88,49 @@ export abstract class SparqlDataset implements IDataset {
    */
   protected abstract executeSparqlUpdate(sparql: string): Promise<void>;
 
-  async selectQuery(query: SelectQuery): Promise<SelectResult> {
-    const ir = lower(query);
+  /**
+   * Answer a select query — **and a count, which is a select.**
+   *
+   * A count is not a distinct query form the way an ask is. An ask really is
+   * `ASK WHERE { … }` and needs its own method; a count is
+   * `SELECT (COUNT(DISTINCT ?a0) AS ?count) WHERE { … }` — the same query form, the
+   * same transport (`executeSparqlSelect`), the same result-set response, differing
+   * only in its projection. `countToAlgebra` says so itself: it builds its plan by
+   * calling `selectToAlgebra` and swapping the projection, and yields
+   * `{type: 'select'}`.
+   *
+   * So a count rides this channel rather than a method of its own. That is not
+   * tidiness: it is what lets a count reach a store through every router that
+   * already forwards a select — `LinkedStorage.selectQuery`, a backend API store —
+   * with no per-kind plumbing to add in each of them, and no optional `IDataset`
+   * member that a third-party store silently lacks.
+   *
+   * The branch is on the LOWERED IR, as `updateQuery` and `deleteQuery` branch on
+   * theirs: `lower()` is the one place that knows a count from a select, and a
+   * rehydrated envelope (`fromJSON`) arrives here as a builder like any other.
+   *
+   * A count carries only a pattern, so there is nothing to normalise away on that
+   * path: no projection, no ordering, and in particular no `LIMIT`/`OFFSET`, which
+   * the builder dropped before the query ever reached the IR. Errors reject; a count
+   * failure is never reported as `0`.
+   */
+  selectQuery(query: SelectQuery): Promise<SelectResult>;
+  selectQuery(query: CountQuery): Promise<number>;
+  async selectQuery(
+    query: SelectQuery | CountQuery,
+  ): Promise<SelectResult | number> {
+    // Cast once for the call rather than lowering in each branch: `lower` is
+    // overloaded per query kind and cannot resolve a union, and lowering twice
+    // would be the thing this method most needs not to do.
+    const ir = lower(query as SelectQuery) as IRSelectQuery | IRCountQuery;
+    if (ir.kind === 'count') {
+      const sparql = countToSparql(ir, this.options);
+      const json = await this.executeSparqlSelect(sparql);
+      // `mapSparqlCountResult` is strict in the same way the guard below is: it
+      // refuses an ASK response, an empty result set and a non-integer binding
+      // rather than answering `0`.
+      return mapSparqlCountResult(json, ir);
+    }
     const sparql = selectToSparql(ir, this.options);
     const json = await this.executeSparqlSelect(sparql);
     if (!isSparqlSelectResults(json)) {
@@ -111,22 +154,6 @@ export abstract class SparqlDataset implements IDataset {
     const sparql = askToSparql(ir, this.options);
     const json = await this.executeSparqlSelect(sparql);
     return mapSparqlAskResult(json);
-  }
-
-  /**
-   * Count the matching instances — emitted as
-   * `SELECT (COUNT(DISTINCT ?a0) AS ?count) WHERE { … }`.
-   *
-   * A {@link CountQuery} carries only a pattern, so there is nothing to normalise
-   * away here: no projection, no ordering, and in particular no `LIMIT`/`OFFSET`,
-   * which the builder dropped before the query ever reached the IR. Errors reject;
-   * they are never reported as `0`.
-   */
-  async countQuery(query: CountQuery): Promise<number> {
-    const ir = lower(query);
-    const sparql = countToSparql(ir, this.options);
-    const json = await this.executeSparqlSelect(sparql);
-    return mapSparqlCountResult(json, ir);
   }
 
   async createQuery(query: CreateQuery): Promise<CreateResult> {

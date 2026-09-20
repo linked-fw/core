@@ -15,18 +15,15 @@ import type {CountQuery} from './CountQuery.js';
  * result types through its own generics; the dispatch is a runtime bridge.
  */
 export interface QueryDispatch {
-  selectQuery<R = any>(query: SelectQuery): Promise<R>;
+  /**
+   * Answer a select query — **and a count**, which travels this channel too: a
+   * count is a select with an aggregate projection, not a query form of its own, so
+   * it needs no method here and no router has to grow an arm for it. It arrives as a
+   * {@link CountQuery} and resolves to a `number`; see {@link resolveCount}.
+   */
+  selectQuery<R = any>(query: SelectQuery | CountQuery): Promise<R>;
   /** Answer an ask query — a boolean, not a result set. */
   askQuery(query: AskQuery): Promise<boolean>;
-  /**
-   * Answer a count query — a number, not a result set.
-   *
-   * **Optional**, unlike `askQuery`. This interface is implemented by object
-   * literals in consuming packages (`setQueryDispatch({…})`), so requiring it would
-   * break every one of them at compile time. {@link resolveCount} turns a missing
-   * implementation into a precise runtime error instead.
-   */
-  countQuery?(query: CountQuery): Promise<number>;
   createQuery<R = any>(query: CreateQuery): Promise<R>;
   updateQuery<R = any>(query: UpdateQuery): Promise<R>;
   deleteQuery(query: DeleteQuery): Promise<DeleteResponse>;
@@ -73,48 +70,69 @@ export async function resolveExistence(
   return answer;
 }
 
-/** A target that can answer a count query. */
-type CountTarget = {countQuery?(query: CountQuery): Promise<number>};
+/**
+ * A target that can answer a count query — which is to say, any target that can
+ * answer a select. There is no count-specific member to look for.
+ */
+type CountTarget = {selectQuery?(query: any): Promise<any>};
 
 /**
  * Answer a count query against `target` — the single entry point for every
  * number-answered query in the library, as {@link resolveExistence} is for boolean
- * ones. `CountBuilder.exec()` and a router's `countQuery` both come here rather than
- * calling `countQuery` directly, so the contract below is enforced once for every
- * store.
+ * ones. `CountBuilder.exec()` comes here rather than calling the store directly, so
+ * the contract below is enforced once for every store.
  *
- * There is deliberately **no translation to a select query anywhere in this
- * package.** A count goes to `IDataset.countQuery` and a SPARQL-backed store turns
- * it into `SELECT (COUNT(DISTINCT ?s) AS ?count)`. A store that lacks an aggregate
- * primitive implements `countQuery` itself, in whatever way its backend allows —
- * that decision belongs to the store, and making it here (by fetching every row and
- * measuring the array) would hide an unbounded read behind a cheap-looking call.
+ * **A count is dispatched over the SELECT channel.** It is not a separate query
+ * form: `SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE { … }` is a select with an
+ * aggregate projection, run over the same transport and answered with the same
+ * result-set response — which is exactly why an ask, which really is a different
+ * form (`ASK WHERE { … }`), has its own `IDataset.askQuery` and a count does not.
+ * Riding `selectQuery` is what lets a count reach a store through every router that
+ * already forwards a select, rather than needing a new arm in each of them (the
+ * arm `LinkedStorage` never grew, which is how a count came to fail on every
+ * application path while passing against a store held directly).
  *
- * `countQuery` must resolve to a **finite, non-negative integer**: anything else
- * rejects rather than being coerced. Errors propagate for the same reason a failed
- * ask is never `false` — and more sharply, because `0` is a *plausible* count. A
- * count that reported an unreachable store as `0` would render an empty table that
- * looks exactly like real data.
+ * There is still deliberately **no translation to a row query anywhere in this
+ * package.** A store receives the count query itself and decides how to answer it;
+ * one extending `SparqlDataset` branches on the lowered IR and emits the aggregate.
+ * Nothing here fetches every row and measures the array — that would hide an
+ * unbounded read behind a call that looks cheap.
+ *
+ * The answer must be a **finite, non-negative integer**: anything else rejects
+ * rather than being coerced. That validation lives here, at the dispatch, because
+ * this is where the count result is read — and it is load-bearing. Errors propagate
+ * for the same reason a failed ask is never `false`, and more sharply, because `0`
+ * is a *plausible* count: a count that reported an unreachable store as `0` would
+ * render an empty table that looks exactly like real data. A store that ignored the
+ * count and answered with rows is caught by the same check.
  */
 export async function resolveCount(
   target: CountTarget,
   query: CountQuery,
 ): Promise<number> {
-  if (typeof target?.countQuery !== 'function') {
+  if (typeof target?.selectQuery !== 'function') {
     throw new Error(
-      'This dataset does not implement IDataset.countQuery(query). A count query is ' +
-      'answered with a number — a SPARQL store emits ' +
-      'SELECT (COUNT(DISTINCT ?s) AS ?count) — and is never rewritten as a select ' +
-      'on its behalf, which would read every matching row to measure the array.',
+      'This dataset does not implement IDataset.selectQuery(query), which is how a ' +
+      'count query is dispatched: a count is a select with an aggregate projection ' +
+      '(a SPARQL store emits SELECT (COUNT(DISTINCT ?s) AS ?count)), not a query ' +
+      'form of its own.',
     );
   }
-  const answer = await target.countQuery(query);
+  const answer = await target.selectQuery(query);
   if (typeof answer !== 'number' || !Number.isInteger(answer) || answer < 0) {
     throw new Error(
-      `countQuery must resolve to a non-negative integer; got ${
-        answer === null ? 'null' : typeof answer === 'number' ? String(answer) : typeof answer
-      }. A count query will not coerce — a NaN or a missing value that fell through ` +
-      'as 0 would silently read as "no matches".',
+      `A count query must be answered with a non-negative integer; got ${
+        answer === null
+          ? 'null'
+          : typeof answer === 'number'
+            ? String(answer)
+            : Array.isArray(answer)
+              ? 'an array of rows'
+              : typeof answer
+      }. It is not coerced — a NaN or a missing value that fell through as 0 would ` +
+      'silently read as "no matches". A store that answered with rows ran the ' +
+      'pattern as a row query instead of counting it: it must branch on the lowered ' +
+      "IR's `kind === 'count'` and emit an aggregate.",
     );
   }
   return answer;

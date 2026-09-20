@@ -181,6 +181,9 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
     // `async` ensures a missing global dispatch rejects rather than throwing
     // synchronously past the caller's `.catch()`.
     const dispatch = target ?? getQueryDispatch();
+    // `resolveCount` dispatches over the SELECT channel — a count is a select with
+    // an aggregate projection, not a query form of its own — and checks the answer
+    // is a real non-negative integer before it reaches the caller.
     return resolveCount(dispatch as any, this);
   }
 

@@ -21,6 +21,7 @@ import {CountBuilder} from '../queries/CountBuilder';
 import {Shape} from '../shapes/Shape';
 import type {CountQuery} from '../queries/CountQuery';
 import type {IDataset} from '../interfaces/IDataset';
+import type {SparqlDataset} from '../sparql/SparqlDataset';
 
 /** Compile-time assertion that `T` is exactly `Expected` (invariant, not assignable). */
 type Exact<T, Expected> = [T] extends [Expected]
@@ -93,12 +94,27 @@ void awaited;
 const asQuery: CountQuery = SelectBuilder.from(Person).toCount();
 void asQuery;
 
-// A dataset's optional countQuery accepts it.
+// A count rides the select channel, so `IDataset.selectQuery` accepts it. The
+// interface's answer is deliberately the wide `SelectResult | number`: narrowing it
+// per query kind would need overloads, and an overloaded member cannot be satisfied
+// by the single-signature object literals that implement this interface everywhere.
+// `resolveCount` is what turns the wide answer into a checked number.
 declare const dataset: IDataset;
 async function viaDataset(): Promise<void> {
-  expectNumber(await dataset.countQuery!(asQuery));
+  void (await dataset.selectQuery(asQuery));
 }
 void viaDataset;
+
+// A store extending SparqlDataset answers it as a `number` — the concrete class
+// overloads `selectQuery` on the query kind, which is where the precision belongs.
+declare const sparqlStore: SparqlDataset;
+async function viaSparqlDataset(): Promise<void> {
+  expectNumber(await sparqlStore.selectQuery(asQuery));
+  // And the select half of the same overload is untouched.
+  const rows = await sparqlStore.selectQuery(SelectBuilder.from(Person));
+  void rows;
+}
+void viaSparqlDataset;
 
 // ---------------------------------------------------------------------------
 // PROBE 5: the select chain is unchanged by the presence of count
