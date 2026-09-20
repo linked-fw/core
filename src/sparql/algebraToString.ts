@@ -177,7 +177,15 @@ export function serializeExpression(
         .map((a) => serializeExpression(a, collector))
         .join(', ');
       const distinctPrefix = expr.distinct ? 'DISTINCT ' : '';
-      return `${expr.name}(${distinctPrefix}${args})`;
+      // Uppercased here rather than in the IR: this one line covers COUNT/SUM/AVG/
+      // MIN/MAX and any aggregate added later, while the IR keeps carrying a plain
+      // lowercase name (`'count'`) that other consumers can match on without
+      // case-folding. It also puts the aggregate in the same voice as every other
+      // keyword this file emits (SELECT, DISTINCT, GROUP BY, HAVING, …).
+      // `function_expr` is deliberately left alone: its names arrive already in
+      // their correct SPARQL spelling, which is not uniformly uppercase (`isBlank`,
+      // `isIRI`), so case-folding there would corrupt them.
+      return `${expr.name.toUpperCase()}(${distinctPrefix}${args})`;
     }
 
     case 'exists_expr': {

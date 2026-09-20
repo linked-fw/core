@@ -786,7 +786,7 @@ describe('SPARQL golden — aggregates', () => {
     const sparql = await goldenSelect(queryFactories.countFriends);
     expect(sparql).toBe(
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-SELECT ?a0 (count(?a0_friends) AS ?a1)
+SELECT ?a0 (COUNT(?a0_friends) AS ?a1)
 WHERE {
   ?a0 rdf:type <${PT}> .
   OPTIONAL {
@@ -800,7 +800,7 @@ GROUP BY ?a0`);
     const sparql = await goldenSelect(queryFactories.countNestedFriends);
     expect(sparql).toBe(
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-SELECT ?a0 (count(?a1_friends) AS ?a1_agg)
+SELECT ?a0 (COUNT(?a1_friends) AS ?a1_agg)
 WHERE {
   ?a0 rdf:type <${PT}> .
   ?a0 <${PROP}hasFriend> ?a1 .
@@ -815,7 +815,7 @@ GROUP BY ?a0`);
     const sparql = await goldenSelect(queryFactories.countLabel);
     expect(sparql).toBe(
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-SELECT ?a0 (count(?a1_friends) AS ?a1_agg)
+SELECT ?a0 (COUNT(?a1_friends) AS ?a1_agg)
 WHERE {
   ?a0 rdf:type <${PT}> .
   ?a0 <${PROP}hasFriend> ?a1 .
@@ -830,7 +830,7 @@ GROUP BY ?a0`);
     const sparql = await goldenSelect(queryFactories.customResultNumFriends);
     expect(sparql).toBe(
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-SELECT ?a0 (count(?a0_friends) AS ?a1)
+SELECT ?a0 (COUNT(?a0_friends) AS ?a1)
 WHERE {
   ?a0 rdf:type <${PT}> .
   OPTIONAL {
@@ -853,7 +853,7 @@ WHERE {
   }
 }
 GROUP BY ?a0
-HAVING(count(?a0_friends) = "2"^^xsd:integer)`);
+HAVING(COUNT(?a0_friends) = "2"^^xsd:integer)`);
   });
 
   test('customResultEqualsBoolean', async () => {
