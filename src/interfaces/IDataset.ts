@@ -27,7 +27,29 @@ export interface IDataset {
    */
   init?(): Promise<any>;
 
-  selectQuery(query: SelectQuery): Promise<SelectResult>;
+  /**
+   * Answer a select query — **and a count query**, which arrives here too.
+   *
+   * A count is not a query form of its own the way an ask is. An ask is
+   * `ASK WHERE { … }`; a count is `SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE { … }`
+   * — a select with an aggregate projection, over the same transport, answered with
+   * the same result-set response. Giving it a method of its own meant every router
+   * had to grow an arm for it, and any that did not silently could not count.
+   *
+   * So a store that wants to answer counts branches on the lowered IR:
+   * `lower(query).kind === 'count'` (see {@link CountQuery} and `SparqlDataset`).
+   * A store that does not is no worse off than before — it will fail loudly at the
+   * dispatch (`resolveCount`), which refuses anything but a non-negative integer.
+   * There is deliberately **no path in this package that rewrites a count as a row
+   * query** and measures the array: that would hide an unbounded read behind a call
+   * that looks cheap.
+   *
+   * A count must be answered with a real, non-negative integer, and must reject on
+   * failure: reporting an unreachable store as `0` renders an empty table that is
+   * indistinguishable from real data, which is the failure mode this API was built
+   * to remove.
+   */
+  selectQuery(query: SelectQuery | CountQuery): Promise<SelectResult | number>;
   /**
    * Answer an ask query — a boolean, not a result set.
    *
@@ -49,28 +71,6 @@ export interface IDataset {
    * API was built to remove.
    */
   askQuery(query: AskQuery): Promise<boolean>;
-  /**
-   * Count the matching instances — a number, not a result set.
-   *
-   * **Optional**, unlike {@link askQuery}. Adding a required method would break
-   * every existing implementer at compile time; `resolveCount` in `queryDispatch`
-   * turns a missing implementation into a precise runtime error instead. Every
-   * store extending {@link SparqlDataset} gets it with no edit.
-   *
-   * A {@link CountQuery} carries a pattern and nothing else: no projection, no
-   * sorting, and in particular no pagination — a count of a windowed query is
-   * meaningless, so the type cannot hold a window. A SPARQL-backed store emits
-   * `SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE { … }`; another backend answers it
-   * however it can. This package contains **no path that rewrites a count as a
-   * select** and measures the array: that would hide an unbounded read behind a
-   * call that looks cheap.
-   *
-   * Must resolve to a real, non-negative integer — a non-number is rejected, not
-   * coerced. Must reject on failure: reporting an unreachable store as `0` renders
-   * an empty table that is indistinguishable from real data, which is the failure
-   * mode this API was built to remove.
-   */
-  countQuery?(query: CountQuery): Promise<number>;
   /**
    * Receives update AND upsert mutations — `lower(query)` yields `kind: 'update'`,
    * `'update_where'` or `'upsert'`. An implementation that does not handle `'upsert'`

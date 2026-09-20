@@ -2,6 +2,7 @@ import {CoreSet} from '../collections/CoreSet.js';
 import type {IDataset} from '../interfaces/IDataset.js';
 import type {SelectQuery} from '../queries/SelectQuery.js';
 import type {AskQuery} from '../queries/AskQuery.js';
+import type {CountQuery} from '../queries/CountQuery.js';
 import type {CreateQuery} from '../queries/CreateQuery.js';
 import type {UpdateQuery} from '../queries/UpdateQuery.js';
 import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
@@ -121,7 +122,23 @@ export abstract class LinkedStorage {
     return this.defaultDataset;
   }
 
-  static selectQuery<ResultType>(query: SelectQuery): Promise<ResultType> {
+  /**
+   * Route a select query — **and a count**, which is a select.
+   *
+   * A count is not a separate query form (an ask is: `ASK WHERE { … }`); it is
+   * `SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE { … }`, routed by the same shape to
+   * the same dataset and answered over the same channel. So it needs no arm of its
+   * own here — which is the point: when it had one, this router was missing it, and
+   * `.count()` failed on every path that went through the router while passing
+   * against a store held directly.
+   *
+   * The count contract — a real, non-negative integer, a failure never flattened
+   * into `0` — belongs to `resolveCount`, which the builder goes through. None of it
+   * is re-implemented here, exactly as none of `resolveExistence` is.
+   */
+  static selectQuery<ResultType>(
+    query: SelectQuery | CountQuery,
+  ): Promise<ResultType> {
     if (!query?.shape) {
       return Promise.reject(
         new Error(
