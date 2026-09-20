@@ -2786,9 +2786,10 @@ export function updateWhereToAlgebra(
  *   traversals, filters and `MINUS` have exactly one implementation. Only the
  *   pattern is kept; the select plan's projection is discarded.
  *
- * There is nothing here to guard against. `IRAskQuery` has no projection,
- * `orderBy`, `limit` or `offset` to ignore or reject — an `ASK` cannot express
- * them, so the IR cannot carry them.
+ * `IRAskQuery` has no projection, `orderBy`, `limit` or `offset` to ignore or
+ * reject — an `ASK` cannot express them, so the IR cannot carry them. The one
+ * thing that *does* need guarding is an aggregate in the where clause, which
+ * lowers to `GROUP BY` + `HAVING` rather than to a `FILTER`; see below.
  */
 export function askToAlgebra(
   query: IRAskQuery,
@@ -2810,7 +2811,7 @@ export function askToAlgebra(
     };
     return {type: 'ask', algebra: bgp};
   }
-  const {algebra} = selectToAlgebra(
+  const inner = selectToAlgebra(
     {
       kind: 'select',
       root: query.root,
@@ -2822,7 +2823,24 @@ export function askToAlgebra(
     },
     options,
   );
-  return {type: 'ask', algebra};
+  if (inner.having) {
+    // Same trap as in `countToAlgebra`: an aggregate in the WHERE clause (e.g.
+    // `p.friends.size().gt(2)`) lowers to HAVING + GROUP BY on the select plan, and
+    // only `algebra` is carried over here — so the HAVING would vanish and the ASK
+    // would answer the UNFILTERED question, `true` for any store holding one
+    // instance of the shape. A boolean of the right type for the wrong question is
+    // worse than an error: nothing downstream can tell. Asking it properly needs
+    // `ASK { SELECT ?a0 WHERE { … } GROUP BY ?a0 HAVING(…) }`, and `SparqlSubSelect`
+    // carries no groupBy/having today. Refuse it rather than answer it wrongly.
+    throw new Error(
+      'Cannot ask a query whose where clause contains an aggregate (e.g. ' +
+      '`.where(p => p.friends.size().gt(2))`). That filter lowers to HAVING over a ' +
+      'per-subject group, and testing whether any group survives needs a nested ' +
+      'sub-SELECT that this layer does not emit yet. Filter without an aggregate, or ' +
+      'run the select and check for rows.',
+    );
+  }
+  return {type: 'ask', algebra: inner.algebra};
 }
 
 /**
