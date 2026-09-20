@@ -143,16 +143,28 @@ describe('count envelope — round trip', () => {
 describe('resolveCount contract', () => {
   const query = SelectBuilder.from(Person).toCount() as unknown as CountQuery;
 
+  // A count is dispatched over the SELECT channel: it is a select with an aggregate
+  // projection, not a query form of its own, so there is no count-specific member to
+  // look for and no router that can forget to forward it.
   test('a real count is returned', async () => {
-    await expect(resolveCount({countQuery: async () => 42}, query)).resolves.toBe(42);
+    await expect(resolveCount({selectQuery: async () => 42}, query)).resolves.toBe(42);
   });
 
   test('0 is a real answer, not an error', async () => {
-    await expect(resolveCount({countQuery: async () => 0}, query)).resolves.toBe(0);
+    await expect(resolveCount({selectQuery: async () => 0}, query)).resolves.toBe(0);
   });
 
-  test('a store with no countQuery rejects, naming the method', async () => {
-    await expect(resolveCount({}, query)).rejects.toThrow(/IDataset\.countQuery/);
+  test('a store with no selectQuery rejects, naming the method', async () => {
+    await expect(resolveCount({}, query)).rejects.toThrow(/IDataset\.selectQuery/);
+  });
+
+  test('a store that answers with rows rejects, saying it ran a row query', async () => {
+    // The failure mode the select channel makes possible: a store that ignored the
+    // count and ran the pattern as a select. `[].length` would have been a plausible
+    // number; the rows are refused instead.
+    await expect(
+      resolveCount({selectQuery: async () => [{id: 'a'}, {id: 'b'}]}, query),
+    ).rejects.toThrow(/an array of rows/);
   });
 
   test.each([
@@ -164,7 +176,7 @@ describe('resolveCount contract', () => {
     ['a negative', -1],
   ])('%s is rejected, never coerced', async (_label, answer) => {
     await expect(
-      resolveCount({countQuery: async () => answer as never}, query),
+      resolveCount({selectQuery: async () => answer as never}, query),
     ).rejects.toThrow(/non-negative integer/);
   });
 
@@ -172,7 +184,7 @@ describe('resolveCount contract', () => {
     await expect(
       resolveCount(
         {
-          countQuery: async () => {
+          selectQuery: async () => {
             throw new Error('store unreachable');
           },
         },
@@ -190,7 +202,7 @@ describe('count exec — no subject to count', () => {
   test('.for(null) answers 0 without dispatching', async () => {
     let dispatched = false;
     const target = {
-      countQuery: async () => {
+      selectQuery: async () => {
         dispatched = true;
         return 7;
       },
@@ -206,7 +218,7 @@ describe('count exec — no subject to count', () => {
   test('an unresolved pending-context subject answers 0 without dispatching', async () => {
     let dispatched = false;
     const target = {
-      countQuery: async () => {
+      selectQuery: async () => {
         dispatched = true;
         return 7;
       },
@@ -220,7 +232,7 @@ describe('count exec — no subject to count', () => {
   });
 
   test('.count(target) goes through the target dataset', async () => {
-    const target = {countQuery: async () => 11};
+    const target = {selectQuery: async () => 11};
     await expect(
       SelectBuilder.from(Person).where((p) => p.name.equals('Semmy')).count(target as never),
     ).resolves.toBe(11);
@@ -290,7 +302,6 @@ describe('count never flattens a failure into 0', () => {
    */
   const loweringStore = {
     selectQuery: async (q: never) => lower(q) as never,
-    countQuery: async (q: never) => lower(q) as never,
   };
 
   test('an unresolved context in a WHERE clause rejects — where select answers null', async () => {
@@ -315,7 +326,7 @@ describe('count never flattens a failure into 0', () => {
     await expect(
       resolveCount(
         {
-          countQuery: async (q) => lower(q as never) as never,
+          selectQuery: async (q) => lower(q as never) as never,
         },
         builder as unknown as CountQuery,
       ),
@@ -408,24 +419,32 @@ describe('count over explicit subjects', () => {
 // ---------------------------------------------------------------------------
 
 describe('a store that cannot count says so, through every entry point', () => {
+  // A store that has a select channel but does not recognise a count on it: it runs
+  // the pattern as a row query and hands back rows. Every entry point must reject —
+  // measuring that array is precisely the unbounded read nothing here will do on a
+  // store's behalf.
   const cannotCount = {selectQuery: async () => []};
 
   test('SelectBuilder.count()', async () => {
     await expect(
       SelectBuilder.from(Person).count(cannotCount as never),
-    ).rejects.toThrow(/IDataset\.countQuery/);
+    ).rejects.toThrow(/non-negative integer/);
   });
 
   test('Shape.count()', async () => {
     await expect(Person.count(cannotCount as never)).rejects.toThrow(
-      /IDataset\.countQuery/,
+      /non-negative integer/,
     );
   });
 
   test('await on the builder', async () => {
     await expect(
       SelectBuilder.from(Person).toCount().exec(cannotCount as never),
-    ).rejects.toThrow(/IDataset\.countQuery/);
+    ).rejects.toThrow(/non-negative integer/);
+  });
+
+  test('and a store with no select channel at all names the method', async () => {
+    await expect(Person.count({} as never)).rejects.toThrow(/IDataset\.selectQuery/);
   });
 });
 

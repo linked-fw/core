@@ -2149,18 +2149,20 @@ describe('Fuseki COUNT — root-level', () => {
       process.env.FUSEKI_BASE_URL || 'http://localhost:3939',
       DATASET_NAME,
     );
-    await expect(store.countQuery(rehydrated)).rejects.toThrow(/context/i);
+    await expect(store.selectQuery(rehydrated)).rejects.toThrow(/context/i);
   });
 
-  test('SparqlDataset.countQuery answers end to end', async () => {
+  test('a count answers end to end, over the select channel', async () => {
     if (!fusekiAvailable) return;
     const store = new FusekiStore(
       process.env.FUSEKI_BASE_URL || 'http://localhost:3939',
       DATASET_NAME,
     );
-    await expect(store.countQuery(Person.select().toCount())).resolves.toBe(4);
+    // `selectQuery`, not a method of its own: a count is a select with an aggregate
+    // projection, and the store branches on the lowered IR to emit it.
+    await expect(store.selectQuery(Person.select().toCount())).resolves.toBe(4);
     await expect(
-      store.countQuery(Person.select().where((p) => p.name.equals('Moa')).toCount()),
+      store.selectQuery(Person.select().where((p) => p.name.equals('Moa')).toCount()),
     ).resolves.toBe(1);
     // And through the public entry point, with the store as an explicit target.
     await expect(
