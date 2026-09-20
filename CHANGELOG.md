@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.20.2
+
+### Patch Changes
+
+- [#240](https://github.com/linked-fw/core/pull/240) [`7088b4f`](https://github.com/linked-fw/core/commit/7088b4fd0e43bb9a7fd725eee50546355ab3e9b2) Thanks [@flyon](https://github.com/flyon)! - Fix `askToAlgebra` silently dropping a `HAVING`. An `ASK` whose where clause contained an aggregate — `.where(p => p.friends.size().gt(2)).exists()` — lowered to `GROUP BY` + `HAVING`, of which only the pattern was carried over, so the query answered the _unfiltered_ question and returned `true` for any store holding one instance of the shape. It now throws, exactly as `countToAlgebra` already did for the same lowering: answering it needs a nested sub-SELECT carrying `GROUP BY`/`HAVING`, which the algebra cannot express yet (see `docs/backlog/042`).
+
+- [#240](https://github.com/linked-fw/core/pull/240) [`9d2ee33`](https://github.com/linked-fw/core/commit/9d2ee33d451f6d9b99bad0ad8c3114c50f5fa096) Thanks [@flyon](https://github.com/flyon)! - Emit SPARQL aggregate function names in uppercase (`COUNT(DISTINCT ?a0)` instead of `count(DISTINCT ?a0)`), matching every other keyword the emitter produces. The upper-casing happens in `algebraToString`, so it covers `SUM`/`AVG`/`MIN`/`MAX` and any future aggregate, while the IR keeps carrying the plain lowercase name. SPARQL is case-insensitive for function names so query behaviour is unchanged, but the emitted query **text** changes — anything asserting on the exact string of a generated aggregate query needs updating.
+
 ## 2.20.1
 
 ### Patch Changes
