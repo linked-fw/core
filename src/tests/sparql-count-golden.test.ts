@@ -16,9 +16,9 @@
  * - no `GROUP BY` appears (the root alias is NOT projected as a plain variable);
  * - no `LIMIT`/`OFFSET`/`ORDER BY` survives, for any input builder.
  *
- * `count(` is lowercase to match every other aggregate golden in this suite
- * (SPARQL keywords are case-insensitive; `algebraToString` emits the IR name
- * verbatim).
+ * `COUNT(` is uppercase because `algebraToString` upper-cases every aggregate
+ * name on the way out, in the same voice as the other keywords it emits; the IR
+ * itself still carries the plain lowercase `'count'`.
  */
 import {describe, expect, test} from '@jest/globals';
 import {
@@ -129,7 +129,7 @@ describe('SPARQL golden — count', () => {
   test('countAll', async () => {
     expect(await goldenCount(countFactories.countAll)).toBe(
 `${RDF_PREFIX}
-SELECT (count(DISTINCT ?a0) AS ?count)
+SELECT (COUNT(DISTINCT ?a0) AS ?count)
 WHERE {
   ?a0 rdf:type <${PT}> .
 }`);
@@ -138,7 +138,7 @@ WHERE {
   test('countWhere', async () => {
     expect(await goldenCount(countFactories.countWhere)).toBe(
 `${RDF_PREFIX}
-SELECT (count(DISTINCT ?a0) AS ?count)
+SELECT (COUNT(DISTINCT ?a0) AS ?count)
 WHERE {
   ?a0 rdf:type <${PT}> .
   ?a0 <${PROP}name> ?a0_name .
@@ -149,7 +149,7 @@ WHERE {
   test('countById', async () => {
     expect(await goldenCount(countFactories.countById)).toBe(
 `${RDF_PREFIX}
-SELECT (count(DISTINCT ?a0) AS ?count)
+SELECT (COUNT(DISTINCT ?a0) AS ?count)
 WHERE {
   ?a0 rdf:type <${PT}> .
   FILTER(?a0 = <${tmpEntityBase}p1>)
@@ -159,7 +159,7 @@ WHERE {
   test('countBySubjects', async () => {
     expect(await goldenCount(countFactories.countBySubjects)).toBe(
 `${RDF_PREFIX}
-SELECT (count(DISTINCT ?a0) AS ?count)
+SELECT (COUNT(DISTINCT ?a0) AS ?count)
 WHERE {
   VALUES ?a0 { <${tmpEntityBase}p1> <${tmpEntityBase}p2> }
   ?a0 rdf:type <${PT}> .
@@ -169,7 +169,7 @@ WHERE {
   test('countMinus', async () => {
     expect(await goldenCount(countFactories.countMinus)).toBe(
 `${RDF_PREFIX}
-SELECT (count(DISTINCT ?a0) AS ?count)
+SELECT (COUNT(DISTINCT ?a0) AS ?count)
 WHERE {
   ?a0 rdf:type <${PT}> .
   MINUS {
@@ -201,13 +201,13 @@ describe('count invariants', () => {
   test('every fixture counts DISTINCT subjects, never rows', async () => {
     const all = await allSparql();
     expect(
-      fixturesWhere(all, (s) => !s.includes('(count(DISTINCT ?a0) AS ?count)')),
+      fixturesWhere(all, (s) => !s.includes('(COUNT(DISTINCT ?a0) AS ?count)')),
     ).toEqual([]);
   });
 
   test('no GROUP BY — the root alias is not projected as a plain variable', async () => {
     // This is the failure mode a select-with-aggregate-projection would have had:
-    // `SELECT ?a0 (count(…) AS ?count) … GROUP BY ?a0` is one row per entity, each
+    // `SELECT ?a0 (COUNT(…) AS ?count) … GROUP BY ?a0` is one row per entity, each
     // counting 1.
     const all = await allSparql();
     expect(fixturesWhere(all, (s) => s.includes('GROUP BY'))).toEqual([]);
@@ -264,7 +264,7 @@ describe('count invariants', () => {
     // `nickNames` has no maxCount, so the join yields one row per nickname. Without
     // DISTINCT this count would be inflated by exactly that factor.
     const sparql = await goldenCount(countFactories.countMultiValuedWhere);
-    expect(sparql).toContain('(count(DISTINCT ?a0) AS ?count)');
+    expect(sparql).toContain('(COUNT(DISTINCT ?a0) AS ?count)');
     expect(sparql).toContain(`?a0 <${PROP}nickName> ?a0_nickNames .`);
   });
 });

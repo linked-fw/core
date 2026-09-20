@@ -1219,7 +1219,7 @@ describe('Fuseki SELECT — quantifiers and aggregates', () => {
 
     const {sparql, ir, results} = await runSelect('countEquals');
     expect(sparql).toContain('HAVING');
-    expect(sparql).toContain('count');
+    expect(sparql).toContain('COUNT');
 
     const mapped = mapSparqlSelectResult(results, ir);
     expect(Array.isArray(mapped)).toBe(true);
@@ -1286,7 +1286,7 @@ describe('Fuseki SELECT — aggregation', () => {
     expect(Array.isArray(mapped)).toBe(true);
     const rows = mapped as ResultRow[];
 
-    // SPARQL: SELECT ?a0 (count(?a1_friends) AS ?a1_agg) ... GROUP BY ?a0
+    // SPARQL: SELECT ?a0 (COUNT(?a1_friends) AS ?a1_agg) ... GROUP BY ?a0
     // INNER JOIN on friends — only p1 and p2 have friends
     expect(rows.length).toBe(2);
 
@@ -2100,7 +2100,7 @@ describe('Fuseki COUNT — root-level', () => {
     expect(Number(distinct.results.bindings[0].count.value)).toBe(1);
     // The same query without DISTINCT counts rows — the number this feature must
     // not produce.
-    const rows = await executeSparqlQuery(sparql.replace('count(DISTINCT ', 'count('));
+    const rows = await executeSparqlQuery(sparql.replace('COUNT(DISTINCT ', 'COUNT('));
     expect(Number(rows.results.bindings[0].count.value)).toBeGreaterThan(1);
   });
 

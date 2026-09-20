@@ -35,24 +35,24 @@ describe('G9 — per-path sort directions survive the wire', () => {
 });
 
 describe('G11 — SetSize comparisons (.size().gt/lt/…)', () => {
-  test('.size().gt(2) → HAVING count(...) > 2', () => {
+  test('.size().gt(2) → HAVING COUNT(...) > 2', () => {
     const sparql = sparqlOf(
       Person.select((p) => p.name).where((p) => p.friends.size().gt(2)),
     );
-    expect(sparql).toMatch(/HAVING\(count\([^)]*\) > "2"/);
+    expect(sparql).toMatch(/HAVING\(COUNT\([^)]*\) > "2"/);
   });
 
-  test('.size().lte(1) → HAVING count(...) <= 1', () => {
+  test('.size().lte(1) → HAVING COUNT(...) <= 1', () => {
     const sparql = sparqlOf(
       Person.select((p) => p.name).where((p) => p.friends.size().lte(1)),
     );
-    expect(sparql).toMatch(/HAVING\(count\([^)]*\) <= "1"/);
+    expect(sparql).toMatch(/HAVING\(COUNT\([^)]*\) <= "1"/);
   });
 
   test('.size().equals(3) still works', () => {
     const sparql = sparqlOf(
       Person.select((p) => p.name).where((p) => p.friends.size().equals(3)),
     );
-    expect(sparql).toMatch(/HAVING\(count\([^)]*\) = "3"/);
+    expect(sparql).toMatch(/HAVING\(COUNT\([^)]*\) = "3"/);
   });
 });

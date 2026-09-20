@@ -115,3 +115,23 @@ describe('SPARQL golden — shapeless ASK', () => {
     expect(() => askToAlgebra({kind: 'ask', patterns: []})).toThrow(/needs a subject/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Loud refusals
+// ---------------------------------------------------------------------------
+
+describe('ask refusals', () => {
+  test('an aggregate in the where clause is refused, not silently unfiltered', async () => {
+    // `.size().gt(2)` lowers to HAVING over a per-subject GROUP BY. askToAlgebra
+    // keeps only the pattern, so the filter used to vanish and the ASK answered the
+    // UNFILTERED question — `true` for any store holding one Person, no matter how
+    // many friends anyone has. See backlog 042.
+    const ir = await captureQuery(() =>
+      Person.select().where((p) => p.friends.size().gt(2)).exists(),
+    );
+    expect(() => askToAlgebra(ir)).toThrow(/aggregate/i);
+    expect(() => askToAlgebra(ir)).toThrow(/HAVING/);
+    // Belt and braces: whatever the wording, the filter must not be dropped.
+    expect(() => askToSparql(ir)).toThrow();
+  });
+});
