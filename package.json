@@ -43,13 +43,13 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "npx rimraf ./lib && npx tsc -p tsconfig-esm.json",
-    "compile": "echo '💫 Compiling ESM' && npx tsc -p tsconfig-esm.json",
+    "build": "rimraf ./lib && tsc -p tsconfig-esm.json",
+    "compile": "echo '💫 Compiling ESM' && tsc -p tsconfig-esm.json",
     "sync:agents": "node packages/skills/sync.mjs",
     "setup": "npx semantu-agents",
-    "typecheck": "npx tsc -p tsconfig-tests.json",
-    "test": "NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs && npm run typecheck",
-    "test:fuseki": "docker compose -f src/tests/docker-compose.test.yml up -d --wait && NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs --runInBand --testPathPattern='sparql-fuseki' --verbose; EXIT=$?; docker compose -f src/tests/docker-compose.test.yml down; exit $EXIT"
+    "typecheck": "tsc -p tsconfig-tests.json",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs && npm run typecheck",
+    "test:fuseki": "docker compose -f src/tests/docker-compose.test.yml up -d --wait && NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --runInBand --testPathPattern='sparql-fuseki' --verbose; EXIT=$?; docker compose -f src/tests/docker-compose.test.yml down; exit $EXIT"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.5.2",
