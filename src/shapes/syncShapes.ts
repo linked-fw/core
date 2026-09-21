@@ -22,13 +22,29 @@ import {serializePathToNodeData} from './serializePathToNodeData.js';
  */
 const FRAMEWORK_PACKAGE = '@_linked/core';
 
-/** Build the create-pipeline data object for a single PropertyShape (flattened under shapeIri). */
-function buildPropertyShapeData(ps: PropertyShapeData, shapeIri: string): Record<string, unknown> {
+/**
+ * Build the create-pipeline data object for a single PropertyShape (flattened under shapeIri).
+ *
+ * @internal Exported for tests only — not part of the public API.
+ */
+export function buildPropertyShapeData(ps: PropertyShapeData, shapeIri: string): Record<string, unknown> {
   const psIri = `${shapeIri}/${ps.label}`;
   const d: Record<string, unknown> = {
     __id: psIri,
     path: serializePathToNodeData(ps.path, psIri),
   };
+  // `rdfs:label` — the DSL label, i.e. the accessor name the property is reached
+  // by in code (`person.memberships`). It is NOT `sh:name`, written below, which
+  // is a human-readable display string.
+  //
+  // Without this the label is only ever implied by `psIri`, and a reader has to
+  // re-derive one from the path's local part. That works right up until the two
+  // differ — `@_linked/org` declares `memberships` on the path `org:hasMembership`
+  // — at which point the catalog reports `hasMembership`, the query proxy indexes
+  // the shape with it, and the class (which only knows `memberships`) throws.
+  // Readers already prefer a stored label and fall back to the path, so writing it
+  // is the whole fix; old catalogs keep working via that fallback.
+  if (ps.label) d.label = ps.label;
   if (ps.nodeKind) d.nodeKind = ps.nodeKind;
   if (ps.datatype) d.datatype = ps.datatype;
   if (typeof ps.minCount === 'number') d.minCount = ps.minCount;
