@@ -65,7 +65,7 @@
   "dependencies": {
     "ulid": "^3.0.2"
   },
-  "types": "./lib/esm/index.d.ts",
+  "types": "index.d.ts",
   "typesVersions": {
     "*": {
       "*": [
