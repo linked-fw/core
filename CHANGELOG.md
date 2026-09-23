@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.22.2
+
+### Patch Changes
+
+- [#254](https://github.com/linked-fw/core/pull/254) [`b813432`](https://github.com/linked-fw/core/commit/b813432c181a522c1b5d5afdb65bb9d9322b490e) Thanks [@flyon](https://github.com/flyon)! - A shape authored in a project now resolves in queries, as documented.
+
+  `registerRuntimeShape` deliberately synthesizes no class — consumers needing a
+  constructor are meant to get one from `getOrCreateShapeAdapter`. The query
+  layer never adopted that: five call sites resolved shapes with `getShapeClass`
+  alone, which answers `undefined` for every data-only shape.
+
+  The failures landed well away from the lookup:
+
+  ```
+  Error: Shape class not found for https://linked.cm/shape/my-project/Author
+  TypeError: Cannot read properties of undefined (reading 'shape')
+  ```
+
+  The second came from a sub-select, where the undefined class was handed to
+  `FieldSet.forSubSelect` and only failed when it read `.shape` off it.
+
+  `MutationQuery` (update callbacks, nested value shapes) and `SelectQuery`
+  (value-shape resolution, `select()` and `selectAll()` sub-selects) now fall
+  back to the adapter. `getShapeClass` is unchanged and still reports only
+  shapes with a real authored class.
+
 ## 2.22.1
 
 ### Patch Changes
