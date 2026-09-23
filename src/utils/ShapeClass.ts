@@ -296,8 +296,16 @@ export function addNodeShapeToShapeClass(
   // one — the exact failure that silently breaks cross-runtime shape lookup (`Person3`
   // on the FE ≠ `Person` on the backend). Warn ONCE per base so a build-config
   // regression (e.g. a dropped `optimizeDeps.exclude`) surfaces loudly instead of
-  // no-op'ing a query at forward time. Dev-only — prod is minified and would false-fire.
-  if (process.env.NODE_ENV !== 'production') {
+  // no-op'ing a query at forward time.
+  //
+  // This used to be dev-only, on the reasoning that production is minified and
+  // the check would false-fire. It does not: full minification renames a class
+  // to something like `za`, so `base === id` and nothing fires. What DOES fire
+  // is the case worth catching — a bundler appending a digit to disambiguate
+  // `BackendAPIStore` from the ontology term of the same name, which is exactly
+  // the collision that breaks shape lookup, and it only happens in a production
+  // build. Suppressing the warning there hid it from the one place it occurs.
+  {
     const id = nodeShape.id;
     const base = id.replace(/\d+$/, '');
     const existing = nodeShapeToShapeClass.get(base);
