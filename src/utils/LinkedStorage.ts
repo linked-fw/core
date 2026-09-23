@@ -94,11 +94,51 @@ export abstract class LinkedStorage {
       if (dataset) {
         return dataset;
       }
+      const byUri = this.findPinByShapeUri(current);
+      if (byUri) {
+        return byUri;
+      }
       const parent = Object.getPrototypeOf(current);
       if (parent === Function.prototype || parent === null) break;
       current = parent;
     }
     return this.defaultDataset;
+  }
+
+  /**
+   * The same pins, matched on shape IRI rather than on class identity.
+   *
+   * A class object is only a usable key while exactly one copy of the module
+   * that declares it has evaluated, and in a built app there is not: the
+   * backend runs from `lib/`, while `linked.backend.storage` is loaded from the
+   * app root and imports the app's shapes from `src/`. The pin lands on one
+   * copy of a shape class and the query resolves the other. The two are `!==`,
+   * the lookup misses, and the query silently falls through to the default
+   * dataset — which is how a shape that IS pinned reaches the app-data router
+   * and fails there. Dev loads both halves from `src`, so it only breaks in
+   * production.
+   *
+   * A shape's IRI does not have that problem: it is the shape's identity, it is
+   * what the query already carries on the wire, and every copy derives the same
+   * one. So it is the key that survives duplication.
+   *
+   * Deliberately a scan of the one map rather than a second map kept alongside
+   * it. `getShapeToDatasetMap()` hands out a mutable view that callers use to
+   * *remove* pins, and a parallel index would not see those deletions — the pin
+   * would come back from the shadow copy. One source of truth is worth more
+   * here than a lookup that is already only reached on a miss, over a map that
+   * holds a few dozen entries.
+   */
+  private static findPinByShapeUri(shapeClass: Function): IDataset | undefined {
+    const uri = (shapeClass as {shape?: {id?: unknown}})?.shape?.id;
+    if (typeof uri !== 'string' || !uri) return undefined;
+    for (const [pinned, dataset] of this.shapeToDataset) {
+      const pinnedUri = (pinned as {shape?: {id?: unknown}})?.shape?.id;
+      if (typeof pinnedUri === 'string' && pinnedUri === uri) {
+        return dataset;
+      }
+    }
+    return undefined;
   }
 
   private static resolveDatasetForQueryShape(
