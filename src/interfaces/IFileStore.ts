@@ -14,6 +14,12 @@ export interface SaveFileOptions {
   /** Store-level user metadata, when the backing store supports it. */
   metadata?: Record<string, string>;
   /**
+   * Store the supplied object key verbatim. Intended for generated release
+   * artifacts whose URLs already contain that exact key; stores must reject
+   * absolute or traversal paths instead of sanitising them.
+   */
+  preservePath?: boolean;
+  /**
    * Rename instead of overwriting when the path is already taken.
    *
    * Left `undefined` when the caller did not say: each store then applies its
