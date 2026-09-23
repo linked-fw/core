@@ -43,6 +43,20 @@ let _autoLoadOntologyData = false;
 
 export type ShapeConfig = {
   /**
+   * The name this shape is identified by, overriding the class name.
+   *
+   * A shape's IRI is `<baseUri>shape/<package>/<name>`, and `Server.call`
+   * routes on it — so the name is persisted data, not a label. Taking it from
+   * `constructor.name` couples that data to how the code was compiled: a
+   * minifier renames the class, and so does a plain name collision, because a
+   * shape and the ontology term it targets deliberately share a name. Either
+   * one silently changes what the shape *is*.
+   *
+   * Optional, and defaults to `constructor.name`, so existing shapes are
+   * unaffected. Set it where the identity has to outlive the build.
+   */
+  name?: string;
+  /**
    * A short description of the shape, what it represents and what it is used for.
    * will be stored as rdfs:comment on the shape node
    */
@@ -307,14 +321,33 @@ export function linkedPackage(
     // if no shape object has been attached to the constructor
     if (!Object.getOwnPropertyNames(constructor).includes('shape'))
     {
+      // The shape's identity. An explicit name wins; otherwise the class name,
+      // which is what every existing shape relies on.
+      const shapeName = options?.name ?? constructor.name;
+
+      // A class name ending in a digit, with no explicit name given, is almost
+      // always a bundler disambiguating a collision — `BackendAPIStore2` when
+      // the ontology term of the same name took the binding first. The shape
+      // then registers under an IRI the rest of the system will never ask for,
+      // and the only symptom is a 501 several layers away. Say so here, where
+      // it is cheap and early.
+      if (!options?.name && /\d$/.test(constructor.name)) {
+        console.warn(
+          `[linked] Shape '${constructor.name}' in '${packageName}' has a name ending in a digit, ` +
+            `which usually means a bundler renamed it to avoid a collision — often with the ` +
+            `ontology term it targets. Its IRI will not match what consumers ask for. ` +
+            `Pass an explicit name: @linkedShape({name: '...'}).`,
+        );
+      }
+
       // create a new node shape (plain metadata object) for this shapeClass
       const nodeShape: NodeShapeData = createNodeShapeData(
-        getNodeShapeUri(packageName, constructor.name),
+        getNodeShapeUri(packageName, shapeName),
       );
       // connect the typescript class to its NodeShape
       constructor.shape = nodeShape;
       // set the name
-      nodeShape.label = constructor.name;
+      nodeShape.label = shapeName;
 
       if (options)
       {
