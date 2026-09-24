@@ -39,8 +39,39 @@ const resolveTargetClassId = (
 const shapeRegistryGlobal: any =
   typeof globalThis !== 'undefined' ? globalThis : ({} as any);
 
-shapeRegistryGlobal.__linkedShapeRegistryInstanceCount =
-  (shapeRegistryGlobal.__linkedShapeRegistryInstanceCount ?? 0) + 1;
+/**
+ * Counts DISTINCT physical copies of this module, not evaluations of it.
+ *
+ * The difference matters. A bare `count++` here is incremented by Vite's HMR every time
+ * the module is re-evaluated in the same process, against the same `globalThis` — so a
+ * developer who edits a file a few times sees a count of 4 and goes hunting a
+ * dual-resolution problem that does not exist. Recording a token per copy and counting
+ * the tokens survives re-evaluation: HMR replaces the module, and its token with it.
+ */
+const copyToken: object = {};
+const copies: Set<object> = (shapeRegistryGlobal.__linkedShapeRegistryCopies ??= new Set());
+copies.add(copyToken);
+
+/**
+ * More than one copy of this module means shapes register into one registry and are
+ * looked up in another, and the resulting failures never mention module identity — they
+ * say a declared property is not declared, or that a pinned shape has no pin.
+ *
+ * Reported rather than thrown. A throw from a library module at import time breaks
+ * tooling that legitimately loads a module twice, and the shared state above means a
+ * second copy is survivable: it is a correctness hazard for anything holding a class
+ * reference, not an immediate failure. So this says so, once, as loudly as a log can.
+ */
+if (copies.size > 1) {
+  console.error(
+    `[linked] ${copies.size} copies of @_linked/core's shape registry have loaded in ` +
+      `this process. They share one registry, so lookups still resolve — but each copy ` +
+      `has its own \`Shape\` base class, so \`instanceof\` comparisons across them are ` +
+      `false and adapters built by one copy do not satisfy the other. This is a module ` +
+      `resolution problem: part of the app is reaching this package by a path that ` +
+      `resolves to its source and part by one that resolves to its build output.`,
+  );
+}
 
 /**
  * One shared container, created by whichever copy evaluates first.
@@ -62,9 +93,9 @@ const registryState: {
   registryVersion: 0,
 });
 
-/** How many physical copies of THIS module have evaluated. One is expected. */
+/** How many distinct copies of this module are loaded. One is expected. */
 export function getShapeRegistryInstanceCount(): number {
-  return shapeRegistryGlobal.__linkedShapeRegistryInstanceCount ?? 0;
+  return copies.size;
 }
 
 let subShapesCache: Map<string, (typeof Shape)[]> = new Map();
