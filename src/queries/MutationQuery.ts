@@ -12,8 +12,8 @@ import {
 } from './QueryFactory.js';
 import {getPropertyShapes} from '../shapes/nodeShapeData.js';
 import type {NodeShapeData, PropertyShapeData} from '../shapes/SHACL.js';
-import {Shape} from '../shapes/Shape.js';
-import {getShapeClass} from '../utils/ShapeClass.js';
+import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
+import {getOrCreateShapeAdapter, getShapeClass} from '../utils/ShapeClass.js';
 import {isExpressionNode, ExpressionNode} from '../expressions/ExpressionNode.js';
 import {createProxiedPathBuilder} from './ProxiedPathBuilder.js';
 import {asContextRef} from './QueryContext.js';
@@ -75,7 +75,17 @@ export class MutationQueryFactory extends QueryFactory {
       }
       resolved = obj;
     } else if (typeof obj === 'function') {
-      const shapeClass = shape.id ? getShapeClass(shape.id) : undefined;
+      // A shape authored in a project exists only as metadata, so it has no authored
+      // class. `getOrCreateShapeAdapter` derives a constructor from that metadata --
+      // which is the documented return leg of the shape round trip (see
+      // registerRuntimeShape). Using `getShapeClass` alone made every runtime shape
+      // fail here with "Shape class not found".
+      // SAFETY: the adapter is an anonymous concrete subclass of Shape with a static
+      // .shape, i.e. a ShapeConstructor -- the same cast getShapeClass documents.
+      const shapeClass = shape.id
+        ? ((getShapeClass(shape.id) ??
+            getOrCreateShapeAdapter(shape.id)) as unknown as ShapeConstructor | undefined)
+        : undefined;
       if (!shapeClass) {
         throw new Error(`Shape class not found for ${shape.id || 'unknown'}`);
       }
@@ -266,7 +276,9 @@ export class MutationQueryFactory extends QueryFactory {
       } else {
         let valueShape: NodeShapeData = null;
         if (propShape.valueShape) {
-          const shapeClass = getShapeClass(propShape.valueShape);
+          const shapeClass =
+            getShapeClass(propShape.valueShape) ??
+            getOrCreateShapeAdapter(propShape.valueShape.id);
           valueShape = shapeClass?.shape || null;
           if (!valueShape) {
             throw new Error(

@@ -1,5 +1,91 @@
 # Changelog
 
+## 2.22.2
+
+### Patch Changes
+
+- [#254](https://github.com/linked-fw/core/pull/254) [`b813432`](https://github.com/linked-fw/core/commit/b813432c181a522c1b5d5afdb65bb9d9322b490e) Thanks [@flyon](https://github.com/flyon)! - A shape authored in a project now resolves in queries, as documented.
+
+  `registerRuntimeShape` deliberately synthesizes no class — consumers needing a
+  constructor are meant to get one from `getOrCreateShapeAdapter`. The query
+  layer never adopted that: five call sites resolved shapes with `getShapeClass`
+  alone, which answers `undefined` for every data-only shape.
+
+  The failures landed well away from the lookup:
+
+  ```
+  Error: Shape class not found for https://linked.cm/shape/my-project/Author
+  TypeError: Cannot read properties of undefined (reading 'shape')
+  ```
+
+  The second came from a sub-select, where the undefined class was handed to
+  `FieldSet.forSubSelect` and only failed when it read `.shape` off it.
+
+  `MutationQuery` (update callbacks, nested value shapes) and `SelectQuery`
+  (value-shape resolution, `select()` and `selectAll()` sub-selects) now fall
+  back to the adapter. `getShapeClass` is unchanged and still reports only
+  shapes with a real authored class.
+
+## 2.22.1
+
+### Patch Changes
+
+- [#252](https://github.com/linked-fw/core/pull/252) [`95b169e`](https://github.com/linked-fw/core/commit/95b169ee1221bc4b511d6693ff744076b8cf03cc) Thanks [@flyon](https://github.com/flyon)! - Dataset pins survive duplicate copies of a shape class.
+
+  `LinkedStorage.setDatasetForShapes()` keyed its pins on the class object, which
+  is only a usable key while exactly one copy of the declaring module has
+  evaluated. In a built app there is not: the backend runs from `lib/`, while
+  `linked.backend.storage` is loaded from the app root and imports the app's
+  shapes from `src/`. The pin landed on one copy and the query resolved the
+  other, so a shape that _was_ pinned fell through to the default dataset.
+
+  For an app whose default is a router, the symptom is remote from the cause:
+
+  ```
+  [AppDataRouter] query reached the app-data router with NO active project.
+  CN-internal shapes must be pinned to cn-main/cn-ai ...
+  ```
+
+  — reporting a missing pin for a shape that is pinned two files away. Dev loads
+  both halves from `src`, so this only ever appeared in production.
+
+  `getDatasetForShapeClass()` now falls back to matching on the shape's IRI when
+  the class-identity lookup misses. No API change, and unpinning through
+  `getShapeToDatasetMap()` keeps working, because the IRI match scans that same
+  map rather than a parallel index.
+
+## 2.22.0
+
+### Minor Changes
+
+- [#249](https://github.com/linked-fw/core/pull/249) [`30c4080`](https://github.com/linked-fw/core/commit/30c40800252ca7676d03e4144d1c448282fa2d2c) Thanks [@flyon](https://github.com/flyon)! - A shape can name itself, and a renamed one says so.
+
+  A shape's IRI is `<baseUri>shape/<package>/<name>` and `Server.call` routes on
+  it, so the name is persisted data rather than a label. Taking it from
+  `constructor.name` couples that data to how the code was compiled — a minifier
+  renames the class, and so does an ordinary name collision, because a shape and
+  the ontology term it targets deliberately share a name.
+
+  `@linkedShape` now accepts an optional `name`:
+
+  ```ts
+  @linkedShape({ name: "BackendAPIStore" })
+  export class BackendAPIStore extends Shape {}
+  ```
+
+  Optional, defaulting to `constructor.name`, so no existing shape changes.
+
+  Two warnings now fire where the cost is cheap — at registration, rather than as
+  a `No provider for …` several layers later:
+
+  - a class name ending in a digit with no explicit name given, which is almost
+    always a bundler disambiguating a collision;
+  - the existing shape-identity duplication guardrail, which **now also runs in
+    production**. It was dev-only on the reasoning that production is minified and
+    would false-fire; it does not — full minification produces `za`, which the
+    check ignores. What it does catch is `BackendAPIStore2`, which only happens in
+    a production build. The warning was suppressed in the one place the bug occurs.
+
 ## 2.21.2
 
 ### Patch Changes
