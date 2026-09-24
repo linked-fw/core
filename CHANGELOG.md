@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.22.5
+
+### Patch Changes
+
+- [#263](https://github.com/linked-fw/core/pull/263) [`f2754e6`](https://github.com/linked-fw/core/commit/f2754e62613b419480a777a9d8935597f021fca7) Thanks [@flyon](https://github.com/flyon)! - The shape registry reports when more than one copy of it is loaded.
+
+  A duplicated framework module never announces itself. Its symptoms accuse correct
+  application code — `Invalid property key: projectSlug. The shape Project does not have
+a registered property with this name`, for a property declared correctly two files away,
+  or a pinned shape resolving to the default dataset. Finding the real cause took a day.
+
+  Loading a second copy now logs once, naming what is actually wrong: that the app is
+  reaching this package by two paths, one resolving to its source and one to its build
+  output. It reports rather than throws — a throw at import time breaks tooling that
+  legitimately loads a module twice, and the shared registry makes a second copy
+  survivable.
+
+  `getShapeRegistryInstanceCount()` now counts **distinct copies** rather than
+  evaluations. The previous count was incremented by Vite's HMR on every hot
+  re-evaluation in the same process, so it would have reported phantom duplicates after a
+  few edits.
+
 ## 2.22.4
 
 ### Patch Changes
