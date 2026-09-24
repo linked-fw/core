@@ -1,4 +1,3 @@
-import {getShapeRegistryInstanceCount} from '../utils/ShapeClass.js';
 /*
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -38,6 +37,7 @@ import {getShapeRegistryInstanceCount} from '../utils/ShapeClass.js';
  * Not covered: `sh:languageIn` / `sh:uniqueLang` (skipped at serialization time
  * too, so there is no metadata to check against) and `sh:hasValue`.
  */
+import {getShapeRegistryInstanceCount} from '../utils/ShapeClass.js';
 import {shacl} from '../ontologies/shacl.js';
 import {xsd} from '../ontologies/xsd.js';
 import {isNodeReferenceValue, type NodeReferenceValue} from '../utils/NodeReference.js';

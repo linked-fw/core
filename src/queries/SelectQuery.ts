@@ -5,19 +5,8 @@ import type {RawSelectInput} from './IRDesugar.js';
 import {ShapeSet} from '../collections/ShapeSet.js';
 import {shacl} from '../ontologies/shacl.js';
 import {CoreSet} from '../collections/CoreSet.js';
-import {getOrCreateShapeAdapter, getPropertyShapeByLabel,getShapeClass} from '../utils/ShapeClass.js';
+import {getPropertyShapeByLabel, getShapeClass, resolveShapeConstructor} from '../utils/ShapeClass.js';
 
-/**
- * An authored shape class if there is one, otherwise a constructor derived from the
- * shape's registered metadata.
- *
- * A shape authored in a project exists only as data -- `registerRuntimeShape` records
- * the metadata and deliberately does NOT synthesize a class, so `getShapeClass` alone
- * answers `undefined` for every such shape and the query layer then fails somewhere
- * downstream of the lookup.
- */
-const resolveShapeForQuery = (id: string) =>
-  getShapeClass(id) ?? getOrCreateShapeAdapter(id);
 import {NodeReferenceValue,type Prettify,type ShapeReferenceValue} from './QueryFactory.js';
 import {xsd} from '../ontologies/xsd.js';
 import type {IRSelectQuery} from './IntermediateRepresentation.js';
@@ -563,10 +552,7 @@ export class QueryBuilderObject<
       }
     }
     if (valueShape) {
-      // Same as MutationQuery: fall back to the metadata-derived constructor so a
-      // project-authored shape resolves as a value shape too.
-      const shapeClass =
-        getShapeClass(valueShape) ?? getOrCreateShapeAdapter(valueShape.id);
+      const shapeClass = resolveShapeConstructor(valueShape);
       if(!shapeClass) {
         //TODO: getShapeClassAsync -> which will lazy load the shape class
         // but Im not sure if that's even possible with dynamic import paths, that are only known at runtime
@@ -1255,7 +1241,7 @@ export class QueryShape<
     // A sub-select on a project-authored value shape has no authored class, so fall
     // back to the metadata-derived constructor. Without it this returned undefined and
     // FieldSet.forSubSelect failed reading `.shape` off it, far from the cause.
-    const leastSpecificShape = resolveShapeForQuery(
+    const leastSpecificShape = resolveShapeConstructor(
       (this.getOriginalValue() as Shape).nodeShape.id,
     );
     const parentSegments = FieldSet.collectPropertySegments(this);
@@ -1273,9 +1259,17 @@ export class QueryShape<
     QueryShape<S, Source, Property>
   > {
     // Same as `select()` above: runtime shapes resolve through the adapter.
-    let leastSpecificShape = resolveShapeForQuery(
-      (this.getOriginalValue() as Shape).nodeShape.id,
-    );
+    const shapeId = (this.getOriginalValue() as Shape).nodeShape.id;
+    const leastSpecificShape = resolveShapeConstructor(shapeId);
+    // An IRI that is registered nowhere resolves to nothing, and reading `.shape` off
+    // it produced a bare "Cannot read properties of undefined" from inside the field
+    // walk — a message that named neither the shape nor this call. Say which shape.
+    if (!leastSpecificShape) {
+      throw new Error(
+        `selectAll() cannot resolve a shape for '${shapeId}'. It is registered neither ` +
+          `as a class nor as metadata, so its properties are unknown.`,
+      );
+    }
     const propertyLabels = getUniquePropertyShapes(leastSpecificShape.shape)
       .map((propertyShape) => propertyShape.label);
     return this.select((shape) =>
