@@ -30,10 +30,30 @@ linkedStorageGlobal.__linkedStorageInstanceCount =
  * The "Dataset" naming aligns with the IDataset contract. Earlier "Store"
  * names were renamed in phase-1 — see docs/plans/002-phase-1-create-user-project-flow.md.
  */
+/**
+ * The routing table lives on the shared global, beside the shape registries.
+ *
+ * It has to, for the same reason they do: a module can evaluate more than once in a
+ * process, and a class static then exists once per copy. Leaving these two here while
+ * the registries were shared was worse than either extreme — a second copy answered
+ * `isInitialised()` with false and `getDatasetForShapeClass()` with the default, while
+ * reporting a fully populated shape registry.
+ */
+const routingState: {
+  defaultDataset?: IDataset;
+  shapeToDataset: Map<Function, IDataset>;
+} = (linkedStorageGlobal.__linkedStorageRouting ??= {
+  defaultDataset: undefined,
+  shapeToDataset: new Map(),
+});
+
+/** A shape class's IRI, or undefined for anything that is not a registered shape. */
+const shapeUriOf = (shapeClass?: Function | null): string | undefined => {
+  const uri = (shapeClass as {shape?: {id?: unknown}} | null | undefined)?.shape?.id;
+  return typeof uri === 'string' && uri ? uri : undefined;
+};
+
 export abstract class LinkedStorage {
-  private static defaultDataset?: IDataset;
-  private static shapeToDataset: Map<Function, IDataset> =
-    new Map();
 
   /** plan-011 — how many physical copies of this module have evaluated. */
   static getLoadedInstanceCount(): number {
@@ -41,19 +61,19 @@ export abstract class LinkedStorage {
   }
 
   static isInitialised() {
-    return !!this.defaultDataset;
+    return !!routingState.defaultDataset;
   }
 
   /** The catch-all IDataset for shapes with no explicit mapping. */
   static getDefaultDataset() {
-    return this.defaultDataset;
+    return routingState.defaultDataset;
   }
 
   /** Set the default IDataset (catch-all for shapes with no explicit mapping). */
   static setDefaultDataset(dataset: IDataset) {
-    this.defaultDataset = dataset;
-    if (this.defaultDataset?.init) {
-      this.defaultDataset.init();
+    routingState.defaultDataset = dataset;
+    if (routingState.defaultDataset?.init) {
+      routingState.defaultDataset.init();
     }
     setQueryDispatch({
       selectQuery: (q) => this.selectQuery(q),
@@ -67,42 +87,82 @@ export abstract class LinkedStorage {
   /** Pin one or more shape classes to a specific IDataset implementer. */
   static setDatasetForShapes(dataset: IDataset, ...shapeClasses: Function[]) {
     shapeClasses.forEach((shapeClass) => {
-      this.shapeToDataset.set(shapeClass, dataset);
+      // A shape's IRI is its identity, so two classes claiming the same IRI are the
+      // same shape and must not route to different datasets. That situation is a
+      // duplicate-registration bug elsewhere; say so here rather than resolving it by
+      // Map insertion order, which is silent and arbitrary.
+      const uri = shapeUriOf(shapeClass);
+      if (uri) {
+        for (const [pinned, existing] of routingState.shapeToDataset) {
+          if (pinned !== shapeClass && shapeUriOf(pinned) === uri && existing !== dataset) {
+            console.warn(
+              `[linked] Two different classes are pinned to '${uri}' with different ` +
+                `datasets. They are the same shape by identity, so one of these pins ` +
+                `will be ignored. This usually means the shape class was registered twice.`,
+            );
+          }
+        }
+      }
+      routingState.shapeToDataset.set(shapeClass, dataset);
     });
+  }
+
+  /**
+   * Remove the pin for a shape, by class or by IRI.
+   *
+   * Removes **every** entry sharing that IRI, not just the one class object handed in.
+   * Deleting by class identity alone is not enough: resolution falls back to matching
+   * on IRI, so another class claiming the same shape would silently resurrect the pin
+   * the caller believed they had removed.
+   */
+  static unsetDatasetForShape(shape: Function | string): void {
+    const uri = typeof shape === 'string' ? shape : shapeUriOf(shape);
+    routingState.shapeToDataset.delete(shape as Function);
+    if (!uri) return;
+    for (const pinned of [...routingState.shapeToDataset.keys()]) {
+      if (shapeUriOf(pinned) === uri) {
+        routingState.shapeToDataset.delete(pinned);
+      }
+    }
   }
 
   /** Every IDataset known to the primary router (default + all pinned). */
   static getDatasets(): CoreSet<IDataset> {
     const datasets = new CoreSet<IDataset>();
-    if (this.defaultDataset) {
-      datasets.add(this.defaultDataset);
+    if (routingState.defaultDataset) {
+      datasets.add(routingState.defaultDataset);
     }
-    this.shapeToDataset.forEach((dataset) => datasets.add(dataset));
+    routingState.shapeToDataset.forEach((dataset) => datasets.add(dataset));
     return datasets;
   }
 
-  /** Read-only view of the shape→IDataset map. */
+  /**
+   * The live shape→IDataset map — not a copy.
+   *
+   * Mutating it works but is not the supported way to remove a pin: deleting a key
+   * here removes one class object, and resolution falls back to matching on shape IRI,
+   * so another class claiming the same shape resurrects the pin. Use
+   * `unsetDatasetForShape`, which removes every entry for that identity.
+   */
   static getShapeToDatasetMap(): Map<Function, IDataset> {
-    return this.shapeToDataset;
+    return routingState.shapeToDataset;
   }
 
   /** Resolve the IDataset for a given shape class. Walks the prototype chain. */
   static getDatasetForShapeClass(shapeClass?: Function | null): IDataset | undefined {
     let current: Function | null = shapeClass ?? null;
     while (typeof current === 'function') {
-      const dataset = this.shapeToDataset.get(current);
+      const dataset = routingState.shapeToDataset.get(current);
       if (dataset) {
         return dataset;
-      }
-      const byUri = this.findPinByShapeUri(current);
-      if (byUri) {
-        return byUri;
       }
       const parent = Object.getPrototypeOf(current);
       if (parent === Function.prototype || parent === null) break;
       current = parent;
     }
-    return this.defaultDataset;
+    // Only once the identity walk has failed. `static shape` is inherited, so running
+    // this at every level of the chain repeated the same scan for the same IRI.
+    return this.findPinByShapeUri(shapeClass) ?? routingState.defaultDataset;
   }
 
   /**
@@ -122,19 +182,15 @@ export abstract class LinkedStorage {
    * what the query already carries on the wire, and every copy derives the same
    * one. So it is the key that survives duplication.
    *
-   * Deliberately a scan of the one map rather than a second map kept alongside
-   * it. `getShapeToDatasetMap()` hands out a mutable view that callers use to
-   * *remove* pins, and a parallel index would not see those deletions — the pin
-   * would come back from the shadow copy. One source of truth is worth more
-   * here than a lookup that is already only reached on a miss, over a map that
-   * holds a few dozen entries.
+   * Deliberately a scan of the one map rather than a second map kept alongside it:
+   * one source of truth, over a map holding a few dozen entries, on a path only
+   * reached after an identity lookup has already failed.
    */
-  private static findPinByShapeUri(shapeClass: Function): IDataset | undefined {
-    const uri = (shapeClass as {shape?: {id?: unknown}})?.shape?.id;
-    if (typeof uri !== 'string' || !uri) return undefined;
-    for (const [pinned, dataset] of this.shapeToDataset) {
-      const pinnedUri = (pinned as {shape?: {id?: unknown}})?.shape?.id;
-      if (typeof pinnedUri === 'string' && pinnedUri === uri) {
+  private static findPinByShapeUri(shapeClass?: Function | null): IDataset | undefined {
+    const uri = shapeUriOf(shapeClass);
+    if (!uri) return undefined;
+    for (const [pinned, dataset] of routingState.shapeToDataset) {
+      if (shapeUriOf(pinned) === uri) {
         return dataset;
       }
     }
@@ -145,7 +201,7 @@ export abstract class LinkedStorage {
     shape?: string | Function | NodeShapeData | null,
   ): IDataset | undefined {
     if (!shape) {
-      return this.defaultDataset;
+      return routingState.defaultDataset;
     }
     if (typeof shape === 'function') {
       return this.getDatasetForShapeClass(shape);
@@ -159,7 +215,7 @@ export abstract class LinkedStorage {
       const shapeClass = getShapeClass((shape as {id: string}).id);
       return this.getDatasetForShapeClass(shapeClass);
     }
-    return this.defaultDataset;
+    return routingState.defaultDataset;
   }
 
   /**

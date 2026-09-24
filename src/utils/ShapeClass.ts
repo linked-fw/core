@@ -88,16 +88,17 @@ const nodeShapeRegistry = registryState.nodeShapeRegistry;
 let subShapesCacheVersion = -1;
 
 /**
- * Monotonic registration counter. Every derived cache in this module (and in
- * `irToAlgebra`) is keyed on it.
+ * The current registration version — a monotonic counter, bumped on every write.
  *
- * It replaces two earlier invalidation strategies that were both unsound: a
- * `setTimeout(…, 0)` cache clear (which missed anything registered later in the same
- * session) and comparing the registry SIZE (which silently reuses a stale cache when a
- * registration and a removal coincide, or when a shape is re-registered in place).
+ * Every derived cache in this module, and in `irToAlgebra`, is keyed on it. It replaces
+ * two earlier invalidation strategies that were both unsound: a `setTimeout(…, 0)` cache
+ * clear (which missed anything registered later in the same session) and comparing the
+ * registry SIZE (which silently reuses a stale cache when a registration and a removal
+ * coincide, or when a shape is re-registered in place).
+ *
+ * It lives on the shared state, not in module scope: a cache keyed on a per-copy version
+ * would look valid after another copy had written.
  */
-
-/** The current registration version — bump-on-write, for cache invalidation. */
 export function getRegistryVersion(): number {
   return registryState.registryVersion;
 }
@@ -378,6 +379,29 @@ export function addNodeShapeToShapeClass(
   // see one map regardless of how a shape was declared. This also bumps the version,
   // which invalidates every derived cache immediately rather than on a next-tick timer.
   registerNodeShape(nodeShape);
+}
+
+/**
+ * The constructor for a shape IRI — an authored class if there is one, otherwise one
+ * derived from the registered metadata.
+ *
+ * This is what the query layer wants in every case, and `getShapeClass` alone is not:
+ * it answers `undefined` for a shape that exists only as data, which is every shape
+ * authored in a project. Five call sites used to spell this fallback out by hand, in
+ * four different ways.
+ *
+ * `getShapeClass` is NOT consulted first. `getOrCreateShapeAdapter` already returns the
+ * authored class when one exists, and a class-backed shape is always mirrored into the
+ * primary registry, so the adapter path cannot miss a shape `getShapeClass` would find.
+ */
+export function resolveShapeConstructor(
+  nodeShape: NodeReferenceValue | {id: string} | string,
+): ShapeConstructor | undefined {
+  const id = typeof nodeShape === 'string' ? nodeShape : nodeShape?.id;
+  if (!id) return undefined;
+  // SAFETY: both paths yield a concrete subclass of Shape with a static .shape —
+  // i.e. a ShapeConstructor. Same cast getShapeClass documents.
+  return getOrCreateShapeAdapter(id) as unknown as ShapeConstructor | undefined;
 }
 
 export function getShapeClass(
