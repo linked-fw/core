@@ -19,9 +19,88 @@ const resolveTargetClassId = (
   return targetClass.id ?? null;
 };
 
+/**
+ * The shape registries live on `globalThis`, not in module scope.
+ *
+ * A module can evaluate more than once in one process, and in a built app it does: an
+ * app's backend is assembled from two graphs, one loaded by the bundler from `src/` and
+ * one resolved by Node to `lib/esm/`. A module-scope `Map` then exists twice — shapes
+ * register into one copy and every lookup reads the other, which finds nothing.
+ *
+ * The symptom never mentions module identity. It is `Invalid property key: projectSlug.
+ * The shape Project does not have a registered property with this name` for a property
+ * that is declared correctly two files away, because validation ran on the copy the
+ * decorators never reached. See docs/reports/043-module-identity-in-the-backend.md.
+ *
+ * Sharing the state makes duplication harmless rather than merely absent: the graphs
+ * still hold two copies of this module, but only one registry. `LinkedStorage` already
+ * keeps its instance counter here; this keeps the data itself.
+ */
+const shapeRegistryGlobal: any =
+  typeof globalThis !== 'undefined' ? globalThis : ({} as any);
+
+/**
+ * Counts DISTINCT physical copies of this module, not evaluations of it.
+ *
+ * The difference matters. A bare `count++` here is incremented by Vite's HMR every time
+ * the module is re-evaluated in the same process, against the same `globalThis` — so a
+ * developer who edits a file a few times sees a count of 4 and goes hunting a
+ * dual-resolution problem that does not exist. Recording a token per copy and counting
+ * the tokens survives re-evaluation: HMR replaces the module, and its token with it.
+ */
+const copyToken: object = {};
+const copies: Set<object> = (shapeRegistryGlobal.__linkedShapeRegistryCopies ??= new Set());
+copies.add(copyToken);
+
+/**
+ * More than one copy of this module means shapes register into one registry and are
+ * looked up in another, and the resulting failures never mention module identity — they
+ * say a declared property is not declared, or that a pinned shape has no pin.
+ *
+ * Reported rather than thrown. A throw from a library module at import time breaks
+ * tooling that legitimately loads a module twice, and the shared state above means a
+ * second copy is survivable: it is a correctness hazard for anything holding a class
+ * reference, not an immediate failure. So this says so, once, as loudly as a log can.
+ */
+if (copies.size > 1) {
+  console.error(
+    `[linked] ${copies.size} copies of @_linked/core's shape registry have loaded in ` +
+      `this process. They share one registry, so lookups still resolve — but each copy ` +
+      `has its own \`Shape\` base class, so \`instanceof\` comparisons across them are ` +
+      `false and adapters built by one copy do not satisfy the other. This is a module ` +
+      `resolution problem: part of the app is reaching this package by a path that ` +
+      `resolves to its source and part by one that resolves to its build output.`,
+  );
+}
+
+/**
+ * One shared container, created by whichever copy evaluates first.
+ *
+ * `registryVersion` belongs here too: every derived cache in this module is keyed on it,
+ * so a version that is not shared would let one copy's writes leave another copy's caches
+ * looking valid. The caches themselves stay per-copy — they are rebuilt whenever the
+ * shared version moves past them.
+ */
+const registryState: {
+  nodeShapeToShapeClass: Map<string, typeof Shape>;
+  nodeShapeRegistry: Map<string, NodeShapeData>;
+  shapeAdapters: Map<string, typeof Shape>;
+  registryVersion: number;
+} = (shapeRegistryGlobal.__linkedShapeRegistry ??= {
+  nodeShapeToShapeClass: new Map(),
+  nodeShapeRegistry: new Map(),
+  shapeAdapters: new Map(),
+  registryVersion: 0,
+});
+
+/** How many distinct copies of this module are loaded. One is expected. */
+export function getShapeRegistryInstanceCount(): number {
+  return copies.size;
+}
+
 let subShapesCache: Map<string, (typeof Shape)[]> = new Map();
 let mostSpecificSubShapesCache: Map<string, (typeof Shape)[]> = new Map();
-let nodeShapeToShapeClass: Map<string, typeof Shape> = new Map();
+const nodeShapeToShapeClass = registryState.nodeShapeToShapeClass;
 const warnedDuplicateBases = new Set<string>();
 
 /**
@@ -34,25 +113,25 @@ const warnedDuplicateBases = new Set<string>();
  * typed accessor). Query lowering, predicate resolution and containment all read
  * metadata, so they use this map and work identically for both kinds of shape.
  */
-let nodeShapeRegistry: Map<string, NodeShapeData> = new Map();
+const nodeShapeRegistry = registryState.nodeShapeRegistry;
 
 /** Version the sub-shape caches above were filled at. */
 let subShapesCacheVersion = -1;
 
 /**
- * Monotonic registration counter. Every derived cache in this module (and in
- * `irToAlgebra`) is keyed on it.
+ * The current registration version — a monotonic counter, bumped on every write.
  *
- * It replaces two earlier invalidation strategies that were both unsound: a
- * `setTimeout(…, 0)` cache clear (which missed anything registered later in the same
- * session) and comparing the registry SIZE (which silently reuses a stale cache when a
- * registration and a removal coincide, or when a shape is re-registered in place).
+ * Every derived cache in this module, and in `irToAlgebra`, is keyed on it. It replaces
+ * two earlier invalidation strategies that were both unsound: a `setTimeout(…, 0)` cache
+ * clear (which missed anything registered later in the same session) and comparing the
+ * registry SIZE (which silently reuses a stale cache when a registration and a removal
+ * coincide, or when a shape is re-registered in place).
+ *
+ * It lives on the shared state, not in module scope: a cache keyed on a per-copy version
+ * would look valid after another copy had written.
  */
-let registryVersion = 0;
-
-/** The current registration version — bump-on-write, for cache invalidation. */
 export function getRegistryVersion(): number {
-  return registryVersion;
+  return registryState.registryVersion;
 }
 
 /** Reverse index parentIri → direct child IRIs, rebuilt when the registry changes. */
@@ -60,7 +139,7 @@ let childIndex: Map<string, string[]> | null = null;
 let childIndexVersion = -1;
 
 function getChildIndex(): Map<string, string[]> {
-  if (childIndex && childIndexVersion === registryVersion) return childIndex;
+  if (childIndex && childIndexVersion === registryState.registryVersion) return childIndex;
   const index = new Map<string, string[]>();
   nodeShapeRegistry.forEach((shape, id) => {
     const parent = shape.extends?.id;
@@ -70,12 +149,12 @@ function getChildIndex(): Map<string, string[]> {
     else index.set(parent, [id]);
   });
   childIndex = index;
-  childIndexVersion = registryVersion;
+  childIndexVersion = registryState.registryVersion;
   return index;
 }
 
 function invalidateRegistryCaches() {
-  registryVersion++;
+  registryState.registryVersion++;
   subShapesCache.clear();
   mostSpecificSubShapesCache.clear();
   childIndex = null;
@@ -130,7 +209,7 @@ export function getAllNodeShapes(): ReadonlyMap<string, NodeShapeData> {
  * the metadata verbatim, so nothing is lost, and inheritance is read from
  * `nodeShape.extends` (not from the adapter's prototype, which is always `Shape`).
  */
-const shapeAdapters: Map<string, typeof Shape> = new Map();
+const shapeAdapters = registryState.shapeAdapters;
 
 /**
  * A constructor for a shape known only as data, created on first use.
@@ -333,6 +412,29 @@ export function addNodeShapeToShapeClass(
   registerNodeShape(nodeShape);
 }
 
+/**
+ * The constructor for a shape IRI — an authored class if there is one, otherwise one
+ * derived from the registered metadata.
+ *
+ * This is what the query layer wants in every case, and `getShapeClass` alone is not:
+ * it answers `undefined` for a shape that exists only as data, which is every shape
+ * authored in a project. Five call sites used to spell this fallback out by hand, in
+ * four different ways.
+ *
+ * `getShapeClass` is NOT consulted first. `getOrCreateShapeAdapter` already returns the
+ * authored class when one exists, and a class-backed shape is always mirrored into the
+ * primary registry, so the adapter path cannot miss a shape `getShapeClass` would find.
+ */
+export function resolveShapeConstructor(
+  nodeShape: NodeReferenceValue | {id: string} | string,
+): ShapeConstructor | undefined {
+  const id = typeof nodeShape === 'string' ? nodeShape : nodeShape?.id;
+  if (!id) return undefined;
+  // SAFETY: both paths yield a concrete subclass of Shape with a static .shape —
+  // i.e. a ShapeConstructor. Same cast getShapeClass documents.
+  return getOrCreateShapeAdapter(id) as unknown as ShapeConstructor | undefined;
+}
+
 export function getShapeClass(
   nodeShape: NodeReferenceValue | {id: string} | string,
 ): ShapeConstructor | undefined {
@@ -363,10 +465,10 @@ export function getSubShapesClasses(
   _internalKey?: string,
 ): (typeof Shape)[] {
   let key = _internalKey || getKey(shape);
-  if (subShapesCacheVersion !== registryVersion) {
+  if (subShapesCacheVersion !== registryState.registryVersion) {
     subShapesCache.clear();
     mostSpecificSubShapesCache.clear();
-    subShapesCacheVersion = registryVersion;
+    subShapesCacheVersion = registryState.registryVersion;
   }
   if (!subShapesCache.has(key)) {
     //apply the hasSuperclass function to the shape
@@ -470,10 +572,10 @@ export function getMostSpecificSubShapes(
   }
   //get the subshapes of the given shapes
   let key = shape.map((s) => s.name).join(',');
-  if (subShapesCacheVersion !== registryVersion) {
+  if (subShapesCacheVersion !== registryState.registryVersion) {
     subShapesCache.clear();
     mostSpecificSubShapesCache.clear();
-    subShapesCacheVersion = registryVersion;
+    subShapesCacheVersion = registryState.registryVersion;
   }
   if (!mostSpecificSubShapesCache.has(key)) {
     //get the subshapes of the given shapes

@@ -45,9 +45,20 @@ export type NodeShapeWire = Omit<NodeShapeData, 'propertyShapes'> & {
 };
 
 /**
- * True when the value is already in wire form (or is indistinguishable from it —
- * a shape with no patterns and no parent links satisfies both types, which is
- * harmless because the conversions are then identities).
+ * True when the value is already in wire form — a structural guess, not a fact.
+ *
+ * The two forms differ only by `parentNodeShape` and by `pattern` being a RegExp
+ * rather than a string, so a shape carrying neither satisfies both types. An empty
+ * `propertyShapes` array is the extreme case: `[].every()` is vacuously true, so
+ * every propertyless shape reads as wire.
+ *
+ * This is safe **because the conversions are idempotent**, not because the guess is
+ * reliable. `fromWire` preserves an already-compiled pattern and re-attaching a
+ * parent link is a no-op, and `toWire` tolerates a pattern that is already a source
+ * string. So misclassifying a shape in either direction costs nothing.
+ *
+ * That property is load-bearing: keep it if you change either converter. Before it
+ * held, `fromWire` on an already-converted shape dropped every RegExp pattern.
  */
 export function isNodeShapeWire(
   shape: NodeShapeData | NodeShapeWire,
@@ -103,6 +114,19 @@ function propertyFromWire(
   const prop = rest as PropertyShapeData;
   if (typeof pattern === 'string') {
     prop.pattern = new RegExp(pattern, patternFlags ?? '');
+  } else if ((pattern as unknown) instanceof RegExp) {
+    // The cast is the point: `pattern` is declared `string` on the wire type, and
+    // this branch exists precisely for the input that does not honour that.
+    // Already in metamodel form. `pattern` was destructured out above, so without
+    // this branch it is silently DROPPED -- converting a shape that was already
+    // converted would quietly discard every `sh:pattern` constraint, and the shape
+    // would then validate values it should reject.
+    //
+    // Keeping it makes this function idempotent: fromWire(fromWire(x)) equals
+    // fromWire(x) for any input. That matters because the only thing deciding
+    // whether to call it is `isNodeShapeWire`, a structural guess -- see the note
+    // on that function.
+    prop.pattern = pattern as unknown as RegExp;
   }
   prop.parentNodeShape = parent;
   return prop;

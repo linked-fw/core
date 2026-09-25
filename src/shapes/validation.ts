@@ -37,6 +37,7 @@
  * Not covered: `sh:languageIn` / `sh:uniqueLang` (skipped at serialization time
  * too, so there is no metadata to check against) and `sh:hasValue`.
  */
+import {getShapeRegistryInstanceCount} from '../utils/ShapeClass.js';
 import {shacl} from '../ontologies/shacl.js';
 import {xsd} from '../ontologies/xsd.js';
 import {isNodeReferenceValue, type NodeReferenceValue} from '../utils/NodeReference.js';
@@ -147,11 +148,27 @@ const RESERVED_KEYS = new Set(['id', '__id', 'shape']);
  */
 export function undeclaredPropertyMessage(key: string, shape: NodeShapeData): string {
   const shapeName = shape.label || shape.id?.split('/').pop();
-  return (
+  const base =
     `Invalid property key: ${key}. The shape ${shapeName} does not have a registered ` +
     `property with this name. Make sure the get/set method exists, and that it uses a ` +
-    `@objectProperty or @literalProperty decorator.`
-  );
+    `@objectProperty or @literalProperty decorator.`;
+
+  // If more than one copy of the shape registry module has evaluated, this message is
+  // very probably lying: the property IS declared, on a copy this code cannot see.
+  // Saying so here is the whole point — the previous version of this error accused
+  // correct application code, and finding the real cause took a day of eliminating
+  // innocent suspects. See docs/reports/043-module-identity-in-the-backend.md.
+  const copies = getShapeRegistryInstanceCount();
+  if (copies > 1) {
+    return (
+      `${base}\n\n` +
+      `NOTE: ${copies} copies of the shape registry have loaded in this process. If this ` +
+      `property is declared, it almost certainly registered on a different copy than the ` +
+      `one validating here, and the declaration is not the problem. This happens when part ` +
+      `of the app resolves a framework package to its source and part to its built output.`
+    );
+  }
+  return base;
 }
 
 // ---------------------------------------------------------------------------

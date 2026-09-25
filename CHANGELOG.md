@@ -1,5 +1,84 @@
 # Changelog
 
+## 2.22.5
+
+### Patch Changes
+
+- [#263](https://github.com/linked-fw/core/pull/263) [`f2754e6`](https://github.com/linked-fw/core/commit/f2754e62613b419480a777a9d8935597f021fca7) Thanks [@flyon](https://github.com/flyon)! - The shape registry reports when more than one copy of it is loaded.
+
+  A duplicated framework module never announces itself. Its symptoms accuse correct
+  application code — `Invalid property key: projectSlug. The shape Project does not have
+a registered property with this name`, for a property declared correctly two files away,
+  or a pinned shape resolving to the default dataset. Finding the real cause took a day.
+
+  Loading a second copy now logs once, naming what is actually wrong: that the app is
+  reaching this package by two paths, one resolving to its source and one to its build
+  output. It reports rather than throws — a throw at import time breaks tooling that
+  legitimately loads a module twice, and the shared registry makes a second copy
+  survivable.
+
+  `getShapeRegistryInstanceCount()` now counts **distinct copies** rather than
+  evaluations. The previous count was incremented by Vite's HMR on every hot
+  re-evaluation in the same process, so it would have reported phantom duplicates after a
+  few edits.
+
+## 2.22.4
+
+### Patch Changes
+
+- [#261](https://github.com/linked-fw/core/pull/261) [`24634c3`](https://github.com/linked-fw/core/commit/24634c3b65a19c08e94f0bdce8cee221473458ae) Thanks [@flyon](https://github.com/flyon)! - Dataset routing state is shared, and pins are keyed on shape identity.
+
+  **`LinkedStorage.shapeToDataset` and `defaultDataset` now live on the shared global**,
+  beside the shape registries. They were the one part of the routing model still held per
+  module copy, which left the package in a worse state than either extreme: a second copy
+  reported a fully populated shape registry while answering `isInitialised()` with `false`
+  and resolving every shape to the default dataset.
+
+  This also covers the previous release, which moved the shape registries to the shared
+  global and shipped without a changeset.
+
+  **New: `LinkedStorage.unsetDatasetForShape(classOrIri)`.** Removing a pin by deleting
+  from `getShapeToDatasetMap()` removes one class object, but resolution falls back to
+  matching on shape IRI — so another class claiming the same shape silently resurrects the
+  pin. The new method removes every entry for that identity:
+
+  ```ts
+  LinkedStorage.unsetDatasetForShape(Project); // by class
+  LinkedStorage.unsetDatasetForShape("https://…/shape/x/Project"); // or by IRI
+  ```
+
+  Pinning two different classes to one IRI with different datasets now **warns**, instead
+  of resolving by `Map` insertion order.
+
+  **New: `resolveShapeConstructor(iri)`**, the one way to get a constructor for a shape
+  IRI whether or not it has an authored class. Five call sites in the query layer spelled
+  this out by hand in four different ways.
+
+  `selectAll()` on an unregistered IRI now throws naming the shape, rather than failing
+  later with `Cannot read properties of undefined (reading 'shape')`.
+
+## 2.22.3
+
+### Patch Changes
+
+- [#258](https://github.com/linked-fw/core/pull/258) [`a7dddb2`](https://github.com/linked-fw/core/commit/a7dddb28929dd982017a107753583adfaea0bf14) Thanks [@flyon](https://github.com/flyon)! - `fromWire` no longer discards an already-compiled `sh:pattern`.
+
+  `propertyFromWire` destructured `pattern` out and restored it only when it was a
+  source string. Handed a shape that was already in metamodel form, it therefore
+  **dropped every RegExp pattern** — and a shape whose pattern constraint has
+  silently vanished validates values it should reject.
+
+  That mattered because nothing guarantees which form a shape is in.
+  `isNodeShapeWire` is a structural guess: the two types differ only by
+  `parentNodeShape` and by `pattern` being a RegExp rather than a string, so a
+  shape carrying neither satisfies both. A shape with no property shapes always
+  reads as wire, because `[].every()` is vacuously true.
+
+  The conversions are now idempotent in both directions — `fromWire(fromWire(x))`
+  equals `fromWire(x)`, and `toWire` already tolerated a pattern that was already a
+  string. Misclassifying a shape now costs nothing, which is what makes the guess
+  safe to keep.
+
 ## 2.22.2
 
 ### Patch Changes
