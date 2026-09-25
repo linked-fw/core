@@ -57,7 +57,7 @@ The `.catch(() => null)` turns **any** failure into `false` — into "does not e
 CN observed this returning `false` unconditionally in a running backend, so every re-save took the
 `create` branch, and nobody noticed because the wrong branch is silent.
 
-[#206](https://github.com/linked-cm/core/pull/206) adds `Shape.exists()` / `SelectBuilder.exists()`
+[#206](https://github.com/linked-fw/core/pull/206) adds `Shape.exists()` / `SelectBuilder.exists()`
 so the check itself is correct and cannot swallow errors. **That fixes the ingredient, not the
 recipe.** The two round-trips, the race and the branch all remain in userland, in every consumer
 that needs them.

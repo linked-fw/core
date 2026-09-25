@@ -9,7 +9,7 @@ packages: [core]
 Status: **done**. Suite **67 suites / 1654 passed / 120 skipped**, typecheck green (baseline before
 this work: 1626 passed). Additive `minor`.
 
-PR: [linked-cm/core#PR](https://github.com/linked-cm/core/pulls) → `dev`.
+PR: [linked-fw/core#PR](https://github.com/linked-fw/core/pulls) → `dev`.
 
 ## The problem
 
