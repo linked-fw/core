@@ -887,7 +887,22 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       if (swallowUnresolvedContext && err instanceof UnresolvedContextError) {
         return null;
       }
-      throw Error(`Error while executing query: ${(err as Error).stack}.\n\nQuery related to this error: ${JSON.stringify(this.toJSON())}`);
+      // The message names the query, which is what a human needs. `cause` keeps
+      // the ORIGINAL error reachable as an object, which is what code needs: a
+      // store error's status/endpoint/class is how a caller tells "this dataset
+      // does not exist" from "this query is wrong", and without the chain the
+      // only way left is to pattern-match this string. Written with
+      // defineProperty rather than `new Error(msg, {cause})` because this
+      // package targets es6, where that overload is not typed; the property
+      // shape (own, non-enumerable) is identical.
+      const wrapped = Error(`Error while executing query: ${(err as Error).stack}.\n\nQuery related to this error: ${JSON.stringify(this.toJSON())}`);
+      Object.defineProperty(wrapped, 'cause', {
+        value: err,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+      throw wrapped;
     }
   }
 
