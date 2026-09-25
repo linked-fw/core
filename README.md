@@ -418,6 +418,7 @@ await store.saveFile('/app.js', bytes, {
   mimeType: 'application/javascript',
   cacheControl: 'public, max-age=31536000, immutable',
   metadata: {release: '1.2.3'},
+  preservePath: true, // keep a generated release key exactly as supplied
   preventDuplicates: true, // rename instead of overwriting when the path is taken
 });
 
@@ -426,6 +427,11 @@ await store.saveFile('/photo.webp', bytes, 'image/webp', true);
 ```
 
 `options.preventDuplicates` wins over the positional fourth argument. Implementations should start with `normalizeSaveFileOptions(options, preventDuplicates)`, which collapses both forms into one object.
+
+Set `preservePath: true` only for generated object keys whose paths are already part of an external contract, such as
+a release manifest. A store must either keep that key verbatim or reject it; it must not silently sanitise or rename
+the key. Filesystem-backed stores must reject absolute and traversal paths before writing. Ordinary user uploads should
+leave this option unset and retain the store's normal filename hygiene.
 
 > **There is no core-wide `preventDuplicates` default.** When a caller does not specify one it stays `undefined` all the way to the store, and **each store applies its own**: `LocalFileStore` adds a random suffix, `S3FileStore` overwrites. Pass it explicitly whenever the behaviour matters — never assume a default.
 
