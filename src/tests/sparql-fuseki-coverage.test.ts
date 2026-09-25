@@ -446,6 +446,32 @@ describe('coverage §2 — date operators', () => {
     expect(await projVal(Person.select((p: any) => ({r: p.birthDate.month()})).for(P1))).toBe(1);
     expect(await projVal(Person.select((p: any) => ({r: p.birthDate.day()})).for(P1))).toBe(1);
   });
+
+  /**
+   * The end-to-end proof that a `Date` in a filter is emitted TYPED. Measured before
+   * the fix, this returned zero rows against the very triple below: the filter
+   * rendered a plain `"1990-01-01T13:45:30.000Z"`, and in SPARQL that is a type
+   * error against an `^^xsd:dateTime` term, so the row was dropped.
+   */
+  test('equals(Date) matches a stored xsd:dateTime', async () => {
+    if (!fusekiAvailable) return;
+    expect(
+      await filterIds(
+        Person.select().where((p: any) =>
+          p.birthDate.equals(new Date('1990-01-01T13:45:30.000Z')),
+        ),
+      ),
+    ).toEqual(['p1']);
+  });
+
+  test('a Date range filter matches too', async () => {
+    if (!fusekiAvailable) return;
+    expect(
+      await filterIds(
+        Person.select().where((p: any) => p.birthDate.lt(new Date('2000-01-01T00:00:00.000Z'))),
+      ),
+    ).toEqual(['p1']);
+  });
 });
 
 describe('coverage §2 — null / introspection / hash', () => {

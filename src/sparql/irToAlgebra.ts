@@ -1469,16 +1469,44 @@ function collectRequiredBindingKeys(expr: IRExpression): Set<string> {
 // Expression conversion
 // ---------------------------------------------------------------------------
 
+/**
+ * The `sh:datatype` of the property a literal is being compared AGAINST, when the
+ * comparison has one. Only temporal values use it (see the `literal_expr` case):
+ * it is what tells an `xsd:date` property's filter to render `"2020-01-01"^^xsd:date`
+ * rather than a full timestamp that can never equal the stored term.
+ */
+function siblingDatatype(expr: IRExpression | undefined): string | undefined {
+  if (!expr) return undefined;
+  if (expr.kind === 'property_expr' || expr.kind === 'context_property_expr') {
+    return resolvePropertyDatatype(expr.property);
+  }
+  return undefined;
+}
+
 function convertExpression(
   expr: IRExpression,
   registry: VariableRegistry,
   optionalPropertyTriples: SparqlTriple[],
+  datatypeHint?: string,
 ): SparqlExpression {
   switch (expr.kind) {
     case 'literal_expr': {
       const value = expr.value;
       if (value === null || value === undefined) {
         return {kind: 'literal_expr', value: ''};
+      }
+      // A temporal literal must carry its datatype. SPARQL's `=` on a plain literal
+      // and an `^^xsd:dateTime` one is a type error, so the row is dropped: an
+      // untyped date filter matched NOTHING against data core itself wrote. The
+      // lexical form follows the compared property's declared datatype, the same
+      // rule `dateToTerm` applies on the mutation side.
+      if (value instanceof Date) {
+        const term = dateToTerm(value, datatypeHint);
+        return {
+          kind: 'literal_expr',
+          value: term.kind === 'literal' ? term.value : String(value),
+          datatype: term.kind === 'literal' ? term.datatype : XSD_DATETIME,
+        };
       }
       if (typeof value === 'boolean') {
         return {
@@ -1521,22 +1549,28 @@ function convertExpression(
       return {kind: 'variable_expr', name: varName};
     }
 
-    case 'in_expr':
+    case 'in_expr': {
+      const listHint = siblingDatatype(expr.value);
       return {
         kind: 'in_expr',
         negated: expr.negated,
         value: convertExpression(expr.value, registry, optionalPropertyTriples),
         list: expr.source.list.map((e) =>
-          convertExpression(e, registry, optionalPropertyTriples),
+          convertExpression(e, registry, optionalPropertyTriples, listHint),
         ),
       };
+    }
 
     case 'binary_expr':
       return {
         kind: 'binary_expr',
         op: expr.operator,
-        left: convertExpression(expr.left, registry, optionalPropertyTriples),
-        right: convertExpression(expr.right, registry, optionalPropertyTriples),
+        left: convertExpression(
+          expr.left, registry, optionalPropertyTriples, siblingDatatype(expr.right),
+        ),
+        right: convertExpression(
+          expr.right, registry, optionalPropertyTriples, siblingDatatype(expr.left),
+        ),
       };
 
     case 'logical_expr':

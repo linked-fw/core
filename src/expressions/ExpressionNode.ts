@@ -34,8 +34,12 @@ export function toIRExpression(input: ExpressionInput): IRExpression {
     return {kind: 'literal_expr', value: input};
   if (typeof input === 'boolean')
     return {kind: 'literal_expr', value: input};
-  if (input instanceof Date)
-    return {kind: 'literal_expr', value: input.toISOString()};
+  // The `Date` is carried through as a Date, NOT flattened to its ISO string.
+  // `IRLiteralValue` admits one, and the SPARQL layer needs the JS type to know
+  // it must emit a TYPED literal: a plain `"2020-01-01T00:00:00.000Z"` never
+  // equals the `^^xsd:dateTime` term the mutation side writes, so flattening
+  // here made every date comparison silently match nothing.
+  if (input instanceof Date) return {kind: 'literal_expr', value: input};
   // A live query-context reference → carry the name; `lower()` resolves it.
   if (input instanceof PendingQueryContext)
     return {kind: 'reference_expr', contextName: input.contextName};
