@@ -220,7 +220,7 @@ function decodeValueExprInner(
       return {ir: {kind: 'reference_expr', contextName: o['@ctx'] as string}, refs: new Map()};
     }
     if ('@date' in o) {
-      return {ir: {kind: 'literal_expr', value: new Date(o['@date'] as string) as never}, refs: new Map()};
+      return {ir: {kind: 'literal_expr', value: new Date(o['@date'] as string)}, refs: new Map()};
     }
     if ('@path' in o) {
       return propertyOrAlias(shape, o['@path'] as string);

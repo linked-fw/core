@@ -30,12 +30,16 @@ describe('ExpressionNode', () => {
       expect(toIRExpression(true)).toEqual({kind: 'literal_expr', value: true});
     });
 
-    test('Date → literal_expr ISO string', () => {
+    /**
+     * The Date survives as a Date. It used to be flattened to its ISO string here,
+     * which left the SPARQL layer unable to tell a timestamp from any other string
+     * — so it emitted an untyped literal that never equalled the `^^xsd:dateTime`
+     * term the mutation side writes. See `date-filter-datatype.test.ts`.
+     */
+    test('Date → literal_expr keeping the Date', () => {
       const d = new Date('2024-01-15T00:00:00.000Z');
-      expect(toIRExpression(d)).toEqual({
-        kind: 'literal_expr',
-        value: '2024-01-15T00:00:00.000Z',
-      });
+      expect(toIRExpression(d)).toEqual({kind: 'literal_expr', value: d});
+      expect((toIRExpression(d) as {value: unknown}).value).toBeInstanceOf(Date);
     });
 
     test('ExpressionNode → extracts .ir', () => {

@@ -56,6 +56,22 @@ export interface SelectQuery {
 export type JSPrimitive = JSNonNullPrimitive | null | undefined;
 export type JSNonNullPrimitive = string | number | boolean | Date;
 
+/**
+ * What a comparison on a primitive-valued query property accepts.
+ *
+ * `NodeReferenceValue` belongs here because an object property may be DECLARED
+ * with a primitive accessor type — `@objectProperty({path: …}) get project():
+ * string` returns the referenced node's IRI — which projects to a
+ * `QueryPrimitive<string>`, not a `QueryShape`. The documented way to match such
+ * a property is still by reference (`.equals({id})`), and the lowering has always
+ * supported it: `toIRExpression` turns `{id}` into a `reference_expr`, so the
+ * comparison renders as `<iri>` rather than a string literal.
+ */
+export type ComparisonValue =
+  | JSPrimitive
+  | QueryBuilderObject
+  | NodeReferenceValue;
+
 const isSameRef = (
   a?: NodeReferenceValue,
   b?: NodeReferenceValue,
@@ -1304,7 +1320,7 @@ export class QueryPrimitive<
     super(property, subject);
   }
 
-  equals(otherValue: JSPrimitive | QueryBuilderObject): ExpressionNode {
+  equals(otherValue: ComparisonValue): ExpressionNode {
     const self = toExpressionNode(this);
     const arg = otherValue instanceof QueryBuilderObject
       ? toExpressionNode(otherValue)
@@ -1312,12 +1328,12 @@ export class QueryPrimitive<
     return self.eq(arg as any);
   }
 
-  oneOf(values: (JSPrimitive | QueryBuilderObject)[]): ExpressionNode {
+  oneOf(values: ComparisonValue[]): ExpressionNode {
     return toExpressionNode(this).oneOf(
       values.map((v) => (v instanceof QueryBuilderObject ? toExpressionNode(v) : v)) as any,
     );
   }
-  notOneOf(values: (JSPrimitive | QueryBuilderObject)[]): ExpressionNode {
+  notOneOf(values: ComparisonValue[]): ExpressionNode {
     return toExpressionNode(this).notOneOf(
       values.map((v) => (v instanceof QueryBuilderObject ? toExpressionNode(v) : v)) as any,
     );

@@ -1,5 +1,89 @@
 # Changelog
 
+## 2.22.8
+
+### Patch Changes
+
+- [#270](https://github.com/linked-fw/core/pull/270) [`90ac746`](https://github.com/linked-fw/core/commit/90ac7463740ad6e18b3aacf9dcf65443be295f11) Thanks [@flyon](https://github.com/flyon)! - A `Date` in a query filter is emitted as a TYPED SPARQL literal.
+
+  `.equals(new Date(…))` on a date property used to render a plain
+  `"2020-01-01T00:00:00.000Z"`, while `create`/`update` write
+  `"2020-01-01T00:00:00.000Z"^^xsd:dateTime`. In SPARQL those are not equal — the
+  comparison is a type error and the row is dropped — so every date filter silently
+  matched nothing against data the same library had written. Measured against Fuseki:
+  zero rows for a triple that was present.
+
+  `toIRExpression` now carries the `Date` through instead of flattening it to its ISO
+  string, and the SPARQL layer types it from the compared property's declared
+  `sh:datatype`, the same rule the mutation side already applied: an `xsd:date`
+  property compares against `"2020-01-01"^^xsd:date`, not against a full timestamp
+  that could never equal it. Applies to `=`/`!=`/range comparisons and to
+  `oneOf`/`notOneOf`.
+
+## 2.22.7
+
+### Patch Changes
+
+- [#268](https://github.com/linked-fw/core/pull/268) [`5fe12fd`](https://github.com/linked-fw/core/commit/5fe12fd2636c51a560986591c6379e006301c3a9) Thanks [@flyon](https://github.com/flyon)! - `.equals({id})` on an object property declared as a string now type-checks
+
+  `@objectProperty({path: …}) get project(): string` is an accepted idiom — the accessor returns the
+  referenced node's IRI, so the natural declared type is `string`. `ToQueryBuilderObject` can only see
+  that declared type, so the property projects to a `QueryPrimitive<string>` rather than a
+  `QueryShape`. That projection is correct. What was wrong is that `QueryPrimitive.equals` accepted
+  only `JSPrimitive | QueryBuilderObject`, while the documented way to match an object property is by
+  node reference — `docs/backlog/014-prefixed-uris-in-json.md` lists `.where(…).equals(val)` as taking
+  `JSNonNullPrimitive | NodeReferenceValue`.
+
+  So the documented call was a type error at every call site. Create Now had 24 of them:
+
+  ```
+  LinkedDocumentRepository.ts(268,100): error TS2353: Object literal may only specify known
+  properties, and 'id' does not exist in type 'Date | QueryBuilderObject<any, any, any>'.
+  ```
+
+  (`Date` is in that message because the compiler lists only the object-typed members of
+  `JSPrimitive | QueryBuilderObject` when rejecting an object literal.)
+
+  This is a typing fix only — the lowering always handled the reference form. `toIRExpression` turns
+  `{id}` into a `reference_expr`, so the comparison renders as `FILTER(?x = <iri>)`, never a string
+  literal. The 24 call sites were compiling under `as any` casts or failing a typecheck gate; none of
+  them were producing wrong SPARQL.
+
+  `equals`, `oneOf` and `notOneOf` on `QueryPrimitive` now take a named `ComparisonValue =
+JSPrimitive | QueryBuilderObject | NodeReferenceValue`. Nothing is widened to `any`:
+  `.equals({name: x})` and `.equals({id: 42})` are still rejected, asserted by `@ts-expect-error` in
+  `src/tests/object-property-reference.test.ts`.
+
+## 2.22.6
+
+### Patch Changes
+
+- [#266](https://github.com/linked-fw/core/pull/266) [`1beb542`](https://github.com/linked-fw/core/commit/1beb5423bdbb23ff77c0394d5e9941c597290119) Thanks [@flyon](https://github.com/flyon)! - A failed query now carries the error it wrapped as `cause`
+
+  `QueryBuilder._run` wraps a dataset's error in a new `Error` that names the query — useful for a
+  human reading a log, and unchanged. But it discarded the original, so everything that error knew (a
+  store's HTTP status, its endpoint, its own class) survived only as text inside a message string.
+
+  That made ordinary states indistinguishable from real faults. "This dataset does not exist" — a
+  404/405 on the endpoint itself, which is what you get when a name is derived from an id that has no
+  data yet — reads exactly like "this query is wrong", and the only way left to tell them apart was to
+  pattern-match the message. Create Now hit this in `getShapeCatalog`, where an unknown project id
+  produced a 500 where an empty catalog belonged.
+
+  The wrapper now sets `cause` to the original error, so callers can branch on structure:
+
+  ```ts
+  for (let e: any = err; e; e = e.cause) {
+    if (e.status === 404 || e.status === 405) return EMPTY;
+  }
+  throw err;
+  ```
+
+  Message and stack are unchanged, so nothing that reads the text is affected. Written with
+  `Object.defineProperty` rather than `new Error(msg, {cause})` because this package targets es6,
+  where that overload is not in the typings; the resulting property (own, non-enumerable) is identical
+  to the native one.
+
 ## 2.22.5
 
 ### Patch Changes

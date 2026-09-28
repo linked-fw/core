@@ -8,9 +8,8 @@ packages: [core]
 
 # 044 — `isNodeShapeWire` is vacuously true for an empty shape
 
-**Status:** open, latent. No known bug traced to it — recorded because it was inspected closely
-while investigating a shape arriving with no `propertyShapes`, and it is the kind of check that
-will eventually hide one.
+**Status: CLOSED** by [#258](https://github.com/linked-fw/core/pull/258), *fix: wire conversion is
+idempotent, so a pattern survives it*. See **Resolution** at the end — do not re-investigate this.
 
 ## The check
 
@@ -84,3 +83,25 @@ the registry's class-backed shape had 27. **That turned out to be something else
 Playwright transform not supporting `experimentalDecorators`, so `@literalProperty` registered
 nothing in the test process (see CN `docs/reports/043`). This predicate was not the cause; it was
 inspected as a suspect and found to be independently fragile.
+
+
+## Resolution — #258 (verified 2026-09-24, CN plan 055 item 6)
+
+**Option 1 was taken, and the ambiguity was made harmless rather than removed.**
+
+The predicate is unchanged and still reads an empty shape as wire form. What changed is that both
+conversions are now **idempotent**, so it no longer matters which branch a shape takes:
+
+- `src/tests/shape-wire-idempotence.test.ts` — *"toWire on an already-wire shape keeps the source
+  string"*, and `fromWire` restores both the `RegExp` pattern and the `parentNodeShape`
+  back-reference.
+- The empty case is pinned by its own test, named for what it is: *"a shape with no property
+  shapes reads as wire — the ambiguity, pinned"*, with the comment **"Not a defect to fix: it is
+  why the conversions must tolerate either input."**
+
+So the remaining exposure described above — a shape that has *lost* its property shapes passing
+through silently — is accepted, and deliberately. It is also much less likely to matter now that
+its origin case is understood: the `Project` NodeShape arriving with no `propertyShapes` was the
+Playwright decorator-transform problem in CN `docs/reports/043`, not anything in this file.
+
+Options 2 and 3 are not being pursued.

@@ -195,7 +195,12 @@ export type IRInExpression = {
 
 export type IRLiteralExpression = {
   kind: 'literal_expr';
-  value: IRValue;
+  /**
+   * `Date` is admitted alongside `IRValue`: a temporal comparison has to reach the
+   * SPARQL layer still knowing it is temporal, or the literal is emitted untyped
+   * and never equals the `^^xsd:dateTime` term the mutation side writes.
+   */
+  value: IRValue | Date;
 };
 
 export type IRReferenceExpression = {
