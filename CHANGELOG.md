@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.22.9
+
+### Patch Changes
+
+- [#273](https://github.com/linked-fw/core/pull/273) [`5c42945`](https://github.com/linked-fw/core/commit/5c4294500c2271dfdb26e8f73f480da68b777aad) Thanks [@flyon](https://github.com/flyon)! - Sourcemaps now embed their TypeScript source, so consumers no longer see 'points to missing source files' warnings.
+
 ## 2.22.8
 
 ### Patch Changes
