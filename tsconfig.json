@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "sourceMap": true,
+    "inlineSources": true,
     "declaration": true,
     "experimentalDecorators": true,
     "resolveJsonModule": true,
