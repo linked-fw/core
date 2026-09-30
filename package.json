@@ -16,7 +16,13 @@
     "**/ontologies/*.js",
     "**/ontologies/*.ts",
     "**/utils/Package.js",
-    "**/utils/Package.ts"
+    "**/utils/Package.ts",
+    "**/lib/esm/index.js",
+    "**/src/index.ts",
+    "**/shapes/index.js",
+    "**/shapes/index.ts",
+    "**/shapes/*.js",
+    "**/shapes/*.ts"
   ],
   "exports": {
     ".": {

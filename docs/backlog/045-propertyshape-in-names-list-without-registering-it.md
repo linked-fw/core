@@ -6,9 +6,34 @@ summary: >
   it even then. Any query or create that touches `in` throws "Shape class not found" wherever
   `List` was not loaded. Create Now's production client bundle is one such place today.
 packages: [core]
+status: Done
 ---
 
 # 045 — `PropertyShape.in` names `List` without registering it
+
+> **Done** on branch `fix/shape-registration`, as proposed below. `List` is split into
+> `src/shapes/List.class.ts` (the class, which never imports `package.js`) and `List.ts` (the
+> public module, which loads the registration and keeps `rdfList`). `utils/Package.ts`
+> registers it by value, `corePackage.linkedShape({name: 'List', dependent: true})(List)`,
+> and `PropertyShape.in` is now `shape: List`. The same change adds `**/shapes/*` and the
+> package entry to `sideEffects`, adds `src/shapes/index.ts` (loads every core shape; the
+> entry imports it), and gives `PathNode`, `NodeShape` and `PropertyShape` explicit names:
+> once `PathNode` was actually bundled, Rollup renamed it `PathNode2` to resolve a collision
+> with `coreOntology.PathNode`, which registered it under the wrong IRI.
+>
+> Measured after the change (Node, fresh process, `package.js` + `shapes/SHACL.js` only):
+> `getShapeClass(List): registered`, and `select(p => p.in)`, `select(['in'])`,
+> `select(p => p.in.first)` and the catalog-style query all build. Vite 7 production builds,
+> client and SSR, unminified and minified: a bare `import '@_linked/core/shapes/List'`,
+> deep `utils/Package` + `shapes/SHACL` imports, `import '@_linked/core/shapes/index'` and
+> `import {validate} from '@_linked/core'` all register `List` (the last registered none of
+> the core shapes before). The cli's "Checking shape references" passes with no known gap.
+> `src/tests/shacl-metamodel-registration.test.ts` covers the Node case and fails 3/3
+> against the old `Package.ts`.
+>
+> The open questions below are answered: no stopgap release is needed; the cli check found
+> no other by-name references in core. Create Now's browser confirmation is still open, and
+> moot once CN takes this release.
 
 ## The declaration
 
