@@ -10,6 +10,7 @@
     "skipLibCheck": true,
     "pretty": true,
     "target": "es6",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "esnext",
     "jsx": "react",
     "moduleResolution": "node",
