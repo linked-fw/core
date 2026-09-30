@@ -119,15 +119,20 @@ function buildSyncThunk(nodeShape: NodeShapeData, iri: string, ds?: IDataset): (
 export interface SyncShapesOptions {
   /**
    * How to treat NodeShapes present in the store but not in the current process's code:
-   * - `'all'` (default) — prune every store-only shape as an orphan. Correct for a
-   *   **single-writer** dataset (CN's own storage sync, tests), where "not in code" ⇒ deleted.
+   * - `'none'` (default) — never prune; purely additive (delete→recreate the code shapes, touch
+   *   nothing else). The only mode that is safe when the process has loaded a *subset* of the
+   *   shapes in the dataset, or when the dataset has more than one writer.
+   * - `'all'` — prune every store-only shape as an orphan. Only correct when this process has
+   *   loaded **every** shape the dataset should hold and is its **only** writer; "not registered
+   *   here" is then taken to mean "deleted from code".
    * - `'ownedNamespaces'` — prune a store-only shape ONLY if its IRI falls within a namespace
    *   this process actually writes (the package-namespace of one of its code-registered shapes,
-   *   i.e. the IRI prefix up to the last `/` or `#`). This is the **multi-writer** rule (arch-04:
-   *   one app-data dataset, several writers): an app booting `syncShapesOnBoot` must not delete
-   *   shapes another writer (e.g. CN's `enableCapability`) materialized into the same dataset in a
-   *   package the app never registers. Renames/removals WITHIN the app's own package still prune.
-   * - `'none'` — never prune; purely additive (delete→recreate the code shapes, touch nothing else).
+   *   i.e. the IRI prefix up to the last `/` or `#`). Protects other writers' packages (arch-04:
+   *   one app-data dataset, several writers), but NOT the rest of a package the process only
+   *   partially loaded — the namespace is the whole package, so a deep import of one shape file
+   *   still claims all of it.
+   *
+   * `'all'` and `'ownedNamespaces'` are destructive and must be requested explicitly.
    */
   orphanScope?: 'all' | 'ownedNamespaces' | 'none';
 }
@@ -148,23 +153,32 @@ function shapeNamespace(iri: string): string {
  * ```
  * Each in-code shape's thunk runs `delete → create` in order (the delete cascade-cleans the old
  * property shapes / list / path subtrees via the containment cascade, the create rebuilds them).
- * Shapes present in the store but no longer in code are deleted as orphans (their owned subtree
- * cascades too) — subject to `options.orphanScope`. Reads existing shape IRIs for orphan detection.
+ *
+ * **Shapes in the store but not registered in this process are left alone by default**
+ * (`orphanScope: 'none'`). The registry only holds what this process happened to import, and
+ * that is routinely a subset of what the dataset holds: shapes are deep-importable one file at a
+ * time, and an app-data dataset also holds shapes other writers materialized (CN's
+ * `bindShape` / `enableCapability`). "Not registered here" therefore does not mean "deleted from
+ * code". Measured against a dataset holding the 36 `@_linked/schema` shapes: a process that
+ * imported only `@_linked/schema/shapes/Thing` (11 shapes registered) deleted the other 25 under
+ * both `'all'` and `'ownedNamespaces'`, and a process that imported no shapes deleted all 36.
+ *
+ * Pruning is opt-in via `options.orphanScope` (see {@link SyncShapesOptions}): pass `'all'` only
+ * from a process that has loaded every shape the dataset should hold and is its sole writer, and
+ * `'ownedNamespaces'` only when it has loaded every shape of each package it registers. Pruned
+ * orphans are deleted with their owned subtree. Pruning reads the existing shape IRIs first;
+ * with `'none'` no read is made.
  *
  * `ds` (optional) targets an explicit dataset instead of the global router. It is a **plan-time**
  * parameter: it feeds both the orphan-detection read (so orphans are computed against the same
- * store they'll be pruned from) and every delete/create thunk. Omitted → today's global behavior;
+ * store they'll be pruned from) and every delete/create thunk. Omitted → the global router;
  * the returned thunks stay nullary either way.
- *
- * `options.orphanScope` (default `'all'`) scopes the orphan sweep — see {@link SyncShapesOptions}.
- * Multi-writer datasets (an app materializing on boot next to CN's capability shapes) MUST pass
- * `'ownedNamespaces'` so the sweep never clobbers another writer's shapes.
  */
 export async function syncShapes(
   ds?: IDataset,
   options?: SyncShapesOptions,
 ): Promise<Array<() => Promise<void>>> {
-  const orphanScope = options?.orphanScope ?? 'all';
+  const orphanScope = options?.orphanScope ?? 'none';
   // 1. Enumerate code-registered user shapes (exclude framework/meta shapes).
   const userShapes: Array<{iri: string; nodeShape: NodeShapeData}> = [];
   for (const [iri, shapeClass] of getAllShapeClasses()) {
