@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.24.1
+
+### Patch Changes
+
+- [#292](https://github.com/linked-fw/core/pull/292) [`74b6b75`](https://github.com/linked-fw/core/commit/74b6b755f30f8055e15c90997a3c999d98711578) Thanks [@flyon](https://github.com/flyon)! - Subpath imports written with a `.js` extension (`@_linked/core/<path>.js`) now resolve. The exports map had no `./*.js` entry, so `./*` turned them into `<path>.js.js` and Node, Vite and TypeScript (node16/bundler) all failed to find them. This matches the exports map of the other Linked packages.
+
 ## 2.24.0
 
 ### Minor Changes
