@@ -3,6 +3,7 @@
     "sourceMap": true,
     "inlineSources": true,
     "declaration": true,
+    "rootDir": "./src",
     "experimentalDecorators": true,
     "resolveJsonModule": true,
     "esModuleInterop": true,
