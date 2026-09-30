@@ -1,7 +1,7 @@
 {
   "name": "@_linked/core",
   "version": "2.23.0",
-  "packageManager": "npm@11.19.1",
+  "packageManager": "npm@11.20.0",
   "license": "MIT",
   "linkedPackage": true,
   "type": "module",
