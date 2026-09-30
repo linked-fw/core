@@ -58,7 +58,7 @@
     "test:fuseki": "docker compose -f src/tests/docker-compose.test.yml up -d --wait && NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --runInBand --testPathPattern='sparql-fuseki' --verbose; EXIT=$?; docker compose -f src/tests/docker-compose.test.yml down; exit $EXIT"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "^0.5.2",
+    "@changesets/changelog-github": "^1.0.0",
     "@changesets/cli": "^3.0.0",
     "@jest/globals": "^29.7.0",
     "@types/jest": "^29.5.12",
