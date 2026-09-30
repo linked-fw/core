@@ -32,7 +32,7 @@ import {
   type PropertyShapeData,
 } from '../shapes/SHACL';
 import {getAllShapeClasses} from '../utils/ShapeClass';
-import {syncShapes} from '../shapes/syncShapes';
+import {syncShapes, type SyncShapesOptions} from '../shapes/syncShapes';
 import {rdfList} from '../shapes/List';
 import {UpdateBuilder} from '../queries/UpdateBuilder';
 import {xsd} from '../ontologies/xsd';
@@ -81,8 +81,8 @@ const G = () => E2EGone.shape.id;
 
 let available = false;
 
-async function runSync() {
-  const plan = await syncShapes();
+async function runSync(options?: SyncShapesOptions) {
+  const plan = await syncShapes(undefined, options);
   await Promise.all(plan.map((run) => run()));
 }
 async function count(where: string): Promise<number> {
@@ -156,7 +156,12 @@ describe('shape sync e2e (Fuseki)', () => {
     // remove a whole shape from the registry (no longer "in code")
     getAllShapeClasses().delete(G());
 
-    await runSync(); // Phase B
+    // A default sync does not treat "no longer registered" as "deleted" — the shape survives.
+    await runSync();
+    expect(await has(`<${G()}> <${RDF}type> <${SH}NodeShape>`)).toBe(true);
+    expect(await count(`<${G()}/tmp> ?p ?o`)).toBeGreaterThan(0);
+
+    await runSync({orphanScope: 'all'}); // Phase B — explicit prune
 
     // updates persisted
     expect(await has(`<${P()}/name> <${SH}maxCount> 3`)).toBe(true);
