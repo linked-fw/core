@@ -102,7 +102,8 @@ beforeAll(async () => {
 
 // Each phase makes several sequential round-trips to a live Fuseki (sync, cascade
 // deletes, re-reads); Jest's 5 s default made Phase B time out intermittently in CI.
-jest.setTimeout(30000);
+// (ESM Jest has no `jest` global, so the timeout is passed per test.)
+const LIVE_FUSEKI_TIMEOUT = 30000;
 
 describe('shape sync e2e (Fuseki)', () => {
   test('Phase A: shapes materialize into the store', async () => {
@@ -129,7 +130,7 @@ describe('shape sync e2e (Fuseki)', () => {
     expect(await has(`<${P()}> <${SH}ignoredProperties> <${ex('extra').id}>`)).toBe(true);
     // both shapes present
     expect(await has(`<${G()}> <${RDF}type> <${SH}NodeShape>`)).toBe(true);
-  });
+  }, LIVE_FUSEKI_TIMEOUT);
 
   test('Phase B: mutate code shapes, re-sync — updates persist & old subtrees cleaned', async () => {
     if (!available) return;
@@ -193,7 +194,7 @@ describe('shape sync e2e (Fuseki)', () => {
     // SAFETY: shared predicate IRI and shared enum IRI survived the cascade
     expect(await has(`<${ex('name').id}> <${RDF}type> <${ex('Predicate').id}>`)).toBe(true);
     expect(await has(`<${ex('Active').id}> <${RDF}type> <${ex('StatusValue').id}>`)).toBe(true);
-  });
+  }, LIVE_FUSEKI_TIMEOUT);
 
   test('Phase C: update() of a contains property cascade-cleans the old list subtree', async () => {
     if (!available) return;
@@ -218,5 +219,5 @@ describe('shape sync e2e (Fuseki)', () => {
     expect(await count(`<${psIri}> <${SH}in>/<${RDF}rest>*/<${RDF}first> ?v`)).toBe(1);
     expect(await has(`?cell <${RDF}first> <${ex('m2').id}>`)).toBe(false);
     expect(await has(`?cell <${RDF}first> <${ex('m3').id}>`)).toBe(false);
-  });
+  }, LIVE_FUSEKI_TIMEOUT);
 });
