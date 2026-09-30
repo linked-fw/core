@@ -100,6 +100,10 @@ beforeAll(async () => {
   await runSync(); // Phase A
 });
 
+// Each phase makes several sequential round-trips to a live Fuseki (sync, cascade
+// deletes, re-reads); Jest's 5 s default made Phase B time out intermittently in CI.
+jest.setTimeout(30000);
+
 describe('shape sync e2e (Fuseki)', () => {
   test('Phase A: shapes materialize into the store', async () => {
     if (!available) return;
