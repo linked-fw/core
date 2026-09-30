@@ -14,6 +14,7 @@ import {
 } from '../shapes/SHACL.js';
 import {createNodeShapeData, type NodeShapeData} from '../shapes/nodeShapeData.js';
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
+import {List} from '../shapes/List.class.js';
 import {Prefix} from './Prefix.js';
 import {coreOntology} from '../ontologies/linked-core.js';
 import {rdf} from '../ontologies/rdf.js';
@@ -575,17 +576,29 @@ initTree();
 
 //now that this file is set up, we can link linked shapes in the core module itself
 export const corePackage = linkedPackage('@_linked/core');
+// NodeShape, PropertyShape and List share their names with ontology terms (shacl.NodeShape,
+// shacl.PropertyShape, rdf.List), so a bundler may rename the classes. Explicit names keep
+// their IRIs independent of that.
 corePackage.linkedShape({
+  name: 'NodeShape',
   description:
     'Represents a SHACL NodeShape; defines constraints for a class of RDF nodes. Links to multiple PropertyShapes. (schema, constraint, class validation)',
 })(NodeShape);
 corePackage.linkedShape({
+  name: 'PropertyShape',
   description:
     'Represents a SHACL PropertyShape; specifies rules for one property of a NodeShape (path, datatype, cardinality). (validation rule, property constraint)',
   // A property shape has no independent existence — it is owned by its NodeShape via the
   // `contains` sh:property edge, so deleting the NodeShape cascade-deletes it.
   dependent: true,
 })(PropertyShape);
+// List is registered here, by value, because PropertyShape.in below uses it as its value
+// shape. Naming it by string instead would leave it unregistered for anyone who loads the
+// SHACL metamodel without importing shapes/List (backlog 045).
+corePackage.linkedShape({
+  name: 'List',
+  dependent: true,
+})(List);
 // ValidationReport / ValidationResult removed in core metadata rewrite
 
 //ALL the following is to support Shape having get/set methods with property shapes
@@ -773,7 +786,7 @@ createPropertyShape(
 
 // PropertyShape.in → an rdf:List (owned)
 createPropertyShape(
-  {path: shacl.in, shape: ['@_linked/core', 'List'], maxCount: 1, contains: true},
+  {path: shacl.in, shape: List, maxCount: 1, contains: true},
   'in',
   shacl.IRI,
   PropertyShape,

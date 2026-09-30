@@ -3,33 +3,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
-import {linkedShape} from '../package.js';
-import {Shape} from './Shape.js';
-import {linkedProperty, objectProperty} from './SHACL.js';
+// Registers List (together with the rest of the SHACL metamodel), so importing this module
+// on its own is enough to make List resolvable. The class lives in List.class.ts because
+// utils/Package.ts needs it by value and cannot import this module's registration path.
+import '../utils/Package.js';
+import {List} from './List.class.js';
 import {rdf} from '../ontologies/rdf.js';
 
-/**
- * SHACL/RDF ordered-list cell shape (`rdf:List`).
- *
- * A list is a chain of cells: `first` holds the value, `rest` points to the next cell
- * (or `rdf:nil`). The cell is `dependent` (it has no independent existence) and `rest` is
- * a `contains` edge, so deleting/replacing a list cascade-cleans the whole spine — while
- * `first` is NOT a `contains` edge, so the list's *contents* (shared IRIs/values) are kept.
- */
-@linkedShape({dependent: true})
-export class List<T = unknown> extends Shape {
-  static targetClass = rdf.List;
-
-  @linkedProperty({path: rdf.first, maxCount: 1})
-  get first(): T {
-    return null;
-  }
-
-  @objectProperty({path: rdf.rest, maxCount: 1, shape: List, contains: true})
-  get rest(): List<T> {
-    return null;
-  }
-}
+export {List};
 
 /**
  * Node-data for a single cell / the `rdf:nil` terminal. Accepted by the create pipeline.

@@ -20,7 +20,10 @@ import {List} from './List.js';
  * Operands are polymorphic (a predicate IRI, a nested `PathNode`, or a `List`), so no fixed
  * `valueShape` is declared except for `alternativePath`, which is always an `rdf:List`.
  */
-@linkedShape({dependent: true})
+// Named explicitly: the class shares its name with the ontology term coreOntology.PathNode,
+// and a bundler resolving that collision renames the class (PathNode2), which would change
+// the shape's IRI.
+@linkedShape({name: 'PathNode', dependent: true})
 export class PathNode extends Shape {
   static targetClass = coreOntology.PathNode;
 
