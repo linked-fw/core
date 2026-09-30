@@ -33,6 +33,10 @@
       "types": "./lib/esm/sparql/index.d.ts",
       "import": "./lib/esm/sparql/index.js"
     },
+    "./*.js": {
+      "types": "./lib/esm/*.d.ts",
+      "import": "./lib/esm/*.js"
+    },
     "./*": {
       "types": "./lib/esm/*.d.ts",
       "import": "./lib/esm/*.js"
