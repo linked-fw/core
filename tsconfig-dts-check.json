@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": false,
+    "target": "es2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "experimentalDecorators": true,
+    "types": ["node"]
+  },
+  "include": ["./lib/esm/**/*.d.ts"]
+}
