@@ -850,7 +850,7 @@ createPropertyShape(
 );
 createPropertyShape({path: shacl.group, maxCount: 1}, 'group', shacl.Literal, PropertyShape);
 
-// PropertyShape.displayRank / displayHidden (linked_core: display vocabulary).
+// PropertyShape.displayRank / displayHidden (core: display vocabulary).
 // These materialize onto the pure sh:NodeShape and so travel with an ejected app.
 createPropertyShape(
   {path: coreOntology.displayRank, datatype: xsd.integer, maxCount: 1},
@@ -865,7 +865,7 @@ createPropertyShape(
   PropertyShape,
 );
 
-// PropertyShape.contains (linked_core:contains — persists the composition flag)
+// PropertyShape.contains (core:contains — persists the composition flag)
 createPropertyShape(
   {path: coreOntology.contains, datatype: xsd.boolean, maxCount: 1},
   'contains',

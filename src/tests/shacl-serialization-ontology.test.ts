@@ -6,9 +6,10 @@
 import {describe, expect, test} from '@jest/globals';
 import {shacl} from '../ontologies/shacl';
 import {coreOntology} from '../ontologies/linked-core';
+import {Prefix} from '../utils/Prefix';
 
 const SH = 'http://www.w3.org/ns/shacl#';
-const LC = 'https://linked.cm/ont/linked-core/';
+const LC = 'https://linked.cm/ont/core/';
 
 describe('ontology terms', () => {
   test('shacl predicates present', () => {
@@ -22,9 +23,16 @@ describe('ontology terms', () => {
     expect(shacl.ignoredProperties.id).toBe(`${SH}ignoredProperties`);
   });
 
-  test('linked-core terms present', () => {
+  test('core terms present', () => {
     expect(coreOntology.contains.id).toBe(`${LC}contains`);
     expect(coreOntology.dependent.id).toBe(`${LC}dependent`);
     expect(coreOntology.PathNode.id).toBe(`${LC}PathNode`);
+  });
+
+  test('core prefix compacts to core:, deprecated linked_core: still resolves', () => {
+    expect(Prefix.toPrefixed(`${LC}displayRank`)).toBe('core:displayRank');
+    expect(Prefix.toFull('core:displayRank')).toBe(`${LC}displayRank`);
+    // Deprecated alias resolves to the NEW IRI; old full IRIs are not matched.
+    expect(Prefix.toFull('linked_core:displayRank')).toBe(`${LC}displayRank`);
   });
 });
