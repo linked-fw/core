@@ -167,7 +167,7 @@ export type QueryShapeSetProps<SourceShapeSet, Shape> = {
 export type QShapeSet<
   ShapeSetType extends Shape,
   Source = null,
-  Property extends string | number | symbol = null,
+  Property extends string | number | symbol = never,
 > = QueryShapeSet<ShapeSetType, Source, Property> &
   QueryShapeSetProps<
     QueryShapeSet<ShapeSetType, Source, Property>,
@@ -272,7 +272,7 @@ export type QResult<ShapeType extends Shape = Shape, Object = {}> = Object & {
  */
 export type QueryResponseToResultType<
   T,
-  QShapeType extends Shape = null,
+  QShapeType extends Shape = Shape,
   HasName = false,
 > = T extends QueryBuilderObject
   ? GetQueryObjectResultType<T, {}, false, HasName>
@@ -424,7 +424,7 @@ export type CreateQResult<
             {
               //we pass Value and Value but not Property, so that when the value is a Shape or ShapeSet, there is recursion
               //but for all other cases (like string, number, boolean) the value is just passed through
-              [P in Property]: CreateQResult<Value, Value, null, SubProperties>;
+              [P in Property]: CreateQResult<Value, Value, never, SubProperties>;
             }
           >[],
           SourceProperty,
@@ -453,18 +453,18 @@ export type CreateShapeSetQResult<
       //This is used by custom object keys with values like: p.friends, which should return an array of QResult<Person> Objects, not a {friends:...} QResult
       //NOTE: this notation check if 2 statements are true: HasName is true, and ParentSource is null
       [HasName, ParentSource] extends [true, null]
-      ? CreateQResult<Source, null, null>[]
+      ? CreateQResult<Source, null, never>[]
       : ParentSource extends null
         ? QResult<
             SourceShapeType,
-            {[P in Property]: CreateQResult<Source, null, null, SubProperties>[]}
+            {[P in Property]: CreateQResult<Source, null, never, SubProperties>[]}
           >
         : //when ParentSource is not null, we need to continue unwinding the source chain
           //Pass the inner ShapeSet items as SubProperties so they stay at the correct nesting level
           CreateQResult<
             Source,
             null,
-            null,
+            never,
             {[P in Property]: (ShapeType extends Shape ? QResult<ShapeType, SubProperties> : QResult<Shape, SubProperties>)[]}
           >
     : Source extends QueryShapeSet<
@@ -493,7 +493,7 @@ export type CreateShapeSetQResult<
 export type ObjectToPlainResult<T> = {
   //passing true as sourceOverwrite will mean that the original source is ignored and so the converted value will not be wrapped in a QResult
   // [P in keyof T]: QueryResponseToResultType<T[P], null, true>;
-  [P in keyof T]: QueryResponseToResultType<T[P], null, true>;
+  [P in keyof T]: QueryResponseToResultType<T[P], Shape, true>;
 };
 
 type GetNestedQueryResultType<Response, Source> =
@@ -1352,7 +1352,7 @@ export class QueryPrimitive<
 
 
 export class QueryPrimitiveSet<
-  QPrimitive extends QueryPrimitive<any> = null,
+  QPrimitive extends QueryPrimitive<any> | null = null,
 > extends QueryBuilderObject<any, any, any> {
   public contents: CoreSet<QPrimitive>;
 
