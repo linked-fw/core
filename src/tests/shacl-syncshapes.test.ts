@@ -77,7 +77,7 @@ describe('syncShapes', () => {
   });
 
   test('routes create/delete for user shape, delete for orphan, skips framework shapes', async () => {
-    const plan = await syncShapes();
+    const plan = await syncShapes(undefined, {orphanScope: 'all'});
     for (const run of plan) await run(); // sequential for deterministic ordering
 
     const creates = calls.filter((c) => c.kind === 'create').map((c) => c.id);
@@ -123,8 +123,20 @@ describe('syncShapes orphanScope (multi-writer, arch-04)', () => {
 
   beforeEach(() => installMock([userIri(), OWNED_ORPHAN, FOREIGN_ORPHAN]));
 
-  test("default ('all') prunes both the owned and the foreign orphan", async () => {
+  test("default prunes nothing — neither the owned nor the foreign orphan", async () => {
     const plan = await syncShapes();
+    for (const run of plan) await run();
+    const deletes = calls.filter((c) => c.kind === 'delete').map((c) => c.id);
+    const creates = calls.filter((c) => c.kind === 'create').map((c) => c.id);
+    // code shapes are still delete→recreated
+    expect(creates).toContain(userIri());
+    expect(deletes).toContain(userIri());
+    expect(deletes).not.toContain(OWNED_ORPHAN);
+    expect(deletes).not.toContain(FOREIGN_ORPHAN);
+  });
+
+  test("explicit 'all' prunes both the owned and the foreign orphan", async () => {
+    const plan = await syncShapes(undefined, {orphanScope: 'all'});
     for (const run of plan) await run();
     const deletes = calls.filter((c) => c.kind === 'delete').map((c) => c.id);
     expect(deletes).toContain(OWNED_ORPHAN);
@@ -156,6 +168,38 @@ describe('syncShapes orphanScope (multi-writer, arch-04)', () => {
     // no orphan (owned or foreign) is swept
     expect(deletes).not.toContain(OWNED_ORPHAN);
     expect(deletes).not.toContain(FOREIGN_ORPHAN);
+  });
+});
+
+describe('syncShapes with a partial registry (deep imports)', () => {
+  // The store holds a whole package's worth of shapes, but this process registered only some of
+  // them — e.g. it deep-imported one shape file. Shapes it did not load are in the SAME package
+  // namespace as the ones it did, so 'ownedNamespaces' cannot tell them apart from removals.
+  const NOT_LOADED = [
+    'https://linked.cm/shape/syncshapes-test/NotLoadedA',
+    'https://linked.cm/shape/syncshapes-test/NotLoadedB',
+    'https://linked.cm/shape/syncshapes-test/NotLoadedC',
+  ];
+  const FOREIGN = 'https://id.linked.cm/shape/documents/SourceDocument';
+  const storeIds = () => [TUser.shape.id, TOther.shape.id, ...NOT_LOADED, FOREIGN];
+
+  test('default: every store shape the process did not load survives', async () => {
+    const {store, storeCalls} = makeTargetStore(storeIds());
+    const plan = await syncShapes(store);
+    for (const run of plan) await run();
+    const deletes = storeCalls.filter((c) => c.kind === 'delete').map((c) => c.id);
+    const creates = storeCalls.filter((c) => c.kind === 'create').map((c) => c.id);
+    // only the registered shapes are touched (delete→recreate)
+    expect(deletes.sort()).toEqual([TOther.shape.id, TUser.shape.id].sort());
+    expect(creates.sort()).toEqual([TOther.shape.id, TUser.shape.id].sort());
+  });
+
+  test("explicit 'all' still prunes every store shape the process did not load", async () => {
+    const {store, storeCalls} = makeTargetStore(storeIds());
+    const plan = await syncShapes(store, {orphanScope: 'all'});
+    for (const run of plan) await run();
+    const deletes = storeCalls.filter((c) => c.kind === 'delete').map((c) => c.id);
+    for (const id of [...NOT_LOADED, FOREIGN]) expect(deletes).toContain(id);
   });
 });
 
@@ -259,7 +303,7 @@ describe('dataset threading — sync into an explicit store, global router untou
     // Pruning STORE_ORPHAN — and never ORPHAN — proves the orphan read hit the store, not global.
     const STORE_ORPHAN = 'https://linked.cm/shape/syncshapes-test/StoreOnlyShape';
     const {store, storeCalls} = makeTargetStore([userIri(), TOther.shape.id, STORE_ORPHAN]);
-    const plan = await syncShapes(store);
+    const plan = await syncShapes(store, {orphanScope: 'all'});
     for (const run of plan) await run();
 
     const creates = storeCalls.filter((c) => c.kind === 'create').map((c) => c.id);

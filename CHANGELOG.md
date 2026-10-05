@@ -1,5 +1,84 @@
 # Changelog
 
+## 2.25.0
+
+### Minor Changes
+
+- [#299](https://github.com/linked-fw/core/pull/299) [`d51089a`](https://github.com/linked-fw/core/commit/d51089a532fbc458b2df51d362c460e4a3700203) Thanks [@flyon](https://github.com/flyon)! - The framework vocabulary now lives at `https://linked.cm/ont/core/` with the prefix `core`
+  (previously `https://linked.cm/ont/linked-core/`, prefix `linked_core`).
+  
+  This follows the public ontology namespace rule, `https://linked.cm/ont/{ontologySlug}/{localName}`,
+  where the ontology slug defaults to the package's public slug (`@_linked/core` -> `core`) and the
+  prefix label equals that slug. The old `linked-core` segment was a leftover of a slug derivation
+  that has since been reverted. Every term moves: `core:displayRank`, `core:displayHidden`,
+  `core:contains`, `core:dependent`, `core:PathNode`, `core:Package` and the rest.
+  
+  The `linked_core` prefix is deprecated but still registered as an alias, so prefixed names such as
+  `linked_core:displayRank` keep resolving — to the new IRIs. Compaction always emits `core:`. The
+  alias does not make the old full IRIs match.
+  
+  Stored data under the old IRIs is not migrated. Triples such as
+  `https://linked.cm/ont/linked-core/displayRank` on synced shapes stay as they are; clear dev
+  datasets and resync shapes from code.
+  
+  Released as a minor rather than a major: the previous move of this vocabulary (from
+  `purl.org/on/lincd` to `linked.cm`, [#91](https://github.com/Semantu/linked/issues/91)) shipped as a minor in 2.8.0; these terms appear only in
+  code-derived shape and package metadata that shape sync rewrites from code; there is no real data
+  using them; and a core major would force every `@_linked` package to move its peer range.
+
+## 2.24.1
+
+### Patch Changes
+
+- [#292](https://github.com/linked-fw/core/pull/292) [`74b6b75`](https://github.com/linked-fw/core/commit/74b6b755f30f8055e15c90997a3c999d98711578) Thanks [@flyon](https://github.com/flyon)! - Subpath imports written with a `.js` extension (`@_linked/core/<path>.js`) now resolve. The exports map had no `./*.js` entry, so `./*` turned them into `<path>.js.js` and Node, Vite and TypeScript (node16/bundler) all failed to find them. This matches the exports map of the other Linked packages.
+
+## 2.24.0
+
+### Minor Changes
+
+- [#285](https://github.com/linked-fw/core/pull/285) [`1ed3af6`](https://github.com/linked-fw/core/commit/1ed3af6e396929845092128702d03e31fa7fef50) Thanks [@flyon](https://github.com/flyon)! - `syncShapes()` no longer deletes store shapes it did not register, unless asked to.
+  
+  The default `orphanScope` is now `'none'`: a sync delete→recreates the shapes registered in the
+  current process and leaves every other NodeShape in the dataset alone. Previously it defaulted to
+  `'all'` and treated every store shape not registered in the process as an orphan to cascade-delete.
+  
+  That made partial loading destructive. Shapes are deep-importable one file at a time, and an
+  app-data dataset also holds shapes other writers put there, so "not registered here" does not mean
+  "removed from code". Measured on a dataset holding the 36 `@_linked/schema` shapes: a process that
+  imported only `@_linked/schema/shapes/Thing` (11 registered) deleted the other 25, under both
+  `'all'` and `'ownedNamespaces'`; a process that imported no shapes deleted all 36.
+  
+  **Migrating:** a caller that relies on the sync removing shapes deleted from code must now pass
+  `{orphanScope: 'all'}` (sole writer, every shape loaded) or `{orphanScope: 'ownedNamespaces'}`
+  explicitly: `await syncShapes(ds, {orphanScope: 'all'})`.
+
+## 2.23.0
+
+### Minor Changes
+
+- [#282](https://github.com/linked-fw/core/pull/282) [`32834ea`](https://github.com/linked-fw/core/commit/32834ea450a2bd7ae98e77758ccbca322d94a4d3) Thanks [@flyon](https://github.com/flyon)! - Every core shape is now registered by whatever loads it, including under a bundler.
+
+  - `PropertyShape.in` (sh:in) refers to `List` by value instead of by name, and `List` is
+    registered from `utils/Package.ts` next to `NodeShape` and `PropertyShape`. Loading the SHACL
+    metamodel (`package.js` + `shapes/SHACL.js`) is now enough to query or create `in`; before,
+    that threw `Shape class not found for https://linked.cm/shape/core/List` unless something
+    else had loaded `shapes/List`.
+  - New `@_linked/core/shapes/index`: a side-effect-only module that loads every shape core
+    defines. The package entry imports it.
+  - `sideEffects` now includes `shapes/*` and the package entry. Before, a bundler dropped a bare
+    `import '@_linked/core/shapes/List'`, and `import {validate} from '@_linked/core'` registered
+    no core shape at all. A consumer of the entry now bundles the SHACL metamodel with it
+    (measured: +40 kB unminified in a Vite build that imports only `validate`).
+  - `PathNode`, `NodeShape` and `PropertyShape` have explicit shape names. Bundled, `PathNode`
+    collided with the ontology term `coreOntology.PathNode` and was renamed `PathNode2`, which
+    registered it under the wrong IRI. Their IRIs are unchanged.
+
+## 2.22.9
+
+### Patch Changes
+
+- [#273](https://github.com/linked-fw/core/pull/273) [`5c42945`](https://github.com/linked-fw/core/commit/5c4294500c2271dfdb26e8f73f480da68b777aad) Thanks [@flyon](https://github.com/flyon)! - Sourcemaps now embed their TypeScript source, so consumers no longer see 'points to missing source files' warnings.
+
 ## 2.22.8
 
 ### Patch Changes

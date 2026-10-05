@@ -1,7 +1,7 @@
 {
   "name": "@_linked/core",
-  "version": "2.22.8",
-  "packageManager": "npm@11.19.1",
+  "version": "2.25.0",
+  "packageManager": "npm@11.20.0",
   "license": "MIT",
   "linkedPackage": true,
   "type": "module",
@@ -16,7 +16,13 @@
     "**/ontologies/*.js",
     "**/ontologies/*.ts",
     "**/utils/Package.js",
-    "**/utils/Package.ts"
+    "**/utils/Package.ts",
+    "**/lib/esm/index.js",
+    "**/src/index.ts",
+    "**/shapes/index.js",
+    "**/shapes/index.ts",
+    "**/shapes/*.js",
+    "**/shapes/*.ts"
   ],
   "exports": {
     ".": {
@@ -26,6 +32,10 @@
     "./sparql": {
       "types": "./lib/esm/sparql/index.d.ts",
       "import": "./lib/esm/sparql/index.js"
+    },
+    "./*.js": {
+      "types": "./lib/esm/*.d.ts",
+      "import": "./lib/esm/*.js"
     },
     "./*": {
       "types": "./lib/esm/*.d.ts",
@@ -52,13 +62,13 @@
     "test:fuseki": "docker compose -f src/tests/docker-compose.test.yml up -d --wait && NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --runInBand --testPathPattern='sparql-fuseki' --verbose; EXIT=$?; docker compose -f src/tests/docker-compose.test.yml down; exit $EXIT"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "^0.5.2",
-    "@changesets/cli": "^2.29.8",
-    "@jest/globals": "^29.7.0",
-    "@types/jest": "^29.5.12",
-    "@types/node": "^20.12.7",
-    "jest": "^29.7.0",
-    "rimraf": "^5.0.7",
+    "@changesets/changelog-github": "^1.0.0",
+    "@changesets/cli": "^3.0.0",
+    "@jest/globals": "^30.0.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.0.0",
+    "jest": "^30.0.0",
+    "rimraf": "^6.0.0",
     "ts-jest": "^29.1.2",
     "typescript": "^5.7.3"
   },

@@ -1,13 +1,16 @@
 {
   "compilerOptions": {
     "sourceMap": true,
+    "inlineSources": true,
     "declaration": true,
+    "rootDir": "./src",
     "experimentalDecorators": true,
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "pretty": true,
     "target": "es6",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "esnext",
     "jsx": "react",
     "moduleResolution": "node",

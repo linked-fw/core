@@ -130,7 +130,7 @@ describe('owned-subtree cascade', () => {
       .map((t: any) => t.object.value);
     expect(types).toEqual(expect.arrayContaining([
       'http://www.w3.org/1999/02/22-rdf-syntax-ns#List',
-      'https://linked.cm/ont/linked-core/PathNode',
+      'https://linked.cm/ont/core/PathNode',
       'http://example.org/c#TCell',
     ]));
   });

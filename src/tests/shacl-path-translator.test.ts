@@ -50,7 +50,7 @@ describe('serializePathToNodeData', () => {
   test('inverse → PathNode with sh:inversePath', () => {
     const s = sparql({inv: {id: 'http://ex.org/parent'}});
     expect(s).toContain('shacl:inversePath <http://ex.org/parent>');
-    expect(s).toContain('linked_core:PathNode');
+    expect(s).toContain('core:PathNode');
   });
 
   test('alternative → PathNode with sh:alternativePath → rdf:List', () => {

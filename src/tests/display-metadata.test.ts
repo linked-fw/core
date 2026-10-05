@@ -93,12 +93,12 @@ describe('display metadata — decorator to shape', () => {
     expect(propByLabel('title').group).toBe('basics');
   });
 
-  test('the terms live in the linked-core ecosystem namespace, not the CN code vocab', () => {
+  test('the terms live in the core ontology namespace, not the CN code vocab', () => {
     expect(coreOntology.displayRank.id).toBe(
-      'https://linked.cm/ont/linked-core/displayRank',
+      'https://linked.cm/ont/core/displayRank',
     );
     expect(coreOntology.displayHidden.id).toBe(
-      'https://linked.cm/ont/linked-core/displayHidden',
+      'https://linked.cm/ont/core/displayHidden',
     );
   });
 });

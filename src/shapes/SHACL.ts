@@ -265,11 +265,11 @@ export interface PropertyShapeConfig {
   order?: number;
   group?: string;
   /**
-   * Display importance, lower = more important (`linked_core:displayRank`).
+   * Display importance, lower = more important (`core:displayRank`).
    * A renderer that can show only N properties shows the N lowest ranks.
    */
   displayRank?: number;
-  /** Omit this property from generic rendering (`linked_core:displayHidden`). */
+  /** Omit this property from generic rendering (`core:displayHidden`). */
   displayHidden?: boolean;
   /**
    * should correlate to the given datatype or class

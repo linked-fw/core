@@ -32,7 +32,7 @@ import {
   type PropertyShapeData,
 } from '../shapes/SHACL';
 import {getAllShapeClasses} from '../utils/ShapeClass';
-import {syncShapes} from '../shapes/syncShapes';
+import {syncShapes, type SyncShapesOptions} from '../shapes/syncShapes';
 import {rdfList} from '../shapes/List';
 import {UpdateBuilder} from '../queries/UpdateBuilder';
 import {xsd} from '../ontologies/xsd';
@@ -81,8 +81,8 @@ const G = () => E2EGone.shape.id;
 
 let available = false;
 
-async function runSync() {
-  const plan = await syncShapes();
+async function runSync(options?: SyncShapesOptions) {
+  const plan = await syncShapes(undefined, options);
   await Promise.all(plan.map((run) => run()));
 }
 async function count(where: string): Promise<number> {
@@ -99,6 +99,11 @@ beforeAll(async () => {
   setQueryDispatch(new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME) as any);
   await runSync(); // Phase A
 });
+
+// Each phase makes several sequential round-trips to a live Fuseki (sync, cascade
+// deletes, re-reads); Jest's 5 s default made Phase B time out intermittently in CI.
+// (ESM Jest has no `jest` global, so the timeout is passed per test.)
+const LIVE_FUSEKI_TIMEOUT = 30000;
 
 describe('shape sync e2e (Fuseki)', () => {
   test('Phase A: shapes materialize into the store', async () => {
@@ -125,7 +130,7 @@ describe('shape sync e2e (Fuseki)', () => {
     expect(await has(`<${P()}> <${SH}ignoredProperties> <${ex('extra').id}>`)).toBe(true);
     // both shapes present
     expect(await has(`<${G()}> <${RDF}type> <${SH}NodeShape>`)).toBe(true);
-  });
+  }, LIVE_FUSEKI_TIMEOUT);
 
   test('Phase B: mutate code shapes, re-sync — updates persist & old subtrees cleaned', async () => {
     if (!available) return;
@@ -156,7 +161,12 @@ describe('shape sync e2e (Fuseki)', () => {
     // remove a whole shape from the registry (no longer "in code")
     getAllShapeClasses().delete(G());
 
-    await runSync(); // Phase B
+    // A default sync does not treat "no longer registered" as "deleted" — the shape survives.
+    await runSync();
+    expect(await has(`<${G()}> <${RDF}type> <${SH}NodeShape>`)).toBe(true);
+    expect(await count(`<${G()}/tmp> ?p ?o`)).toBeGreaterThan(0);
+
+    await runSync({orphanScope: 'all'}); // Phase B — explicit prune
 
     // updates persisted
     expect(await has(`<${P()}/name> <${SH}maxCount> 3`)).toBe(true);
@@ -184,7 +194,7 @@ describe('shape sync e2e (Fuseki)', () => {
     // SAFETY: shared predicate IRI and shared enum IRI survived the cascade
     expect(await has(`<${ex('name').id}> <${RDF}type> <${ex('Predicate').id}>`)).toBe(true);
     expect(await has(`<${ex('Active').id}> <${RDF}type> <${ex('StatusValue').id}>`)).toBe(true);
-  });
+  }, LIVE_FUSEKI_TIMEOUT);
 
   test('Phase C: update() of a contains property cascade-cleans the old list subtree', async () => {
     if (!available) return;
@@ -209,5 +219,5 @@ describe('shape sync e2e (Fuseki)', () => {
     expect(await count(`<${psIri}> <${SH}in>/<${RDF}rest>*/<${RDF}first> ?v`)).toBe(1);
     expect(await has(`?cell <${RDF}first> <${ex('m2').id}>`)).toBe(false);
     expect(await has(`?cell <${RDF}first> <${ex('m3').id}>`)).toBe(false);
-  });
+  }, LIVE_FUSEKI_TIMEOUT);
 });

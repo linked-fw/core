@@ -2,12 +2,19 @@ import type {NodeReferenceValue} from '../utils/NodeReference.js';
 import {createNameSpace} from '../utils/NameSpace.js';
 import {Prefix} from '../utils/Prefix.js';
 
-// The @_linked/core framework vocabulary. Public/first-party term URIs live on
-// linked.cm following the public-ontology scheme (arch-02 §Ontology namespace model):
+// The @_linked/core framework vocabulary. First-party ontology IRIs follow Create Now
+// arch-02 §"Public ontology namespace":
 //   https://linked.cm/ont/{ontologySlug}/{localName}
-export const ns = createNameSpace('https://linked.cm/ont/linked-core/');
+// where ontologySlug defaults to the owning package's publicSlug (`@_linked/core` -> `core`)
+// and the prefix label equals the ontologySlug. Previously `https://linked.cm/ont/linked-core/`
+// (prefix `linked_core`), a leftover of a reverted slug derivation.
+export const ns = createNameSpace('https://linked.cm/ont/core/');
 export const _self: NodeReferenceValue = ns('');
+// @deprecated prefix alias: keeps `linked_core:` prefixed names resolving (to the NEW IRIs).
+// It does not make the old full IRIs match. Registered BEFORE `core` because the last add
+// wins for IRI -> prefix compaction, so output always uses `core:`.
 Prefix.add('linked_core', _self.id);
+Prefix.add('core', _self.id);
 
 const Package = ns('Package');
 const ShapeClass = ns('ShapeClass');

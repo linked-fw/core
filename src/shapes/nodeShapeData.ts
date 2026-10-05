@@ -27,12 +27,12 @@ export interface PropertyShapeData {
   order?: number;
   group?: string;
   /**
-   * `linked_core:displayRank` — a single linear importance rank, lower = more
+   * `core:displayRank` — a single linear importance rank, lower = more
    * important. Truncated display contexts ("the top 3 properties") derive from it.
    * Distinct from `order`, which is arrangement rather than importance.
    */
   displayRank?: number;
-  /** `linked_core:displayHidden` — omit from generic rendering. */
+  /** `core:displayHidden` — omit from generic rendering. */
   displayHidden?: boolean;
   class?: NodeReferenceValue;
   in?: (NodeReferenceValue | string | number | boolean)[];
