@@ -70,7 +70,7 @@
     "jest": "^30.0.0",
     "rimraf": "^6.0.0",
     "ts-jest": "^29.1.2",
-    "typescript": "^5.7.3"
+    "typescript": "^7.0.0"
   },
   "dependencies": {
     "ulid": "^3.0.2"
