@@ -288,10 +288,14 @@ const minCountCheck: ConstraintCheck = (values, ctx) => {
 /** True when the property clearly accepts only literal values. */
 function expectsLiteral(ps: PropertyShapeData): boolean {
   if (ps.nodeKind) return ps.nodeKind.id === shacl.Literal.id;
-  return !!ps.datatype && !ps.valueShape;
+  return !!ps.datatype && !ps.valueShape && !ps.class;
 }
 
-/** True when the property clearly accepts only nodes (IRIs/blank nodes). */
+/**
+ * True when the property clearly accepts only nodes (IRIs/blank nodes). `sh:class` counts
+ * as much as `sh:node`: a value that is an instance of a class is a node, whether or not
+ * the property names a shape for it.
+ */
 function expectsNode(ps: PropertyShapeData): boolean {
   if (ps.nodeKind) {
     return (
@@ -300,7 +304,7 @@ function expectsNode(ps: PropertyShapeData): boolean {
       ps.nodeKind.id === shacl.BlankNodeOrIRI.id
     );
   }
-  return !!ps.valueShape;
+  return !!(ps.valueShape || ps.class);
 }
 
 function isScalarValue(value: unknown): boolean {
@@ -315,7 +319,7 @@ function isScalarValue(value: unknown): boolean {
 /**
  * `sh:nodeKind` — literal properties reject nodes/objects, relation properties
  * reject bare scalars. Ambiguous kinds (`sh:IRIOrLiteral`, or no `nodeKind` and
- * no `datatype`/`valueShape` to infer from) are not enforced.
+ * no `datatype`/`valueShape`/`class` to infer from) are not enforced.
  */
 const nodeKindCheck: ConstraintCheck = (values, ctx) => {
   const ps = ctx.propertyShape;
