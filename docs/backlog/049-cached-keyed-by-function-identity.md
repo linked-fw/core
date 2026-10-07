@@ -10,7 +10,7 @@ status: open
 
 # 049 — `cached()` misses for every inline function
 
-Found by Create Now plan 059 (phase 4). Checked against `src/utils/cached.ts` on
+Found by Create Now plan 059. Checked against `src/utils/cached.ts` on
 `feat/relation-shape-resolver` (2026-10-07).
 
 ## Context
