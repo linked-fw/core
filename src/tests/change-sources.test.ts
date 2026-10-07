@@ -4,7 +4,7 @@
  * optional change feed, `publishChange()` from application code, and the
  * echo folding between a local change and its remote confirmation.
  */
-import {afterEach, beforeEach, describe, expect, test} from '@jest/globals';
+import {afterEach, beforeEach, describe, expect, jest, test} from '@jest/globals';
 import {LinkedStorage} from '../utils/LinkedStorage';
 import type {IDataset} from '../interfaces/IDataset';
 import type {ChangeEvent} from '../live/changes';
@@ -181,6 +181,50 @@ describe('change sources', () => {
     await flush();
     expect(dataset.selects).toBe(3);
     expect(getLiveQueryStore()).toBe(store);
+  });
+
+  test('two different local writes within the echo window refetch twice', async () => {
+    await Team.update({members: {add: [{id: ids.P3}]}}).for(ids.T1);
+    await flush();
+    await Team.update({members: {add: [{id: ids.P3}]}}).for(ids.T1); // same effects, same origin
+    await flush();
+    expect(dataset.selects).toBe(3);
+  });
+
+  test('invalidate twice within the echo window refetches twice', async () => {
+    invalidate(Team);
+    await flush();
+    invalidate(Team);
+    await flush();
+    expect(dataset.selects).toBe(3);
+  });
+
+  test('exec(target) on an authoritative target publishes nothing; a plain target does', async () => {
+    const authoritative = new FeedDataset(true);
+    await Team.update({members: {add: [{id: ids.P3}]}}).for(ids.T1).exec(authoritative);
+    await flush();
+    expect(dataset.selects).toBe(1);
+    const plain = new FeedDataset();
+    await Team.update({members: {add: [{id: ids.P4}]}}).for(ids.T1).exec(plain);
+    await flush();
+    expect(dataset.selects).toBe(2);
+  });
+
+  test('the feed of a dataset removed from routing is unsubscribed', async () => {
+    const pinned = new FeedDataset();
+    LinkedStorage.setDatasetForShapes(pinned, Person);
+    await flush();
+    expect(pinned.listeners.size).toBe(1);
+    LinkedStorage.unsetDatasetForShape(Person);
+    await flush();
+    expect(pinned.listeners.size).toBe(0);
+  });
+
+  test('a malformed feed event is reported, not thrown into the emitter', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => dataset.emit({mutation: {op: 'nonsense'} as any})).not.toThrow();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 
   test('an invalidation while a fetch is in flight yields exactly one follow-up fetch', async () => {

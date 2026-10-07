@@ -23,7 +23,10 @@ export type LiveQueryKind = 'select' | 'count' | 'ask';
 export type InstanceParams = {
   subject?: string;
   subjects?: string[];
+  /** The query context the subject comes from (`.for(getQueryContext(name))`). */
   contextName?: string;
+  /** Query contexts referenced inside `where` (`p.x.equals(getQueryContext(name))`): a change refetches, it does not re-key. */
+  contextNames?: string[];
   one?: boolean;
   limit?: number;
   offset?: number;
@@ -76,16 +79,41 @@ export function splitQuery(query: LiveBuilder): SplitQuery {
     const subject = liftContext(j.subject);
     if (subject) params.subject = subject;
     if (j.subjects && j.subjects.length) params.subjects = [...j.subjects];
-    if (j.one && !subject && !params.contextName) params.one = true; // `.for(id)`/`.for(ctx)` imply one; keep the key minimal
+    // `.for(id)` / `.for(ctx)` imply `one`; it is only a param for a subject-less `.one()`.
+    if (j.one && !subject && !params.contextName) params.one = true;
     if (j.limit !== undefined) params.limit = j.limit;
     if (j.offset !== undefined) params.offset = j.offset;
+    liftWhereContexts(json.where, params);
     return {kind, templateJson, params};
   }
 
   // count / ask: the subject is part of the template; only a context ref is lifted.
   const subject = liftContext(json.subject);
   if (params.contextName && subject) params.subject = subject;
+  liftWhereContexts(json.where, params);
   return {kind, templateJson: json, params};
+}
+
+/** Every `{@ctx: name}` inside a where clause, so a context change can refetch the instance. */
+function liftWhereContexts(where: unknown, params: InstanceParams): void {
+  const names = new Set<string>();
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === 'object') {
+      if (isContextRefJSON(v)) names.add((v as unknown as Record<string, string>)[CONTEXT_REF_KEY]);
+      else Object.values(v as Record<string, unknown>).forEach(walk);
+    }
+  };
+  walk(where);
+  if (names.size) params.contextNames = [...names].sort();
+}
+
+/**
+ * The subject-less form of a builder, used only for dependency analysis: what
+ * a query reads does not depend on which node it is applied to.
+ */
+export function stripSubjects(query: LiveBuilder): LiveBuilder {
+  return kindOf(query) === 'select' ? (query as SelectBuilder<any, any, any>).forAll() : query;
 }
 
 const templateKeyMemo = new WeakMap<object, string>();
@@ -101,25 +129,6 @@ export function templateKey(query: LiveBuilder): string {
 
 export function paramsKey(params: InstanceParams): string {
   return stableStringify(params);
-}
-
-/** Apply instance params to a template builder. Count/ask builders are returned as they are. */
-export function bindParams(query: LiveBuilder, params: InstanceParams): LiveBuilder {
-  if (kindOf(query) !== 'select') return query;
-  let b = query as SelectBuilder<any, any, any>;
-  // Bind with `{id}` references: a bare string would go through prefix
-  // resolution, which rejects ids such as `urn:…` that are not prefixed names.
-  if (params.subject) {
-    b = b.for({id: params.subject}) as SelectBuilder<any, any, any>;
-  } else if (params.subjects && params.subjects.length) {
-    b = b.forAll(params.subjects.map((id) => ({id})));
-  } else {
-    b = b.forAll();
-    if (params.one) b = b.one() as SelectBuilder<any, any, any>;
-  }
-  if (params.limit !== undefined) b = b.limit(params.limit);
-  if (params.offset !== undefined) b = b.offset(params.offset);
-  return b;
 }
 
 /** JSON with object keys in sorted order at every depth, so equal values give equal strings. */

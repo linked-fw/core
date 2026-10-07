@@ -83,15 +83,26 @@ export function selectInstances(index: LiveIndexes, e: MutationEffects): Set<Ins
       for (const t of index.templatesByShape.get(shape) ?? []) {
         if (e.op === 'delete') {
           addAll(t);
-        } else {
-          const deps = index.depsOf(t);
-          if (deps.unbound) addAll(t);
+        } else if (t.reactive) {
+          for (const inst of t.instances.values()) if (isUnbound(index, inst)) out.add(inst);
         }
       }
     }
   }
 
   return out;
+}
+
+/**
+ * Whether an instance scans its whole shape (so a create can add to it). For a
+ * select the subject is an instance param; count and ask builders carry it in
+ * their spec, so their template dependencies decide.
+ */
+export function isUnbound(index: LiveIndexes, inst: Instance): boolean {
+  if (inst.template.kind === 'select') {
+    return !(inst.params.subject || inst.params.contextName || (inst.params.subjects && inst.params.subjects.length));
+  }
+  return index.depsOf(inst.template).unbound;
 }
 
 /** A set of shape IRIs plus every ancestor and descendant shape of each. */

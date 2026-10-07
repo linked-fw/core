@@ -32,7 +32,7 @@ export function peekLiveQueryStore(): LiveQueryStore | undefined {
 }
 
 /** The registered store; throws when live queries have not been loaded. */
-export function getLiveQueryStore(): LiveQueryStore {
+export function requireLiveQueryStore(): LiveQueryStore {
   const store = peekLiveQueryStore();
   if (!store) {
     throw new Error(

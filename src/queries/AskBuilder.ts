@@ -32,7 +32,7 @@ import {
   deserializeRawMinusEntry,
 } from './QueryBuilderSerialization.js';
 import type {AskQuery, AskQueryJSON, RawAskInput} from './AskQuery.js';
-import {getLiveQueryStore} from '../live/registry.js';
+import {requireLiveQueryStore} from '../live/registry.js';
 import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
 
 /** Everything an ask can carry. Assembled by `.exists()` or by `Shape.exists()`. */
@@ -205,7 +205,7 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
   live<R = boolean>(listenerOrOptions?: LiveListener<R> | LiveQueryOptions, options?: LiveQueryOptions): LiveQuery<R> {
     const listener = typeof listenerOrOptions === 'function' ? listenerOrOptions : undefined;
     const opts = typeof listenerOrOptions === 'function' ? options : listenerOrOptions;
-    return getLiveQueryStore().subscribe<R>(this as any, listener, opts);
+    return requireLiveQueryStore().subscribe<R>(this as any, listener, opts);
   }
 
   /** `await` triggers execution. */

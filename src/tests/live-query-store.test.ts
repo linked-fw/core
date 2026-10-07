@@ -9,9 +9,10 @@ import {afterEach, beforeEach, describe, expect, jest, test} from '@jest/globals
 import {LinkedStorage} from '../utils/LinkedStorage';
 import type {IDataset} from '../interfaces/IDataset';
 import {getQueryContext, setQueryContext} from '../queries/QueryContext';
+import {isContextRefJSON, resolveContextId, CONTEXT_REF_KEY} from '../queries/ContextRef';
 import {AskBuilder} from '../queries/AskBuilder';
 import {resetLiveQueryStore, getLiveQueryStore, LiveQueryStore} from '../live/LiveQueryStore';
-import {splitQuery, templateKey} from '../live/keys';
+import {splitQuery, templateKey, stripSubjects} from '../live/keys';
 import {LIVE_STORE_KEY} from '../live/registry';
 import {Person, Team, ids} from '../test-helpers/live-fixtures';
 
@@ -50,7 +51,11 @@ class ScriptedDataset implements IDataset {
     if (this.queue.length) return this.queue.shift()!.promise;
     const json = query.toJSON();
     if (json.op === 'count') return [...this.rows.values()].length;
-    if (json.subject) return this.rows.get(json.subject) ?? null;
+    // A real dataset resolves `{@ctx}` references when it lowers the query.
+    const subject = isContextRefJSON(json.subject)
+      ? resolveContextId((json.subject as any)[CONTEXT_REF_KEY], false)
+      : json.subject;
+    if (subject) return this.rows.get(subject) ?? null;
     if (json.subjects) return json.subjects.map((s: string) => this.rows.get(s)).filter(Boolean);
     const all = [...this.rows.values()];
     const offset = json.offset ?? 0;
@@ -63,8 +68,6 @@ class ScriptedDataset implements IDataset {
     return typeof json.subject === 'string' ? this.rows.has(json.subject) : this.rows.size > 0;
   }
 }
-
-const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
 let dataset: ScriptedDataset;
 let store: LiveQueryStore;
@@ -285,6 +288,132 @@ describe('LiveQueryStore', () => {
     LinkedStorage.setDefaultDataset(dataset);
     await live.refresh();
     expect(live.state.status).toBe('success');
+  });
+
+  test('a template shared by a bound and an unbound builder keeps per-instance binding (both orders)', async () => {
+    // Bound first, then unbound: the unbound instance must not inherit the subject.
+    const bound = Person.select((p) => p.name).for(ids.P1).live(() => {});
+    const unbound = Person.select((p) => p.name).live(() => {});
+    await settle();
+    expect(bound.state.data).toEqual(expect.objectContaining({id: ids.P1}));
+    expect(Array.isArray(unbound.state.data)).toBe(true);
+    expect((unbound.state.data as Row[]).length).toBe(3);
+    const template = store._templates.get(templateKey(Person.select((p) => p.name)))!;
+    expect(template.instances.size).toBe(2);
+    expect(store.depsOf(template).unbound).toBe(true); // the template's builder is subject-stripped
+    // Unbound first, then bound (fresh store).
+    store = resetLiveQueryStore();
+    const unbound2 = Person.select((p) => p.name).live(() => {});
+    const bound2 = Person.select((p) => p.name).for(ids.P2).live(() => {});
+    await settle();
+    expect((unbound2.state.data as Row[]).length).toBe(3);
+    expect((bound2.state.data as Row).name).toBe('Moa');
+  });
+
+  test('limit and one of the first registrant do not leak into other instances', async () => {
+    const limited = Person.select((p) => p.name).limit(1).live(() => {});
+    const unlimited = Person.select((p) => p.name).live(() => {});
+    const one = Person.select((p) => p.name).one().live(() => {});
+    await settle();
+    expect((limited.state.data as Row[]).length).toBe(1);
+    expect((unlimited.state.data as Row[]).length).toBe(3);
+    expect(Array.isArray(one.state.data)).toBe(true); // the scripted dataset does not unwrap; the request carried limit 1
+    expect((one.state.data as unknown as Row[]).length).toBe(1);
+  });
+
+  test('close() detaches this handle only and the handle can subscribe again', async () => {
+    const a = Person.select((p) => p.name).for(ids.P1).live();
+    const b = Person.select((p) => p.name).for(ids.P1).live();
+    a.subscribe(() => {});
+    const seenB: string[] = [];
+    b.subscribe((s) => seenB.push(s.status));
+    await settle();
+    a.close();
+    expect(seenB.at(-1)).toBe('success');
+    const seenA: string[] = [];
+    a.subscribe((s) => seenA.push(s.status)); // reopened, no throw
+    await a.refresh();
+    expect(seenA.length).toBeGreaterThan(0);
+    expect(dataset.selects).toBe(2);
+  });
+
+  test('a handle re-resolves its instance after GC and after a routing change', async () => {
+    const live = Person.select((p) => p.name).for(ids.P1).live();
+    const off = live.subscribe(() => {});
+    await settle();
+    off();
+    jest.advanceTimersByTime(store.options.gcMs + 1); // instance dropped
+    expect(store.templates()).toHaveLength(0);
+    live.subscribe(() => {});
+    await settle();
+    expect(live.state.status).toBe('success');
+    expect(store.templates()).toHaveLength(1);
+    // The re-resolved instance is visible to the matcher.
+    store.invalidate({id: ids.P1});
+    await settle();
+    expect(dataset.selects).toBe(3);
+    // Routing change with no listeners drops it; subscribing again revives it.
+    live.close();
+    LinkedStorage.setDefaultDataset(dataset);
+    expect(store.templates()).toHaveLength(0);
+    live.subscribe(() => {});
+    await settle();
+    expect(live.state.status).toBe('success');
+  });
+
+  test('a handle created without a listener is released after the grace period', async () => {
+    Person.select((p) => p.name).for(ids.P1).live();
+    expect(store.templates()).toHaveLength(1);
+    jest.advanceTimersByTime(store.options.gcMs + 1);
+    expect(store.templates()).toHaveLength(0);
+    expect(dataset.selects).toBe(0);
+  });
+
+  test('refresh while pending does not notify', async () => {
+    LinkedStorage.setDefaultDataset(null as any);
+    let calls = 0;
+    const live = Person.select((p) => p.name).for(ids.P1).live(() => calls++);
+    await settle();
+    const before = calls;
+    await live.refresh();
+    expect(calls).toBe(before);
+    LinkedStorage.setDefaultDataset(dataset);
+  });
+
+  test('patch on a pending instance makes it loaded; arrays replace', async () => {
+    LinkedStorage.setDefaultDataset(null as any);
+    const live = Person.select((p) => p.name).for(ids.P1).live(() => {});
+    live.patch({id: ids.P1, name: 'Local'} as any);
+    expect(live.state.status).toBe('success');
+    expect(await live).toEqual({id: ids.P1, name: 'Local'});
+    LinkedStorage.setDefaultDataset(dataset);
+    const list = Person.select((p) => p.name).live(() => {});
+    await settle();
+    list.patch([{id: ids.P9, name: 'Only'}] as any);
+    expect(list.state.data).toEqual([{id: ids.P9, name: 'Only'}]);
+  });
+
+  test('a where clause on an unset query context does not throw and refetches when it lands', async () => {
+    const live = Person.select((p) => p.name)
+      .where((p) => p.bestFriend.equals(getQueryContext('user')))
+      .live(() => {});
+    await settle();
+    expect(live.state.status).toBe('success'); // exec() answers null/[] while unresolved
+    expect(splitQuery(Person.select((p) => p.name).where((p) => p.bestFriend.equals(getQueryContext('user')))).params.contextNames).toEqual(['user']);
+    const template = [...store._templates.values()][0];
+    expect(template.depsProvisional).toBe(true);
+    const before = dataset.selects;
+    setQueryContext('user', {id: ids.P2}, Person);
+    await settle();
+    expect(dataset.selects).toBe(before + 1);
+    expect(template.depsProvisional).toBe(false);
+  });
+
+  test('stripSubjects clears the subject of a select and leaves counts alone', () => {
+    const q = Team.select((t) => t.name).for(ids.T1);
+    expect((stripSubjects(q) as any).toJSON().subject).toBeUndefined();
+    const c = Team.select().toCount();
+    expect(stripSubjects(c)).toBe(c);
   });
 
   test('.live() without a registered store throws the documented error', () => {

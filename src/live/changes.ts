@@ -24,6 +24,13 @@ export type ChangeEvent =
   | {effects: MutationEffects}
   | {mutation: MutationJSON; result?: unknown};
 
+/**
+ * Where a change event came from. Only used to fold a remote echo (`feed`,
+ * `app`) onto the local original of the same change, or the reverse; two local
+ * events are never folded, and `manual` (`invalidate()`) is never folded.
+ */
+export type ChangeOrigin = 'local' | 'feed' | 'app' | 'manual';
+
 export function normalizeChange(event: ChangeEvent): MutationEffects {
   if ('effects' in event) return reviveEffects(event.effects);
   const builder = fromJSON(event.mutation as any) as any;

@@ -29,4 +29,4 @@ export type {
   Instance,
 } from './live/LiveQueryStore.js';
 export type {InstanceParams, LiveBuilder, LiveQueryKind} from './live/keys.js';
-export {splitQuery, templateKey, paramsKey} from './live/keys.js';
+export {splitQuery, templateKey, paramsKey, stripSubjects} from './live/keys.js';

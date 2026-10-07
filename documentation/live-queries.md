@@ -41,7 +41,7 @@ IR lowering it needs.
 | `await live` | Resolves with the first successful `data`, rejects on the first error |
 | `refresh()` | Fetch now, keeping the current data until the response lands |
 | `patch(partialOrFn)` | Local edit of the cached data, no request; the next refetch overwrites it |
-| `close()` | Detach this handle's listeners and release the instance |
+| `close()` | Detach this handle's listeners; the handle can subscribe again later |
 | `key` | Identity of the underlying instance |
 
 `status` is `pending` (nothing requested: no storage configured, or the subject
@@ -51,7 +51,13 @@ true while a request is in flight and data is present. `notFound` is true when
 a single-subject select answered `null`.
 
 Do not `return` a handle from an `async` function: it is `PromiseLike`, so the
-promise machinery would unwrap it.
+promise machinery would unwrap it. `await live` waits for as long as storage is
+not configured or a pending query context is not set.
+
+`patch()` merges an object into object data and replaces arrays; a patched
+instance counts as loaded, so `await live` resolves with it. The edit is visible
+to every subscriber of the same query and overwritten by the next refetch.
+`.for(null)` answers `null` with `notFound: true`, like a missing node.
 
 ## Templates and instances
 
@@ -74,8 +80,18 @@ JSON and optional name) and `prepare()` computes every watch set eagerly — the
 list of queries an application can fire, for a database to tune for.
 
 Options on `.live(opts)` / `.live(cb, opts)`: `name` (registry metadata),
-`reactive: false` (opt out of automatic refetching), `pinned` (keep the template
-registered while it has no instances; component definitions use this).
+`reactive: false` (opt out of automatic refetching — this applies to the
+template, i.e. every query with that exact template, not to one handle),
+`pinned` (keep the template registered while it has no instances; component
+definitions use this).
+
+An instance with no listeners is released after a grace period
+(`getLiveQueryStore().options.gcMs`, 30 s); a pinned template outlives its
+instances. `options.echoMs` (50 ms) is the echo window below. When storage
+changes (`LinkedStorage.setDefaultDataset`, `setDatasetForShapes`,
+`unsetDatasetForShape`) the cache is reset: instances nobody watches are
+dropped and watched ones fetch again, because what was cached may come from a
+store that no longer answers. `resetLiveQueryStore()` replaces the store in tests.
 
 ## What triggers a refetch
 
@@ -124,19 +140,25 @@ already has after executing it — or precomputed effects:
 {effects: {op, shape, props, ids, membership}}            // sets may arrive as arrays
 ```
 
-A local change and its remote echo usually carry identical effects; the store
-folds identical events within `options.echoMs` (50 ms) into one refetch, and an
-invalidation that lands while a fetch is in flight yields one follow-up fetch.
-A dataset may declare `authoritativeChanges: true`: local mutations routed to it
-then trigger nothing by themselves and the store waits for the dataset's own
-change event, the server's confirmation.
+A local change and its remote echo usually carry identical effects; when they
+arrive within `options.echoMs` (50 ms) of each other the store refetches once.
+Only a *remote* echo of a *local* change (or the reverse) is folded: two local
+writes to the same node in quick succession are two changes, and `invalidate()`
+is never folded. An invalidation that lands while a fetch is in flight yields one
+follow-up fetch. A dataset may declare `authoritativeChanges: true`: local
+mutations routed to it — or run with `exec(thatDataset)` — then trigger nothing
+by themselves and the store waits for the dataset's own change event, the
+server's confirmation.
 
 ## Query context
 
 An instance bound to `getQueryContext('user')` stays `pending` until that
 context is set. When it is set, changed or cleared, the store re-keys the
 instance to the new subject, fetches, and notifies the same listeners; nothing
-upstream has to rerender.
+upstream has to rerender. A context referenced inside `where` does not re-key —
+the instance simply fetches again when that context changes; until it is set,
+the template's dependencies are provisional (its shape only) and are computed
+once the context lands.
 
 ## Related
 

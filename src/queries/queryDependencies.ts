@@ -87,7 +87,11 @@ export type MutationEffects = {
   shape: string;
   /** Predicates written (nested node descriptions and add/remove relations included); for delete: every predicate of the shape. */
   props: Set<string>;
-  /** Affected node ids; `undefined` = unknown (`update_where`, `delete_all`, `delete_where`). */
+  /**
+   * Affected node ids: the target id(s), nested created nodes, removed references, and every
+   * `id` found anywhere in `result` (conservative: a reference echoed in the result counts).
+   * `undefined` = unknown (`update_where`, `delete_all`, `delete_where`).
+   */
   ids?: Set<string>;
   /** Shapes whose instance set may have changed: the target shape for create/upsert/delete + shapes of nested created nodes; empty for a plain update. */
   membership: Set<string>;
@@ -418,14 +422,6 @@ export function queryDependencies(
 
 const isNodeData = (value: unknown): value is IRNodeData =>
   !!value && typeof value === 'object' && 'fields' in value && 'shape' in value;
-
-const isNodeReference = (value: unknown): value is {id: string} =>
-  !!value &&
-  typeof value === 'object' &&
-  'id' in value &&
-  typeof (value as {id: unknown}).id === 'string' &&
-  !('fields' in value) &&
-  !('kind' in value);
 
 const isSetModification = (value: unknown): value is {add?: IRFieldValue[]; remove?: {id: string}[]} =>
   !!value && typeof value === 'object' && ('add' in value || 'remove' in value) && !('kind' in value);

@@ -5,7 +5,7 @@
  */
 import {LinkedStorage} from '../utils/LinkedStorage.js';
 import type {IDataset} from '../interfaces/IDataset.js';
-import {subscribeQueryContext} from '../queries/QueryContext.js';
+import {subscribeQueryContext, UnresolvedContextError} from '../queries/QueryContext.js';
 import {resolveContextId} from '../queries/ContextRef.js';
 import {subscribeQueryDispatch, type QueryDispatchEvent} from '../queries/queryDispatch.js';
 import {
@@ -16,14 +16,14 @@ import {
 } from '../queries/queryDependencies.js';
 import {getShapeClass} from '../utils/ShapeClass.js';
 import type {ShapeConstructor} from '../shapes/Shape.js';
-import {effectsHash, normalizeChange, type ChangeEvent} from './changes.js';
+import {effectsHash, normalizeChange, type ChangeEvent, type ChangeOrigin} from './changes.js';
 import {selectInstances} from './matcher.js';
 import {
-  bindParams,
   kindOf,
   paramsKey,
   splitQuery,
   stableStringify,
+  stripSubjects,
   type InstanceParams,
   type LiveBuilder,
   type LiveQueryKind,
@@ -63,7 +63,7 @@ export type LiveListener<R = unknown> = (state: LiveState<R>) => void;
 export type LiveQueryOptions = {
   /** Metadata for the template registry (`prepare()`), not identity. */
   name?: string;
-  /** `false` opts this template out of automatic invalidation. Default `true`. */
+  /** `false` opts this template — every query with this exact template — out of automatic invalidation. Default `true`. */
   reactive?: boolean;
   /** A pinned template survives having no instances (component definitions, `prepare()`). */
   pinned?: boolean;
@@ -73,21 +73,28 @@ export type LiveQueryOptions = {
  * The handle returned by `query.live()`.
  *
  * It is `PromiseLike`: `await live` resolves with the first successful `data`
- * (or rejects with the first error) and the handle stays live afterwards.
- * Because of that, do not `return` a handle from an `async` function — the
- * promise machinery would unwrap it. `subscribe(cb)` follows the Svelte store
- * contract (returns the unsubscribe function).
+ * (or rejects with the first error) and the handle stays live afterwards. It
+ * waits for as long as storage is not configured or a pending query context is
+ * not set. Because the handle is thenable, do not `return` it from an `async`
+ * function — the promise machinery would unwrap it. `subscribe(cb)` follows
+ * the Svelte store contract (returns the unsubscribe function). `close()`
+ * detaches every listener added through this handle; the handle can be used
+ * again afterwards, which is what React's StrictMode needs.
  */
 export interface LiveQuery<R = unknown> extends PromiseLike<R> {
   readonly state: LiveState<R>;
   /** Identity of the underlying instance (template key + params). */
   readonly key: string;
   subscribe(listener: LiveListener<R>): () => void;
-  /** Refetch now, keeping the current data on screen until the response lands. */
+  /** Refetch now, keeping the current data until the response lands. */
   refresh(): Promise<void>;
-  /** Local edit of the cached data, no request; overwritten by the next refetch. */
+  /**
+   * Local edit of the cached data, no request; overwritten by the next refetch
+   * and visible to every subscriber of the same query. An object merges into
+   * object data; an array or a function replaces.
+   */
   patch(partial: Partial<R> | ((current: R) => R)): void;
-  /** Detach every listener added through this handle and release the instance. */
+  /** Detach every listener added through this handle. */
   close(): void;
 }
 
@@ -96,11 +103,14 @@ export type Template = {
   kind: LiveQueryKind;
   name?: string;
   json: Record<string, unknown>;
+  /** Subject-stripped builder, used for dependency analysis only. */
   builder: LiveBuilder;
   shapeIri?: string;
   reactive: boolean;
   pinned: boolean;
   deps?: QueryDependencies;
+  /** `deps` could not be computed (a query context in `where` is unset); recomputed on the next use. */
+  depsProvisional?: boolean;
   instances: Map<string, Instance>;
 };
 
@@ -108,6 +118,8 @@ export type Instance = {
   key: string;
   template: Template;
   params: InstanceParams;
+  /** The bound builder this instance executes (what `.live()` was called on). */
+  builder: LiveBuilder;
   state: LiveState;
   /** Sequence of the latest issued request; a response carrying an older sequence is dropped. */
   seq: number;
@@ -117,13 +129,17 @@ export type Instance = {
   /** Every node id the last result mentions, plus the subject(s). */
   ids: Set<string>;
   listeners: Set<LiveListener>;
+  /** Removed from its template (GC, routing change); a handle that still holds it re-resolves on use. */
+  dropped: boolean;
+  /** Set when a query context re-keyed this instance: handles follow it to the new one. */
+  movedTo?: Instance;
   gcTimer?: ReturnType<typeof setTimeout>;
 };
 
 export type LiveQueryStoreOptions = {
   /** Grace period before an instance with no listeners is dropped. */
   gcMs: number;
-  /** Window in which identical change events are treated as one (local + remote echo). */
+  /** Window in which a remote echo of a local change (or the reverse) folds into one refetch. */
   echoMs: number;
 };
 
@@ -153,7 +169,7 @@ export class LiveQueryStore {
 
   private readonly _disposers: Array<() => void> = [];
   private readonly _feeds = new Map<IDataset, () => void>();
-  private readonly _recentChanges = new Map<string, number>();
+  private readonly _recentChanges = new Map<string, {at: number; origin: ChangeOrigin}>();
   private _pendingRefetch = new Set<Instance>();
   private _flushScheduled = false;
 
@@ -170,16 +186,19 @@ export class LiveQueryStore {
 
   /** Register (or find) the template of `query`. Options merge into an existing template. */
   template(query: LiveBuilder, opts: LiveQueryOptions = {}): Template {
-    const split = splitQuery(query);
-    const key = stableStringify(split.templateJson);
+    return this._template(splitQuery(query).templateJson, query, opts);
+  }
+
+  private _template(templateJson: Record<string, unknown>, query: LiveBuilder, opts: LiveQueryOptions): Template {
+    const key = stableStringify(templateJson);
     let t = this._templates.get(key);
     if (!t) {
       t = {
         key,
-        kind: split.kind,
-        json: split.templateJson,
-        builder: query,
-        shapeIri: typeof split.templateJson.shape === 'string' ? (split.templateJson.shape as string) : undefined,
+        kind: kindOf(query),
+        json: templateJson,
+        builder: stripSubjects(query),
+        shapeIri: typeof templateJson.shape === 'string' ? (templateJson.shape as string) : undefined,
         reactive: true,
         pinned: false,
         instances: new Map(),
@@ -202,16 +221,34 @@ export class LiveQueryStore {
     for (const t of this._templates.values()) this.depsOf(t);
   }
 
-  /** @internal The watch set of a template, computed once. */
+  /**
+   * The watch set of a template, computed once. When a query context used in
+   * `where` is not set yet, lowering throws; the template then gets provisional
+   * dependencies (its shape only) and is recomputed on its next use, which the
+   * context change triggers.
+   */
   depsOf(template: Template): QueryDependencies {
-    if (!template.deps) {
+    if (template.deps && !template.depsProvisional) return template.deps;
+    try {
       template.deps = queryDependencies(template.builder as any);
-      this._onDepsComputed(template);
+      template.depsProvisional = false;
+    } catch (err) {
+      if (!(err instanceof UnresolvedContextError)) throw err;
+      if (template.deps) return template.deps; // still provisional
+      template.deps = {
+        narrow: new Set(),
+        filter: new Set(),
+        hidden: new Set(),
+        shapes: new Set(template.shapeIri ? [template.shapeIri] : []),
+        unbound: false,
+      };
+      template.depsProvisional = true;
     }
+    this._index(template);
     return template.deps;
   }
 
-  private _onDepsComputed(t: Template): void {
+  private _index(t: Template): void {
     const deps = t.deps!;
     for (const set of [deps.narrow, deps.filter, deps.hidden]) {
       for (const p of set) addToIndex(this.templatesByProp, p, t);
@@ -219,12 +256,17 @@ export class LiveQueryStore {
     for (const s of deps.shapes) addToIndex(this.templatesByShape, s, t);
   }
 
+  private _unindexTemplate(t: Template): void {
+    for (const set of this.templatesByProp.values()) set.delete(t);
+    for (const set of this.templatesByShape.values()) set.delete(t);
+  }
+
   // -------------------------------------------------------------------------
   // Instances and handles
   // -------------------------------------------------------------------------
 
-  /** @internal Get or create the instance of `template` for `params`. */
-  instance(template: Template, params: InstanceParams): Instance {
+  /** @internal Get or create the instance of `template` for `params`, executing `builder`. */
+  instance(template: Template, params: InstanceParams, builder: LiveBuilder): Instance {
     const pk = paramsKey(params);
     let inst = template.instances.get(pk);
     if (!inst) {
@@ -233,12 +275,14 @@ export class LiveQueryStore {
         key: `${template.key}|${pk}`,
         template,
         params,
+        builder,
         state: IDLE,
         seq: 0,
         inflight: false,
         staleWhileInflight: false,
         ids: new Set(),
         listeners: new Set(),
+        dropped: false,
       };
       template.instances.set(pk, inst);
     }
@@ -247,14 +291,26 @@ export class LiveQueryStore {
 
   /**
    * Subscribe to `query`. The first listener on an instance starts its fetch;
-   * identical queries share one instance and one request.
+   * identical queries share one instance and one request. A handle created
+   * without a listener holds nothing: its instance is released after the grace
+   * period unless something subscribes.
    */
   subscribe<R = unknown>(query: LiveBuilder, listener?: LiveListener<R>, opts: LiveQueryOptions = {}): LiveQuery<R> {
-    const template = this.template(query, opts);
-    const {params} = splitQuery(query);
-    const handle = new LiveQueryHandle<R>(this, this.instance(template, params));
+    const {templateJson, params} = splitQuery(query);
+    const template = this._template(templateJson, query, opts);
+    const inst = this.instance(template, params, query);
+    if (inst.listeners.size === 0) this._scheduleGc(inst);
+    const handle = new LiveQueryHandle<R>(this, inst);
     if (listener) handle.subscribe(listener);
     return handle;
+  }
+
+  /** @internal The live instance for a possibly dropped one (same template, params and builder). */
+  _resolve(inst: Instance): Instance {
+    if (!inst.dropped) return inst;
+    if (inst.movedTo) return this._resolve(inst.movedTo);
+    const t = this._templates.get(inst.template.key) ?? this._template(inst.template.json, inst.builder, {});
+    return this.instance(t, inst.params, inst.builder);
   }
 
   /** @internal */
@@ -269,7 +325,7 @@ export class LiveQueryStore {
   /** @internal */
   _detach(inst: Instance, listener: LiveListener): void {
     inst.listeners.delete(listener);
-    if (inst.listeners.size === 0) this._scheduleGc(inst);
+    if (inst.listeners.size === 0 && !inst.dropped) this._scheduleGc(inst);
   }
 
   /** Refetch an instance, keeping its data on screen. Resolves when that request settles. */
@@ -277,29 +333,35 @@ export class LiveQueryStore {
     return this._fetch(inst);
   }
 
-  /** Local edit of an instance's data. Never touches the store. */
+  /**
+   * Local edit of an instance's data. Never touches the store. A patched
+   * instance counts as loaded (`success`), so `await live` resolves with it.
+   */
   patch(inst: Instance, partial: unknown): void {
     const current = inst.state.data;
+    const mergeable = (v: unknown) => !!v && typeof v === 'object' && !Array.isArray(v);
     const next =
       typeof partial === 'function'
         ? (partial as (c: unknown) => unknown)(current)
-        : current && typeof current === 'object' && !Array.isArray(current)
+        : mergeable(current) && mergeable(partial)
           ? {...(current as object), ...(partial as object)}
           : partial;
-    this._setState(inst, {...inst.state, data: next, notFound: next === null});
+    const status = inst.state.status === 'error' ? 'error' : 'success';
+    this._setState(inst, {...inst.state, status, data: next, notFound: next === null});
     this._collectIds(inst, next);
   }
 
   /**
    * Refetch every instance matching `target`: a shape class or shape IRI
    * (everything that scans or traverses it, as after a delete), a node
-   * reference (`{id}`), a query (its template), or a template.
+   * reference (`{id}`), a query (its template), or a template. Never folded
+   * with other change events.
    */
   invalidate(target: ShapeConstructor<any> | string | {id: string} | LiveBuilder | Template): void {
     if (typeof target === 'function' || typeof target === 'string') {
       const shape = typeof target === 'string' ? target : (target as {shape?: {id?: string}}).shape?.id;
       if (!shape) throw new Error('invalidate(): the shape class has no registered shape.');
-      this.publish({effects: {op: 'delete', shape, props: new Set(), ids: undefined, membership: new Set([shape])}});
+      this.publish({effects: {op: 'delete', shape, props: new Set(), ids: undefined, membership: new Set([shape])}}, 'manual');
       return;
     }
     const instances = new Set<Instance>();
@@ -309,10 +371,7 @@ export class LiveQueryStore {
       const t = this._templates.get(stableStringify(splitQuery(target as LiveBuilder).templateJson));
       if (t) for (const i of t.instances.values()) instances.add(i);
     } else if (typeof (target as {id?: unknown}).id === 'string') {
-      const id = (target as {id: string}).id;
-      for (const t of this._templates.values()) {
-        for (const i of t.instances.values()) if (i.ids.has(id)) instances.add(i);
-      }
+      for (const i of this.instancesById.get((target as {id: string}).id) ?? []) instances.add(i);
     }
     this._refetchAll(instances);
   }
@@ -320,7 +379,7 @@ export class LiveQueryStore {
   /** @internal Refetch a set of instances, folding in-flight ones into one follow-up request. */
   _refetchAll(instances: Iterable<Instance>): void {
     for (const inst of instances) {
-      if (inst.listeners.size === 0) continue; // nobody is watching; it will refetch when subscribed again
+      if (inst.listeners.size === 0 || inst.dropped) continue; // nobody is watching; it refetches when subscribed again
       if (inst.inflight) inst.staleWhileInflight = true;
       else void this._fetch(inst);
     }
@@ -332,19 +391,28 @@ export class LiveQueryStore {
 
   /**
    * Tell the store that data changed. Every source ends here: local mutations
-   * (automatically), dataset change feeds, and application code via
-   * `publishChange()`. Identical events within `options.echoMs` are folded
-   * into one, so a local change and its remote echo refetch once.
+   * (automatically, origin `local`), dataset change feeds (`feed`), application
+   * code via `publishChange()` (`app`) and `invalidate()` (`manual`).
+   *
+   * A local change and its remote confirmation carry identical effects; when
+   * they arrive within `options.echoMs` of each other they refetch once. Two
+   * events of the same origin are never folded — two writes to the same node
+   * in quick succession are two changes — and manual invalidations never are.
    */
-  publish(event: ChangeEvent): void {
+  publish(event: ChangeEvent, origin: ChangeOrigin = 'app'): void {
     const effects = normalizeChange(event);
-    const hash = effectsHash(effects);
-    const now = Date.now();
-    const last = this._recentChanges.get(hash);
-    if (last !== undefined && now - last < this.options.echoMs) return;
-    this._recentChanges.set(hash, now);
-    if (this._recentChanges.size > 256) {
-      for (const [h, t] of this._recentChanges) if (now - t >= this.options.echoMs) this._recentChanges.delete(h);
+    if (origin !== 'manual') {
+      const hash = effectsHash(effects);
+      const now = Date.now();
+      const prev = this._recentChanges.get(hash);
+      if (prev && prev.origin !== 'manual' && prev.origin !== origin && now - prev.at < this.options.echoMs) {
+        return; // the echo of a change already applied
+      }
+      this._recentChanges.set(hash, {at: now, origin});
+      if (this._recentChanges.size > 256) {
+        // Bounded: anything older than the echo window can no longer fold with a newcomer.
+        for (const [h, r] of this._recentChanges) if (now - r.at >= this.options.echoMs) this._recentChanges.delete(h);
+      }
     }
     for (const inst of selectInstances(this, effects)) this._pendingRefetch.add(inst);
     this._scheduleFlush();
@@ -361,55 +429,76 @@ export class LiveQueryStore {
     });
   }
 
+  /**
+   * Local mutations. Select and ask events are ignored: the store's own fetches
+   * run through the same dispatch and must not feed back into it.
+   */
   private _onDispatch(e: QueryDispatchEvent): void {
     if (e.kind !== 'create' && e.kind !== 'update' && e.kind !== 'delete') return;
     const query = e.query as {shape?: {id?: string}};
-    const shapeClass = query.shape?.id ? getShapeClass(query.shape.id) : undefined;
-    const dataset = LinkedStorage.getDatasetForShapeClass(shapeClass as Function | undefined);
+    const dataset =
+      e.target ??
+      LinkedStorage.getDatasetForShapeClass(
+        (query.shape?.id ? getShapeClass(query.shape.id) : undefined) as Function | undefined,
+      );
     if (dataset?.authoritativeChanges) return; // the dataset's own feed will report it
     e.result.then(
-      (result) => this.publish({effects: mutationEffects(e.query as any, result)}),
+      (result) => {
+        let effects: MutationEffects;
+        try {
+          effects = mutationEffects(e.query as any, result);
+        } catch (err) {
+          console.error('[linked] could not derive the effects of a mutation; live queries were not refetched', err);
+          return;
+        }
+        this.publish({effects}, 'local');
+      },
       () => {}, // a failed mutation changed nothing
     );
+  }
+
+  /** Subscribe to the change feeds of the datasets currently routed; drop feeds of datasets that left. */
+  private _scanDatasets(): void {
+    const current = new Set<IDataset>(LinkedStorage.getDatasets());
+    for (const [dataset, off] of [...this._feeds]) {
+      if (!current.has(dataset)) {
+        off();
+        this._feeds.delete(dataset);
+      }
+    }
+    for (const dataset of current) {
+      if (typeof dataset.subscribeChanges !== 'function' || this._feeds.has(dataset)) continue;
+      const off = dataset.subscribeChanges((event) => {
+        try {
+          this.publish(event, 'feed');
+        } catch (err) {
+          console.error('[linked] a dataset change event could not be applied', err);
+        }
+      });
+      this._feeds.set(dataset, off);
+    }
   }
 
   /**
    * Storage changed (a dataset was set, pinned or unpinned): what is cached may
    * come from a store that no longer answers, so instances nobody watches are
-   * dropped and watched ones fetch again. Also picks up new change feeds.
+   * dropped and watched ones fetch again. Also refreshes the feed subscriptions.
    */
   private _onRoutingChanged(): void {
     this._scanDatasets();
     this._recentChanges.clear();
     for (const t of [...this._templates.values()]) {
       for (const inst of [...t.instances.values()]) {
-        if (inst.listeners.size === 0) {
-          this._cancelGc(inst);
-          t.instances.delete(paramsKey(inst.params));
-          this._handles.delete(inst);
-          this._onInstanceDropped(inst);
-        } else {
-          this._refetchAll([inst]);
-        }
+        if (inst.listeners.size === 0) this._dropInstance(inst);
+        else this._refetchAll([inst]);
       }
-      if (t.instances.size === 0 && !t.pinned) {
-        this._templates.delete(t.key);
-        this._onTemplateDropped(t);
-      }
-    }
-  }
-
-  private _scanDatasets(): void {
-    for (const dataset of LinkedStorage.getDatasets()) {
-      if (typeof dataset.subscribeChanges !== 'function' || this._feeds.has(dataset)) continue;
-      this._feeds.set(dataset, dataset.subscribeChanges((event) => this.publish(event)));
     }
   }
 
   /** Drop every template and instance (tests). Subscriptions to sources stay. */
   reset(): void {
-    for (const t of this._templates.values()) {
-      for (const i of t.instances.values()) this._cancelGc(i);
+    for (const t of [...this._templates.values()]) {
+      for (const i of [...t.instances.values()]) this._dropInstance(i, true);
     }
     this._templates.clear();
     this.templatesByProp.clear();
@@ -432,15 +521,15 @@ export class LiveQueryStore {
   // -------------------------------------------------------------------------
 
   private async _fetch(inst: Instance): Promise<void> {
-    if (!LinkedStorage.isInitialised()) {
-      this._setState(inst, {...inst.state, status: 'pending', refreshing: false});
+    const unresolvedSubject = !!inst.params.contextName && !inst.params.subject;
+    if (!LinkedStorage.isInitialised() || unresolvedSubject) {
+      // Nothing to request yet. Stay quiet if that is already what listeners know.
+      if (inst.state.status !== 'pending' || inst.state.refreshing) {
+        this._setState(inst, {...inst.state, status: 'pending', refreshing: false});
+      }
       return;
     }
-    const bound = bindParams(inst.template.builder, inst.params);
-    if (inst.params.contextName && !inst.params.subject) {
-      this._setState(inst, {...inst.state, status: 'pending', refreshing: false});
-      return;
-    }
+    if (inst.template.depsProvisional) this.depsOf(inst.template); // a context may have landed
     const seq = ++inst.seq;
     inst.inflight = true;
     const hasData = inst.state.data !== undefined;
@@ -452,7 +541,7 @@ export class LiveQueryStore {
     try {
       // `exec()` is the same path `await query` takes: dispatch, count/ask
       // contracts, error wrapping. The store adds nothing of its own to it.
-      const data = await (bound as {exec(): Promise<unknown>}).exec();
+      const data = await (inst.builder as {exec(): Promise<unknown>}).exec();
       if (seq !== inst.seq) return;
       this._applyResult(inst, data);
     } catch (err) {
@@ -510,75 +599,72 @@ export class LiveQueryStore {
   // Query context
   // -------------------------------------------------------------------------
 
+  /**
+   * A query context changed. An instance whose *subject* is that context is
+   * re-keyed to the new id (the builder resolves the context lazily, so it is
+   * reused); an instance that references it in `where` just fetches again.
+   */
   private _onContextChange(name: string): void {
     const resolved = resolveContextId(name, false);
     for (const t of [...this._templates.values()]) {
       for (const inst of [...t.instances.values()]) {
+        if (inst.params.contextNames?.includes(name)) {
+          if (t.depsProvisional) {
+            this._unindexTemplate(t);
+            this.depsOf(t);
+          }
+          if (inst.listeners.size > 0) this._refetchAll([inst]);
+        }
         if (inst.params.contextName !== name) continue;
         const params: InstanceParams = {...inst.params};
         if (resolved) params.subject = resolved;
         else delete params.subject;
-        const pk = paramsKey(params);
-        if (pk === paramsKey(inst.params)) continue;
+        if (paramsKey(params) === paramsKey(inst.params)) continue;
         // Move the listeners to the instance for the new subject and drop the old one.
-        const next = this.instance(t, params);
-        t.instances.delete(paramsKey(inst.params));
-        this._cancelGc(inst);
-        this._onInstanceDropped(inst);
-        inst.seq++; // any in-flight response for the old subject is now stale
-        for (const l of inst.listeners) next.listeners.add(l);
+        const next = this.instance(t, params, inst.builder);
+        this._cancelGc(next);
+        const listeners = [...inst.listeners];
         inst.listeners.clear();
-        for (const h of this._handlesOf(inst)) h._moveTo(next);
+        inst.seq++; // any in-flight response for the old subject is now stale
+        inst.movedTo = next;
+        this._dropInstance(inst, true);
+        for (const l of listeners) next.listeners.add(l);
         if (next.listeners.size > 0) {
           if (!resolved) this._setState(next, {...IDLE});
           else if (next.state.status === 'pending' && !next.inflight) void this._fetch(next);
           else this._setState(next, next.state); // publish the cached state to the moved listeners
+        } else {
+          this._scheduleGc(next);
         }
       }
     }
   }
 
   // -------------------------------------------------------------------------
-  // Handles and GC
+  // GC
   // -------------------------------------------------------------------------
 
-  private readonly _handles = new Map<Instance, Set<LiveQueryHandle<any>>>();
-
-  /** @internal */
-  _registerHandle(h: LiveQueryHandle<any>, inst: Instance): void {
-    let set = this._handles.get(inst);
-    if (!set) this._handles.set(inst, (set = new Set()));
-    set.add(h);
-  }
-
-  /** @internal */
-  _unregisterHandle(h: LiveQueryHandle<any>, inst: Instance): void {
-    const set = this._handles.get(inst);
-    if (!set) return;
-    set.delete(h);
-    if (set.size === 0) this._handles.delete(inst);
-  }
-
-  private _handlesOf(inst: Instance): LiveQueryHandle<any>[] {
-    const set = this._handles.get(inst);
-    const list = set ? [...set] : [];
-    this._handles.delete(inst);
-    return list;
+  /** Remove an instance from its template (and the template when it is empty and not pinned). */
+  private _dropInstance(inst: Instance, keepTemplate = false): void {
+    this._cancelGc(inst);
+    inst.dropped = true;
+    const t = inst.template;
+    if (t.instances.get(paramsKey(inst.params)) === inst) t.instances.delete(paramsKey(inst.params));
+    for (const id of inst.ids) removeFromIndex(this.instancesById, id, inst);
+    if (!keepTemplate && t.instances.size === 0 && !t.pinned) {
+      this._templates.delete(t.key);
+      this._unindexTemplate(t);
+    }
   }
 
   private _scheduleGc(inst: Instance): void {
     this._cancelGc(inst);
+    // `unref` so a pending grace period never keeps a Node process (or a test
+    // runner) alive.
     const timer = setTimeout(() => {
       inst.gcTimer = undefined;
       if (inst.listeners.size > 0) return;
-      const t = inst.template;
-      t.instances.delete(paramsKey(inst.params));
-      this._handles.delete(inst);
-      this._onInstanceDropped(inst);
-      if (t.instances.size === 0 && !t.pinned) {
-        this._templates.delete(t.key);
-        this._onTemplateDropped(t);
-      }
+      this._dropInstance(inst);
     }, this.options.gcMs);
     (timer as {unref?: () => void}).unref?.();
     inst.gcTimer = timer;
@@ -590,15 +676,6 @@ export class LiveQueryStore {
       inst.gcTimer = undefined;
     }
   }
-
-  private _onInstanceDropped(inst: Instance): void {
-    for (const id of inst.ids) removeFromIndex(this.instancesById, id, inst);
-  }
-
-  private _onTemplateDropped(t: Template): void {
-    for (const set of this.templatesByProp.values()) set.delete(t);
-    for (const set of this.templatesByShape.values()) set.delete(t);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -608,48 +685,50 @@ export class LiveQueryStore {
 class LiveQueryHandle<R> implements LiveQuery<R> {
   private _inst: Instance;
   private readonly _mine = new Set<LiveListener>();
-  private _closed = false;
 
   constructor(
     private readonly store: LiveQueryStore,
     inst: Instance,
   ) {
     this._inst = inst;
-    store._registerHandle(this, inst);
+  }
+
+  /** The current instance, re-resolved if the store dropped the one this handle held. */
+  private get inst(): Instance {
+    if (this._inst.dropped) this._inst = this.store._resolve(this._inst);
+    return this._inst;
   }
 
   get state(): LiveState<R> {
-    return this._inst.state as LiveState<R>;
+    return this.inst.state as LiveState<R>;
   }
 
   get key(): string {
-    return this._inst.key;
+    return this.inst.key;
   }
 
   subscribe(listener: LiveListener<R>): () => void {
-    if (this._closed) throw new Error('This live query has been closed.');
     const l = listener as LiveListener;
+    const inst = this.inst;
     this._mine.add(l);
-    this.store._attach(this._inst, l);
+    this.store._attach(inst, l);
     return () => {
-      if (this._mine.delete(l)) this.store._detach(this._inst, l);
+      if (this._mine.delete(l)) this.store._detach(inst, l);
     };
   }
 
   refresh(): Promise<void> {
-    return this.store.refresh(this._inst);
+    return this.store.refresh(this.inst);
   }
 
   patch(partial: Partial<R> | ((current: R) => R)): void {
-    this.store.patch(this._inst, partial);
+    this.store.patch(this.inst, partial);
   }
 
   close(): void {
-    if (this._closed) return;
-    this._closed = true;
-    for (const l of this._mine) this.store._detach(this._inst, l);
+    const inst = this._inst;
+    for (const l of this._mine) this.store._detach(inst, l);
     this._mine.clear();
-    this.store._unregisterHandle(this, this._inst);
   }
 
   then<T1 = R, T2 = never>(
@@ -675,13 +754,6 @@ class LiveQueryHandle<R> implements LiveQuery<R> {
         }
       });
     });
-  }
-
-  /** @internal The instance was re-keyed (query context changed). */
-  _moveTo(next: Instance): void {
-    this.store._unregisterHandle(this, this._inst);
-    this._inst = next;
-    this.store._registerHandle(this, next);
   }
 }
 
@@ -754,7 +826,7 @@ export function getLiveQueryStore(): LiveQueryStore {
 
 /** Publish a change from application code (your own transport, a server push). */
 export function publishChange(event: ChangeEvent): void {
-  getLiveQueryStore().publish(event);
+  getLiveQueryStore().publish(event, 'app');
 }
 
 /** Refetch every live query that `target` can have affected. See {@link LiveQueryStore.invalidate}. */
@@ -762,7 +834,7 @@ export function invalidate(target: ShapeConstructor<any> | string | {id: string}
   getLiveQueryStore().invalidate(target);
 }
 
-export type {ChangeEvent, MutationEffects};
+export type {ChangeEvent, ChangeOrigin, MutationEffects};
 
 /** Replace the store with a fresh one (tests). */
 export function resetLiveQueryStore(): LiveQueryStore {

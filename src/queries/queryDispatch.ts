@@ -161,12 +161,16 @@ if (!('__linkedQueryDispatch' in dispatchGlobal)) {
  * listeners. `query` is the very builder handed to the store (same identity), and
  * `result` is the store's answer as a promise — not yet settled when the event fires.
  */
-export type QueryDispatchEvent =
+export type QueryDispatchEvent = (
   | {kind: 'select'; query: SelectQuery | CountQuery; result: Promise<unknown>}
   | {kind: 'ask'; query: AskQuery; result: Promise<boolean>}
   | {kind: 'create'; query: CreateQuery; result: Promise<unknown>}
   | {kind: 'update'; query: UpdateQuery; result: Promise<unknown>}
-  | {kind: 'delete'; query: DeleteQuery; result: Promise<DeleteResponse>};
+  | {kind: 'delete'; query: DeleteQuery; result: Promise<DeleteResponse>}
+) & {
+  /** The explicit dataset of an `exec(target)` call; absent for the global dispatch. */
+  target?: IDataset;
+};
 
 /** Listener notified for every query that runs through the dispatch. */
 export type QueryDispatchListener = (event: QueryDispatchEvent) => void;
@@ -215,32 +219,34 @@ const INSTRUMENTED = '__instrumented';
  * promise. Idempotent: an already-instrumented dispatch is returned as is, so re-setting
  * the current dispatch with itself never double-reports.
  */
-function instrumentDispatch(d: QueryDispatch): QueryDispatch {
+function instrumentDispatch(d: QueryDispatch, target?: IDataset): QueryDispatch {
   if ((d as any)?.[INSTRUMENTED]) return d;
+  // `target` is only set for an explicit `exec(target)`: the wrapper is created
+  // per call and the user's dataset object is never marked or mutated.
   const wrapped: QueryDispatch = {
     selectQuery<R = any>(query: SelectQuery | CountQuery): Promise<R> {
       const result = Promise.resolve(d.selectQuery<R>(query));
-      notifyDispatch({kind: 'select', query, result});
+      notifyDispatch({kind: 'select', query, result, target});
       return result;
     },
     askQuery(query: AskQuery): Promise<boolean> {
       const result = Promise.resolve(d.askQuery(query));
-      notifyDispatch({kind: 'ask', query, result});
+      notifyDispatch({kind: 'ask', query, result, target});
       return result;
     },
     createQuery<R = any>(query: CreateQuery): Promise<R> {
       const result = Promise.resolve(d.createQuery<R>(query));
-      notifyDispatch({kind: 'create', query, result});
+      notifyDispatch({kind: 'create', query, result, target});
       return result;
     },
     updateQuery<R = any>(query: UpdateQuery): Promise<R> {
       const result = Promise.resolve(d.updateQuery<R>(query));
-      notifyDispatch({kind: 'update', query, result});
+      notifyDispatch({kind: 'update', query, result, target});
       return result;
     },
     deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
       const result = Promise.resolve(d.deleteQuery(query));
-      notifyDispatch({kind: 'delete', query, result});
+      notifyDispatch({kind: 'delete', query, result, target});
       return result;
     },
   };
@@ -283,5 +289,5 @@ export function resolveMutationDispatch(
     throw new Error(`The target dataset does not support ${kind} queries.`);
   }
   // Instrumented so `builder.exec(target)` is observed like the global path.
-  return instrumentDispatch(target as unknown as QueryDispatch);
+  return instrumentDispatch(target as unknown as QueryDispatch, target);
 }

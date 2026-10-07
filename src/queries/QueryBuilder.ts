@@ -36,7 +36,7 @@ import {
   type SortByPathJSON,
   type RawMinusEntryJSON,
 } from './QueryBuilderSerialization.js';
-import {getLiveQueryStore} from '../live/registry.js';
+import {requireLiveQueryStore} from '../live/registry.js';
 import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
 
 /** JSON representation of a SelectBuilder. */
@@ -920,7 +920,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   live<R = Result>(listenerOrOptions?: LiveListener<R> | LiveQueryOptions, options?: LiveQueryOptions): LiveQuery<R> {
     const listener = typeof listenerOrOptions === 'function' ? listenerOrOptions : undefined;
     const opts = typeof listenerOrOptions === 'function' ? options : listenerOrOptions;
-    return getLiveQueryStore().subscribe<R>(this as any, listener, opts);
+    return requireLiveQueryStore().subscribe<R>(this as any, listener, opts);
   }
 
   // ---------------------------------------------------------------------------
