@@ -52,10 +52,11 @@ function dataShape(
   return shape;
 }
 
-// Registered: two shapes for Person (Employee extends Person), one for Org, and a shape
-// whose targetClass is only inherited.
+// Registered: three shapes for Person (Employee and Contractor extend Person), one for Org,
+// two unrelated roots for Supplier, and a shape whose targetClass is only inherited.
 const PERSON = classIri('Person');
 const ORG = classIri('Org');
+const SUPPLIER = classIri('Supplier');
 
 @linkedShape
 class RelPerson extends Shape {
@@ -71,6 +72,8 @@ beforeAll(() => {
     dataShape('Employee', {targetClass: PERSON, extendsName: 'Person'}),
     dataShape('Contractor', {extendsName: 'Person'}),
     dataShape('Org', {targetClass: ORG}),
+    dataShape('Supplier', {targetClass: SUPPLIER}),
+    dataShape('Agency', {targetClass: SUPPLIER}),
     dataShape('Untyped', {properties: [{label: 'note', datatype: xsd.string}]}),
     dataShape('Holder', {
       targetClass: classIri('Holder'),
@@ -119,11 +122,16 @@ describe('getTargetClassId', () => {
 });
 
 describe('getShapesForTargetClass', () => {
-  test('defaults to the registry, inherited targetClass included, ancestors dropped', () => {
-    const ids = getShapesForTargetClass(PERSON).map((s) => s.id);
-    // Employee and Contractor both extend Person, so Person is dropped; the two are
-    // unrelated and go by id.
-    expect(ids).toEqual([shapeIri('Contractor'), shapeIri('Employee')]);
+  test('defaults to the registry, inherited targetClass included, sub-shapes dropped', () => {
+    // Employee and Contractor both extend Person, so only the root, Person, remains.
+    expect(getShapesForTargetClass(PERSON).map((s) => s.id)).toEqual([shapeIri('Person')]);
+  });
+
+  test('unrelated registered roots go by id', () => {
+    expect(getShapesForTargetClass(SUPPLIER).map((s) => s.id)).toEqual([
+      shapeIri('Agency'),
+      shapeIri('Supplier'),
+    ]);
   });
 
   test('matches the targetClass exactly', () => {
@@ -152,29 +160,33 @@ describe('getShapesForTargetClass', () => {
     expect(found).toBe(catalog[0]);
   });
 
-  test('drops ancestors by the set\'s own extends; unrelated leaves at different depths go by id', () => {
+  test('drops sub-shapes by the set\'s own extends; unrelated roots go by id', () => {
     const catalog = [
       dataShape('B_Base', {targetClass: classIri('Doc')}),
       dataShape('A_Other', {targetClass: classIri('Doc')}),
       dataShape('Z_Mid', {targetClass: classIri('Doc'), extendsName: 'B_Base'}),
       dataShape('C_Leaf', {extendsName: 'Z_Mid'}),
     ];
-    // C_Leaf is two levels deep and A_Other is a root, but neither extends the other:
-    // depth does not rank them, the id does.
+    // Z_Mid and C_Leaf extend B_Base, so they are dropped; B_Base and A_Other are unrelated
+    // roots and the id ranks them, not catalog order.
     expect(getShapesForTargetClass(classIri('Doc'), catalog).map((s) => s.id)).toEqual([
       shapeIri('A_Other'),
-      shapeIri('C_Leaf'),
+      shapeIri('B_Base'),
     ]);
   });
 
-  test('a parent and its sub-shape are one candidate: the sub-shape', () => {
+  test('a parent and its sub-shape are one candidate: the parent', () => {
     const catalog = [
       dataShape('HPerson', {targetClass: classIri('HPerson')}),
       dataShape('HEmployee', {targetClass: classIri('HPerson'), extendsName: 'HPerson'}),
     ];
     expect(getShapesForTargetClass(classIri('HPerson'), catalog).map((s) => s.id)).toEqual([
-      shapeIri('HEmployee'),
+      shapeIri('HPerson'),
     ]);
+    // Catalog order does not matter either.
+    expect(
+      getShapesForTargetClass(classIri('HPerson'), [...catalog].reverse()).map((s) => s.id),
+    ).toEqual([shapeIri('HPerson')]);
   });
 
   test('order does not depend on the order of the set', () => {
@@ -192,7 +204,7 @@ describe('getShapesForTargetClass', () => {
   });
 
   test('an extends cycle keeps every candidate, by id, rather than none', () => {
-    // Each member of a cycle is the other's ancestor, so dropping ancestors would leave
+    // Each member of a cycle extends the other, so dropping sub-shapes would leave
     // nothing — malformed data must not silently turn a relation into "no shape".
     const catalog = [
       dataShape('CycB', {targetClass: classIri('Cyc'), extendsName: 'CycA'}),
@@ -261,29 +273,60 @@ describe('relation helpers', () => {
   // The warn-once memory is module state shared by every test in this file, so each warning
   // test below uses a class no other test resolves: the outcome does not depend on order.
 
-  test('resolveRelationShape: several candidates warn once, naming them all', () => {
+  test('resolveRelationShape: several roots warn once, naming them all', () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    const first = resolveRelationShape({class: {id: PERSON}});
-    resolveRelationShape({class: {id: PERSON}});
-    expect(first.shapeId).toBe(shapeIri('Contractor'));
-    expect(first.candidates).toEqual([shapeIri('Contractor'), shapeIri('Employee')]);
+    const first = resolveRelationShape({class: {id: SUPPLIER}});
+    resolveRelationShape({class: {id: SUPPLIER}});
+    expect(first.shapeId).toBe(shapeIri('Agency'));
+    expect(first.candidates).toEqual([shapeIri('Agency'), shapeIri('Supplier')]);
     expect(first.source).toBe('class');
     expect(warn).toHaveBeenCalledTimes(1);
     const message = String(warn.mock.calls[0][0]);
-    expect(message).toContain(PERSON);
+    expect(message).toContain(SUPPLIER);
     for (const id of first.candidates) expect(message).toContain(id);
-    expect(message).toContain(`Using '${shapeIri('Contractor')}'`);
+    expect(message).toContain(`Using '${shapeIri('Agency')}'`);
   });
 
-  test('resolveRelationShape: a parent and its sub-shape resolve to the sub-shape, silently', () => {
+  test('resolveRelationShape: a registered root with sub-shapes resolves to the root, silently', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(resolveRelationShape({class: {id: PERSON}})).toEqual({
+      shapeId: shapeIri('Person'),
+      candidates: [shapeIri('Person')],
+      source: 'class',
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test('resolveRelationShape: a declared sh:node on a sub-shape is used exactly', () => {
+    expect(
+      resolveRelationShape({valueShape: {id: shapeIri('Employee')}, class: {id: PERSON}}),
+    ).toEqual({shapeId: shapeIri('Employee'), candidates: [shapeIri('Employee')], source: 'node'});
+  });
+
+  test('resolveRelationShape: an extends cycle resolves to the first by id and warns', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const RING = classIri('Ring');
+    const catalog = [
+      dataShape('RingB', {targetClass: RING, extendsName: 'RingA'}),
+      dataShape('RingA', {targetClass: RING, extendsName: 'RingB'}),
+    ];
+    expect(resolveRelationShape({class: {id: RING}}, catalog)).toEqual({
+      shapeId: shapeIri('RingA'),
+      candidates: [shapeIri('RingA'), shapeIri('RingB')],
+      source: 'class',
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  test('resolveRelationShape: a parent and its sub-shape resolve to the parent, silently', () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const catalog = [
       dataShape('WPerson', {targetClass: classIri('WPerson')}),
       dataShape('WEmployee', {targetClass: classIri('WPerson'), extendsName: 'WPerson'}),
     ];
     expect(resolveRelationShape({class: {id: classIri('WPerson')}}, catalog)).toEqual({
-      shapeId: shapeIri('WEmployee'),
-      candidates: [shapeIri('WEmployee')],
+      shapeId: shapeIri('WPerson'),
+      candidates: [shapeIri('WPerson')],
       source: 'class',
     });
     expect(warn).not.toHaveBeenCalled();

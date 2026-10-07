@@ -451,30 +451,27 @@ export function getTargetClassId(
 }
 
 /**
- * The most specific candidates, by id. A candidate that another candidate extends (directly
- * or further up) is dropped: a relation to `Person` with `Person` and `Employee extends
- * Person` both targeting it means `Employee`, not an ambiguity. What remains are unrelated
- * shapes the data does not choose between; they sort by id alone — never by depth or by
+ * The least specific candidates (the roots), by id. A candidate that extends another
+ * candidate (directly or further up) is dropped: a relation to `Person` with `Person` and
+ * `Employee extends Person` both targeting it means `Person` — a relation never upgrades
+ * itself to a sub-shape; declare `sh:node` to ask for one. What remains are unrelated roots
+ * the data does not choose between; they sort by id alone — never by depth or by
  * registration or catalog order — so the choice is stable and visibly arbitrary. If that
  * would drop every candidate (an `extends` cycle), all of them are kept, by id.
  */
-function mostSpecific<S extends ShapeHeader>(
+function leastSpecific<S extends ShapeHeader>(
   candidates: S[],
   local?: ReadonlyMap<string, ShapeHeader>,
 ): S[] {
   const ids = new Set(candidates.map((c) => c.id));
-  const ancestors = new Set<string>();
-  for (const candidate of candidates) {
-    for (const parent of superShapesWithin(candidate, local)) {
-      if (ids.has(parent.id)) ancestors.add(parent.id);
-    }
-  }
   const byId = (a: S, b: S) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-  const kept = candidates.filter((c) => !ancestors.has(c.id));
-  // An `extends` cycle makes each member the other's ancestor, so the filter can leave
-  // nothing. Malformed data must not turn a relation into "no shape" silently: keep every
-  // candidate instead, by id, and let the caller's ambiguity handling (warn) apply.
-  return (kept.length ? kept : [...candidates]).sort(byId);
+  const roots = candidates.filter(
+    (candidate) => !superShapesWithin(candidate, local).some((parent) => ids.has(parent.id)),
+  );
+  // An `extends` cycle makes each member extend another, so the filter can leave nothing.
+  // Malformed data must not turn a relation into "no shape" silently: keep every candidate
+  // instead, by id, and let the caller's ambiguity handling (warn) apply.
+  return (roots.length ? roots : [...candidates]).sort(byId);
 }
 
 /** targetClass IRI → registered shapes targeting it, ordered. Rebuilt when the registry changes. */
@@ -493,17 +490,17 @@ function getTargetClassIndex(): Map<string, NodeShapeData[]> {
     if (shapes) shapes.push(shape);
     else index.set(classId, [shape]);
   });
-  index.forEach((shapes, classId) => index.set(classId, mostSpecific(shapes)));
+  index.forEach((shapes, classId) => index.set(classId, leastSpecific(shapes)));
   targetClassIndex = index;
   targetClassIndexVersion = registryState.registryVersion;
   return index;
 }
 
 /**
- * The most specific shapes whose effective targetClass (own, or inherited through
- * `extends`) is exactly `classIri`, sorted by id. A matching shape that another match
- * extends is left out, so one entry means the class has one most specific shape and more
- * than one means unrelated shapes compete for it.
+ * The least specific shapes whose effective targetClass (own, or inherited through
+ * `extends`) is exactly `classIri`, sorted by id. A matching shape that extends another
+ * match is left out, so one entry means the class has one root shape and more than one
+ * means unrelated roots compete for it. Sub-shapes are never chosen for a class alone.
  *
  * With no `shapes`, the candidates are the registered shapes. Pass `shapes` to choose among
  * that set only — the registry also holds compiled framework shapes, and a project's
@@ -526,7 +523,7 @@ export function getShapesForTargetClass(
   const candidates = [...local.values()].filter(
     (shape) => targetClassIdWithin(shape, local) === classIri,
   );
-  return mostSpecific(candidates, local);
+  return leastSpecific(candidates, local);
 }
 
 export function addNodeShapeToShapeClass(

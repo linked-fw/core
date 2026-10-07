@@ -75,11 +75,12 @@ const warnedAmbiguities = new Set<string>();
 /**
  * The shape a relation's values are viewed, picked and created through.
  *
- * A declared `sh:node` wins outright. Otherwise the shapes targeting the property's
- * `sh:class` are candidates — the most specific ones (a shape another candidate extends is
- * left out), sorted by id — and the first is used. More than one candidate is a real
- * ambiguity the data does not settle, so it warns — once per class and candidate set —
- * naming every candidate and the one chosen. No candidate (or no
+ * A declared `sh:node` wins outright: the relation uses exactly that shape. Otherwise the
+ * shapes targeting the property's `sh:class` are candidates — the least specific ones (a
+ * shape that extends another candidate is left out, so a relation to `Person` creates a
+ * `Person`, never an `Employee extends Person`), sorted by id — and the first is used. More
+ * than one root is a real ambiguity the data does not settle, so it warns — once per class
+ * and candidate set — naming every candidate and the one chosen. No candidate (or no
  * `sh:class` either) resolves to `none`: the value can still be shown as a reference,
  * but there is no shape to open or create it through.
  */
