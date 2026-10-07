@@ -42,7 +42,7 @@ shape's own properties and everything it inherits is missing, with no error.
 
 ## Why it matters
 
-This is the failure mode [#211](https://github.com/linked-cm/core/pull/211) set out to fix —
+This is the failure mode [#211](https://github.com/linked-fw/core/pull/211) set out to fix —
 *"Create Now registers imported project Shapes at runtime … relationship queries and CMS
 operations for imported Shapes fail or return empty results"* — for the sub-case where the shape
 has no compiled class. #211 correctly removed the duplicated chain walk in
@@ -81,7 +81,7 @@ cannot drift apart.
   in the Create Now repo. Its metamodel work unified `getSuperShapes` with `getPropertyShapes`;
   the follow-up commit here brought `getPropertyShape` (singular) onto the same walk, which is
   what closed this item.
-- [#211](https://github.com/linked-cm/core/pull/211) — removed the duplicated walk at the
+- [#211](https://github.com/linked-fw/core/pull/211) — removed the duplicated walk at the
   `getPropertyShapeByLabel` call site.
 - Both call sites of `getPropertyShapeByLabel` (`queries/SelectQuery.ts`, `shapes/Shape.ts`) do
   guard the `undefined` that #211's signature now admits, so there is no crash to fix there.

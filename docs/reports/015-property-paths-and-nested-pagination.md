@@ -7,7 +7,7 @@ summary: Two SPARQL-generation improvements in @_linked/core — structured sh:p
 
 # 015 — Structured Property Paths & Nested-Select Pagination
 
-**PR:** [#91](https://github.com/linked-cm/core/pull/91) → `dev`.
+**PR:** [#91](https://github.com/linked-fw/core/pull/91) → `dev`.
 **Changeset:** `.changeset/sparql-property-paths-and-nested-pagination.md` (minor).
 **Reference docs:** `documentation/sparql-algebra.md`, `documentation/intermediate-representation.md`.
 **Related:** `011-shacl-property-paths-and-prefix-resolution` (property-path foundations this builds on).

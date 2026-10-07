@@ -8,8 +8,8 @@ packages: [core]
 
 Status: **done**. Suite **1565 passed / 117 skipped**, typecheck green (baseline before this work: 1472 passed).
 
-PRs: [#188](https://github.com/linked-cm/core/pull/188) (merged, released as 2.16.0) and the
-unresolvable-shape follow-up [#194](https://github.com/linked-cm/core/pull/194), both → `dev`.
+PRs: [#188](https://github.com/linked-fw/core/pull/188) (merged, released as 2.16.0) and the
+unresolvable-shape follow-up [#194](https://github.com/linked-fw/core/pull/194), both → `dev`.
 
 ## The problem
 
