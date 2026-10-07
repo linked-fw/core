@@ -158,9 +158,12 @@ describe('change sources', () => {
   test('a dataset registered after the store exists is picked up through routing changes', async () => {
     const pinned = new FeedDataset();
     LinkedStorage.setDatasetForShapes(pinned, Person);
+    await flush();
+    expect(dataset.selects).toBe(2); // the routing change itself refetches watched instances
+    await new Promise((r) => setTimeout(r, store.options.echoMs + 10));
     pinned.emit({mutation: Team.update({name: 'X'}).for(ids.T1).toJSON()});
     await flush();
-    expect(dataset.selects).toBe(2);
+    expect(dataset.selects).toBe(3); // the new dataset's feed is subscribed
   });
 
   test('a rejected mutation publishes nothing', async () => {
