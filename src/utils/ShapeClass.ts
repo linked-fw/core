@@ -9,6 +9,7 @@ import {
   type NodeShapeData,
   type PropertyShapeData,
 } from '../shapes/nodeShapeData.js';
+import type {NodeShapeWire} from '../shapes/nodeShapeWire.js';
 import type {ICoreIterable} from '../interfaces/ICoreIterable.js';
 import type {NodeReferenceValue} from './NodeReference.js';
 
@@ -158,6 +159,7 @@ function invalidateRegistryCaches() {
   subShapesCache.clear();
   mostSpecificSubShapesCache.clear();
   childIndex = null;
+  targetClassIndex = null;
 }
 
 /** Drop the adapter for a shape whose metadata was replaced. */
@@ -360,6 +362,168 @@ export function isSubShapeOf(a: ShapeLike, b: ShapeLike): boolean {
   const target = toNodeShapeData(b);
   if (!target) return false;
   return getSuperShapes(a).some((superShape) => superShape.id === target.id);
+}
+
+/**
+ * The fields of a shape the targetClass lookups read. Both `NodeShapeData` and its wire
+ * form satisfy it, so a caller holding a shape catalog never has to convert it first.
+ */
+type ShapeHeader = Pick<NodeShapeData, 'id' | 'targetClass' | 'extends'>;
+
+/**
+ * Every shape `shape` extends, most specific first — resolving each parent in `local`
+ * before the registry.
+ *
+ * `local` is a caller's own set of shapes (a project's catalog), which may hold shapes the
+ * registry has never seen, or newer versions of ones it has. The catalog is the authority
+ * for what it holds; once the chain leaves it, the registry knows the rest.
+ */
+function superShapesWithin(
+  shape: ShapeHeader,
+  local?: ReadonlyMap<string, ShapeHeader>,
+): ShapeHeader[] {
+  if (!local) return getSuperShapes(shape as NodeShapeData);
+  const chain: ShapeHeader[] = [];
+  const seen = new Set<string>([shape.id]);
+  let current: ShapeHeader = shape;
+  while (current.extends?.id) {
+    const parentId = current.extends.id;
+    if (seen.has(parentId)) break; // cycle guard — malformed data must not hang a read
+    seen.add(parentId);
+    const parent = local.get(parentId);
+    if (!parent) {
+      const registered = nodeShapeRegistry.get(parentId);
+      if (registered) chain.push(registered, ...getSuperShapes(registered));
+      break;
+    }
+    chain.push(parent);
+    current = parent;
+  }
+  return chain;
+}
+
+function indexShapes<S extends ShapeHeader>(shapes: Iterable<S>): Map<string, S> {
+  const index = new Map<string, S>();
+  for (const shape of shapes) if (shape?.id) index.set(shape.id, shape);
+  return index;
+}
+
+function targetClassIdWithin(
+  shape: ShapeLike | NodeShapeWire | {id: string},
+  local?: ReadonlyMap<string, ShapeHeader>,
+): string | undefined {
+  if (!shape) return undefined;
+  if (typeof shape === 'function') {
+    // A class's static targetClass is inherited through the prototype chain for free.
+    const asClass = shape as typeof Shape;
+    if (asClass.targetClass?.id) return asClass.targetClass.id;
+    if (!asClass.shape?.id) return undefined;
+    shape = asClass.shape;
+  }
+  const id = typeof shape === 'string' ? shape : shape.id;
+  if (!id) return undefined;
+  const given = typeof shape === 'string' ? undefined : (shape as ShapeHeader);
+  const own =
+    given?.targetClass?.id ??
+    local?.get(id)?.targetClass?.id ??
+    getShapeClass(id)?.targetClass?.id ??
+    nodeShapeRegistry.get(id)?.targetClass?.id;
+  if (own) return own;
+  // A data-only shape's targetClass is not inherited for free, so walk `extends`.
+  const start = local?.get(id) ?? (given?.extends ? given : nodeShapeRegistry.get(id) ?? given);
+  if (!start) return undefined;
+  return superShapesWithin(start, local).find((s) => s.targetClass?.id)?.targetClass?.id;
+}
+
+/**
+ * The class a shape's instances are typed with: its own `targetClass`, else the first one
+ * found through what it extends. `undefined` when there is none anywhere in the chain.
+ *
+ * Accepts a shape IRI, a `{id}` reference, a shape's metadata (data or wire form) or a shape
+ * class. Pass `shapes` to resolve the shape — and what it extends — in that set before the
+ * registry; a project's catalog may hold shapes the registry does not.
+ */
+export function getTargetClassId(
+  shape: ShapeLike | NodeShapeWire | {id: string},
+  shapes?: Iterable<NodeShapeData | NodeShapeWire>,
+): string | undefined {
+  return targetClassIdWithin(shape, shapes ? indexShapes(shapes) : undefined);
+}
+
+/**
+ * The least specific candidates (the roots), by id. A candidate that extends another
+ * candidate (directly or further up) is dropped: a relation to `Person` with `Person` and
+ * `Employee extends Person` both targeting it means `Person` — a relation never upgrades
+ * itself to a sub-shape; declare `sh:node` to ask for one. What remains are unrelated roots
+ * the data does not choose between; they sort by id alone — never by depth or by
+ * registration or catalog order — so the choice is stable and visibly arbitrary. If that
+ * would drop every candidate (an `extends` cycle), all of them are kept, by id.
+ */
+function leastSpecific<S extends ShapeHeader>(
+  candidates: S[],
+  local?: ReadonlyMap<string, ShapeHeader>,
+): S[] {
+  const ids = new Set(candidates.map((c) => c.id));
+  const byId = (a: S, b: S) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const roots = candidates.filter(
+    (candidate) => !superShapesWithin(candidate, local).some((parent) => ids.has(parent.id)),
+  );
+  // An `extends` cycle makes each member extend another, so the filter can leave nothing.
+  // Malformed data must not turn a relation into "no shape" silently: keep every candidate
+  // instead, by id, and let the caller's ambiguity handling (warn) apply.
+  return (roots.length ? roots : [...candidates]).sort(byId);
+}
+
+/** targetClass IRI → registered shapes targeting it, ordered. Rebuilt when the registry changes. */
+let targetClassIndex: Map<string, NodeShapeData[]> | null = null;
+let targetClassIndexVersion = -1;
+
+function getTargetClassIndex(): Map<string, NodeShapeData[]> {
+  if (targetClassIndex && targetClassIndexVersion === registryState.registryVersion) {
+    return targetClassIndex;
+  }
+  const index = new Map<string, NodeShapeData[]>();
+  nodeShapeRegistry.forEach((shape) => {
+    const classId = targetClassIdWithin(shape);
+    if (!classId) return;
+    const shapes = index.get(classId);
+    if (shapes) shapes.push(shape);
+    else index.set(classId, [shape]);
+  });
+  index.forEach((shapes, classId) => index.set(classId, leastSpecific(shapes)));
+  targetClassIndex = index;
+  targetClassIndexVersion = registryState.registryVersion;
+  return index;
+}
+
+/**
+ * The least specific shapes whose effective targetClass (own, or inherited through
+ * `extends`) is exactly `classIri`, sorted by id. A matching shape that extends another
+ * match is left out, so one entry means the class has one root shape and more than one
+ * means unrelated roots compete for it. Sub-shapes are never chosen for a class alone.
+ *
+ * With no `shapes`, the candidates are the registered shapes. Pass `shapes` to choose among
+ * that set only — the registry also holds compiled framework shapes, and a project's
+ * `schema:Person` relation should resolve to the project's shape, not to one a framework
+ * package happens to register for the same class. Inheritance is still resolved through
+ * the registry when a candidate extends a shape outside the set.
+ */
+export function getShapesForTargetClass(classIri: string): NodeShapeData[];
+export function getShapesForTargetClass<S extends NodeShapeData | NodeShapeWire>(
+  classIri: string,
+  shapes: Iterable<S>,
+): S[];
+export function getShapesForTargetClass(
+  classIri: string,
+  shapes?: Iterable<NodeShapeData | NodeShapeWire>,
+): (NodeShapeData | NodeShapeWire)[] {
+  if (!classIri) return [];
+  if (!shapes) return [...(getTargetClassIndex().get(classIri) ?? [])];
+  const local = indexShapes(shapes);
+  const candidates = [...local.values()].filter(
+    (shape) => targetClassIdWithin(shape, local) === classIri,
+  );
+  return leastSpecific(candidates, local);
 }
 
 export function addNodeShapeToShapeClass(

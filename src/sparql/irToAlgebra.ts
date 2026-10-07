@@ -53,7 +53,7 @@ import {
   getNodeShape,
   getRegistryVersion,
   getShapeClass,
-  getSuperShapes,
+  getTargetClassId,
 } from '../utils/ShapeClass.js';
 import {UnresolvedContextError} from '../queries/QueryContext.js';
 
@@ -114,16 +114,10 @@ function tripleOf(
  * `targetClass` whenever that was still temporary.
  */
 function resolveShapeScanIri(shapeId: string): string {
-  // The METAMODEL registry, not the class registry. A shape that exists only as data has
-  // no class — that is the whole point of it — and reading `getShapeClass(...)` here made
+  // `getTargetClassId` reads the METAMODEL registry as well as the class registry, and
+  // walks `extends` for a data-only shape — reading only `getShapeClass(...)` here made
   // `SelectBuilder.from(dataOnlyIri)` resolve, build an IR, and then die at this line.
-  //
-  // A class's `targetClass` is inherited through the prototype chain for free; a data-only
-  // shape's is not, so walk `extends` explicitly.
-  const targetClassId =
-    getShapeClass(shapeId)?.targetClass?.id ??
-    getNodeShape(shapeId)?.targetClass?.id ??
-    getSuperShapes(shapeId).find((s) => s.targetClass?.id)?.targetClass?.id;
+  const targetClassId = getTargetClassId(shapeId);
   if (!targetClassId) {
     throw new Error(
       `Cannot resolve an rdf:type for shape "${shapeId}": no targetClass is declared ` +

@@ -1,0 +1,385 @@
+/**
+ * Resolving what a relation property points at.
+ *
+ * `sh:node` names the shape a value is viewed through; `sh:class` names only the class the
+ * value is an instance of. A class-only relation is resolved to a shape at read time — from
+ * the registry, or from a caller's own set of shapes (a project's catalog) — and must never
+ * reach into the registry when a set is given, because the registry also holds framework
+ * shapes for the same classes.
+ */
+import {afterEach, beforeAll, describe, expect, jest, test} from '@jest/globals';
+import {linkedShape} from '../package';
+import {Shape} from '../shapes/Shape';
+import {
+  createNodeShapeData,
+  createPropertyShapeData,
+  type NodeShapeData,
+  type PropertyShapeData,
+} from '../shapes/nodeShapeData';
+import {toWire, type NodeShapeWire} from '../shapes/nodeShapeWire';
+import {registerRuntimeShapes} from '../shapes/registerRuntimeShape';
+import {isRelation, rangeClassOf, resolveRelationShape} from '../shapes/relationShape';
+import {validate} from '../shapes/validation';
+import {shacl} from '../ontologies/shacl';
+import {xsd} from '../ontologies/xsd';
+import {getShapesForTargetClass, getTargetClassId} from '../utils/ShapeClass';
+import {SelectBuilder} from '../queries/QueryBuilder';
+import {lower} from '../queries/lower';
+import {selectToSparql} from '../sparql/irToAlgebra';
+
+const NS = 'https://example.org/relation-shape/';
+const shapeIri = (name: string) => `${NS}shape/${name}`;
+const classIri = (name: string) => `${NS}vocab#${name}`;
+
+function dataShape(
+  name: string,
+  opts: {targetClass?: string; extendsName?: string; properties?: Partial<PropertyShapeData>[]} = {},
+): NodeShapeData {
+  const shape = createNodeShapeData(shapeIri(name));
+  shape.label = name;
+  if (opts.targetClass) shape.targetClass = {id: opts.targetClass};
+  if (opts.extendsName) shape.extends = {id: shapeIri(opts.extendsName)};
+  shape.propertyShapes = (opts.properties ?? []).map((fields) => {
+    const prop = createPropertyShapeData();
+    Object.assign(prop, {
+      id: `${shape.id}/${fields.label}`,
+      path: {id: `${NS}prop/${fields.label}`},
+      parentNodeShape: shape,
+      ...fields,
+    });
+    return prop;
+  });
+  return shape;
+}
+
+// Registered: three shapes for Person (Employee and Contractor extend Person), one for Org,
+// two unrelated roots for Supplier, and a shape whose targetClass is only inherited.
+const PERSON = classIri('Person');
+const ORG = classIri('Org');
+const SUPPLIER = classIri('Supplier');
+
+@linkedShape
+class RelPerson extends Shape {
+  static targetClass = {id: classIri('ClassBacked')} as any;
+}
+
+@linkedShape
+class RelEmployee extends RelPerson {}
+
+beforeAll(() => {
+  registerRuntimeShapes([
+    dataShape('Person', {targetClass: PERSON}),
+    dataShape('Employee', {targetClass: PERSON, extendsName: 'Person'}),
+    dataShape('Contractor', {extendsName: 'Person'}),
+    dataShape('Org', {targetClass: ORG}),
+    dataShape('Supplier', {targetClass: SUPPLIER}),
+    dataShape('Agency', {targetClass: SUPPLIER}),
+    dataShape('Untyped', {properties: [{label: 'note', datatype: xsd.string}]}),
+    dataShape('Holder', {
+      targetClass: classIri('Holder'),
+      properties: [
+        {label: 'member', class: {id: PERSON}},
+        {label: 'name', datatype: xsd.string},
+      ],
+    }),
+  ]);
+});
+
+describe('getTargetClassId', () => {
+  test('reads an own targetClass by id, reference, data and class', () => {
+    expect(getTargetClassId(shapeIri('Org'))).toBe(ORG);
+    expect(getTargetClassId({id: shapeIri('Org')})).toBe(ORG);
+    expect(getTargetClassId(dataShape('Loose', {targetClass: ORG}))).toBe(ORG);
+    expect(getTargetClassId(RelPerson)).toBe(classIri('ClassBacked'));
+  });
+
+  test('inherits through extends for a data-only shape, and through the class chain', () => {
+    expect(getTargetClassId(shapeIri('Contractor'))).toBe(PERSON);
+    expect(getTargetClassId(RelEmployee)).toBe(classIri('ClassBacked'));
+    expect(getTargetClassId(RelEmployee.shape)).toBe(classIri('ClassBacked'));
+  });
+
+  test('returns undefined, without throwing, when nothing in the chain declares one', () => {
+    expect(getTargetClassId(shapeIri('Untyped'))).toBeUndefined();
+    expect(getTargetClassId(`${NS}shape/NeverRegistered`)).toBeUndefined();
+  });
+
+  test('resolves inheritance inside a given set before the registry', () => {
+    const catalog = [
+      dataShape('CatalogBase', {targetClass: classIri('CatalogThing')}),
+      dataShape('CatalogChild', {extendsName: 'CatalogBase'}),
+    ];
+    expect(getTargetClassId(shapeIri('CatalogChild'), catalog)).toBe(classIri('CatalogThing'));
+    expect(getTargetClassId(shapeIri('CatalogChild'))).toBeUndefined();
+  });
+
+  test('a scan over a shape with no targetClass still throws its explanation', () => {
+    const query = SelectBuilder.from(shapeIri('Untyped')).select((b: any) => [b.note]);
+    expect(() => selectToSparql(lower(query as never) as never)).toThrow(
+      /Cannot resolve an rdf:type for shape ".*Untyped": no targetClass is declared/,
+    );
+  });
+});
+
+describe('getShapesForTargetClass', () => {
+  test('defaults to the registry, inherited targetClass included, sub-shapes dropped', () => {
+    // Employee and Contractor both extend Person, so only the root, Person, remains.
+    expect(getShapesForTargetClass(PERSON).map((s) => s.id)).toEqual([shapeIri('Person')]);
+  });
+
+  test('unrelated registered roots go by id', () => {
+    expect(getShapesForTargetClass(SUPPLIER).map((s) => s.id)).toEqual([
+      shapeIri('Agency'),
+      shapeIri('Supplier'),
+    ]);
+  });
+
+  test('matches the targetClass exactly', () => {
+    expect(getShapesForTargetClass(ORG).map((s) => s.id)).toEqual([shapeIri('Org')]);
+    expect(getShapesForTargetClass(classIri('Nothing'))).toEqual([]);
+  });
+
+  test('sees shapes registered after the first lookup', () => {
+    getShapesForTargetClass(classIri('Late'));
+    registerRuntimeShapes([dataShape('Late', {targetClass: classIri('Late')})]);
+    expect(getShapesForTargetClass(classIri('Late')).map((s) => s.id)).toEqual([
+      shapeIri('Late'),
+    ]);
+  });
+
+  test('an explicit set excludes shapes that are only in the registry', () => {
+    const catalog = [dataShape('ProjectPerson', {targetClass: PERSON})];
+    expect(getShapesForTargetClass(PERSON, catalog).map((s) => s.id)).toEqual([
+      shapeIri('ProjectPerson'),
+    ]);
+  });
+
+  test('accepts wire-form shapes and returns them as given', () => {
+    const catalog: NodeShapeWire[] = [toWire(dataShape('WirePerson', {targetClass: PERSON}))];
+    const [found] = getShapesForTargetClass(PERSON, catalog);
+    expect(found).toBe(catalog[0]);
+  });
+
+  test('drops sub-shapes by the set\'s own extends; unrelated roots go by id', () => {
+    const catalog = [
+      dataShape('B_Base', {targetClass: classIri('Doc')}),
+      dataShape('A_Other', {targetClass: classIri('Doc')}),
+      dataShape('Z_Mid', {targetClass: classIri('Doc'), extendsName: 'B_Base'}),
+      dataShape('C_Leaf', {extendsName: 'Z_Mid'}),
+    ];
+    // Z_Mid and C_Leaf extend B_Base, so they are dropped; B_Base and A_Other are unrelated
+    // roots and the id ranks them, not catalog order.
+    expect(getShapesForTargetClass(classIri('Doc'), catalog).map((s) => s.id)).toEqual([
+      shapeIri('A_Other'),
+      shapeIri('B_Base'),
+    ]);
+  });
+
+  test('a parent and its sub-shape are one candidate: the parent', () => {
+    const catalog = [
+      dataShape('HPerson', {targetClass: classIri('HPerson')}),
+      dataShape('HEmployee', {targetClass: classIri('HPerson'), extendsName: 'HPerson'}),
+    ];
+    expect(getShapesForTargetClass(classIri('HPerson'), catalog).map((s) => s.id)).toEqual([
+      shapeIri('HPerson'),
+    ]);
+    // Catalog order does not matter either.
+    expect(
+      getShapesForTargetClass(classIri('HPerson'), [...catalog].reverse()).map((s) => s.id),
+    ).toEqual([shapeIri('HPerson')]);
+  });
+
+  test('order does not depend on the order of the set', () => {
+    const shapes = [
+      dataShape('Q_One', {targetClass: classIri('Order')}),
+      dataShape('P_Two', {targetClass: classIri('Order')}),
+      dataShape('R_Three', {targetClass: classIri('Order')}),
+    ];
+    const forward = getShapesForTargetClass(classIri('Order'), shapes).map((s) => s.id);
+    const reverse = getShapesForTargetClass(classIri('Order'), [...shapes].reverse()).map(
+      (s) => s.id,
+    );
+    expect(forward).toEqual([shapeIri('P_Two'), shapeIri('Q_One'), shapeIri('R_Three')]);
+    expect(reverse).toEqual(forward);
+  });
+
+  test('an extends cycle keeps every candidate, by id, rather than none', () => {
+    // Each member of a cycle extends the other, so dropping sub-shapes would leave
+    // nothing — malformed data must not silently turn a relation into "no shape".
+    const catalog = [
+      dataShape('CycB', {targetClass: classIri('Cyc'), extendsName: 'CycA'}),
+      dataShape('CycA', {targetClass: classIri('Cyc'), extendsName: 'CycB'}),
+    ];
+    expect(getShapesForTargetClass(classIri('Cyc'), catalog).map((s) => s.id)).toEqual([
+      shapeIri('CycA'),
+      shapeIri('CycB'),
+    ]);
+  });
+
+  test('a set member extending a registered shape inherits its targetClass', () => {
+    const catalog = [dataShape('ProjectOrgUnit', {extendsName: 'Org'})];
+    expect(getShapesForTargetClass(ORG, catalog).map((s) => s.id)).toEqual([
+      shapeIri('ProjectOrgUnit'),
+    ]);
+  });
+});
+
+describe('relation helpers', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  test('isRelation: sh:node, sh:class, or a node kind that is not literal', () => {
+    expect(isRelation({valueShape: {id: shapeIri('Org')}})).toBe(true);
+    expect(isRelation({class: {id: ORG}})).toBe(true);
+    expect(isRelation({nodeKind: shacl.IRI})).toBe(true);
+    expect(isRelation({nodeKind: shacl.BlankNode})).toBe(true);
+    expect(isRelation({nodeKind: shacl.BlankNodeOrIRI})).toBe(true);
+    expect(isRelation({nodeKind: shacl.Literal})).toBe(false);
+    expect(isRelation({})).toBe(false);
+  });
+
+  test('rangeClassOf: sh:class first, else the sh:node shape\'s targetClass', () => {
+    expect(rangeClassOf({class: {id: ORG}, valueShape: {id: shapeIri('Person')}})).toBe(ORG);
+    expect(rangeClassOf({valueShape: {id: shapeIri('Contractor')}})).toBe(PERSON);
+    expect(rangeClassOf({})).toBeUndefined();
+    const catalog = [dataShape('OnlyInCatalog', {targetClass: classIri('Catalogued')})];
+    expect(rangeClassOf({valueShape: {id: shapeIri('OnlyInCatalog')}}, catalog)).toBe(
+      classIri('Catalogued'),
+    );
+  });
+
+  test('resolveRelationShape: a declared sh:node wins', () => {
+    expect(
+      resolveRelationShape({valueShape: {id: shapeIri('Org')}, class: {id: PERSON}}),
+    ).toEqual({shapeId: shapeIri('Org'), candidates: [shapeIri('Org')], source: 'node'});
+  });
+
+  test('resolveRelationShape: a class-only relation resolves through the given set', () => {
+    const catalog = [dataShape('ProjectOrg', {targetClass: ORG})];
+    expect(resolveRelationShape({class: {id: ORG}}, catalog)).toEqual({
+      shapeId: shapeIri('ProjectOrg'),
+      candidates: [shapeIri('ProjectOrg')],
+      source: 'class',
+    });
+  });
+
+  test('resolveRelationShape: no candidate, or no class, is none', () => {
+    expect(resolveRelationShape({class: {id: classIri('Nothing')}})).toEqual({
+      candidates: [],
+      source: 'none',
+    });
+    expect(resolveRelationShape({nodeKind: shacl.IRI})).toEqual({candidates: [], source: 'none'});
+  });
+
+  // The warn-once memory is module state shared by every test in this file, so each warning
+  // test below uses a class no other test resolves: the outcome does not depend on order.
+
+  test('resolveRelationShape: several roots warn once, naming them all', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const first = resolveRelationShape({class: {id: SUPPLIER}});
+    resolveRelationShape({class: {id: SUPPLIER}});
+    expect(first.shapeId).toBe(shapeIri('Agency'));
+    expect(first.candidates).toEqual([shapeIri('Agency'), shapeIri('Supplier')]);
+    expect(first.source).toBe('class');
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = String(warn.mock.calls[0][0]);
+    expect(message).toContain(SUPPLIER);
+    for (const id of first.candidates) expect(message).toContain(id);
+    expect(message).toContain(`Using '${shapeIri('Agency')}'`);
+  });
+
+  test('resolveRelationShape: a registered root with sub-shapes resolves to the root, silently', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(resolveRelationShape({class: {id: PERSON}})).toEqual({
+      shapeId: shapeIri('Person'),
+      candidates: [shapeIri('Person')],
+      source: 'class',
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test('resolveRelationShape: a declared sh:node on a sub-shape is used exactly', () => {
+    expect(
+      resolveRelationShape({valueShape: {id: shapeIri('Employee')}, class: {id: PERSON}}),
+    ).toEqual({shapeId: shapeIri('Employee'), candidates: [shapeIri('Employee')], source: 'node'});
+  });
+
+  test('resolveRelationShape: an extends cycle resolves to the first by id and warns', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const RING = classIri('Ring');
+    const catalog = [
+      dataShape('RingB', {targetClass: RING, extendsName: 'RingA'}),
+      dataShape('RingA', {targetClass: RING, extendsName: 'RingB'}),
+    ];
+    expect(resolveRelationShape({class: {id: RING}}, catalog)).toEqual({
+      shapeId: shapeIri('RingA'),
+      candidates: [shapeIri('RingA'), shapeIri('RingB')],
+      source: 'class',
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  test('resolveRelationShape: a parent and its sub-shape resolve to the parent, silently', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const catalog = [
+      dataShape('WPerson', {targetClass: classIri('WPerson')}),
+      dataShape('WEmployee', {targetClass: classIri('WPerson'), extendsName: 'WPerson'}),
+    ];
+    expect(resolveRelationShape({class: {id: classIri('WPerson')}}, catalog)).toEqual({
+      shapeId: shapeIri('WPerson'),
+      candidates: [shapeIri('WPerson')],
+      source: 'class',
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test('resolveRelationShape: warns once per class AND candidate set', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const KEYED = classIri('Keyed');
+    const one = [
+      dataShape('K_A', {targetClass: KEYED}),
+      dataShape('K_B', {targetClass: KEYED}),
+    ];
+    const other = [
+      dataShape('K_A', {targetClass: KEYED}),
+      dataShape('K_C', {targetClass: KEYED}),
+    ];
+    resolveRelationShape({class: {id: KEYED}}, one);
+    resolveRelationShape({class: {id: KEYED}}, one);
+    expect(warn).toHaveBeenCalledTimes(1);
+    // Same class, different competing shapes: a different ambiguity, reported on its own.
+    resolveRelationShape({class: {id: KEYED}}, other);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(String(warn.mock.calls[1][0])).toContain(shapeIri('K_C'));
+    resolveRelationShape({class: {id: KEYED}}, [...other].reverse());
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('validation treats sh:class as node-valued', () => {
+  test('a class-only relation rejects a literal and accepts a reference', () => {
+    const holder = dataShape('HolderCheck', {
+      targetClass: classIri('Holder'),
+      properties: [{label: 'member', class: {id: PERSON}}],
+    });
+    const literal = validate(holder, {member: 'not a node'}, {mode: 'partial'});
+    expect(literal.conforms).toBe(false);
+    expect(literal.results[0].sourceConstraintComponent.id).toBe(
+      shacl.NodeKindConstraintComponent.id,
+    );
+    expect(validate(holder, {member: {id: `${NS}people/1`}}, {mode: 'partial'}).conforms).toBe(
+      true,
+    );
+  });
+
+  test('a datatype alongside sh:class does not make it literal', () => {
+    const holder = dataShape('HolderMixed', {
+      properties: [{label: 'member', class: {id: PERSON}, datatype: xsd.string}],
+    });
+    const report = validate(holder, {member: {id: `${NS}people/1`}}, {mode: 'partial'});
+    expect(
+      report.results.some(
+        (r) => r.sourceConstraintComponent.id === shacl.NodeKindConstraintComponent.id,
+      ),
+    ).toBe(false);
+  });
+});

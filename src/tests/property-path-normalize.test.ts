@@ -129,7 +129,8 @@ describe('getSimplePathId', () => {
 });
 
 describe('bare absolute IRIs are PathRefs, not expressions', () => {
-  // `PropertyDetails.path` is a plain IRI string for every simple property in a shape catalog.
+  // A property path in shape data or its wire form (`NodeShapeWire`, e.g. a project's shape
+  // catalog) can be a plain IRI string.
   // Before this, the `//` in the scheme was fed to the path parser and threw — invisible while
   // paths arrived as NamedNodes or prefixed names from decorators.
   it.each([
