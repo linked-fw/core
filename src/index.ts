@@ -33,6 +33,8 @@ export {
   PendingQueryContext,
   UnresolvedContextError,
 } from './queries/QueryContext.js';
+export {subscribeQueryDispatch} from './queries/queryDispatch.js';
+export type {QueryDispatchEvent, QueryDispatchListener} from './queries/queryDispatch.js';
 export {
   CONTEXT_REF_KEY,
   encodeContextRef,
