@@ -42,10 +42,25 @@ linkedStorageGlobal.__linkedStorageInstanceCount =
 const routingState: {
   defaultDataset?: IDataset;
   shapeToDataset: Map<Function, IDataset>;
+  listeners?: Set<() => void>;
 } = (linkedStorageGlobal.__linkedStorageRouting ??= {
   defaultDataset: undefined,
   shapeToDataset: new Map(),
+  listeners: new Set(),
 });
+// An older copy of this module may have created the record without listeners.
+routingState.listeners ??= new Set();
+
+/** Tell routing-change listeners that the set of datasets may have changed. */
+function notifyRoutingChanged(): void {
+  for (const listener of [...routingState.listeners!]) {
+    try {
+      listener();
+    } catch (err) {
+      console.error('[linked] routing-change listener failed', err);
+    }
+  }
+}
 
 /** A shape class's IRI, or undefined for anything that is not a registered shape. */
 const shapeUriOf = (shapeClass?: Function | null): string | undefined => {
@@ -82,6 +97,17 @@ export abstract class LinkedStorage {
       updateQuery: (q) => this.updateQuery(q),
       deleteQuery: (q) => this.deleteQuery(q),
     });
+    notifyRoutingChanged();
+  }
+
+  /**
+   * Be told whenever the set of datasets changes (`setDefaultDataset`,
+   * `setDatasetForShapes`, `unsetDatasetForShape`). The live-query store uses
+   * this to pick up a dataset's change feed. Returns the unsubscribe function.
+   */
+  static onRoutingChanged(listener: () => void): () => void {
+    routingState.listeners!.add(listener);
+    return () => routingState.listeners!.delete(listener);
   }
 
   /** Pin one or more shape classes to a specific IDataset implementer. */
@@ -105,6 +131,7 @@ export abstract class LinkedStorage {
       }
       routingState.shapeToDataset.set(shapeClass, dataset);
     });
+    notifyRoutingChanged();
   }
 
   /**
@@ -118,12 +145,14 @@ export abstract class LinkedStorage {
   static unsetDatasetForShape(shape: Function | string): void {
     const uri = typeof shape === 'string' ? shape : shapeUriOf(shape);
     routingState.shapeToDataset.delete(shape as Function);
-    if (!uri) return;
-    for (const pinned of [...routingState.shapeToDataset.keys()]) {
-      if (shapeUriOf(pinned) === uri) {
-        routingState.shapeToDataset.delete(pinned);
+    if (uri) {
+      for (const pinned of [...routingState.shapeToDataset.keys()]) {
+        if (shapeUriOf(pinned) === uri) {
+          routingState.shapeToDataset.delete(pinned);
+        }
       }
     }
+    notifyRoutingChanged();
   }
 
   /** Every IDataset known to the primary router (default + all pinned). */

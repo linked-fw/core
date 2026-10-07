@@ -4,9 +4,20 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import {LinkedStorage} from '../utils/LinkedStorage.js';
+import type {IDataset} from '../interfaces/IDataset.js';
 import {subscribeQueryContext} from '../queries/QueryContext.js';
 import {resolveContextId} from '../queries/ContextRef.js';
-import {queryDependencies, type QueryDependencies} from '../queries/queryDependencies.js';
+import {subscribeQueryDispatch, type QueryDispatchEvent} from '../queries/queryDispatch.js';
+import {
+  mutationEffects,
+  queryDependencies,
+  type MutationEffects,
+  type QueryDependencies,
+} from '../queries/queryDependencies.js';
+import {getShapeClass} from '../utils/ShapeClass.js';
+import type {ShapeConstructor} from '../shapes/Shape.js';
+import {effectsHash, normalizeChange, type ChangeEvent} from './changes.js';
+import {selectInstances} from './matcher.js';
 import {
   bindParams,
   kindOf,
@@ -133,10 +144,24 @@ export class LiveQueryStore {
 
   /** @internal */
   readonly _templates = new Map<string, Template>();
-  private readonly _unsubscribeContext: () => void;
+  /** @internal Indexes read by the change matcher. */
+  readonly templatesByProp = new Map<string, Set<Template>>();
+  /** @internal */
+  readonly templatesByShape = new Map<string, Set<Template>>();
+  /** @internal */
+  readonly instancesById = new Map<string, Set<Instance>>();
+
+  private readonly _disposers: Array<() => void> = [];
+  private readonly _feeds = new Map<IDataset, () => void>();
+  private readonly _recentChanges = new Map<string, number>();
+  private _pendingRefetch = new Set<Instance>();
+  private _flushScheduled = false;
 
   constructor() {
-    this._unsubscribeContext = subscribeQueryContext((name) => this._onContextChange(name));
+    this._disposers.push(subscribeQueryContext((name) => this._onContextChange(name)));
+    this._disposers.push(subscribeQueryDispatch((e) => this._onDispatch(e)));
+    this._disposers.push(LinkedStorage.onRoutingChanged(() => this._scanDatasets()));
+    this._scanDatasets();
   }
 
   // -------------------------------------------------------------------------
@@ -186,8 +211,13 @@ export class LiveQueryStore {
     return template.deps;
   }
 
-  /** @internal Hook for the change matcher's indexes (filled in by the matcher module). */
-  protected _onDepsComputed(_template: Template): void {}
+  private _onDepsComputed(t: Template): void {
+    const deps = t.deps!;
+    for (const set of [deps.narrow, deps.filter, deps.hidden]) {
+      for (const p of set) addToIndex(this.templatesByProp, p, t);
+    }
+    for (const s of deps.shapes) addToIndex(this.templatesByShape, s, t);
+  }
 
   // -------------------------------------------------------------------------
   // Instances and handles
@@ -198,6 +228,7 @@ export class LiveQueryStore {
     const pk = paramsKey(params);
     let inst = template.instances.get(pk);
     if (!inst) {
+      this.depsOf(template); // index the template before its first instance exists
       inst = {
         key: `${template.key}|${pk}`,
         template,
@@ -260,11 +291,17 @@ export class LiveQueryStore {
   }
 
   /**
-   * Refetch every instance matching `target`: a node reference (`{id}`), a
-   * query (its template), or a template. Shape-level invalidation arrives with
-   * the change matcher.
+   * Refetch every instance matching `target`: a shape class or shape IRI
+   * (everything that scans or traverses it, as after a delete), a node
+   * reference (`{id}`), a query (its template), or a template.
    */
-  invalidate(target: {id: string} | LiveBuilder | Template): void {
+  invalidate(target: ShapeConstructor<any> | string | {id: string} | LiveBuilder | Template): void {
+    if (typeof target === 'function' || typeof target === 'string') {
+      const shape = typeof target === 'string' ? target : (target as {shape?: {id?: string}}).shape?.id;
+      if (!shape) throw new Error('invalidate(): the shape class has no registered shape.');
+      this.publish({effects: {op: 'delete', shape, props: new Set(), ids: undefined, membership: new Set([shape])}});
+      return;
+    }
     const instances = new Set<Instance>();
     if (isTemplate(target)) {
       for (const i of target.instances.values()) instances.add(i);
@@ -289,18 +326,79 @@ export class LiveQueryStore {
     }
   }
 
-  /** Drop everything (tests). Keeps the context subscription. */
+  // -------------------------------------------------------------------------
+  // Change sources
+  // -------------------------------------------------------------------------
+
+  /**
+   * Tell the store that data changed. Every source ends here: local mutations
+   * (automatically), dataset change feeds, and application code via
+   * `publishChange()`. Identical events within `options.echoMs` are folded
+   * into one, so a local change and its remote echo refetch once.
+   */
+  publish(event: ChangeEvent): void {
+    const effects = normalizeChange(event);
+    const hash = effectsHash(effects);
+    const now = Date.now();
+    const last = this._recentChanges.get(hash);
+    if (last !== undefined && now - last < this.options.echoMs) return;
+    this._recentChanges.set(hash, now);
+    if (this._recentChanges.size > 256) {
+      for (const [h, t] of this._recentChanges) if (now - t >= this.options.echoMs) this._recentChanges.delete(h);
+    }
+    for (const inst of selectInstances(this, effects)) this._pendingRefetch.add(inst);
+    this._scheduleFlush();
+  }
+
+  private _scheduleFlush(): void {
+    if (this._flushScheduled) return;
+    this._flushScheduled = true;
+    queueMicrotask(() => {
+      this._flushScheduled = false;
+      const batch = this._pendingRefetch;
+      this._pendingRefetch = new Set();
+      this._refetchAll(batch);
+    });
+  }
+
+  private _onDispatch(e: QueryDispatchEvent): void {
+    if (e.kind !== 'create' && e.kind !== 'update' && e.kind !== 'delete') return;
+    const query = e.query as {shape?: {id?: string}};
+    const shapeClass = query.shape?.id ? getShapeClass(query.shape.id) : undefined;
+    const dataset = LinkedStorage.getDatasetForShapeClass(shapeClass as Function | undefined);
+    if (dataset?.authoritativeChanges) return; // the dataset's own feed will report it
+    e.result.then(
+      (result) => this.publish({effects: mutationEffects(e.query as any, result)}),
+      () => {}, // a failed mutation changed nothing
+    );
+  }
+
+  private _scanDatasets(): void {
+    for (const dataset of LinkedStorage.getDatasets()) {
+      if (typeof dataset.subscribeChanges !== 'function' || this._feeds.has(dataset)) continue;
+      this._feeds.set(dataset, dataset.subscribeChanges((event) => this.publish(event)));
+    }
+  }
+
+  /** Drop every template and instance (tests). Subscriptions to sources stay. */
   reset(): void {
     for (const t of this._templates.values()) {
       for (const i of t.instances.values()) this._cancelGc(i);
     }
     this._templates.clear();
+    this.templatesByProp.clear();
+    this.templatesByShape.clear();
+    this.instancesById.clear();
+    this._recentChanges.clear();
+    this._pendingRefetch.clear();
   }
 
   /** @internal */
   dispose(): void {
     this.reset();
-    this._unsubscribeContext();
+    for (const off of this._disposers) off();
+    for (const off of this._feeds.values()) off();
+    this._feeds.clear();
   }
 
   // -------------------------------------------------------------------------
@@ -366,12 +464,10 @@ export class LiveQueryStore {
     if (inst.params.subject) ids.add(inst.params.subject);
     for (const s of inst.params.subjects ?? []) ids.add(s);
     collectIds(data, ids);
+    for (const old of inst.ids) if (!ids.has(old)) removeFromIndex(this.instancesById, old, inst);
+    for (const id of ids) if (!inst.ids.has(id)) addToIndex(this.instancesById, id, inst);
     inst.ids = ids;
-    this._onIdsChanged(inst);
   }
-
-  /** @internal Hook for the change matcher's subject index. */
-  protected _onIdsChanged(_inst: Instance): void {}
 
   private _setState(inst: Instance, state: LiveState): void {
     inst.state = state;
@@ -402,6 +498,7 @@ export class LiveQueryStore {
         const next = this.instance(t, params);
         t.instances.delete(paramsKey(inst.params));
         this._cancelGc(inst);
+        this._onInstanceDropped(inst);
         inst.seq++; // any in-flight response for the old subject is now stale
         for (const l of inst.listeners) next.listeners.add(l);
         inst.listeners.clear();
@@ -468,9 +565,14 @@ export class LiveQueryStore {
     }
   }
 
-  /** @internal Hooks for the change matcher's indexes. */
-  protected _onInstanceDropped(_inst: Instance): void {}
-  protected _onTemplateDropped(_template: Template): void {}
+  private _onInstanceDropped(inst: Instance): void {
+    for (const id of inst.ids) removeFromIndex(this.instancesById, id, inst);
+  }
+
+  private _onTemplateDropped(t: Template): void {
+    for (const set of this.templatesByProp.values()) set.delete(t);
+    for (const set of this.templatesByShape.values()) set.delete(t);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -561,6 +663,19 @@ class LiveQueryHandle<R> implements LiveQuery<R> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+function addToIndex<K, V>(index: Map<K, Set<V>>, key: K, value: V): void {
+  let set = index.get(key);
+  if (!set) index.set(key, (set = new Set()));
+  set.add(value);
+}
+
+function removeFromIndex<K, V>(index: Map<K, Set<V>>, key: K, value: V): void {
+  const set = index.get(key);
+  if (!set) return;
+  set.delete(value);
+  if (set.size === 0) index.delete(key);
+}
+
 function isTemplate(v: unknown): v is Template {
   return !!v && typeof v === 'object' && 'instances' in (v as object) && 'builder' in (v as object);
 }
@@ -610,6 +725,18 @@ export function getLiveQueryStore(): LiveQueryStore {
   }
   return store;
 }
+
+/** Publish a change from application code (your own transport, a server push). */
+export function publishChange(event: ChangeEvent): void {
+  getLiveQueryStore().publish(event);
+}
+
+/** Refetch every live query that `target` can have affected. See {@link LiveQueryStore.invalidate}. */
+export function invalidate(target: ShapeConstructor<any> | string | {id: string} | LiveBuilder | Template): void {
+  getLiveQueryStore().invalidate(target);
+}
+
+export type {ChangeEvent, MutationEffects};
 
 /** Replace the store with a fresh one (tests). */
 export function resetLiveQueryStore(): LiveQueryStore {

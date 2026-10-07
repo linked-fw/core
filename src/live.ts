@@ -14,7 +14,10 @@ export {
   LiveQueryStore,
   getLiveQueryStore,
   resetLiveQueryStore,
+  publishChange,
+  invalidate,
 } from './live/LiveQueryStore.js';
+export type {ChangeEvent} from './live/changes.js';
 export type {
   LiveQuery,
   LiveState,
