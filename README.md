@@ -42,6 +42,7 @@ npm run setup
 - **[DSL-JSON — the Linked query wire format](./documentation/dsl-json.md)** — the canonical, standardized query structure.
 - [Intermediate Representation (IR)](./documentation/intermediate-representation.md) — the internal algebra the SPARQL dataset lowers to.
 - [SPARQL Algebra Layer](./documentation/sparql-algebra.md)
+- [Live queries](./documentation/live-queries.md) — `query.live()`, change sources, and what triggers a refetch.
 
 ## How Linked works — from shapes to query results
 
@@ -1131,6 +1132,32 @@ yet — it travels as a `{$ctx}` marker and is resolved wherever the query is fi
 
 `FieldSet` serializes the same way (`FieldSet.for(Person, ['name','knows']).toJSON()` /
 `FieldSet.fromJSON(json)`).
+
+## Live queries
+
+A live query keeps its result current: subscribe once, and whenever something changes that the query
+can have read — a local mutation, a change reported by a dataset's feed, or one you publish yourself —
+it fetches again and notifies its listeners. The store is framework-free and lives in core; UI
+bindings such as `@_linked/react` sit on top of it. Full guide: **[documentation/live-queries.md](./documentation/live-queries.md)**.
+
+```typescript
+const live = Team.select((t) => [t.name, t.members.size()]).for({id: teamId}).live();
+const first = await live;                       // first data; the handle stays live
+live.subscribe((state) => render(state.data));  // every later result
+live.close();
+
+Team.select().toCount().live((s) => setTotal(s.data)); // listener shorthand; counts and asks go live too
+
+await Team.update({members: {add: [{id: personId}]}}).for({id: teamId});
+// → every live query that reads this team's members refetches; unrelated ones do not.
+```
+
+- `queryDependencies(query)` and `mutationEffects(mutation, result?)` describe, in predicate IRIs, what a
+  query reads and what a mutation writes; the store matches the two (by node id where it can, template-wide
+  where it must, scoped by shape).
+- `subscribeQueryDispatch(listener)` observes every query that runs through the dispatch, `exec(target)` included.
+- A dataset can report changes made elsewhere through the optional `IDataset.subscribeChanges(listener)`;
+  `publishChange(event)` does the same from application code; `invalidate(Shape | {id} | query)` is the manual lever.
 
 ## TODO
 
