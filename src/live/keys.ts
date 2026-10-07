@@ -107,10 +107,12 @@ export function paramsKey(params: InstanceParams): string {
 export function bindParams(query: LiveBuilder, params: InstanceParams): LiveBuilder {
   if (kindOf(query) !== 'select') return query;
   let b = query as SelectBuilder<any, any, any>;
+  // Bind with `{id}` references: a bare string would go through prefix
+  // resolution, which rejects ids such as `urn:…` that are not prefixed names.
   if (params.subject) {
-    b = b.for(params.subject) as SelectBuilder<any, any, any>;
+    b = b.for({id: params.subject}) as SelectBuilder<any, any, any>;
   } else if (params.subjects && params.subjects.length) {
-    b = b.forAll(params.subjects);
+    b = b.forAll(params.subjects.map((id) => ({id})));
   } else {
     b = b.forAll();
     if (params.one) b = b.one() as SelectBuilder<any, any, any>;
