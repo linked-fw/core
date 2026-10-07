@@ -5,7 +5,7 @@
  */
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
-import {getSuperShapes} from '../utils/ShapeClass.js';
+import {getAllNodeShapes, getRegistryVersion, getSuperShapes} from '../utils/ShapeClass.js';
 
 /**
  * Plain-object SHACL metadata — the QResult-like shape of a `sh:PropertyShape`.
@@ -177,6 +177,51 @@ export function getPropertyShapes(
     res.push(...ownPropertyShapes(superShape));
   }
   return res;
+}
+
+// ---------------------------------------------------------------------------
+// Property-shape lookup by id
+// ---------------------------------------------------------------------------
+
+// The registry scan behind predicate, datatype and dependency resolution, cached on
+// successful lookups only and invalidated by the registry version.
+const propertyShapeCache = new Map<string, PropertyShapeData>();
+let propertyShapeCacheVersion = -1;
+
+/**
+ * Find the property shape declared under a property-shape IRI, across every
+ * registered node shape.
+ *
+ * Scans the METAMODEL registry, which holds every shape — authored or data-only.
+ * Scanning the class registry meant a data-only property was never found, and the
+ * caller then fell through to emitting the PROPERTY SHAPE's IRI as the SPARQL
+ * predicate: a silently wrong query that matched nothing, with no error.
+ *
+ * Cache keyed on the registration version rather than the registry SIZE. Size does not
+ * change when a shape is re-registered in place, which is exactly what happens when a
+ * shape is edited and its metadata replaced. Only successful resolutions are cached — a
+ * not-found is never stored, so a property resolved before its shape registers can
+ * still resolve correctly afterwards.
+ */
+export function findPropertyShapeById(propertyId: string): PropertyShapeData | undefined {
+  const version = getRegistryVersion();
+  if (version !== propertyShapeCacheVersion) {
+    propertyShapeCache.clear();
+    propertyShapeCacheVersion = version;
+  }
+  const cached = propertyShapeCache.get(propertyId);
+  if (cached) return cached;
+
+  for (const nodeShape of getAllNodeShapes().values()) {
+    const propertyShape = getPropertyShapes(nodeShape, true).find(
+      (prop: {id?: string}) => prop.id === propertyId,
+    );
+    if (propertyShape) {
+      propertyShapeCache.set(propertyId, propertyShape);
+      return propertyShape;
+    }
+  }
+  return undefined;
 }
 
 /** Property shapes across the inheritance chain, deduped by label (most specific wins). */

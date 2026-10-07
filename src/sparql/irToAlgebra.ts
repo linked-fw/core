@@ -16,7 +16,7 @@ import type {
   IRSetModificationValue,
   IRTraversePattern,
 } from '../queries/IntermediateRepresentation.js';
-import {getPropertyShapes, type PropertyShapeData} from '../shapes/nodeShapeData.js';
+import {findPropertyShapeById, getPropertyShapes} from '../shapes/nodeShapeData.js';
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
 import {pathExprToSparql, collectPathUris} from '../paths/pathExprToSparql.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
@@ -154,41 +154,6 @@ function resolveShapeScanIri(shapeId: string): string {
 // resolved before its shape registers can still resolve correctly afterwards.
 const predicateTermCache = new Map<string, SparqlTerm>();
 let predicateTermCacheSize = -1;
-
-// The registry scan behind both predicate and datatype resolution, cached on the
-// same terms as the predicate cache above: successful lookups only, invalidated
-// by registry size.
-const propertyShapeCache = new Map<string, PropertyShapeData>();
-let propertyShapeCacheSize = -1;
-
-function findPropertyShapeById(propertyId: string): PropertyShapeData | undefined {
-  // Scans the METAMODEL registry, which holds every shape — authored or data-only.
-  // Scanning the class registry meant a data-only property was never found, and the
-  // caller then fell through to emitting the PROPERTY SHAPE's IRI as the SPARQL
-  // predicate: a silently wrong query that matched nothing, with no error.
-  //
-  // Cache keyed on the registration version rather than the registry SIZE. Size does not
-  // change when a shape is re-registered in place, which is exactly what happens when a
-  // shape is edited and its metadata replaced.
-  const version = getRegistryVersion();
-  if (version !== propertyShapeCacheSize) {
-    propertyShapeCache.clear();
-    propertyShapeCacheSize = version;
-  }
-  const cached = propertyShapeCache.get(propertyId);
-  if (cached) return cached;
-
-  for (const nodeShape of getAllNodeShapes().values()) {
-    const propertyShape = getPropertyShapes(nodeShape, true).find(
-      (prop: {id?: string}) => prop.id === propertyId,
-    );
-    if (propertyShape) {
-      propertyShapeCache.set(propertyId, propertyShape);
-      return propertyShape;
-    }
-  }
-  return undefined;
-}
 
 /**
  * The `sh:datatype` declared for a property, if any. Lets the serializer emit the
