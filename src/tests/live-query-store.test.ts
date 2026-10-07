@@ -76,8 +76,10 @@ beforeEach(() => {
     {id: ids.P1, name: 'Semmy'},
     {id: ids.P2, name: 'Moa'},
   ]);
-  LinkedStorage.setDefaultDataset(dataset);
+  // Dispose the previous test's store before storage changes, or its still-
+  // subscribed instances refetch from the new dataset (routing change = refetch).
   store = resetLiveQueryStore();
+  LinkedStorage.setDefaultDataset(dataset);
 });
 
 afterEach(() => {

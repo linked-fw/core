@@ -160,7 +160,7 @@ export class LiveQueryStore {
   constructor() {
     this._disposers.push(subscribeQueryContext((name) => this._onContextChange(name)));
     this._disposers.push(subscribeQueryDispatch((e) => this._onDispatch(e)));
-    this._disposers.push(LinkedStorage.onRoutingChanged(() => this._scanDatasets()));
+    this._disposers.push(LinkedStorage.onRoutingChanged(() => this._onRoutingChanged()));
     this._scanDatasets();
   }
 
@@ -371,6 +371,32 @@ export class LiveQueryStore {
       (result) => this.publish({effects: mutationEffects(e.query as any, result)}),
       () => {}, // a failed mutation changed nothing
     );
+  }
+
+  /**
+   * Storage changed (a dataset was set, pinned or unpinned): what is cached may
+   * come from a store that no longer answers, so instances nobody watches are
+   * dropped and watched ones fetch again. Also picks up new change feeds.
+   */
+  private _onRoutingChanged(): void {
+    this._scanDatasets();
+    this._recentChanges.clear();
+    for (const t of [...this._templates.values()]) {
+      for (const inst of [...t.instances.values()]) {
+        if (inst.listeners.size === 0) {
+          this._cancelGc(inst);
+          t.instances.delete(paramsKey(inst.params));
+          this._handles.delete(inst);
+          this._onInstanceDropped(inst);
+        } else {
+          this._refetchAll([inst]);
+        }
+      }
+      if (t.instances.size === 0 && !t.pinned) {
+        this._templates.delete(t.key);
+        this._onTemplateDropped(t);
+      }
+    }
   }
 
   private _scanDatasets(): void {
