@@ -191,6 +191,19 @@ describe('getShapesForTargetClass', () => {
     expect(reverse).toEqual(forward);
   });
 
+  test('an extends cycle keeps every candidate, by id, rather than none', () => {
+    // Each member of a cycle is the other's ancestor, so dropping ancestors would leave
+    // nothing — malformed data must not silently turn a relation into "no shape".
+    const catalog = [
+      dataShape('CycB', {targetClass: classIri('Cyc'), extendsName: 'CycA'}),
+      dataShape('CycA', {targetClass: classIri('Cyc'), extendsName: 'CycB'}),
+    ];
+    expect(getShapesForTargetClass(classIri('Cyc'), catalog).map((s) => s.id)).toEqual([
+      shapeIri('CycA'),
+      shapeIri('CycB'),
+    ]);
+  });
+
   test('a set member extending a registered shape inherits its targetClass', () => {
     const catalog = [dataShape('ProjectOrgUnit', {extendsName: 'Org'})];
     expect(getShapesForTargetClass(ORG, catalog).map((s) => s.id)).toEqual([

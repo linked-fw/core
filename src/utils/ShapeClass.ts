@@ -455,7 +455,8 @@ export function getTargetClassId(
  * or further up) is dropped: a relation to `Person` with `Person` and `Employee extends
  * Person` both targeting it means `Employee`, not an ambiguity. What remains are unrelated
  * shapes the data does not choose between; they sort by id alone — never by depth or by
- * registration or catalog order — so the choice is stable and visibly arbitrary.
+ * registration or catalog order — so the choice is stable and visibly arbitrary. If that
+ * would drop every candidate (an `extends` cycle), all of them are kept, by id.
  */
 function mostSpecific<S extends ShapeHeader>(
   candidates: S[],
@@ -468,9 +469,12 @@ function mostSpecific<S extends ShapeHeader>(
       if (ids.has(parent.id)) ancestors.add(parent.id);
     }
   }
-  return candidates
-    .filter((c) => !ancestors.has(c.id))
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const byId = (a: S, b: S) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const kept = candidates.filter((c) => !ancestors.has(c.id));
+  // An `extends` cycle makes each member the other's ancestor, so the filter can leave
+  // nothing. Malformed data must not turn a relation into "no shape" silently: keep every
+  // candidate instead, by id, and let the caller's ambiguity handling (warn) apply.
+  return (kept.length ? kept : [...candidates]).sort(byId);
 }
 
 /** targetClass IRI → registered shapes targeting it, ordered. Rebuilt when the registry changes. */
