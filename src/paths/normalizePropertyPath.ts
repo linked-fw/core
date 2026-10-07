@@ -62,8 +62,9 @@ export function normalizePropertyPath(input: PropertyPathDecoratorInput): PathEx
       // to the parser and dies at the `//` in its scheme.
       //
       // It never showed up while paths arrived as NamedNodes or prefixed names from decorators.
-      // It bites the moment a plain IRI string is used — which `PropertyDetails.path` now is for
-      // every simple property in a shape catalog.
+      // It bites whenever a path is a plain IRI string — which a `PathRef` may be, and which
+      // the property paths in shape data and its wire form (`NodeShapeWire`, e.g. a project's
+      // shape catalog) can be.
       //
       // A genuine sequence of absolute IRIs is written `<a>/<b>` and contains `<`, so the two
       // are unambiguous.

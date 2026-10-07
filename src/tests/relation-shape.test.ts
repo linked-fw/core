@@ -119,10 +119,11 @@ describe('getTargetClassId', () => {
 });
 
 describe('getShapesForTargetClass', () => {
-  test('defaults to the registry, most specific first, inherited targetClass included', () => {
+  test('defaults to the registry, inherited targetClass included, ancestors dropped', () => {
     const ids = getShapesForTargetClass(PERSON).map((s) => s.id);
-    // Employee and Contractor both extend Person, so both come before it; they tie and go by id.
-    expect(ids).toEqual([shapeIri('Contractor'), shapeIri('Employee'), shapeIri('Person')]);
+    // Employee and Contractor both extend Person, so Person is dropped; the two are
+    // unrelated and go by id.
+    expect(ids).toEqual([shapeIri('Contractor'), shapeIri('Employee')]);
   });
 
   test('matches the targetClass exactly', () => {
@@ -151,19 +152,43 @@ describe('getShapesForTargetClass', () => {
     expect(found).toBe(catalog[0]);
   });
 
-  test('orders an unregistered set by its own extends, then by id', () => {
+  test('drops ancestors by the set\'s own extends; unrelated leaves at different depths go by id', () => {
     const catalog = [
       dataShape('B_Base', {targetClass: classIri('Doc')}),
       dataShape('A_Other', {targetClass: classIri('Doc')}),
       dataShape('Z_Mid', {targetClass: classIri('Doc'), extendsName: 'B_Base'}),
       dataShape('C_Leaf', {extendsName: 'Z_Mid'}),
     ];
+    // C_Leaf is two levels deep and A_Other is a root, but neither extends the other:
+    // depth does not rank them, the id does.
     expect(getShapesForTargetClass(classIri('Doc'), catalog).map((s) => s.id)).toEqual([
-      shapeIri('C_Leaf'),
-      shapeIri('Z_Mid'),
       shapeIri('A_Other'),
-      shapeIri('B_Base'),
+      shapeIri('C_Leaf'),
     ]);
+  });
+
+  test('a parent and its sub-shape are one candidate: the sub-shape', () => {
+    const catalog = [
+      dataShape('HPerson', {targetClass: classIri('HPerson')}),
+      dataShape('HEmployee', {targetClass: classIri('HPerson'), extendsName: 'HPerson'}),
+    ];
+    expect(getShapesForTargetClass(classIri('HPerson'), catalog).map((s) => s.id)).toEqual([
+      shapeIri('HEmployee'),
+    ]);
+  });
+
+  test('order does not depend on the order of the set', () => {
+    const shapes = [
+      dataShape('Q_One', {targetClass: classIri('Order')}),
+      dataShape('P_Two', {targetClass: classIri('Order')}),
+      dataShape('R_Three', {targetClass: classIri('Order')}),
+    ];
+    const forward = getShapesForTargetClass(classIri('Order'), shapes).map((s) => s.id);
+    const reverse = getShapesForTargetClass(classIri('Order'), [...shapes].reverse()).map(
+      (s) => s.id,
+    );
+    expect(forward).toEqual([shapeIri('P_Two'), shapeIri('Q_One'), shapeIri('R_Three')]);
+    expect(reverse).toEqual(forward);
   });
 
   test('a set member extending a registered shape inherits its targetClass', () => {
@@ -220,17 +245,57 @@ describe('relation helpers', () => {
     expect(resolveRelationShape({nodeKind: shacl.IRI})).toEqual({candidates: [], source: 'none'});
   });
 
-  test('resolveRelationShape: several candidates warn once per class, naming them all', () => {
+  // The warn-once memory is module state shared by every test in this file, so each warning
+  // test below uses a class no other test resolves: the outcome does not depend on order.
+
+  test('resolveRelationShape: several candidates warn once, naming them all', () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const first = resolveRelationShape({class: {id: PERSON}});
     resolveRelationShape({class: {id: PERSON}});
     expect(first.shapeId).toBe(shapeIri('Contractor'));
+    expect(first.candidates).toEqual([shapeIri('Contractor'), shapeIri('Employee')]);
     expect(first.source).toBe('class');
     expect(warn).toHaveBeenCalledTimes(1);
     const message = String(warn.mock.calls[0][0]);
     expect(message).toContain(PERSON);
     for (const id of first.candidates) expect(message).toContain(id);
     expect(message).toContain(`Using '${shapeIri('Contractor')}'`);
+  });
+
+  test('resolveRelationShape: a parent and its sub-shape resolve to the sub-shape, silently', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const catalog = [
+      dataShape('WPerson', {targetClass: classIri('WPerson')}),
+      dataShape('WEmployee', {targetClass: classIri('WPerson'), extendsName: 'WPerson'}),
+    ];
+    expect(resolveRelationShape({class: {id: classIri('WPerson')}}, catalog)).toEqual({
+      shapeId: shapeIri('WEmployee'),
+      candidates: [shapeIri('WEmployee')],
+      source: 'class',
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test('resolveRelationShape: warns once per class AND candidate set', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const KEYED = classIri('Keyed');
+    const one = [
+      dataShape('K_A', {targetClass: KEYED}),
+      dataShape('K_B', {targetClass: KEYED}),
+    ];
+    const other = [
+      dataShape('K_A', {targetClass: KEYED}),
+      dataShape('K_C', {targetClass: KEYED}),
+    ];
+    resolveRelationShape({class: {id: KEYED}}, one);
+    resolveRelationShape({class: {id: KEYED}}, one);
+    expect(warn).toHaveBeenCalledTimes(1);
+    // Same class, different competing shapes: a different ambiguity, reported on its own.
+    resolveRelationShape({class: {id: KEYED}}, other);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(String(warn.mock.calls[1][0])).toContain(shapeIri('K_C'));
+    resolveRelationShape({class: {id: KEYED}}, [...other].reverse());
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });
 

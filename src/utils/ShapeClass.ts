@@ -451,25 +451,26 @@ export function getTargetClassId(
 }
 
 /**
- * Most specific first: a candidate that extends another candidate sorts ahead of it. The
- * rank is how many of the OTHER candidates a shape descends from, which is strictly
- * greater for a sub-shape than for any of its candidate ancestors. Ties go by id, so the
- * order never depends on registration or catalog order.
+ * The most specific candidates, by id. A candidate that another candidate extends (directly
+ * or further up) is dropped: a relation to `Person` with `Person` and `Employee extends
+ * Person` both targeting it means `Employee`, not an ambiguity. What remains are unrelated
+ * shapes the data does not choose between; they sort by id alone — never by depth or by
+ * registration or catalog order — so the choice is stable and visibly arbitrary.
  */
-function orderBySpecificity<S extends ShapeHeader>(
+function mostSpecific<S extends ShapeHeader>(
   candidates: S[],
   local?: ReadonlyMap<string, ShapeHeader>,
 ): S[] {
   const ids = new Set(candidates.map((c) => c.id));
-  const rank = new Map<string, number>();
+  const ancestors = new Set<string>();
   for (const candidate of candidates) {
-    const ancestors = superShapesWithin(candidate, local).filter((s) => ids.has(s.id));
-    rank.set(candidate.id, ancestors.length);
+    for (const parent of superShapesWithin(candidate, local)) {
+      if (ids.has(parent.id)) ancestors.add(parent.id);
+    }
   }
-  return [...candidates].sort(
-    (a, b) =>
-      rank.get(b.id)! - rank.get(a.id)! || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-  );
+  return candidates
+    .filter((c) => !ancestors.has(c.id))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 /** targetClass IRI → registered shapes targeting it, ordered. Rebuilt when the registry changes. */
@@ -488,15 +489,17 @@ function getTargetClassIndex(): Map<string, NodeShapeData[]> {
     if (shapes) shapes.push(shape);
     else index.set(classId, [shape]);
   });
-  index.forEach((shapes, classId) => index.set(classId, orderBySpecificity(shapes)));
+  index.forEach((shapes, classId) => index.set(classId, mostSpecific(shapes)));
   targetClassIndex = index;
   targetClassIndexVersion = registryState.registryVersion;
   return index;
 }
 
 /**
- * Every shape whose targetClass (own or inherited) is exactly `classIri`, most specific
- * first, then by id.
+ * The most specific shapes whose effective targetClass (own, or inherited through
+ * `extends`) is exactly `classIri`, sorted by id. A matching shape that another match
+ * extends is left out, so one entry means the class has one most specific shape and more
+ * than one means unrelated shapes compete for it.
  *
  * With no `shapes`, the candidates are the registered shapes. Pass `shapes` to choose among
  * that set only — the registry also holds compiled framework shapes, and a project's
@@ -519,7 +522,7 @@ export function getShapesForTargetClass(
   const candidates = [...local.values()].filter(
     (shape) => targetClassIdWithin(shape, local) === classIri,
   );
-  return orderBySpecificity(candidates, local);
+  return mostSpecific(candidates, local);
 }
 
 export function addNodeShapeToShapeClass(

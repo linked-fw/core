@@ -65,16 +65,21 @@ export function rangeClassOf(
   return getTargetClassId(p.valueShape, shapes);
 }
 
-/** Classes already warned about, so a list of many rows warns once and not once per row. */
-const warnedAmbiguousClasses = new Set<string>();
+/**
+ * Ambiguities already warned about, keyed by class and candidate set, so a list of many rows
+ * warns once and not once per row — while a different set of shapes competing for the same
+ * class (another project's catalog, or the registry next to a catalog) still gets its own.
+ */
+const warnedAmbiguities = new Set<string>();
 
 /**
  * The shape a relation's values are viewed, picked and created through.
  *
  * A declared `sh:node` wins outright. Otherwise the shapes targeting the property's
- * `sh:class` are candidates, most specific first and then by id, and the first is used.
- * More than one candidate is a real ambiguity the data does not settle, so it warns —
- * once per class — naming every candidate and the one chosen. No candidate (or no
+ * `sh:class` are candidates — the most specific ones (a shape another candidate extends is
+ * left out), sorted by id — and the first is used. More than one candidate is a real
+ * ambiguity the data does not settle, so it warns — once per class and candidate set —
+ * naming every candidate and the one chosen. No candidate (or no
  * `sh:class` either) resolves to `none`: the value can still be shown as a reference,
  * but there is no shape to open or create it through.
  */
@@ -92,8 +97,9 @@ export function resolveRelationShape(
       : getShapesForTargetClass(classIri);
     const candidates = matches.map((shape) => shape.id);
     if (candidates.length) {
-      if (candidates.length > 1 && !warnedAmbiguousClasses.has(classIri)) {
-        warnedAmbiguousClasses.add(classIri);
+      const warnKey = `${classIri}|${candidates.join(' ')}`;
+      if (candidates.length > 1 && !warnedAmbiguities.has(warnKey)) {
+        warnedAmbiguities.add(warnKey);
         console.warn(
           `[linked] ${candidates.length} shapes target class '${classIri}': ` +
             `${candidates.join(', ')}. Using '${candidates[0]}' for relations declared ` +
