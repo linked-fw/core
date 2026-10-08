@@ -9,6 +9,7 @@ import type {
   CreateResult,
   UpdateResult,
 } from '../queries/IntermediateRepresentation.js';
+import type {ChangeEvent} from '../live/changes.js';
 
 /**
  * Universal dataset interface. Every dataset in the Linked framework accepts
@@ -80,4 +81,19 @@ export interface IDataset {
   updateQuery?(query: UpdateQuery): Promise<UpdateResult>;
   createQuery?(query: CreateQuery): Promise<CreateResult>;
   deleteQuery?(query: DeleteQuery): Promise<DeleteResponse>;
+
+  /**
+   * Optional change feed. A dataset that learns about changes made elsewhere
+   * (another client, a server-side job) reports them here as
+   * {@link ChangeEvent}s — the mutation's DSL-JSON plus its result, or
+   * precomputed effects — and the live-query store refetches whatever those
+   * changes can have touched. Returns the unsubscribe function.
+   */
+  subscribeChanges?(listener: (event: ChangeEvent) => void): () => void;
+  /**
+   * When `true`, a local mutation routed to this dataset does not trigger
+   * refetches by itself; the store waits for the dataset's own change event
+   * (the server's confirmation). Only meaningful with `subscribeChanges`.
+   */
+  readonly authoritativeChanges?: boolean;
 }

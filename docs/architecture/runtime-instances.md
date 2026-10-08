@@ -8,7 +8,15 @@ summary: Why @_linked/core must be a single module instance per runtime, the sta
 
 - the **shape registry** (`nodeShapeToShapeClass`, `utils/ShapeClass.ts`) — NodeShape URI → Shape class,
 - **`LinkedStorage`** (`utils/LinkedStorage.ts`) — query dispatch / dataset routing,
-- the **query context** (`queries/QueryContext.ts`) — the current user/context references.
+- the **query context** (`queries/QueryContext.ts`) — the current user/context references,
+- the **query dispatch listeners** (`queries/queryDispatch.ts`, `subscribeQueryDispatch`) — observers of every query that runs,
+- the **live-query store** (`live/LiveQueryStore.ts`, registered through `live/registry.ts`) — templates, instances and cached results of every live query, plus its subscriptions to the dispatch, the query context and dataset change feeds.
+
+The dispatch, its listeners, the routing table (with its `onRoutingChanged` listeners) and
+the live-query store are `globalThis`-backed (`__linkedQueryDispatch`,
+`__linkedStorageRouting`, `__linkedLiveQueryStore`). The query context map and its
+listeners are still module-level: under an accidental double evaluation a live query can
+miss a `setQueryContext` made through the other copy.
 
 ## Single instance per runtime
 
@@ -25,12 +33,16 @@ rather than silently forking it.
 
 An app runs in two runtimes — the **browser** and the **Node backend** — each with its
 own core instance. They are separate by design (normal client/server) and never share
-objects, only **serialized data**. Two things cross that boundary:
+objects, only **serialized data**. Two things cross that boundary (three, with live queries):
 
 - **Shape identity.** A shape's URI is `getNodeShapeUri(packageName, ShapeClass.name)`.
   The client and backend independently register the same shapes and must arrive at the
   **same URI** — that is how a query forwarded from the browser
   (`/call/<pkg>/<Shape>/<method>`) resolves to the right provider on the backend.
+- **Change events.** A `ChangeEvent` — a mutation's DSL-JSON plus its result, or
+  precomputed `MutationEffects` — is plain data. A server forwards it to clients through
+  a dataset's `subscribeChanges` feed or the app's own transport (`publishChange`); each
+  client computes which of its live queries to refetch.
 - **Shape data.** `JSONWriter`/`JSONParser` (in `@_linked/server-utils`) serialize shape
   values across the boundary. Only **plain data** (query results / `{id}`) should cross —
   a live `Shape` instance serializes to a bare `{__s, u}` reference with no field data

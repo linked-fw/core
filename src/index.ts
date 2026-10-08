@@ -5,6 +5,8 @@
  */
 // Registers every shape core defines (side effects only).
 import './shapes/index.js';
+// Registers the live-query store so `query.live()` works (side effects only).
+import './live.js';
 export {syncShapes, syncShape} from './shapes/syncShapes.js';
 export {rdfList} from './shapes/List.js';
 export {serializePathToNodeData} from './shapes/serializePathToNodeData.js';
@@ -33,6 +35,8 @@ export {
   PendingQueryContext,
   UnresolvedContextError,
 } from './queries/QueryContext.js';
+export {subscribeQueryDispatch} from './queries/queryDispatch.js';
+export type {QueryDispatchEvent, QueryDispatchListener} from './queries/queryDispatch.js';
 export {
   CONTEXT_REF_KEY,
   encodeContextRef,
@@ -97,3 +101,20 @@ export type {
   MutationNodeDataJSON,
 } from './queries/MutationSerialization.js';
 
+
+// Live-query dependency helpers — what a query reads and a mutation writes, as predicates
+export {queryDependencies, mutationEffects} from './queries/queryDependencies.js';
+export type {QueryDependencies, MutationEffects} from './queries/queryDependencies.js';
+export {findPropertyShapeById} from './shapes/nodeShapeData.js';
+
+// Live queries — see documentation/live-queries.md
+export {LiveQueryStore, getLiveQueryStore, resetLiveQueryStore, publishChange, invalidate} from './live/LiveQueryStore.js';
+export type {ChangeEvent} from './live/changes.js';
+export type {
+  LiveQuery,
+  LiveState,
+  LiveStatus,
+  LiveListener,
+  LiveQueryOptions,
+  LiveQueryStoreOptions,
+} from './live/LiveQueryStore.js';

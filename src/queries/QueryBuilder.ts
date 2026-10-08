@@ -36,6 +36,8 @@ import {
   type SortByPathJSON,
   type RawMinusEntryJSON,
 } from './QueryBuilderSerialization.js';
+import {requireLiveQueryStore} from '../live/registry.js';
+import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
 
 /** JSON representation of a SelectBuilder. */
 export type QueryBuilderJSON = {
@@ -904,6 +906,21 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       });
       throw wrapped;
     }
+  }
+
+
+  /**
+   * Go live: subscribe to this query and keep its result current.
+   *
+   * Returns a {@link LiveQuery} handle. `await` it for the first result,
+   * `subscribe()` for every later one, `close()` when done. A listener may be
+   * passed directly as the first argument. Requires the live-query store to be
+   * loaded, which importing `@_linked/core` (the package root) does.
+   */
+  live<R = Result>(listenerOrOptions?: LiveListener<R> | LiveQueryOptions, options?: LiveQueryOptions): LiveQuery<R> {
+    const listener = typeof listenerOrOptions === 'function' ? listenerOrOptions : undefined;
+    const opts = typeof listenerOrOptions === 'function' ? options : listenerOrOptions;
+    return requireLiveQueryStore().subscribe<R>(this as any, listener, opts);
   }
 
   // ---------------------------------------------------------------------------

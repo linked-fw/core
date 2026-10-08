@@ -35,6 +35,8 @@ import {
   deserializeRawMinusEntry,
 } from './QueryBuilderSerialization.js';
 import type {CountQuery, CountQueryJSON, RawCountInput} from './CountQuery.js';
+import {requireLiveQueryStore} from '../live/registry.js';
+import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
 
 /**
  * Everything a count can carry. Assembled by `SelectBuilder.toCount()` or
@@ -185,6 +187,21 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
     // an aggregate projection, not a query form of its own — and checks the answer
     // is a real non-negative integer before it reaches the caller.
     return resolveCount(dispatch as any, this);
+  }
+
+
+  /**
+   * Go live: subscribe to this query and keep its result current.
+   *
+   * Returns a {@link LiveQuery} handle. `await` it for the first result,
+   * `subscribe()` for every later one, `close()` when done. A listener may be
+   * passed directly as the first argument. Requires the live-query store to be
+   * loaded, which importing `@_linked/core` (the package root) does.
+   */
+  live<R = number>(listenerOrOptions?: LiveListener<R> | LiveQueryOptions, options?: LiveQueryOptions): LiveQuery<R> {
+    const listener = typeof listenerOrOptions === 'function' ? listenerOrOptions : undefined;
+    const opts = typeof listenerOrOptions === 'function' ? options : listenerOrOptions;
+    return requireLiveQueryStore().subscribe<R>(this as any, listener, opts);
   }
 
   /** `await` triggers execution. */
