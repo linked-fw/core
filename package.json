@@ -57,7 +57,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "rimraf ./lib && tsc -p tsconfig-esm.json",
+    "build": "linked build",
     "compile": "echo '💫 Compiling ESM' && tsc -p tsconfig-esm.json",
     "sync:agents": "node packages/skills/sync.mjs",
     "setup": "npx semantu-agents",
@@ -67,13 +67,13 @@
     "test:fuseki": "docker compose -f src/tests/docker-compose.test.yml up -d --wait && NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --runInBand --testPathPattern='sparql-fuseki' --verbose; EXIT=$?; docker compose -f src/tests/docker-compose.test.yml down; exit $EXIT"
   },
   "devDependencies": {
+    "@_linked/cli": "^1.45.5",
     "@changesets/changelog-github": "^1.0.0",
     "@changesets/cli": "^3.0.0",
     "@jest/globals": "^30.0.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
     "jest": "^30.0.0",
-    "rimraf": "^6.0.0",
     "ts-jest": "^29.1.2",
     "typescript": "^5.7.3"
   },
