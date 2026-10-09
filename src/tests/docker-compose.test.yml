@@ -1,6 +1,6 @@
 services:
   fuseki:
-    image: secoresearch/fuseki:5.6.0
+    image: secoresearch/fuseki:6.2.0
     environment:
       - ADMIN_PASSWORD=admin
     ports:

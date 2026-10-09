@@ -1,7 +1,7 @@
 {
   "name": "@_linked/core",
   "version": "2.28.1",
-  "packageManager": "npm@12.1.0",
+  "packageManager": "npm@12.2.0",
   "license": "MIT",
   "linkedPackage": true,
   "type": "module",
@@ -64,7 +64,7 @@
     "typecheck": "tsc -p tsconfig-tests.json",
     "check:dts": "tsc -p tsconfig-dts-check.json",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs && npm run typecheck",
-    "test:fuseki": "docker compose -f src/tests/docker-compose.test.yml up -d --wait && NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --runInBand --testPathPattern='sparql-fuseki' --verbose; EXIT=$?; docker compose -f src/tests/docker-compose.test.yml down; exit $EXIT"
+    "test:fuseki": "docker compose -f src/tests/docker-compose.test.yml up -d --wait && NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --runInBand --testPathPatterns='sparql-fuseki' --verbose; EXIT=$?; docker compose -f src/tests/docker-compose.test.yml down; exit $EXIT"
   },
   "devDependencies": {
     "@_linked/cli": "^1.45.5",
