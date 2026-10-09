@@ -248,9 +248,18 @@ export function serializeAlgebraNode(
     }
 
     case 'union': {
-      const left = serializeAlgebraNode(node.left, collector);
-      const right = serializeAlgebraNode(node.right, collector);
-      return `{\n${indent(left)}\n}\nUNION\n{\n${indent(right)}\n}`;
+      // UNION is associative: write a left-nested chain flat, {a} UNION {b} UNION {c},
+      // instead of nesting every earlier branch one group deeper.
+      const branches: SparqlAlgebraNode[] = [node.right];
+      let head: SparqlAlgebraNode = node.left;
+      while (head.type === 'union') {
+        branches.unshift(head.right);
+        head = head.left;
+      }
+      branches.unshift(head);
+      return branches
+        .map((branch) => `{\n${indent(serializeAlgebraNode(branch, collector))}\n}`)
+        .join('\nUNION\n');
     }
 
     case 'minus': {

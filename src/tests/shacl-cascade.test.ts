@@ -105,6 +105,19 @@ describe('owned-subtree cascade', () => {
     expect(sparql).toContain('http://example.org/c#TCell');
   });
 
+  test('delete joins its blocks with UNION, never with chained OPTIONALs', () => {
+    // Chained OPTIONALs multiply: own triples x incoming references x each owned type's
+    // triples. A UNION adds them up and deletes the same triples.
+    const sparql = deleteToSparql(
+      lower(DeleteBuilder.from(TBox, {id: 'http://example.org/c#b1'})) as IRDeleteMutation,
+    );
+    const where = sparql.slice(sparql.indexOf('WHERE'));
+    expect(where).not.toContain('OPTIONAL');
+    expect(where).toContain('UNION');
+    // The type guard is still required, outside the UNION.
+    expect(where).toMatch(/^WHERE \{\n  <http:\/\/example\.org\/c#b1> rdf:type <http:\/\/example\.org\/c#TBox> \./);
+  });
+
   test('safety: non-contains predicate (ref) is NOT followed by the cascade', () => {
     const sparql = deleteToSparql(
       lower(DeleteBuilder.from(TBox, {id: 'http://example.org/c#b1'})) as IRDeleteMutation,
@@ -332,5 +345,64 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
       }`,
     );
     expect(Number(orphans.results.bindings[0]?.c?.value ?? 0)).toBe(0);
+  });
+});
+
+// The shape sync deletes every shape description through this path on every boot.
+// Its WHERE once chained the cascade blocks as OPTIONALs, so the solutions were the
+// product of all of them: ~27,000 rows and 30+ seconds per shape on Fuseki, which made
+// a server's second boot take minutes. Counted here as solutions of the generated WHERE.
+describe('owned-subtree cascade — live Fuseki (delete WHERE size)', () => {
+  const C = 'http://example.org/c#';
+  const iri = (n: string) => `<${C}${n}>`;
+  const RDF = 'PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n';
+  let fusekiAvailable = false;
+
+  beforeAll(async () => {
+    fusekiAvailable = await ensureFuseki();
+    if (fusekiAvailable) await createTestDataset();
+  });
+  afterAll(async () => {
+    if (fusekiAvailable) await clearAllData();
+  });
+  beforeEach(async () => {
+    if (fusekiAvailable) await clearAllData();
+  });
+
+  test('solutions add up across blocks instead of multiplying, and the delete is complete', async () => {
+    if (!fusekiAvailable) return;
+    const OWN = 8; // extra own triples on the box
+    const REFS = 8; // incoming references to the box
+    const CELLS = 4; // owned chain b1 -owns-> cell0 -next-> cell1 ...
+    const triples: string[] = [`${iri('b1')} rdf:type ${iri('TBox')} .`];
+    for (let i = 0; i < OWN; i++) triples.push(`${iri('b1')} ${iri('tag')} "t${i}" .`);
+    for (let i = 0; i < REFS; i++) triples.push(`${iri(`r${i}`)} ${iri('ref')} ${iri('b1')} .`);
+    triples.push(`${iri('b1')} ${iri('owns')} ${iri('cell0')} .`);
+    for (let i = 0; i < CELLS; i++) {
+      triples.push(`${iri(`cell${i}`)} rdf:type ${iri('TCell')} .`);
+      if (i + 1 < CELLS) triples.push(`${iri(`cell${i}`)} ${iri('next')} ${iri(`cell${i + 1}`)} .`);
+    }
+    // A node the box only refers to: not owned, so it must survive.
+    triples.push(`${iri('b1')} ${iri('ref')} ${iri('free')} .`, `${iri('free')} rdf:type ${iri('TCell')} .`);
+    await executeSparqlUpdate(`${RDF}INSERT DATA {\n${triples.join('\n')}\n}`);
+
+    const sparql = deleteToSparql(
+      lower(DeleteBuilder.from(TBox, {id: `${C}b1`})) as IRDeleteMutation,
+    );
+    const countQuery = sparql.replace(/DELETE \{[\s\S]*?\n\}\nWHERE/, 'SELECT (COUNT(*) AS ?n)\nWHERE');
+    const res = await executeSparqlQuery(countQuery);
+    const solutions = Number(res.results.bindings[0]?.n?.value ?? 0);
+
+    // b1's own triples: type + OWN tags + owns + ref = OWN + 3; incoming: REFS;
+    // owned cells: CELLS types + (CELLS - 1) next edges.
+    const additive = OWN + 3 + REFS + CELLS + (CELLS - 1);
+    expect(solutions).toBe(additive);
+
+    await executeSparqlUpdate(sparql);
+    const left = await executeSparqlQuery(`SELECT ?s ?p ?o WHERE { ?s ?p ?o }`);
+    const remaining = left.results.bindings
+      .map((b: any) => `${b.s.value} ${b.p.value} ${b.o.value}`)
+      .sort();
+    expect(remaining).toEqual([`${C}free http://www.w3.org/1999/02/22-rdf-syntax-ns#type ${C}TCell`]);
   });
 });

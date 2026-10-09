@@ -323,9 +323,12 @@ DELETE {
   <${ENT}to-delete> rdf:type <${PT}> .
 }
 WHERE {
-  <${ENT}to-delete> ?p ?o .
   <${ENT}to-delete> rdf:type <${PT}> .
-  OPTIONAL {
+  {
+    <${ENT}to-delete> ?p ?o .
+  }
+  UNION
+  {
     ?s ?p2 <${ENT}to-delete> .
   }
 }`);
@@ -342,9 +345,12 @@ DELETE {
   <${ENT}to-delete> rdf:type <${PT}> .
 }
 WHERE {
-  <${ENT}to-delete> ?p ?o .
   <${ENT}to-delete> rdf:type <${PT}> .
-  OPTIONAL {
+  {
+    <${ENT}to-delete> ?p ?o .
+  }
+  UNION
+  {
     ?s ?p2 <${ENT}to-delete> .
   }
 }`);
@@ -364,14 +370,21 @@ DELETE {
   <${ENT}to-delete-2> rdf:type <${PT}> .
 }
 WHERE {
-  <${ENT}to-delete-1> ?p_0 ?o_0 .
   <${ENT}to-delete-1> rdf:type <${PT}> .
-  <${ENT}to-delete-2> ?p_1 ?o_1 .
   <${ENT}to-delete-2> rdf:type <${PT}> .
-  OPTIONAL {
+  {
+    <${ENT}to-delete-1> ?p_0 ?o_0 .
+  }
+  UNION
+  {
     ?s_0 ?p2_0 <${ENT}to-delete-1> .
   }
-  OPTIONAL {
+  UNION
+  {
+    <${ENT}to-delete-2> ?p_1 ?o_1 .
+  }
+  UNION
+  {
     ?s_1 ?p2_1 <${ENT}to-delete-2> .
   }
 }`);
@@ -391,14 +404,21 @@ DELETE {
   <${ENT}to-delete-2> rdf:type <${PT}> .
 }
 WHERE {
-  <${ENT}to-delete-1> ?p_0 ?o_0 .
   <${ENT}to-delete-1> rdf:type <${PT}> .
-  <${ENT}to-delete-2> ?p_1 ?o_1 .
   <${ENT}to-delete-2> rdf:type <${PT}> .
-  OPTIONAL {
+  {
+    <${ENT}to-delete-1> ?p_0 ?o_0 .
+  }
+  UNION
+  {
     ?s_0 ?p2_0 <${ENT}to-delete-1> .
   }
-  OPTIONAL {
+  UNION
+  {
+    <${ENT}to-delete-2> ?p_1 ?o_1 .
+  }
+  UNION
+  {
     ?s_1 ?p2_1 <${ENT}to-delete-2> .
   }
 }`);
