@@ -540,7 +540,7 @@ describe('updateToAlgebra', () => {
 // ---------------------------------------------------------------------------
 
 describe('deleteToAlgebra', () => {
-  test('deleteSingle produces delete_insert with OPTIONAL object wildcard', async () => {
+  test('deleteSingle produces delete_insert with the object wildcard in a UNION block', async () => {
     const ir = (await captureMutationIR(() =>
       queryFactories.deleteSingle(),
     )) as IRDeleteMutation;
@@ -575,8 +575,14 @@ describe('deleteToAlgebra', () => {
     );
     expect(objectWildcard).toBeDefined();
 
-    // WHERE wraps object wildcard in OPTIONAL (left_join)
-    expect(plan.whereAlgebra.type).toBe('left_join');
+    // WHERE: the required type guard, joined with a UNION of the subject and
+    // object wildcards (a UNION adds their matches up; OPTIONALs would multiply them)
+    expect(plan.whereAlgebra.type).toBe('join');
+    const where = plan.whereAlgebra as any;
+    expect(where.left).toEqual({type: 'bgp', triples: [plan.deletePatterns[2]]});
+    expect(where.right.type).toBe('union');
+    expect(where.right.left).toEqual({type: 'bgp', triples: [subjectWildcard]});
+    expect(where.right.right).toEqual({type: 'bgp', triples: [objectWildcard]});
   });
 
   test('deleteMultiple handles multiple IDs with indexed variables', async () => {

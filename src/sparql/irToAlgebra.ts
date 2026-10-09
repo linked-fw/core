@@ -2402,15 +2402,30 @@ export function buildOwnedSelfDelete(
 
 /**
  * Converts an IRDeleteMutation to a SparqlDeleteInsertPlan (DELETE + WHERE).
+ *
+ * The WHERE is the type guard of every id, joined with ONE UNION of independent
+ * blocks: per id its own triples, its incoming references and, for a shape that
+ * owns something, one block per dependent type of its owned subtree.
+ *
+ * The blocks must not be chained as OPTIONALs. A chain of OPTIONALs is a join, so
+ * the solutions multiply: own triples x incoming references x owned triples of each
+ * dependent type. Deleting one shape description with the shape sync's cascade
+ * produced ~27,000 solutions for ~130 triples and took over 30 seconds on Fuseki,
+ * which re-evaluates the cascade property path for every left-hand row. A UNION
+ * yields each block's matches once, so the solutions add up instead, and it deletes
+ * exactly the same triples: a DELETE template triple whose variables a solution
+ * leaves unbound is skipped, as it was for an OPTIONAL that did not match.
+ *
+ * The guards stay required for every id, as before: when any id is not of the
+ * shape, the WHERE has no solution and nothing is deleted.
  */
 export function deleteToAlgebra(
   query: IRDeleteMutation,
   _options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
   const deletePatterns: SparqlTriple[] = [];
-  const requiredTriples: SparqlTriple[] = [];
-  const optionalTriples: SparqlTriple[] = [];
-  const cascadeOptionals: SparqlAlgebraNode[] = [];
+  const guards: SparqlTriple[] = [];
+  const blocks: SparqlAlgebraNode[] = [];
 
   for (let i = 0; i < query.ids.length; i++) {
     const subjectTerm = iriTerm(query.ids[i].id);
@@ -2423,32 +2438,29 @@ export function deleteToAlgebra(
     // DELETE block: all patterns (subject-wildcard, object-wildcard, type)
     deletePatterns.push(subjWild, objWild, typeGuard);
 
-    // WHERE block: subject-wildcard and type guard are required;
-    // object-wildcard is OPTIONAL (entity may have no incoming references)
-    requiredTriples.push(subjWild, typeGuard);
-    optionalTriples.push(objWild);
+    // WHERE: the type guard is required; the subject's own triples and its
+    // incoming references (the entity may have none) are separate UNION blocks.
+    guards.push(typeGuard);
+    blocks.push({type: 'bgp', triples: [subjWild]}, {type: 'bgp', triples: [objWild]});
 
     // Cascade-delete the owned subtree — only for shapes that actually own something
     // (have a `contains` property); a plain entity delete is left untouched.
     if (shapeHasContainsProperty(query.shape)) {
       const cascade = buildOwnedCascade(subjectTerm, `c${idx}_`);
       deletePatterns.push(...cascade.deletePatterns);
-      cascadeOptionals.push(...cascade.whereOptionals);
+      blocks.push(...cascade.whereOptionals);
     }
   }
 
-  // Build WHERE algebra: required BGP + OPTIONAL for each object-wildcard + cascade OPTIONALs
-  let whereAlgebra: SparqlAlgebraNode = {type: 'bgp', triples: requiredTriples};
-  for (const triple of optionalTriples) {
-    whereAlgebra = {
-      type: 'left_join',
-      left: whereAlgebra,
-      right: {type: 'bgp', triples: [triple]},
-    };
+  let union: SparqlAlgebraNode = blocks[0];
+  for (let i = 1; i < blocks.length; i++) {
+    union = {type: 'union', left: union, right: blocks[i]};
   }
-  for (const optional of cascadeOptionals) {
-    whereAlgebra = {type: 'left_join', left: whereAlgebra, right: optional};
-  }
+  const whereAlgebra: SparqlAlgebraNode = {
+    type: 'join',
+    left: {type: 'bgp', triples: guards},
+    right: union,
+  };
 
   return {
     type: 'delete_insert',
