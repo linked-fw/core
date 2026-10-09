@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.28.2
+
+### Patch Changes
+
+- [#318](https://github.com/linked-fw/core/pull/318) [`2308490`](https://github.com/linked-fw/core/commit/2308490cdc6cc3c8d5a73e21d8ca763e0cbf5bab) Thanks [@flyon](https://github.com/flyon)! - A delete's WHERE no longer multiplies its parts. It chained the incoming references and every cascade block as OPTIONALs, so the solutions were the product of all of them; deleting one shape description during the shape sync gave ~27,000 solutions for ~130 triples and took over 30 seconds on Fuseki, which made an app's second boot (`syncShapesOnBoot`) take minutes. The WHERE is now the type guards joined with one UNION of the blocks, which deletes the same triples. A UNION chain is also serialized flat (`{a} UNION {b} UNION {c}`).
+
 ## 2.28.1
 
 ### Patch Changes
