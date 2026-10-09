@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.28.0
+
+### Minor Changes
+
+- [#257](https://github.com/linked-fw/core/pull/257) [`0995b96`](https://github.com/linked-fw/core/commit/0995b961ee52d9432ab6f378f14d11963d398fff) Thanks [@abdipramana](https://github.com/abdipramana)! - Add `SaveFileOptions.preservePath` for generated release artifacts whose object keys must remain identical to their manifest paths. File-store implementations should store safe keys verbatim and reject absolute or traversal paths instead of silently sanitising them.
+
 ## 2.27.1
 
 ### Patch Changes
