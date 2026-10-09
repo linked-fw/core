@@ -2104,7 +2104,10 @@ function processUpdateFields(
     const self = buildOwnedSelfDelete(subjectTerm, propertyTerm, oldTerm, `uc${n}_`);
     deletePatterns.push(...self.deletePatterns);
     cascadeOptionals.push(...self.whereOptionals);
-    const cascade = buildOwnedCascade(oldTerm, `uc${n}_`);
+    // Every cascade block binds `?old` itself through the owning edge, like the
+    // self-delete block does. Without it an absent old value leaves `?old` unbound and
+    // the block matches the owned subtree of EVERY node in the graph.
+    const cascade = buildOwnedCascade(oldTerm, `uc${n}_`, tripleOf(subjectTerm, propertyTerm, oldTerm));
     deletePatterns.push(...cascade.deletePatterns);
     cascadeOptionals.push(...cascade.whereOptionals);
   });
@@ -2183,77 +2186,12 @@ function buildDeleteInsertPlan(
   const subjectTerm = iriTerm(query.id);
   const result = processUpdateFields(query.data, subjectTerm, options);
 
-  // Partition old-value/optional triples into subject-anchored ones and those
-  // anchored on a traversal target variable (e.g. `?a1 <name> ?a1_name` from a
-  // `p.bestFriend.name.ucase()` expression). Traversal-anchored triples MUST be
-  // nested inside the same OPTIONAL group as their traversal edge — otherwise,
-  // when the subject has no such edge, the leaf variable is unbound and the
-  // property triple matches every entity in the graph (data-corruption bug).
-  const travTos = new Set(
-    (query.traversalPatterns ?? []).map((t) => t.to),
-  );
-  const travAnchoredByTo = new Map<string, SparqlTriple[]>();
-  const subjectAnchored: SparqlTriple[] = [];
-  for (const triple of result.oldValueTriples) {
-    if (triple.subject.kind === 'variable' && travTos.has(triple.subject.name)) {
-      const list = travAnchoredByTo.get(triple.subject.name) ?? [];
-      list.push(triple);
-      travAnchoredByTo.set(triple.subject.name, list);
-    } else {
-      subjectAnchored.push(triple);
-    }
-  }
-
-  let whereAlgebra = wrapOldValueOptionals(
+  const whereAlgebra = buildUpdateWhere(
     {type: 'bgp', triples: []},
-    subjectAnchored,
+    result,
+    query.traversalPatterns,
+    subjectTerm,
   );
-
-  // Add traversal OPTIONAL patterns (for multi-segment expression refs). The
-  // traversal edge and its dependent leaf property triples share one OPTIONAL
-  // group so the leaf variable is scoped to the traversal target. These come
-  // BEFORE expression BINDs since the BINDs reference the traversal variables.
-  if (query.traversalPatterns) {
-    for (const trav of query.traversalPatterns) {
-      const fromTerm =
-        trav.from === '__mutation_subject__' ? subjectTerm : varTerm(trav.from);
-      const traversalTriple = tripleOf(
-        fromTerm,
-        // The declared `sh:path`, like every other predicate — not the property
-        // shape's own IRI, which identifies the description of the property.
-        resolvePropertyPredicateTerm(trav.property),
-        varTerm(trav.to),
-      );
-      // The traversal edge binds the target var; each dependent leaf property is
-      // a nested OPTIONAL *within* that scope, so a missing optional property
-      // (e.g. a bestFriend with no hobby) doesn't drop the whole group, while an
-      // absent edge still leaves every leaf var unbound (no cross-entity match).
-      let travNode: SparqlAlgebraNode = {type: 'bgp', triples: [traversalTriple]};
-      for (const leaf of travAnchoredByTo.get(trav.to) ?? []) {
-        travNode = {
-          type: 'left_join',
-          left: travNode,
-          right: {type: 'bgp', triples: [leaf]},
-        };
-      }
-      whereAlgebra = {type: 'left_join', left: whereAlgebra, right: travNode};
-    }
-  }
-
-  // Owned-subtree cascade OPTIONALs for replaced `contains` properties.
-  for (const optional of result.cascadeOptionals) {
-    whereAlgebra = {type: 'left_join', left: whereAlgebra, right: optional};
-  }
-
-  // Add BIND expressions for computed fields
-  for (const ext of result.extends) {
-    whereAlgebra = {
-      type: 'extend',
-      inner: whereAlgebra,
-      variable: ext.variable,
-      expression: ext.expression,
-    };
-  }
 
   // The type triple leads the INSERT, mirroring `create`'s triple order.
   const insertPatterns = opts?.ensureType
@@ -2269,6 +2207,136 @@ function buildDeleteInsertPlan(
     insertPatterns,
     whereAlgebra,
   };
+}
+
+/** Left-nested UNION of `blocks` (at least one). */
+function unionOf(blocks: SparqlAlgebraNode[]): SparqlAlgebraNode {
+  let union = blocks[0];
+  for (let i = 1; i < blocks.length; i++) {
+    union = {type: 'union', left: union, right: blocks[i]};
+  }
+  return union;
+}
+
+/** Every variable name an expression mentions, including inside EXISTS patterns. */
+function collectVariableNames(value: unknown, into: Set<string>): Set<string> {
+  if (Array.isArray(value)) {
+    for (const item of value) collectVariableNames(item, into);
+  } else if (value && typeof value === 'object') {
+    const node = value as {kind?: string; name?: unknown; variable?: unknown};
+    if ((node.kind === 'variable_expr' || node.kind === 'variable') && typeof node.name === 'string') {
+      into.add(node.name);
+    }
+    if (node.kind === 'bound_expr' && typeof node.variable === 'string') {
+      into.add(node.variable);
+    }
+    for (const child of Object.values(value)) collectVariableNames(child, into);
+  }
+  return into;
+}
+
+/**
+ * The WHERE shared by `update`, `upsert` and `updateWhere`, on top of `base` (empty for
+ * an id-targeted update; the type guard and filter for an update-where).
+ *
+ * The old values and owned-cleanup blocks are independent of each other, so they are
+ * joined as ONE OPTIONAL over a UNION, never as a chain of OPTIONALs. A chain is a join:
+ * the old values of two multi-valued properties, or an owned node's own triples and its
+ * owned subtree, multiply into one solution per combination. A UNION yields each block's
+ * matches once, so the solutions add up, and the DELETE removes exactly the same triples
+ * (a template triple a solution leaves unbound is skipped). The OPTIONAL keeps one
+ * solution when nothing matches, so the INSERT still happens.
+ *
+ * Old values that a computed field's BIND reads stay in `base` as before, together with
+ * the traversals they need, because the BIND needs them bound in the same solution. With
+ * a single independent block the output is the one OPTIONAL it always was.
+ */
+function buildUpdateWhere(
+  base: SparqlAlgebraNode,
+  result: ReturnType<typeof processUpdateFields>,
+  traversalPatterns: IRUpdateMutation['traversalPatterns'],
+  subjectTerm: SparqlTerm,
+): SparqlAlgebraNode {
+  // Partition old-value/optional triples into subject-anchored ones and those
+  // anchored on a traversal target variable (e.g. `?a1 <name> ?a1_name` from a
+  // `p.bestFriend.name.ucase()` expression). Traversal-anchored triples MUST be
+  // nested inside the same OPTIONAL group as their traversal edge — otherwise,
+  // when the subject has no such edge, the leaf variable is unbound and the
+  // property triple matches every entity in the graph (data-corruption bug).
+  const travTos = new Set((traversalPatterns ?? []).map((t) => t.to));
+  const travAnchoredByTo = new Map<string, SparqlTriple[]>();
+  const subjectAnchored: SparqlTriple[] = [];
+  for (const triple of result.oldValueTriples) {
+    if (triple.subject.kind === 'variable' && travTos.has(triple.subject.name)) {
+      const list = travAnchoredByTo.get(triple.subject.name) ?? [];
+      list.push(triple);
+      travAnchoredByTo.set(triple.subject.name, list);
+    } else {
+      subjectAnchored.push(triple);
+    }
+  }
+
+  // Old values a BIND reads must share its solution; the rest are independent blocks.
+  const readByBinds = new Set<string>();
+  for (const ext of result.extends) collectVariableNames(ext.expression, readByBinds);
+  const correlated: SparqlTriple[] = [];
+  const independent: SparqlAlgebraNode[] = [];
+  for (const triple of subjectAnchored) {
+    const vars = collectVariableNames([triple.subject, triple.predicate, triple.object], new Set());
+    if ([...vars].some((v) => readByBinds.has(v))) {
+      correlated.push(triple);
+    } else {
+      independent.push({type: 'bgp', triples: [triple]});
+    }
+  }
+
+  let whereAlgebra = wrapOldValueOptionals(base, correlated);
+
+  // Add traversal OPTIONAL patterns (for multi-segment expression refs). The
+  // traversal edge and its dependent leaf property triples share one OPTIONAL
+  // group so the leaf variable is scoped to the traversal target. These come
+  // BEFORE expression BINDs since the BINDs reference the traversal variables.
+  for (const trav of traversalPatterns ?? []) {
+    const fromTerm =
+      trav.from === '__mutation_subject__' ? subjectTerm : varTerm(trav.from);
+    const traversalTriple = tripleOf(
+      fromTerm,
+      // The declared `sh:path`, like every other predicate — not the property
+      // shape's own IRI, which identifies the description of the property.
+      resolvePropertyPredicateTerm(trav.property),
+      varTerm(trav.to),
+    );
+    // The traversal edge binds the target var; each dependent leaf property is
+    // a nested OPTIONAL *within* that scope, so a missing optional property
+    // (e.g. a bestFriend with no hobby) doesn't drop the whole group, while an
+    // absent edge still leaves every leaf var unbound (no cross-entity match).
+    let travNode: SparqlAlgebraNode = {type: 'bgp', triples: [traversalTriple]};
+    for (const leaf of travAnchoredByTo.get(trav.to) ?? []) {
+      travNode = {
+        type: 'left_join',
+        left: travNode,
+        right: {type: 'bgp', triples: [leaf]},
+      };
+    }
+    whereAlgebra = {type: 'left_join', left: whereAlgebra, right: travNode};
+  }
+
+  // Independent old values + owned-subtree cleanup for `contains` replace/remove.
+  const blocks = [...independent, ...result.cascadeOptionals];
+  if (blocks.length > 0) {
+    whereAlgebra = {type: 'left_join', left: whereAlgebra, right: unionOf(blocks)};
+  }
+
+  // Add BIND expressions for computed fields
+  for (const ext of result.extends) {
+    whereAlgebra = {
+      type: 'extend',
+      inner: whereAlgebra,
+      variable: ext.variable,
+      expression: ext.expression,
+    };
+  }
+  return whereAlgebra;
 }
 
 // ---------------------------------------------------------------------------
@@ -2328,10 +2396,14 @@ function collectContainment(): {containsPreds: string[]; dependentTypes: string[
  * Build DELETE patterns + WHERE OPTIONAL blocks that cascade-delete the owned subtree
  * reachable from `rootTerm` via `contains` edges. `varPrefix` keeps generated variables
  * unique across multiple roots in one query. Returns empty when nothing is owned.
+ *
+ * `anchor`, when given, leads every block: the triple that binds a variable root, so
+ * each block stays correct on its own (as a UNION branch) when no such root exists.
  */
 export function buildOwnedCascade(
   rootTerm: SparqlTerm,
   varPrefix: string,
+  anchor?: SparqlTriple,
 ): {deletePatterns: SparqlTriple[]; whereOptionals: SparqlAlgebraNode[]} {
   const {containsPreds, dependentTypes} = collectContainment();
   if (containsPreds.length === 0 || dependentTypes.length === 0) {
@@ -2358,6 +2430,7 @@ export function buildOwnedCascade(
     whereOptionals.push({
       type: 'bgp',
       triples: [
+        ...(anchor ? [anchor] : []),
         tripleOf(rootTerm, pathTerm, owned),
         tripleOf(owned, iriTerm(RDF_TYPE), iriTerm(typeId)),
         tripleOf(owned, p, o),
@@ -2452,14 +2525,10 @@ export function deleteToAlgebra(
     }
   }
 
-  let union: SparqlAlgebraNode = blocks[0];
-  for (let i = 1; i < blocks.length; i++) {
-    union = {type: 'union', left: union, right: blocks[i]};
-  }
   const whereAlgebra: SparqlAlgebraNode = {
     type: 'join',
     left: {type: 'bgp', triples: guards},
-    right: union,
+    right: unionOf(blocks),
   };
 
   return {
@@ -2486,83 +2555,76 @@ function isBlankNodeProperty(prop: {nodeKind?: {id?: string}}): boolean {
 }
 
 /**
- * Recursively builds DELETE + WHERE patterns for blank-node-typed properties.
+ * Builds DELETE patterns + one WHERE block per blank node reachable from `parentVar`
+ * through blank-node-typed properties, recursing into each property's valueShape for
+ * nested blank nodes (e.g. Person → Address (blank) → GeoPoint (blank)).
  *
- * For each blank-node property on the shape:
- * - DELETE: `?bnVar ?pN ?oN .`  (wildcard all triples on the blank node)
- * - WHERE: `OPTIONAL { ?parent <property> ?bnVar . FILTER(isBlank(?bnVar)) . ?bnVar ?pN ?oN . }`
+ * - DELETE: `?bnN ?pN ?oN .` (wildcard all triples on the blank node)
+ * - WHERE block: the path of edges from the root down to `?bnN`, `?bnN ?pN ?oN`, and
+ *   `FILTER(isBlank(…))` for every blank node on that path.
  *
- * Recurses into the property's valueShape to handle nested blank nodes
- * (e.g. Person → Address (blank) → GeoPoint (blank)).
+ * Each block carries its own path from the root, so the blocks are independent of one
+ * another and are joined with a UNION by the caller. Nested as OPTIONALs, a node's
+ * triples multiplied with every blank node below and beside it.
  */
-function walkBlankNodeTree(
+function blankNodeBlocks(
   shapeId: string,
   parentVar: string,
-  depth: number,
+  path: {triples: SparqlTriple[]; bnVars: string[]},
+  counter: {next: number},
   deletePatterns: SparqlTriple[],
-): SparqlAlgebraNode | null {
+  blocks: SparqlAlgebraNode[],
+): void {
   const nodeShape = getShapeClass(shapeId)?.shape ?? getNodeShape(shapeId);
-  if (!nodeShape) return null;
-
-  let optionals: SparqlAlgebraNode | null = null;
+  if (!nodeShape) return;
 
   const props = getPropertyShapes(nodeShape, true);
   for (const prop of props) {
     if (!isBlankNodeProperty(prop)) continue;
 
-    const bnVar = `bn${depth}`;
-    const pVar = `p${depth}`;
-    const oVar = `o${depth}`;
+    const n = counter.next++;
+    const bnVar = `bn${n}`;
+    const wildcardTriple = tripleOf(varTerm(bnVar), varTerm(`p${n}`), varTerm(`o${n}`));
+    deletePatterns.push(wildcardTriple);
 
-    // DELETE pattern: wildcard all triples on the blank node
-    deletePatterns.push(tripleOf(varTerm(bnVar), varTerm(pVar), varTerm(oVar)));
-
-    // WHERE: parent --<property>--> ?bnVar
-    const traverseTriple = tripleOf(
-      varTerm(parentVar),
-      resolvePropertyPredicateTerm(prop.id),
-      varTerm(bnVar),
-    );
-    // FILTER(isBlank(?bnVar))
-    const isBlankFilter: SparqlExpression = {
-      kind: 'function_expr',
-      name: 'isBlank',
-      args: [{kind: 'variable_expr', name: bnVar}],
+    const here = {
+      triples: [
+        ...path.triples,
+        tripleOf(varTerm(parentVar), resolvePropertyPredicateTerm(prop.id), varTerm(bnVar)),
+      ],
+      bnVars: [...path.bnVars, bnVar],
     };
-    // ?bnVar ?pN ?oN
-    const wildcardTriple = tripleOf(varTerm(bnVar), varTerm(pVar), varTerm(oVar));
+    let block: SparqlAlgebraNode = {type: 'bgp', triples: [...here.triples, wildcardTriple]};
+    for (const v of here.bnVars) {
+      block = {
+        type: 'filter',
+        expression: {kind: 'function_expr', name: 'isBlank', args: [{kind: 'variable_expr', name: v}]},
+        inner: block,
+      };
+    }
+    blocks.push(block);
 
-    // Build inner pattern: traverse + filter + wildcard
-    let innerPattern: SparqlAlgebraNode = {
-      type: 'bgp',
-      triples: [traverseTriple, wildcardTriple],
-    };
-    innerPattern = {type: 'filter', expression: isBlankFilter, inner: innerPattern};
-
-    // Recurse into valueShape for nested blank nodes
     if (prop.valueShape?.id) {
-      const nestedOptional = walkBlankNodeTree(
-        prop.valueShape.id,
-        bnVar,
-        depth + 1,
-        deletePatterns,
-      );
-      if (nestedOptional) {
-        innerPattern = {type: 'left_join', left: innerPattern, right: nestedOptional};
-      }
+      blankNodeBlocks(prop.valueShape.id, bnVar, here, counter, deletePatterns, blocks);
     }
-
-    // Wrap in OPTIONAL (left_join)
-    if (optionals) {
-      optionals = {type: 'left_join', left: optionals, right: innerPattern};
-    } else {
-      optionals = innerPattern;
-    }
-
-    depth++;
   }
+}
 
-  return optionals;
+/**
+ * The blank-node cleanup blocks of a bulk delete, already joined with the root's own
+ * triples as ONE UNION so their matches add up instead of multiplying; `null` when the
+ * shape has no blank-node property (the root wildcard then stays in the required BGP).
+ */
+function bulkDeleteUnion(
+  shapeId: string,
+  subjectVar: string,
+  rootWildcard: SparqlTriple,
+  deletePatterns: SparqlTriple[],
+): SparqlAlgebraNode | null {
+  const blocks: SparqlAlgebraNode[] = [];
+  blankNodeBlocks(shapeId, subjectVar, {triples: [], bnVars: []}, {next: 1}, deletePatterns, blocks);
+  if (blocks.length === 0) return null;
+  return unionOf([{type: 'bgp', triples: [rootWildcard]}, ...blocks]);
 }
 
 /**
@@ -2582,16 +2644,13 @@ export function deleteAllToAlgebra(
     tripleOf(varTerm(subjectVar), varTerm('p'), varTerm('o')),
   ];
 
-  // WHERE: type triple + root wildcard
+  // WHERE: type triple, then the root wildcard and the blank-node cleanup
   const typeTriple = tripleOf(varTerm(subjectVar), iriTerm(RDF_TYPE), iriTerm(resolveShapeScanIri(query.shape)));
   const rootWildcard = tripleOf(varTerm(subjectVar), varTerm('p'), varTerm('o'));
-  let whereAlgebra: SparqlAlgebraNode = {type: 'bgp', triples: [typeTriple, rootWildcard]};
-
-  // Walk blank node tree for cleanup
-  const blankNodeOptional = walkBlankNodeTree(query.shape, subjectVar, 1, deletePatterns);
-  if (blankNodeOptional) {
-    whereAlgebra = {type: 'left_join', left: whereAlgebra, right: blankNodeOptional};
-  }
+  const union = bulkDeleteUnion(query.shape, subjectVar, rootWildcard, deletePatterns);
+  const whereAlgebra: SparqlAlgebraNode = union
+    ? {type: 'join', left: {type: 'bgp', triples: [typeTriple]}, right: union}
+    : {type: 'bgp', triples: [typeTriple, rootWildcard]};
 
   return {
     type: 'delete_insert',
@@ -2618,10 +2677,14 @@ export function deleteWhereToAlgebra(
     tripleOf(varTerm(subjectVar), varTerm('p'), varTerm('o')),
   ];
 
-  // WHERE: type triple + root wildcard
+  // WHERE: type triple + the where clause; the root wildcard and blank-node cleanup follow
   const typeTriple = tripleOf(varTerm(subjectVar), iriTerm(RDF_TYPE), iriTerm(resolveShapeScanIri(query.shape)));
   const rootWildcard = tripleOf(varTerm(subjectVar), varTerm('p'), varTerm('o'));
-  let whereAlgebra: SparqlAlgebraNode = {type: 'bgp', triples: [typeTriple, rootWildcard]};
+  const union = bulkDeleteUnion(query.shape, subjectVar, rootWildcard, deletePatterns);
+  let whereAlgebra: SparqlAlgebraNode = {
+    type: 'bgp',
+    triples: union ? [typeTriple] : [typeTriple, rootWildcard],
+  };
 
   // Process where patterns (traversals from the where clause)
   const traverseTriples: SparqlTriple[] = [];
@@ -2647,10 +2710,8 @@ export function deleteWhereToAlgebra(
   const filterExpr = convertExpression(query.where, registry, []);
   whereAlgebra = {type: 'filter', expression: filterExpr, inner: whereAlgebra};
 
-  // Walk blank node tree for cleanup
-  const blankNodeOptional = walkBlankNodeTree(query.shape, subjectVar, 1, deletePatterns);
-  if (blankNodeOptional) {
-    whereAlgebra = {type: 'left_join', left: whereAlgebra, right: blankNodeOptional};
+  if (union) {
+    whereAlgebra = {type: 'join', left: whereAlgebra, right: union};
   }
 
   return {
@@ -2704,69 +2765,11 @@ export function updateWhereToAlgebra(
   }
 
   // Old-value triples anchored on a traversal *target* belong INSIDE that
-  // traversal's OPTIONAL group, not beside it. Emitted beside it, the leaf's
-  // subject variable is introduced by an OPTIONAL that shares no variable with
-  // anything to its left — a left join with no join condition, i.e. a cartesian
-  // product over every node in the store carrying that predicate. The following
-  // OPTIONAL cannot repair it: the variable is already bound, and OPTIONAL never
-  // removes rows. `updateToAlgebra` performs the same split; this path did not.
-  const travTos = new Set((query.traversalPatterns ?? []).map((t) => t.to));
-  const travAnchoredByTo = new Map<string, SparqlTriple[]>();
-  const subjectAnchored: SparqlTriple[] = [];
-  for (const triple of result.oldValueTriples) {
-    if (triple.subject.kind === 'variable' && travTos.has(triple.subject.name)) {
-      const list = travAnchoredByTo.get(triple.subject.name) ?? [];
-      list.push(triple);
-      travAnchoredByTo.set(triple.subject.name, list);
-    } else {
-      subjectAnchored.push(triple);
-    }
-  }
-
-  whereAlgebra = wrapOldValueOptionals(whereAlgebra, subjectAnchored);
-
-  // Add traversal OPTIONAL patterns (for multi-segment expression refs)
-  // These must come BEFORE expression BINDs since the BINDs reference traversal variables.
-  if (query.traversalPatterns) {
-    for (const trav of query.traversalPatterns) {
-      const fromTerm =
-        trav.from === '__mutation_subject__' ? varTerm('a0') : varTerm(trav.from);
-      const traversalTriple = tripleOf(
-        fromTerm,
-        // The declared `sh:path`, like every other predicate — not the property
-        // shape's own IRI, which identifies the description of the property.
-        resolvePropertyPredicateTerm(trav.property),
-        varTerm(trav.to),
-      );
-      // The edge binds the target variable; each dependent leaf property is a
-      // nested OPTIONAL within that scope, so a missing leaf does not drop the
-      // group while an absent edge leaves every leaf variable unbound.
-      let travNode: SparqlAlgebraNode = {type: 'bgp', triples: [traversalTriple]};
-      for (const leaf of travAnchoredByTo.get(trav.to) ?? []) {
-        travNode = {
-          type: 'left_join',
-          left: travNode,
-          right: {type: 'bgp', triples: [leaf]},
-        };
-      }
-      whereAlgebra = {type: 'left_join', left: whereAlgebra, right: travNode};
-    }
-  }
-
-  // Owned-subtree cascade OPTIONALs for replaced `contains` properties.
-  for (const optional of result.cascadeOptionals) {
-    whereAlgebra = {type: 'left_join', left: whereAlgebra, right: optional};
-  }
-
-  // Add BIND expressions for computed fields
-  for (const ext of result.extends) {
-    whereAlgebra = {
-      type: 'extend',
-      inner: whereAlgebra,
-      variable: ext.variable,
-      expression: ext.expression,
-    };
-  }
+  // traversal's OPTIONAL group, not beside it: beside it, the leaf's subject variable
+  // is introduced by an OPTIONAL that shares no variable with anything to its left — a
+  // cartesian product over every node carrying that predicate. `buildUpdateWhere` does
+  // that split for both update paths.
+  whereAlgebra = buildUpdateWhere(whereAlgebra, result, query.traversalPatterns, subjectTerm);
 
   return {
     type: 'delete_insert',
