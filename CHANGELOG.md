@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.28.1
+
+### Patch Changes
+
+- [#315](https://github.com/linked-fw/core/pull/315) [`cbd3045`](https://github.com/linked-fw/core/commit/cbd3045d0d0ce9c80368e20e7c423d1f2d24b506) Thanks [@flyon](https://github.com/flyon)! - The `build` script is now `linked build`, the same build CI and the release workflow already run, so a local build produces the published `lib/`. `@_linked/cli` is added as a dev dependency to provide it, and the `rimraf` dev dependency is removed.
+
 ## 2.28.0
 
 ### Minor Changes
