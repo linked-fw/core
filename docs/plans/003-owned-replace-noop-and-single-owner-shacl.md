@@ -1491,6 +1491,26 @@ Tests (`shacl-cascade.test.ts`):
 Validation: targeted `shacl-cascade`, `mutation-where-union`, `sparql-mutation-golden`,
 `sparql-mutation-algebra` pass with Fuseki confirmed; typecheck exit 0.
 
+### Phase 8 status: done
+
+Built as planned: `bulkDeleteUnion` takes the type triple and, for a shape with a `contains`
+property, adds one `?a0 rdf:type <S> . ?a0 <p> ?dN . ?dN ?dN_p ?dN_o` block per
+`ownedValueShapePredicates` predicate and the `buildOwnedCascade(?a0, 'c_', typeTriple)` blocks.
+`deleteAllToAlgebra` and `deleteWhereToAlgebra` both use it; a shape without `contains` emits
+the same SPARQL as before (no golden or `mutation-where-union` string changed).
+
+Validation (2026-10-12):
+- `shacl-cascade`, `mutation-where-union`, `sparql-mutation-golden`, `sparql-mutation-algebra`:
+  `[ensureFuseki] Fuseki is ready`; 4 suites, 101 passed. New in `shacl-cascade`: 3 unit
+  (deleteAll blocks, dependent cascade and shape-less slot, `where()`), 3 live (deleteAll of
+  cards with children and an unowned node, deleteAll into a dependent chain, `where()` deletes
+  only the matched card's child). The 3 live tests were proven to run with a temporary `throw`
+  (3 failures), removed afterwards.
+- `npm run typecheck`: exit 0.
+
+Deviation (fixture only): `TCard` gains a `title` literal so that `where()` has something to
+match on.
+
 ## Phase 9 — Single-owner group requires a value shape (Gap 5, C10)
 
 Tasks: filter in `ownedPredicateGroup`; doc comment.

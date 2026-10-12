@@ -13,18 +13,22 @@ import {
 } from '../test-helpers/fuseki-test-store';
 import {linkedPackage} from '../utils/Package';
 import {Shape} from '../shapes/Shape';
-import {objectProperty} from '../shapes/SHACL';
+import {literalProperty, objectProperty} from '../shapes/SHACL';
 import {DeleteBuilder} from '../queries/DeleteBuilder';
 import {UpdateBuilder} from '../queries/UpdateBuilder';
 import {
+  deleteAllToSparql,
   deleteToSparql,
+  deleteWhereToSparql,
   updateToSparql,
   upsertToSparql,
   buildOwnedCascade,
   buildOwnedSelfDelete,
 } from '../sparql/irToAlgebra';
 import type {
+  IRDeleteAllMutation,
   IRDeleteMutation,
+  IRDeleteWhereMutation,
   IRUpdateMutation,
   IRUpsertMutation,
 } from '../queries/IntermediateRepresentation';
@@ -82,6 +86,10 @@ class TPlainCell extends Shape {
 @linkedShape
 class TCard extends Shape {
   static targetClass = ex('TCard');
+  @literalProperty({path: ex('title'), maxCount: 1})
+  get title(): string {
+    return null;
+  }
   @objectProperty({path: ex('holds'), shape: TPlainCell, maxCount: 1, contains: true})
   get holds(): TPlainCell {
     return null;
@@ -450,6 +458,52 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     expect(sparql).toContain('?d0_1 ?d0_1_p ?d0_1_o .');
     expect(sparql).toContain('?d1_0 ?d1_0_p ?d1_0_o .');
   });
+
+  const CARD_TYPE = '\\?a0 rdf:type <http:\\/\\/example\\.org\\/c#TCard> \\.';
+
+  test('deleteAll removes immediately-owned children, each block led by the type triple', () => {
+    const sparql = deleteAllToSparql(lower(DeleteBuilder.from(TCard).all()) as IRDeleteAllMutation);
+    const where = sparql.slice(sparql.indexOf('WHERE'));
+    expect(where).toMatch(
+      new RegExp(`\\{\\s*${CARD_TYPE}\\s*\\?a0 <http:\\/\\/example\\.org\\/c#holds> \\?d0 \\.\\s*\\?d0 \\?d0_p \\?d0_o \\.\\s*\\}`),
+    );
+    expect(where).toMatch(
+      new RegExp(`\\{\\s*${CARD_TYPE}\\s*\\?a0 <http:\\/\\/example\\.org\\/c#cells> \\?d1 \\.\\s*\\?d1 \\?d1_p \\?d1_o \\.\\s*\\}`),
+    );
+    // The dependent cascade, rooted at the subject variable and led by the type triple.
+    const cascade = branchesOf(sparql).filter((b) => /\?c_own\d/.test(b));
+    expect(cascade.length).toBeGreaterThan(0);
+    for (const b of cascade) {
+      expect(b).toMatch(new RegExp(`${CARD_TYPE}\\s*\\?a0 \\([^)]*\\)\\* \\?c_own\\d`));
+    }
+    expect(where).not.toContain('OPTIONAL');
+    const del = deleteBlockOf(sparql);
+    expect(del).toContain('?a0 ?p ?o .');
+    expect(del).toContain('?d0 ?d0_p ?d0_o .');
+    expect(del).toContain('?d1 ?d1_p ?d1_o .');
+  });
+
+  test('deleteAll of a dependent-owning shape cascades; a shape-less contains property adds no child block', () => {
+    const box = deleteAllToSparql(lower(DeleteBuilder.from(TBox).all()) as IRDeleteAllMutation);
+    expect(box).toContain('?a0 <http://example.org/c#owns> ?d0 .');
+    expect(box).toMatch(/\?a0 \([^)]*<http:\/\/example\.org\/c#next>[^)]*\)\* \?c_own\d/);
+    expect(box).not.toContain('#ref> ?d');
+    const slot = deleteAllToSparql(lower(DeleteBuilder.from(TSlot).all()) as IRDeleteAllMutation);
+    expect(slot).not.toMatch(/\?d\d/);
+    expect(slot).toMatch(/\?c_own\d/);
+  });
+
+  test('delete().where() carries the same owned blocks, joined with the filtered match', () => {
+    const sparql = deleteWhereToSparql(
+      lower(DeleteBuilder.from(TCard).where((c: any) => c.title.equals('x'))) as IRDeleteWhereMutation,
+    );
+    const where = sparql.slice(sparql.indexOf('WHERE'));
+    expect(where).toContain('FILTER');
+    expect(where).toContain('?a0 <http://example.org/c#holds> ?d0 .');
+    expect(where).toContain('?a0 <http://example.org/c#cells> ?d1 .');
+    expect(where).toMatch(/\?c_own\d/);
+    expect(where).not.toContain('OPTIONAL');
+  });
 });
 
 // Live end-to-end reproduction of backlog 032: replacing a `contains`-owned node whose
@@ -611,6 +665,61 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
     expect(await countTriples('pred')).toBe(1);
     expect(await hasEdge('slot1', 'anyPath', 'pred2')).toBe(true);
     expect(await hasEdge('slot1', 'anyPath', 'pred')).toBe(false);
+  });
+
+  test('deleteAll deletes every subject\'s owned children, keeps unowned nodes', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} ; ${iri('cells')} ${iri('a')} .
+        ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain2')} . }`,
+    );
+    for (const id of ['plain1', 'plain2', 'a', 'free']) await executeSparqlUpdate(materializeCell(id, id));
+
+    await executeSparqlUpdate(
+      deleteAllToSparql(lower(DeleteBuilder.from(TCard).all()) as IRDeleteAllMutation),
+    );
+
+    for (const id of ['card1', 'card2', 'plain1', 'plain2', 'a']) expect(await countTriples(id)).toBe(0);
+    expect(await countTriples('free')).toBe(2);
+  });
+
+  test('deleteAll cascades into a dependent owned chain', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('b1')} rdf:type ${iri('TBox')} ; ${iri('owns')} ${iri('cell0')} ; ${iri('ref')} ${iri('free')} .
+        ${iri('cell0')} rdf:type ${iri('TCell')} ; ${iri('next')} ${iri('cell1')} .
+        ${iri('cell1')} rdf:type ${iri('TCell')} ; ${iri('next')} ${iri('cell2')} .
+        ${iri('cell2')} rdf:type ${iri('TCell')} .
+        ${iri('free')} rdf:type ${iri('TCell')} . }`,
+    );
+
+    await executeSparqlUpdate(
+      deleteAllToSparql(lower(DeleteBuilder.from(TBox).all()) as IRDeleteAllMutation),
+    );
+
+    for (const id of ['b1', 'cell0', 'cell1', 'cell2']) expect(await countTriples(id)).toBe(0);
+    expect(await countTriples('free')).toBe(1);
+  });
+
+  test('delete().where() deletes only the matched subject\'s owned children', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('title')} "x" ; ${iri('holds')} ${iri('plain1')} .
+        ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('title')} "y" ; ${iri('holds')} ${iri('plain2')} . }`,
+    );
+    await executeSparqlUpdate(materializeCell('plain1', 'a'));
+    await executeSparqlUpdate(materializeCell('plain2', 'b'));
+
+    await executeSparqlUpdate(
+      deleteWhereToSparql(
+        lower(DeleteBuilder.from(TCard).where((c: any) => c.title.equals('x'))) as IRDeleteWhereMutation,
+      ),
+    );
+
+    expect(await countTriples('card1')).toBe(0);
+    expect(await countTriples('plain1')).toBe(0);
+    expect(await countTriples('card2')).toBe(3);
+    expect(await countTriples('plain2')).toBe(2);
   });
 });
 

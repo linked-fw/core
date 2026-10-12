@@ -2741,18 +2741,42 @@ function blankNodeBlocks(
 }
 
 /**
- * The blank-node cleanup blocks of a bulk delete, already joined with the root's own
- * triples as ONE UNION so their matches add up instead of multiplying; `null` when the
- * shape has no blank-node property (the root wildcard then stays in the required BGP).
+ * The cleanup blocks of a bulk delete, already joined with the root's own triples as ONE
+ * UNION so their matches add up instead of multiplying; `null` when there is nothing to
+ * clean up (the root wildcard then stays in the required BGP).
+ *
+ * - The blank-node blocks of the shape's blank-node properties.
+ * - For a shape that owns something (a `contains` property), the same owned cleanup as a
+ *   delete by id: the immediately-owned children of every `contains` property with a value
+ *   shape, and the dependent cascade, rooted at the subject variable. Each owned block is led
+ *   by the subject's type triple. With a linear join it is redundant; it keeps a branch that
+ *   is evaluated on its own from running `?a0 (c…)* ?own` with both ends unbound, which
+ *   matches every node in the graph.
  */
 function bulkDeleteUnion(
   shapeId: string,
   subjectVar: string,
   rootWildcard: SparqlTriple,
+  typeTriple: SparqlTriple,
   deletePatterns: SparqlTriple[],
 ): SparqlAlgebraNode | null {
   const blocks: SparqlAlgebraNode[] = [];
   blankNodeBlocks(shapeId, subjectVar, {triples: [], bnVars: []}, {next: 1}, deletePatterns, blocks);
+  if (shapeHasContainsProperty(shapeId)) {
+    const subject = varTerm(subjectVar);
+    ownedValueShapePredicates(shapeId).forEach((predicate, n) => {
+      const child = varTerm(`d${n}`);
+      const childOwn = tripleOf(child, varTerm(`d${n}_p`), varTerm(`d${n}_o`));
+      deletePatterns.push(childOwn);
+      blocks.push({
+        type: 'bgp',
+        triples: [typeTriple, tripleOf(subject, iriTerm(predicate), child), childOwn],
+      });
+    });
+    const cascade = buildOwnedCascade(subject, 'c_', typeTriple);
+    deletePatterns.push(...cascade.deletePatterns);
+    blocks.push(...cascade.whereOptionals);
+  }
   if (blocks.length === 0) return null;
   return unionOf([{type: 'bgp', triples: [rootWildcard]}, ...blocks]);
 }
@@ -2760,8 +2784,10 @@ function bulkDeleteUnion(
 /**
  * Converts an IRDeleteAllMutation to a SparqlDeleteInsertPlan.
  *
- * Generates DELETE { ?a0 ?p ?o . [blank node wildcards] }
- *          WHERE  { ?a0 a <Shape> . ?a0 ?p ?o . OPTIONAL { [blank node traversals] } }
+ * Generates DELETE { ?a0 ?p ?o . [blank-node and owned-cleanup wildcards] }
+ *          WHERE  { ?a0 a <Shape> . { ?a0 ?p ?o } UNION [one block per blank node,
+ *                   owned child and dependent type] }
+ * (see `bulkDeleteUnion`). Unlike a delete by id, incoming references are not deleted.
  */
 export function deleteAllToAlgebra(
   query: IRDeleteAllMutation,
@@ -2777,7 +2803,7 @@ export function deleteAllToAlgebra(
   // WHERE: type triple, then the root wildcard and the blank-node cleanup
   const typeTriple = tripleOf(varTerm(subjectVar), iriTerm(RDF_TYPE), iriTerm(resolveShapeScanIri(query.shape)));
   const rootWildcard = tripleOf(varTerm(subjectVar), varTerm('p'), varTerm('o'));
-  const union = bulkDeleteUnion(query.shape, subjectVar, rootWildcard, deletePatterns);
+  const union = bulkDeleteUnion(query.shape, subjectVar, rootWildcard, typeTriple, deletePatterns);
   const whereAlgebra: SparqlAlgebraNode = union
     ? {type: 'join', left: {type: 'bgp', triples: [typeTriple]}, right: union}
     : {type: 'bgp', triples: [typeTriple, rootWildcard]};
@@ -2810,7 +2836,7 @@ export function deleteWhereToAlgebra(
   // WHERE: type triple + the where clause; the root wildcard and blank-node cleanup follow
   const typeTriple = tripleOf(varTerm(subjectVar), iriTerm(RDF_TYPE), iriTerm(resolveShapeScanIri(query.shape)));
   const rootWildcard = tripleOf(varTerm(subjectVar), varTerm('p'), varTerm('o'));
-  const union = bulkDeleteUnion(query.shape, subjectVar, rootWildcard, deletePatterns);
+  const union = bulkDeleteUnion(query.shape, subjectVar, rootWildcard, typeTriple, deletePatterns);
   let whereAlgebra: SparqlAlgebraNode = {
     type: 'bgp',
     triples: union ? [typeTriple] : [typeTriple, rootWildcard],
