@@ -1889,3 +1889,78 @@ Validation (2026-10-12):
 - :3939 test container stopped; :3030 not touched.
 
 Deviations: none.
+
+---
+
+# Review (iteration 2)
+
+Reviewed 2026-10-12: `git diff 04212d3..HEAD` (c0f116d, a02b388, ee6ea1b).
+
+## Test run
+
+- `npm test`: `[ensureFuseki] Fuseki is ready`. 96 suites passed and 4 skipped (type-only); 2179
+  tests passed and 121 skipped. `EXIT=0`. :3939 was stopped afterwards and :3030 was untouched.
+
+## Is the cascade narrowing a regression against `main`?
+
+`reachableDependentTypes` (`irToAlgebra.ts:2491`) starts at the deleted shape and its sub-shapes.
+It follows each flattened property on a `contains` predicate to that property's value shape and
+the value shape's sub-shapes. A shape-less property sets `everything` and keeps every dependent
+type.
+
+Callers I checked:
+- **Shape sync and the meta-model are unchanged.**
+  - `NodeShape` → `sh:property` → `PropertyShape` → `sh:path` (shape-less) gives every type. The
+    unit test asserts that `NodeShape` and `PropertyShape` deletes keep every dependent type.
+  - `PathNode` has shape-less `contains` slots, so it also gets every type.
+  - `List` → `rdf:rest` → `List` gives `rdf:List`. On `main` a List spine reaches only Lists,
+    because `rdf:first` is not `contains`. No change.
+  - The generated `.singleOwner` delete is a NodeShape delete, so every type.
+- **CN.** The only dependent shapes in CN's registry are core's (PropertyShape, List, PathNode).
+  CN declares no `contains` of its own and no `dependent` shape.
+  - Its deletes of shaped data are `Shape.delete({id})` (Conversation, Bookmark, Project,
+    Application, …), `DeleteBuilder.from(shapeIri, id)` (`InstanceProvider.ts:326`) and
+    `OntologyPropertyShape.delete` (`OntologyQueryService.ts:559,768,826`, no `contains`, so no
+    cascade on `main` either).
+  - The Thing-derived shapes own only `ImageObject`, which is not dependent. On `main` their
+    cascade could only match if such an entity carried `sh:property`, `sh:path`, `sh:in`,
+    `rdf:rest` or `sh:*Path` edges, i.e. if the entity were itself a SHACL or list node.
+  - Shapes are written through core's `NodeShape` (shape sync), so I found no such data path.
+- **Quantified:** no existing caller relied on undeclared edges. The behaviour is lost only for
+  data that the shapes do not describe. Both cases are hypothetical:
+  - an instance with a `contains`-predicate edge that none of the reached shapes declare;
+  - a dependent shape that shares the targetClass of a non-dependent value shape without
+    extending it (dependent types are matched by targetClass).
+  - No test on `main` changed expectations except the bulk-delete tests, which now assert *no*
+    closure for `TCard`.
+
+## Status of earlier findings
+
+| Finding | Status |
+|---|---|
+| M4 bulk-delete cost | **Resolved** for the common case: a shape owning only non-dependent values (every `Thing.image` owner) emits no closure block, as the `TCard` assertions show. Shapes that reach dependents still pay per reachable type, which is required. |
+| L7 asymmetry | **Documented** accurately (README "Subject deletes and replaces decide ownership differently"); still an open design question. |
+| L8 plain properties checked | **Resolved**: the changeset bullet names the `schema:image` / `Thing.image` case and four ways out. Accurate against `ownedLinkCheck.ts:117-120`. |
+| L9 silent live suites | Open (follow-up). |
+| L1, L2 | Open (follow-ups). |
+| H1, H2, M1-M3, L3, L4 | Remain resolved. |
+
+## New findings
+
+### Critical / High / Medium
+
+None.
+
+### Low
+
+**L10. The narrowing trusts the shapes over the data.**
+- Dependent nodes reached only through undeclared `contains` edges, or typed with a dependent
+  class that the value shape does not extend, are no longer cascaded; they orphan rather than
+  being deleted. That is the safe direction.
+- The code comment notes it (`irToAlgebra.ts:2480-2489`), but the README sentence does not.
+- **Fix:** add "only through the properties the shapes declare" to that README sentence.
+
+**L11. `reachableCache` is a second registry-version cache next to `containmentCache`.**
+- Both are invalidated by the same `getRegistryVersion()`, so they cannot disagree, but the
+  pattern is duplicated.
+- **Fix (optional):** fold both into one memo keyed on the version.
