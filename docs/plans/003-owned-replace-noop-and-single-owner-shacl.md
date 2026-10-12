@@ -1964,3 +1964,127 @@ None.
 - Both are invalidated by the same `getRegistryVersion()`, so they cannot disagree, but the
   pattern is duplicated.
 - **Fix (optional):** fold both into one memo keyed on the version.
+
+---
+
+# Iteration 3 — Ideation
+
+The lead developer changed Decisions 1 and 2 (2026-10-12). L10 was addressed by the lead in the
+README (7f1660e). L1 and L2 are taken up here because the sync lifecycle changes anyway.
+
+## Gap 1 of 1 — Single-owner constraint per accessor
+
+**Context.** Decisions 1-2 generate one constraint per declaring shape, grouping its own *and
+inherited* `contains` predicates in one `sh:alternativePath`.
+- Grouping only adds value when one node is the value of two owned predicates. That requires
+  overlapping value shapes, which is rare, and a wrongly typed link is now refused by the class
+  check (Decision 7).
+- Grouping over the flattened properties duplicates the constraint in every subclass:
+  `Thing.image` yields one generated shape for each of the hundreds of schema shapes that
+  inherit it.
+- The grouping was partial anyway: it never crosses classes or packages (Decision 2's accepted
+  limitation).
+
+**Approaches.**
+- (a) Keep per-shape grouping, but only over own properties. Still one constraint per declaring
+  shape, but a shape with two owned properties keeps the alternative path. Con: the IRI depends on
+  the shape, not the property, so renaming one accessor churns the other's constraint.
+- **(b) One constraint per declared `contains` property** (own properties only, with a value
+  shape and a simple path), at the property shape's IRI plus `.singleOwner`, with a plain
+  `sh:inversePath p`.
+  - Pro: one constraint per accessor, written once by the class that declares it; subclasses add
+    nothing.
+  - Pro: the simplest SHACL (no alternative path, no list).
+  - Con: cross-predicate double ownership (one node owned through `p1` by A and through `p2` by B)
+    is not caught. Documented limitation.
+
+**Chosen: (b)** (lead developer).
+
+**Sync lifecycle.**
+- The declaring shape's thunk deletes and re-creates its generated shapes. Old ones are found by
+  one SELECT of the `core:generated true` NodeShapes, filtered to IRIs under `${shapeIri}/`, so a
+  removed or renamed accessor's constraint is cleaned up. Only shapes the store marks
+  `core:generated` are deleted, which resolves **L1** (a hand-written NodeShape at a generated
+  IRI is no longer deleted).
+- Pruning: generated IRIs of in-code shapes are in `localShapeIris` ('all' never prunes them);
+  for 'ownedNamespaces' a generated IRI's namespace is its declaring shape's namespace.
+- Collision check: throw when a registered shape IRI equals one of the generated IRIs.
+
+**L2 (one SPARQL request per shape).** Not done. `IDataset` exposes only DSL-level
+`selectQuery`/`createQuery`/`updateQuery`/`deleteQuery`, with no batch or raw-update entry
+point. Joining the steps with `;` would mean lowering the builders to SPARQL inside
+`syncShapes` and sending them past the dataset, which breaks routing (`LinkedStorage`), the
+`BackendAPIStore` forwarding and every non-SPARQL dataset. Instead the thunk no longer issues an
+unconditional generated delete: the delete runs only when the SELECT finds generated shapes. The
+cost per shape is SELECT + delete + create (+ one delete and one create per generated shape).
+Recorded as a follow-up: an optional `IDataset.batch` would allow one request.
+
+---
+
+# Iteration 3 — Plan
+
+## Contracts
+
+### C12 — per-accessor constraint (`src/shapes/singleOwnerConstraint.ts`)
+
+```ts
+/** `${propertyShapeIri}.singleOwner`. */
+export function singleOwnerShapeIri(propertyShapeIri: string): string;
+/** The shape's OWN `contains` properties with a value shape and a simple path. */
+export function singleOwnerProperties(nodeShape: NodeShapeData): PropertyShapeData[];
+/** One `{iri, data}` per such property; the property shape IRI is `${shapeIri}/${label}`, as sync writes it. */
+export function buildSingleOwnerConstraints(
+  nodeShape: NodeShapeData, shapeIri: string,
+): Array<{iri: string; data: Record<string, unknown>}>;
+```
+
+`ownedPredicateGroup` and `buildSingleOwnerShapeData` are removed (unreleased). Data:
+`{generated: true, targetObjectsOf: [{id: p}], properties: [{__id: `${gen}/owners`, label: 'owners', maxCount: 1, path: serializePathToNodeData({inv: {id: p}}, `${gen}/owners`)}]}`.
+
+### C13 — persisted triples
+
+```turtle
+<…/Thing/image.singleOwner> a sh:NodeShape ; core:generated true ;
+    sh:targetObjectsOf schema:image ; sh:property <…/Thing/image.singleOwner/owners> .
+<…/Thing/image.singleOwner/owners> a sh:PropertyShape ; rdfs:label "owners" ; sh:maxCount 1 ;
+    sh:path <…/Thing/image.singleOwner/owners/inv> .
+<…/Thing/image.singleOwner/owners/inv> a core:PathNode ; sh:inversePath schema:image .
+```
+
+### C14 — sync thunk
+
+SELECT generated NodeShapes → keep those under `${iri}/` → delete main → delete those (if any) →
+create main → create each constraint.
+
+Files: `singleOwnerConstraint.ts`, `syncShapes.ts`, `src/index.ts`, tests
+(`single-owner-constraint`, `shacl-syncshapes`, `sparql-fuseki-shape-sync`), `README.md`,
+changeset.
+
+---
+
+# Iteration 3 — Phases
+
+## Phase 15 — Per-accessor constraint and sync lifecycle (C12, C14)
+
+Unit tests: data for `Project.image` / `Project.attachments` (separate IRIs, plain inverse path);
+`SubProject` and other subclasses produce none; shape-less and complex-path skipped; thunk plan
+with a stub (select → deletes only generated under the prefix → creates); prune keeps generated
+IRIs ('all') and treats a stale generated IRI by its declaring namespace ('ownedNamespaces');
+collision throws.
+
+Validation: `single-owner-constraint`, `shacl-syncshapes`, `shape-wire-idempotence`, `metadata`
+pass; typecheck.
+
+## Phase 16 — Live sync tests
+
+`sparql-fuseki-shape-sync`: persisted per accessor (C13 triples); idempotent re-sync triple
+count; a removed accessor's constraint is cleaned up and a kept one survives; a subclass adds no
+constraint; a hand-written non-generated NodeShape at a generated-looking IRI survives (L1).
+
+Validation: the suite passes with Fuseki confirmed; new live tests proven to run.
+
+## Phase 17 — Docs
+
+README turtle and limitation sentence (cross-predicate double ownership), changeset text,
+docstrings. Validation: `npm test` exits 0 with Fuseki confirmed; `npx linked build` exits 0;
+:3939 stopped, :3030 untouched.
