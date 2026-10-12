@@ -12,7 +12,11 @@
  * ImageObject — would later be deleted with it. Nothing validates `sh:class` on write, so the
  * SPARQL dataset checks it here, before the update is sent.
  *
- * Only `contains` properties that declare a value shape are checked. A node is refused only
+ * A field is checked when it owns its value by the same rule the replace delete applies: its
+ * predicate is a `contains` predicate anywhere in the registry (`collectContainment`), and the
+ * property declares a value shape. That includes a plain property of one shape that shares a
+ * predicate another shape declares `contains`, since a replace through it deletes the old
+ * value just the same. A node is refused only
  * when the store holds at least one `rdf:type` for it and none of them is accepted; an id that
  * does not exist yet, or has no type, is allowed (`rdf:nil`, a node another request creates,
  * an untyped IRI). Collecting the links is a pure walk over the lowered IR; the dataset sends
@@ -31,6 +35,8 @@ import {findPropertyShapeById, type PropertyShapeData} from '../shapes/nodeShape
 import {getSubShapes, getTargetClassId} from '../utils/ShapeClass.js';
 import {rdf} from '../ontologies/rdf.js';
 import {assertSafeIri} from './sparqlUtils.js';
+import {collectContainment} from './irToAlgebra.js';
+import {getSimplePathId} from '../paths/normalizePropertyPath.js';
 import {isSparqlSelectResults, type SparqlQueryResults} from './resultMapping.js';
 
 /** One bare `{id}` linked into a `contains` field that declares a value shape. */
@@ -46,6 +52,8 @@ export type OwnedLink = {
   expectedClass: string;
   /** `expectedClass`, every registered sub-shape's targetClass, and `sh:class` if declared. */
   acceptedClasses: string[];
+  /** Set when the property is not `contains` itself but shares this `contains` predicate. */
+  sharedPredicate?: string;
 };
 
 type OwnedLinkMutation =
@@ -107,7 +115,9 @@ function ownedRuleFor(
 }
 
 function buildRule(ps: PropertyShapeData | undefined, fallbackShape: string): OwnedRule | null {
-  if (!ps?.contains || !ps.valueShape) return null;
+  if (!ps?.valueShape) return null;
+  const predicate = getSimplePathId(ps.path);
+  if (!predicate || !collectContainment().containsPreds.includes(predicate)) return null;
   const expectedClass = getTargetClassId(ps.valueShape.id);
   if (!expectedClass) return null;
   const accepted = new Set<string>([expectedClass]);
@@ -122,6 +132,7 @@ function buildRule(ps: PropertyShapeData | undefined, fallbackShape: string): Ow
     shape: ps.parentNodeShape?.id ?? fallbackShape,
     expectedClass,
     acceptedClasses: [...accepted],
+    ...(ps.contains ? {} : {sharedPredicate: predicate}),
   };
 }
 
@@ -198,8 +209,12 @@ export function assertOwnedLinkTypes(
     const alsoAccepted = others.length
       ? ` (or of ${others.map((c) => `<${c}>`).join(', ')}, a registered sub-shape or sh:class)`
       : '';
+    const slot = link.sharedPredicate
+      ? `the property "${link.label}" of <${link.shape}>, whose predicate <${link.sharedPredicate}> ` +
+        'is a contains predicate (another shape owns its values through it)'
+      : `the contains property "${link.label}" of <${link.shape}>`;
     messages.push(
-      `Cannot link <${link.id}> into the contains property "${link.label}" of <${link.shape}>: ` +
+      `Cannot link <${link.id}> into ${slot}: ` +
         `it is typed ${typed}, but "${link.label}" only owns instances of ` +
         `<${link.expectedClass}>${alsoAccepted}. An owner deletes what it contains when the ` +
         'value is replaced or removed, or when the owner is deleted.',

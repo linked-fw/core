@@ -2441,7 +2441,7 @@ let containmentCache: {containsPreds: string[]; dependentTypes: string[]} | null
 let containmentCacheSize = -1;
 
 /** Gather contains-predicate IRIs and dependent targetClass IRIs from the registry. */
-function collectContainment(): {containsPreds: string[]; dependentTypes: string[]} {
+export function collectContainment(): {containsPreds: string[]; dependentTypes: string[]} {
   const version = getRegistryVersion();
   if (containmentCache && version === containmentCacheSize) {
     return containmentCache;

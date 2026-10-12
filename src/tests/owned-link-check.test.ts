@@ -28,6 +28,7 @@ import {
   ownedLinkTypesQuery,
 } from '../sparql/ownedLinkCheck';
 import {rdf} from '../ontologies/rdf';
+import {updateToSparql} from '../sparql/irToAlgebra';
 import '../shapes/List';
 import '../shapes/PathNode';
 
@@ -84,6 +85,29 @@ class TAlbum extends Shape {
   }
 }
 
+// A plain (non-`contains`) property on a predicate that TAlbum declares `contains`. The
+// replace delete decides ownership by predicate, so a replace through it deletes the old
+// value; the class check must apply the same rule (backlog 048, review H1).
+@linkedShape
+class TScrapbook extends Shape {
+  static targetClass = ex('Scrapbook');
+  @objectProperty({path: ex('cover'), shape: TPhoto, maxCount: 1})
+  get cover(): TPhoto {
+    return null;
+  }
+}
+
+// The same shared predicate without a value shape: no expected class, and the replace does
+// not self-delete its value either.
+@linkedShape
+class TLooseBook extends Shape {
+  static targetClass = ex('LooseBook');
+  @objectProperty({path: ex('cover'), maxCount: 1})
+  get cover(): unknown {
+    return null;
+  }
+}
+
 const links = (builder: unknown) =>
   collectOwnedLinks(lower(builder as any) as any).map((l) => [l.label, l.id]);
 
@@ -121,6 +145,37 @@ describe('collectOwnedLinks', () => {
       .for(`${O}al1`)
       .set({featured: {id: `${O}f`}, any: {id: `${O}p`}, photos: [{id: rdf.nil.id}]} as any);
     expect(links(b)).toEqual([]);
+  });
+
+  test('a plain property on a contains predicate is checked, by the predicate rule', () => {
+    const [link, ...rest] = collectOwnedLinks(
+      lower(UpdateBuilder.from(TScrapbook).for(`${O}sb1`).set({cover: {id: `${O}a`}})) as any,
+    );
+    expect(rest).toEqual([]);
+    expect(link.id).toBe(`${O}a`);
+    expect(link.shape).toBe(TScrapbook.shape.id);
+    expect(link.sharedPredicate).toBe(`${O}cover`);
+    expect(link.acceptedClasses).toEqual(expect.arrayContaining([`${O}Photo`, `${O}Panorama`]));
+    // The `contains` property itself carries no sharedPredicate.
+    const [own] = collectOwnedLinks(
+      lower(UpdateBuilder.from(TAlbum).for(`${O}al1`).set({cover: {id: `${O}a`}})) as any,
+    );
+    expect(own.sharedPredicate).toBeUndefined();
+    // Without a value shape there is no expected class: not checked.
+    expect(links(UpdateBuilder.from(TLooseBook).for(`${O}lb1`).set({cover: {id: `${O}a`}} as any))).toEqual([]);
+  });
+
+  test('the check and the replace delete agree on which fields own their value', () => {
+    // The replace through the plain property deletes the old value's own triples.
+    const sparql = updateToSparql(
+      lower(UpdateBuilder.from(TScrapbook).for(`${O}sb1`).set({cover: {id: `${O}a`}})) as any,
+    );
+    expect(sparql).toMatch(/\?old_cover \?uc0_sp \?uc0_so/);
+    // The shape-less one does not, and is not checked either (previous test).
+    const loose = updateToSparql(
+      lower(UpdateBuilder.from(TLooseBook).for(`${O}lb1`).set({cover: {id: `${O}a`}} as any)) as any,
+    );
+    expect(loose).not.toMatch(/\?old_cover \?uc0_sp \?uc0_so/);
   });
 
   test('update-where (forAll) is collected', () => {
@@ -221,6 +276,20 @@ describe('SparqlDataset owned-link check (stub store)', () => {
     expect(ds.updates).toHaveLength(0);
   });
 
+  test('a plain property on a contains predicate is refused the same way', async () => {
+    const ds = new StubDataset(types);
+    await expect(
+      UpdateBuilder.from(TScrapbook).for(`${O}sb1`).set({cover: {id: alice}}).exec(ds),
+    ).rejects.toThrow(
+      `Cannot link <${alice}> into the property "cover" of <${TScrapbook.shape.id}>, whose ` +
+        `predicate <${O}cover> is a contains predicate (another shape owns its values through it): ` +
+        `it is typed <${O}Person>, but "cover" only owns instances of <${O}Photo>`,
+    );
+    expect(ds.updates).toHaveLength(0);
+    await UpdateBuilder.from(TScrapbook).for(`${O}sb1`).set({cover: {id: `${O}p1`}}).exec(ds);
+    expect(ds.updates).toHaveLength(1);
+  });
+
   test('a sub-shape class, an untyped id and one matching type of several pass', async () => {
     const ds = new StubDataset(types);
     for (const id of [`${O}pano`, `${O}unknown`, `${O}multi`, `${O}p1`]) {
@@ -281,5 +350,20 @@ describe('SparqlDataset owned-link check — live Fuseki', () => {
 
     await UpdateBuilder.from(TAlbum).for(`${O}album1`).set({cover: {id: `${O}p1`}}).exec(store);
     expect(await coverOf(`${O}album1`)).toEqual([`${O}p1`]);
+  });
+
+  test('a plain property on a contains predicate is checked too', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(`${RDF}INSERT DATA { <${O}sb1> rdf:type <${O}Scrapbook> . }`);
+    await expect(
+      UpdateBuilder.from(TScrapbook).for(`${O}sb1`).set({cover: {id: `${O}alice`}}).exec(store),
+    ).rejects.toThrow('whose predicate');
+    expect(await coverOf(`${O}sb1`)).toEqual([]);
+    // alice is untouched.
+    const alice = await executeSparqlQuery(`SELECT ?p ?o WHERE { <${O}alice> ?p ?o }`);
+    expect(alice.results.bindings).toHaveLength(1);
+
+    await UpdateBuilder.from(TScrapbook).for(`${O}sb1`).set({cover: {id: `${O}p1`}}).exec(store);
+    expect(await coverOf(`${O}sb1`)).toEqual([`${O}p1`]);
   });
 });

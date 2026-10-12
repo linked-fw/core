@@ -6,7 +6,7 @@ summary: >
   a generated single-owner SHACL constraint per declaring shape. Linking a node of the wrong class
   into a `contains` property is refused by one batched type query per mutation. Store-side SHACL
   validation is not enforced today; this is recorded as a limitation.
-status: Review
+status: Implementation
 packages: [core]
 source_backlog: docs/backlog/048-owned-property-replace-deletes-any-node.md
 ---
@@ -1455,6 +1455,24 @@ Tests (`owned-link-check.test.ts`): a fixture `TScrapbook` with a plain (non-`co
 - live (Gap 4 case 7): the same update through `FusekiStore` rejects and writes no edge.
 
 Validation: the targeted jest file passes with `[ensureFuseki] Fuseki is ready`; typecheck exit 0.
+
+### Phase 7 status: done
+
+Built as planned: `collectContainment` is exported from `irToAlgebra.ts`; `buildRule` checks a
+field when its simple-path predicate is in `containsPreds` and it declares a value shape, and sets
+`sharedPredicate` when the property is not `contains` itself; the message follows C8.
+
+Validation (2026-10-12):
+- `owned-link-check.test.ts`: `[ensureFuseki] Fuseki is ready`; 17 passed (4 new: collect by the
+  predicate rule, the check and the replace delete agree, stub refusal with the C8 message, live
+  refusal). The new live test was proven to run with a temporary `throw` after its guard, removed
+  afterwards.
+- `sparql-fuseki`, `sparql-fuseki-shape-sync`, `shacl-cascade`: 3 suites, 132 passed, 1 skipped.
+- `npm run typecheck`: exit 0.
+
+Deviations: none. The extra test "the check and the replace delete agree" pins the two rules
+against each other (the replace through `TScrapbook.cover` self-deletes; the shape-less
+`TLooseBook.cover` neither self-deletes nor is checked).
 
 ## Phase 8 — Bulk deletes delete owned children (Gap 2, C9)
 
