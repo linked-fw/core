@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.28.4
+
+### Patch Changes
+
+- [#326](https://github.com/linked-fw/core/pull/326) [`4596a60`](https://github.com/linked-fw/core/commit/4596a6020e3caab7f4cad0b88ae9098ea3b1dce2) Thanks [@flyon](https://github.com/flyon)! - Lowering a create or update no longer deletes the `shape` key from the caller's nested values.
+  `LiveQueryStore` lowers an executed mutation a second time to derive its effects, and a nested value
+  of a property that declares no shape (a property shape's `sh:path` when it is not a plain IRI) could
+  then no longer be validated: it logged `could not derive the effects of a mutation; live queries were
+  not refetched ShapeValidationError: Cannot validate the value of 'path'` and skipped the live-query
+  refetch. `syncShape` / `syncShapes` hit this for every shape with an inverse, sequence or alternative path.
+
 ## 2.28.3
 
 ### Patch Changes
