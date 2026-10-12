@@ -2403,10 +2403,16 @@ function buildUpdateWhere(
 //   - a property marked `contains` → the cascade FOLLOWS that edge,
 //   - a shape marked `dependent`   → its instances may be DELETED when reached.
 // Both are read from the live registry, so no vocabulary is hardcoded. From a root
-// node we follow `(c1|c2|…)+` over all contains predicates and, for each dependent
-// targetClass, wildcard-delete the reached typed nodes. Requiring an asserted
-// `?owned a <dependentType>` naturally excludes shared predicate IRIs (e.g. a simple
-// `sh:path`) and `rdf:nil` (never typed), so only owned structural nodes are removed.
+// node we follow `(c1|c2|…)*` over all contains predicates (zero hops included, so a
+// dependent-typed root is itself a match) and, for each dependent targetClass,
+// wildcard-delete the reached typed nodes. Requiring an asserted `?owned a <dependentType>`
+// naturally excludes shared predicate IRIs (e.g. a simple `sh:path`) and `rdf:nil` (never
+// typed), so only owned structural nodes are removed.
+//
+// Whether a field owns its value is decided per predicate across the registry
+// (`collectContainment`): the replace and set-remove deletes, and the class check in
+// `ownedLinkCheck.ts`, apply that same rule. The subject deletes (by id and bulk) use the
+// deleted shape's own `contains` properties with a value shape for the immediate children.
 // ---------------------------------------------------------------------------
 
 /**
@@ -2555,7 +2561,10 @@ function keepFilter(
 
 /**
  * Build DELETE + WHERE OPTIONAL that removes the *old node's own* one-hop triples when a
- * `contains` edge is replaced, unset, or set-removed. A `contains` edge asserts exclusive
+ * `contains` edge is replaced, unset, or set-removed. Callers use it only for a property that
+ * declares a value shape; a shape-less `contains` slot (like `sh:path`) may hold a shared IRI,
+ * so its old value is left to `buildOwnedCascade`, which deletes it only when it is
+ * dependent-typed. A `contains` edge asserts exclusive
  * ownership, so overwriting it must delete the previously owned child fully — not merely
  * unlink it — or the child orphans (backlog 032). This is `contains`-driven and deliberately
  * does NOT require the child shape to be `dependent`: ownership via the edge is sufficient.
@@ -2565,6 +2574,11 @@ function keepFilter(
  * is bound there: when no old value exists the group matches nothing and the DELETE is a
  * no-op, rather than an unbound `?old` matching (and deleting) the whole graph. When
  * `oldTerm` is a concrete IRI (set-remove), the guard just confirms the link still holds.
+ *
+ * `keep` lists the bare `{id}`s the mutation writes again (a re-sent current value, the
+ * retained ids of an array overwrite). With a variable `oldTerm` the block is wrapped in
+ * `FILTER(?old NOT IN (…))`, so a kept value is not deleted; its edge is deleted and
+ * re-inserted, a no-op. A nested create carrying an id is never kept: it rewrites that node.
  */
 export function buildOwnedSelfDelete(
   subjectTerm: SparqlTerm,
@@ -2596,7 +2610,11 @@ export function buildOwnedSelfDelete(
  *
  * The WHERE is the type guard of every id, joined with ONE UNION of independent
  * blocks: per id its own triples, its incoming references and, for a shape that
- * owns something, one block per dependent type of its owned subtree.
+ * owns something, one block per immediately-owned child (`<s> <p> ?dN . ?dN ?dN_p ?dN_o`,
+ * for each of the shape's own and inherited `contains` properties with a value shape and
+ * a simple path) and one block per dependent type of its owned subtree. The bulk deletes
+ * (`deleteAllToAlgebra`, `deleteWhereToAlgebra`) add the same owned blocks, rooted at the
+ * subject variable (see `bulkDeleteUnion`).
  *
  * The blocks must not be chained as OPTIONALs. A chain of OPTIONALs is a join, so
  * the solutions multiply: own triples x incoming references x owned triples of each
@@ -2819,7 +2837,9 @@ export function deleteAllToAlgebra(
 /**
  * Converts an IRDeleteWhereMutation to a SparqlDeleteInsertPlan.
  *
- * Like deleteAllToAlgebra but adds filter conditions from the where clause.
+ * Like deleteAllToAlgebra but adds filter conditions from the where clause. The cleanup
+ * UNION (blank nodes, owned children, dependent cascade) is joined with the filtered match,
+ * so only the matched subjects' children are deleted.
  */
 export function deleteWhereToAlgebra(
   query: IRDeleteWhereMutation,

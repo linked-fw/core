@@ -246,7 +246,8 @@ removing the link leaves the referenced node untouched. Two optional flags let y
 **`contains: true` on an object property** — the edge asserts *exclusive ownership* of the
 value. Whenever that edge goes away, the owned node is deleted with it:
 
-- `parent.delete()` deletes the owned child (and its owned sub-tree).
+- `parent.delete()` deletes the owned child (and its owned sub-tree). So do the bulk deletes,
+  `DeleteBuilder.from(Parent).all()` and `.where(...)`.
 - `update({ownedProp: newValue})` **replaces** the owned node — the old one is deleted, not
   orphaned.
 - `update({ownedProp: {remove: [x]}})` deletes `x` itself, not just the link.
@@ -286,10 +287,12 @@ patch: it deletes all of that node's triples and writes the new ones.
 `{avatar: {id: uploadedId}}`. The link transfers ownership: the linked node is deleted when it is
 replaced, removed, or when the owner is deleted.
 
-Because of that, core checks the class of every id linked into a `contains` property that declares
-a `shape`. A link is refused, and nothing is written, when the store already types the node and
-none of its types is the shape's `targetClass`, a registered sub-shape's `targetClass`, or the
-property's `sh:class`:
+Because of that, core checks the class of every id linked into a property that owns its value and
+declares a `shape`. Ownership is decided per predicate: a property owns its value when any
+registered shape declares its predicate `contains`, so a plain property that shares such a
+predicate is checked too (a replace through it deletes the old value just the same). A link is
+refused, and nothing is written, when the store already types the node and none of its types is
+the shape's `targetClass`, a registered sub-shape's `targetClass`, or the property's `sh:class`:
 
 ```
 Cannot link <https://my.app/alice> into the contains property "avatar" of <…/shape/my-pkg/Person>:
@@ -298,15 +301,28 @@ it is typed <https://example.org/Person>, but "avatar" only owns instances of <h
 
 Ids that do not exist yet, or have no `rdf:type`, are allowed, so upload-then-attach works in
 either write order. The check runs in `SparqlDataset` (one `SELECT` per mutation that links owned
-ids, none otherwise). Plain (non-owning) references are never checked.
+ids, none otherwise). Plain references on predicates no shape owns are never checked. A node
+whose type comes from a subclass that has no registered shape is refused unless the store also
+holds the expected type (an RDFS-inferring store adds it); register a shape for that class, or
+declare `sh:class`, to accept it.
+
+Two limits: an id linked while it is untyped, and typed as something else later, is not caught.
+Nor is a node typed by another request between the check's `SELECT` and the `UPDATE` that
+follows it: the two are separate requests, not one transaction. Raw SPARQL updates bypass the
+check altogether. SHACL validation of `sh:class` is the backstop for all three.
 
 **What a delete removes.** `parent.delete()` deletes the immediately-owned children of every
-`contains` property that declares a `shape`; `dependent` extends the cascade further down. A
+`contains` property that declares a `shape`; `dependent` extends the cascade further down. The bulk
+deletes (`.all()`, `.where(...)`) remove the same owned children and cascade for every matched
+subject (they do not delete incoming references to the subjects, which a delete by id does). A
 `contains` property *without* a `shape` (a polymorphic slot such as `sh:path`, whose value may be a
-shared predicate IRI) only ever deletes `dependent`-typed values.
+shared predicate IRI) only ever deletes `dependent`-typed values; a non-dependent old value is
+left in place.
 
 Non-owning references to an owned node, through other properties or from other subjects, are
-allowed. They are not cleaned up: after the owner is deleted they dangle.
+allowed. They are not cleaned up: after the owner is deleted they dangle. The same holds when two
+subjects own one node (an `{id}` linked into a second owner, which breaks the single-owner rule
+below): deleting either owner deletes the node, and the other owner's edge dangles.
 
 **The single-owner constraint.** An owned node has at most one owner. Shape sync persists this as
 a generated SHACL NodeShape per declaring shape, `<Shape>.singleOwner`, next to the shape itself.

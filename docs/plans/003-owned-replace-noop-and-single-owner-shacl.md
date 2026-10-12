@@ -1579,6 +1579,28 @@ Tasks: the comment updates and README additions of Gap 6, plus the two-owner res
 Validation: `grep` shows no `(c1|c2|…)+` left in `irToAlgebra.ts`; README section reads
 consistently with C8, C9 and C10; `npx linked build` exits 0.
 
+### Phase 11 status: done
+
+- `irToAlgebra.ts`: the owned-subtree section comment says `(c1|c2|…)*` and states which rule
+  each path uses (predicate rule for replace, set-remove and the class check; the deleted
+  shape's own shaped `contains` properties for subject deletes). `buildOwnedSelfDelete`
+  documents `keep` and that callers skip it for shape-less properties. `deleteToAlgebra`
+  documents the immediate-child blocks and points at `bulkDeleteUnion`; `deleteAllToAlgebra` and
+  `deleteWhereToAlgebra` document the owned cleanup.
+- `SHACL.ts` `contains`: the predicate rule, the replace/remove/delete behaviour with and
+  without a `shape`, the class check and the generated single-owner shape.
+- README "Owned properties": bulk deletes delete owned children (and do not delete incoming
+  references); the class check's predicate rule; the unregistered-subclass refusal and its fix;
+  the limits (typed later, typed between the `SELECT` and the `UPDATE`, raw SPARQL); the
+  shape-less `contains` slot leaving a non-dependent old value in place; the two-owner result
+  from Phase 10.
+
+Validation (2026-10-12): `grep ")+" src/sparql/irToAlgebra.ts` finds no cascade path comment;
+`npx linked build`: Build successful. Comment and doc changes only (no test run needed beyond the
+build; the full suite runs in Phase 12).
+
+Deviations: none.
+
 ## Phase 12 — Changeset "Behaviour changes" (Gap 3)
 
 Tasks: rewrite `.changeset/owned-replace-noop-single-owner.md` (still minor) with the section.
