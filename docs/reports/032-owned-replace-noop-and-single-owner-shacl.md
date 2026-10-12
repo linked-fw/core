@@ -18,6 +18,7 @@ Contract (architecture): [owned-values](../architecture/owned-values.md). User d
 `.changeset/owned-replace-noop-single-owner.md` (minor). Prior work:
 [report 025](025-update-replace-contains-cascade.md) introduced `buildOwnedSelfDelete`.
 Source: backlog 048 ("replacing an owned property deletes whatever node it pointed to").
+PR: [linked-fw/core#328](https://github.com/linked-fw/core/pull/328).
 
 ## Problem
 
