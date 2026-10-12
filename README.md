@@ -263,6 +263,78 @@ export class Person extends Shape {
 }
 ```
 
+**Replace versus patch in place.** A plain nested object on a `contains` property is a
+*replace*: a new node is created and the old one is deleted. To change the owned node itself,
+update it directly:
+
+```typescript
+// Replace: creates a new ImageObject, deletes the old one.
+await Person.update({avatar: {contentUrl: 'https://cdn.example.org/b.png'}}).for(personId);
+
+// Patch in place: the same ImageObject keeps its id and its other fields.
+await ImageObject.update({contentUrl: 'https://cdn.example.org/b.png'}).for(avatarId);
+
+// Re-sending the current id is a no-op: the edge and the node are left as they are.
+await Person.update({avatar: {id: avatarId}}).for(personId);
+```
+
+The same holds for an array overwrite of a `contains` set: ids you send again are kept, ids you
+leave out are deleted. `{id: current, ...fields}` is a nested create with a predefined id, not a
+patch: it deletes all of that node's triples and writes the new ones.
+
+**Linking an existing node by `{id}`** is allowed, e.g. upload an image first, then attach it with
+`{avatar: {id: uploadedId}}`. The link transfers ownership: the linked node is deleted when it is
+replaced, removed, or when the owner is deleted.
+
+Because of that, core checks the class of every id linked into a `contains` property that declares
+a `shape`. A link is refused, and nothing is written, when the store already types the node and
+none of its types is the shape's `targetClass`, a registered sub-shape's `targetClass`, or the
+property's `sh:class`:
+
+```
+Cannot link <https://my.app/alice> into the contains property "avatar" of <…/shape/my-pkg/Person>:
+it is typed <https://example.org/Person>, but "avatar" only owns instances of <https://schema.org/ImageObject>. …
+```
+
+Ids that do not exist yet, or have no `rdf:type`, are allowed, so upload-then-attach works in
+either write order. The check runs in `SparqlDataset` (one `SELECT` per mutation that links owned
+ids, none otherwise). Plain (non-owning) references are never checked.
+
+**What a delete removes.** `parent.delete()` deletes the immediately-owned children of every
+`contains` property that declares a `shape`; `dependent` extends the cascade further down. A
+`contains` property *without* a `shape` (a polymorphic slot such as `sh:path`, whose value may be a
+shared predicate IRI) only ever deletes `dependent`-typed values.
+
+Non-owning references to an owned node, through other properties or from other subjects, are
+allowed. They are not cleaned up: after the owner is deleted they dangle.
+
+**The single-owner constraint.** An owned node has at most one owner. Shape sync persists this as
+a generated SHACL NodeShape per declaring shape, `<Shape>.singleOwner`, next to the shape itself.
+It groups the shape's own and inherited `contains` predicates (simple paths only, sorted by IRI),
+is marked `core:generated true`, and has no `sh:targetClass`, so catalog readers can skip it. It is
+never registered in memory. For a `Project` that owns `schema:image` and `ex:attachments`:
+
+```turtle
+<…/shape/my-pkg/Project.singleOwner> a sh:NodeShape ;
+    core:generated true ;
+    sh:targetObjectsOf ex:attachments, schema:image ;
+    sh:property <…/Project.singleOwner/owners> .
+
+<…/Project.singleOwner/owners> a sh:PropertyShape ;
+    rdfs:label "owners" ;
+    sh:maxCount 1 ;
+    sh:path [ sh:inversePath [ sh:alternativePath ( ex:attachments schema:image ) ] ] .
+```
+
+(The path nodes are stored with deterministic IRIs under `…/owners/inv`, not as blank nodes.) With
+a single predicate the path is a plain `sh:inversePath schema:image`. `singleOwnerShapeIri`,
+`ownedPredicateGroup` and `buildSingleOwnerShapeData` are exported if you need to recompute it.
+
+> **Not enforced on write.** Core does not check the single-owner rule, or `sh:class` on
+> non-owning references, when it writes. The default Fuseki setup does not validate SHACL on
+> write either: a dataset exposes only query, update and graph-store services. Run a SHACL
+> validator (Jena SHACL, pySHACL, …) against the persisted shapes to enforce them.
+
 **`dependent: true` on a shape** — marks the shape's *instances* as having no independent
 existence, so they are cascade-deleted when reached through a `contains` edge from a parent
 being deleted. Use it for structural nodes that are only ever owned (e.g. list cells, path

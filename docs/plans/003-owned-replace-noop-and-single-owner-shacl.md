@@ -1005,6 +1005,24 @@ Tasks (README.md "Owned properties (`contains` / `dependent`)"):
 Validation: the README renders. Manually check that the code samples match the final API names:
 `grep -n "singleOwner" README.md` shows the section.
 
+### Phase 4 status: done
+
+README "Owned properties (`contains` / `dependent`)" now covers, after the existing intro: replace
+versus patch in place (`ImageObject.update({...}).for(id)`), the re-sent-id no-op and array
+overwrite, `{id: current, ...fields}` as a full rewrite, linking by `{id}` (upload then attach) and
+the ownership it transfers, the class check with its scope (only `contains` properties with a
+`shape`; untyped and nonexistent ids allowed) and an abridged error, what a subject delete removes
+(including the `shape`-less `contains` rule), dangling non-owning references, the persisted
+`<Shape>.singleOwner` turtle, and the not-enforced-on-write caveat.
+
+Validation: `grep -n "singleOwner" README.md` shows the section (L312-330). The API names in the
+samples match the code: `singleOwnerShapeIri`, `ownedPredicateGroup` and
+`buildSingleOwnerShapeData` are exported from `src/index.ts`; the error text follows
+`ownedLinkCheck.ts`.
+
+Deviation: the turtle shows the path with blank-node syntax for readability, with a note that the
+stored path nodes have deterministic IRIs under `…/owners/inv` (C6 has the exact form).
+
 ## Phase 5 — Changeset ∥ Phase 4
 
 Task: create `.changeset/owned-replace-noop-single-owner.md` by hand (`npx changeset` is
