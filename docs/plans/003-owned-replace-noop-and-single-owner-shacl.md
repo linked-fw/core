@@ -2144,3 +2144,116 @@ Validation (2026-10-12):
 - :3939 stopped; :3030 not touched.
 
 Deviations: none beyond the phase renumbering recorded under Phase 15.
+
+---
+
+# Review (iteration 3)
+
+Reviewed 2026-10-12: `git diff 847a43b..HEAD` (7f1660e, f5b0934, 3a2a169, dc7e9df).
+
+## Test run
+
+- `npm test`: `[ensureFuseki] Fuseki is ready`. 96 suites passed and 4 skipped (type-only); 2181
+  tests passed and 121 skipped. `EXIT=0`. :3939 was stopped afterwards and :3030 was untouched.
+
+## Data-deletion safety of the new select + delete
+
+- **Only generated shapes are deleted.** `storedGeneratedShapes` (`syncShapes.ts:104-118`) selects
+  `NodeShape where generated = true` and keeps the ids under `${iri}/`. A hand-written NodeShape
+  is never selected.
+- **Prefix matching across shapes.** `…/Project/` is not a prefix of `…/ProjectX/…`, because the
+  trailing slash prevents it. Package slugs contain no `/` (`packageNameToSlug`, `SHACL.ts:57-63`).
+  A shape name, however, is not validated (`getNodeShapeUri`, `SHACL.ts:734`), so
+  `@linkedShape({name: 'Project/Sub'})` puts `Sub`'s constraints under `…/Project/` (L12).
+- **Collisions** are checked per generated IRI against registered shapes. A property label is a JS
+  accessor name with no `.`, so `${psIri}.singleOwner` cannot equal a real property shape IRI.
+- **Pruning:**
+  - `'all'` keeps the current generated IRIs (`localShapeIris`).
+  - A stale generated shape of a removed accessor is deleted by its owner's thunk, and also by the
+    prune thunk. The double delete is harmless.
+  - `'ownedNamespaces'` maps `…/Thing/image.singleOwner` to `…/pkg/` through the suffix special
+    case (`syncShapes.ts:197-206`).
+  - `'none'` keeps a removed shape's constraints together with the shape itself, consistent with
+    `main`.
+- **Idempotence:** a re-sync selects, deletes and re-creates the same deterministic IRIs. The live
+  tests cover re-sync and accessor removal.
+
+## Status of earlier findings
+
+| Finding | Status |
+|---|---|
+| L1 (sync deletes any NodeShape at the generated IRI) | **Resolved**: only `core:generated true` is deleted. |
+| L2 (non-atomic, extra round trip) | **Worse**: see M5. |
+| L10 | **Resolved** (7f1660e README). |
+| L9, L11 | Open (follow-ups). |
+| Others | Remain resolved. |
+
+## Findings
+
+### Critical / High
+
+None. No path deletes a non-generated NodeShape or another package's shape.
+
+### Medium
+
+**M5. Sync cost regression.** (`syncShapes.ts:104-118,146-152`)
+- Every shape now costs 1 SELECT, 1 DELETE and 1 CREATE, plus 1 DELETE when stale constraints
+  exist and 1 CREATE per constraint. On `main` it was 2 requests.
+- The SELECT has no IRI filter in SPARQL. Each thunk fetches every generated NodeShape in the
+  dataset and filters in JS, so N shapes × G generated rows per sync.
+- This applies to shapes without `contains` too.
+- **Fix:** adopt the owned-constraint alternative below. Otherwise run one SELECT per
+  `syncShapes` call and filter with `STRSTARTS` in SPARQL.
+
+### Low
+
+**L12. A shape name containing `/` breaks the prefix ownership.** The parent's sync deletes the
+child's constraints. If the child's thunk ran first, those constraints stay missing until the
+next sync. **Fix:** match `^${iri}/[^/]+\.singleOwner$`, or reject `/` in shape names.
+
+**L13. Constraints are written in separate requests after the main create.** A crash leaves them
+missing until the next sync, which heals it. **Fix:** the alternative below makes them atomic with
+the main create.
+
+**L14. The `shapeNamespace` special case keys on the `.singleOwner` string suffix**
+(`syncShapes.ts:200-203`). It is harmless today. **Fix:** derive the namespace from the declaring
+IRI when it is known.
+
+## Verdict on the alternative: owned constraints via `core:generatedShape`
+
+The proposal: add `NodeShape.generatedShape`, `contains: true`, value shape `NodeShape`. Create
+the constraints nested in the main create, and delete them with the main shape.
+
+**It is sound, and I recommend it.** Checked against the code:
+
+1. **Delete removes everything in one request.**
+   - `deleteToAlgebra` adds a Decision 5 one-hop block for every own `contains` property with a
+     value shape. `generatedShape` qualifies, so each generated NodeShape's own triples go: type,
+     `core:generated`, `sh:targetObjectsOf` and the `sh:property` edge.
+   - The cascade for `NodeShape` already covers every dependent type, because it reaches
+     `PropertyShape.path`, which is shape-less. Its path alternation includes the new predicate,
+     so it reaches `…/owners` (PropertyShape, dependent) and `…/owners/inv` (PathNode, dependent).
+   - `sh:inversePath schema:image` is a shape-less slot, and only dependent nodes are deleted, so
+     the predicate IRI is never touched.
+2. **Creation.** A nested create with `__id` is the same pipeline the property shapes already use.
+   It is not a link, so the class check sends no SELECT.
+3. **Single-owner rule.** `NodeShape` lives in `@_linked/core`, which sync skips, so no constraint
+   is generated for `core:generatedShape` itself. The new predicate joins the registry-wide
+   cascade alternation, which costs next to nothing.
+4. **Pruning, the one requirement.** Generated shapes are still `a sh:NodeShape`. Prune must keep
+   skipping them, either by keeping their IRIs in `localShapeIris` or by skipping
+   `core:generated`. Otherwise `'all'` deletes them after every sync. A generated shape whose
+   owner is pruned goes with the owner's cascade.
+5. **CN catalog.** Generated shapes still have no `sh:targetClass`, so `projectShapeCatalog`
+   drops them. Main NodeShapes gain a `core:generatedShape` edge. That is harmless unless a
+   reader walks every object value of a NodeShape. Worth one CN check.
+6. **SHACL semantics are unchanged.** Validators ignore the unknown predicate. The generated
+   shapes stay standalone shapes, targeted with `sh:targetObjectsOf`.
+
+**Outcome:**
+- Back to 2 requests per shape, the same as `main`.
+- No SELECT and no prefix matching, which removes M5, L12 and L14.
+- Constraints are created atomically with the main shape (L13).
+- A removed accessor's constraint disappears with the main delete.
+
+Add a live test that asserts zero triples under `${psIri}.singleOwner` after a NodeShape delete.
