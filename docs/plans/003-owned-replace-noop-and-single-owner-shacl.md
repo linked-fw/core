@@ -1637,3 +1637,92 @@ Deviations: none.
 - L1 (sync deletes any NodeShape at `<iri>.singleOwner`) and L2 (four non-atomic updates per
   shape) from the Review.
 - Live suites still return silently without Fuseki outside `CI` handling (backlog 009).
+
+---
+
+# Review (iteration 1)
+
+Reviewed 2026-10-12: `git diff a906af7..HEAD` (df98528..e323c30), checked against C8-C10 and the
+first review's findings. The evidence includes a throwaway live probe against the test Fuseki
+(deleted afterwards).
+- 20,000 `ROwner` subjects, each with an owned non-dependent image and an owned dependent node.
+- 20,000 unrelated `Other` subjects that link their own images through the same `contains`
+  predicate.
+
+## Test run
+
+- `npm test`: `[ensureFuseki] Fuseki is ready`. 96 suites passed and 4 skipped (type-only); 2178
+  tests passed and 121 skipped. Typecheck exit 0, `EXIT=0`. The :3939 container was stopped
+  afterwards; :3030 was not touched.
+
+## Status of earlier findings
+
+| Finding | Status | Evidence |
+|---|---|---|
+| H1 check vs delete rule | **Resolved** | `ownedLinkCheck.ts:117-120` uses `collectContainment().containsPreds` plus the value shape, the same rule as `irToAlgebra.ts:1971-1976`. Unit test "the check and the replace delete agree…", plus a live refusal test. |
+| H2 bulk deletes | **Resolved** | `bulkDeleteUnion` (`irToAlgebra.ts:2774-2799`). See the live probe below. |
+| M1 changeset | **Resolved** | A "Behaviour changes" block names `Thing.image`, the subclass refusal and the shape-less orphans. The changeset is still a `minor`; that is the lead developer's call. |
+| M2 live negatives | **Mostly resolved** | Live tests now cover the unowned set-remove, a kept subtree, upsert, forAll/where and two owners. The 14 live tests in `shacl-cascade.test.ts` still `return` silently without Fuseki (listed as a follow-up). |
+| M3 group | **Resolved** | `singleOwnerConstraint.ts:53` requires `ps.valueShape`, with a test. |
+| L1, L2 | Open | Listed as follow-ups. |
+| L3 | Resolved | It is documented in the README. |
+| L4 stale comments | **Resolved** | The cascade header, the `buildOwnedSelfDelete`, `deleteToAlgebra` and `deleteAll` docstrings, and `SHACL.ts` `contains` are all updated. |
+
+## Live probe (bulk delete scope and cost)
+
+- **`delete().where(name = 'n7')`** took 21 ms. It deleted exactly one owner, its image and its
+  dependent node. Afterwards there were 19,999 owners, 39,999 images and 19,999 dependents. The
+  filter scopes the owned blocks correctly.
+- **`deleteAll()`** deleted all owners, their images and their dependents. The 20,000 `Other`
+  subjects and their 20,000 images survived, and the remaining 60,000 triples are exactly those.
+  Nothing outside the matched subjects was deleted. Each owned branch is led by `?a0 rdf:type`,
+  so `?a0 (c…)*` is never evaluated with both ends unbound.
+- **Cost:** 2.5 s for the new `deleteAll`, against 0.5 s for the old root-only form on the same
+  data. That is about 5× for 20k subjects with 4 dependent types.
+
+## Findings
+
+### Critical / High
+
+None found. I found no regression that deletes more than intended.
+
+### Medium
+
+**M4. Bulk delete cost grows with subject count × (owned predicates + dependent types).**
+(`irToAlgebra.ts:2783-2796`)
+- Every bulk delete of a shape that owns anything now runs one property-path closure per subject
+  per dependent type. Through `Thing.image`, that is every schema-derived shape.
+- Measured at about 5× (0.5 s → 2.5 s) for 20k subjects. Large CN `deleteAll`/`where` calls, such
+  as a project reset, will slow down by a similar factor.
+- **Fix:** emit the dependent-cascade blocks only when a dependent type is actually reachable
+  from the shape's own `contains` value shapes, rather than from every registered dependent type.
+  Alternatively, record the cost in the README.
+
+### Low
+
+**L7. The asymmetry is still open, in the safe direction.**
+- Subject deletes use the deleted shape's own `contains` properties
+  (`ownedValueShapePredicates`).
+- Replace and the class check use the predicate rule.
+- So a plain property that shares a `contains` predicate deletes its value on replace, but not
+  when its subject is deleted.
+- **Fix:** decide this with the per-property follow-up, and document the difference in the README
+  "What a delete removes" paragraph meanwhile.
+
+**L8. The predicate rule now class-checks plain properties in other packages.**
+(`ownedLinkCheck.ts:120`)
+- For example, a CN project shape that declares `schema:image` without `contains`.
+- This is intended. However, a project shape whose value shape is a class that the linked nodes
+  are typed with only through an unregistered subclass is now refused where it was accepted.
+- **Fix:** add one sentence to the changeset that the check applies to non-`contains` properties
+  on a `contains` predicate.
+
+**L9. Live suites still pass silently without Fuseki** (14 `if (!fusekiAvailable) return;` in
+`shacl-cascade.test.ts`, backlog 009). **Fix:** throw when `process.env.CI` is set.
+
+### New issues
+
+Only M4, L7 and L8 are new; L9 is the unresolved part of M2.
+- `ownedLinkCheck.ts` → `irToAlgebra.ts` adds an import edge but no cycle.
+- The owned and cascade variables (`d{n}`, `c_*`) do not collide with blank-node (`bn{n}`,
+  `p{n}`, `o{n}`) or where-clause (`a{n}_…`) variables.
