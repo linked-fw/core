@@ -3,8 +3,9 @@ summary: >
   Owned (`contains`) values. Re-sending the current `{id}` becomes a no-op instead of wiping the
   node. Deleting a subject now deletes its immediately-owned children, as the README already says.
   `contains` properties without a value shape fall back to the `dependent` rule. Shape sync persists
-  a generated single-owner SHACL constraint per declaring shape. Store-side SHACL validation is not
-  enforced today; this is recorded as a limitation.
+  a generated single-owner SHACL constraint per declaring shape. Linking a node of the wrong class
+  into a `contains` property is refused by one batched type query per mutation. Store-side SHACL
+  validation is not enforced today; this is recorded as a limitation.
 status: Implementation
 packages: [core]
 source_backlog: docs/backlog/048-owned-property-replace-deletes-any-node.md
@@ -39,7 +40,7 @@ Whether a predicate counts as `contains` is decided per predicate across the who
 |---|---|
 | A1 | **Replace semantics stay.** A plain nested object on a `contains` property replaces the owned value, and the old node is deleted. Patch in place goes through `ValueShape.update({...}).for(id)` (in future, active-record `parent.image.update()`). Linking an existing node by `{id}` into a `contains` property stays allowed, e.g. upload then attach. |
 | A2 | **S1 is the bug.** Replacing a `contains` value with its current `{id}` must be a no-op. Today the node's own triples are deleted and only the edge is re-inserted. The same applies to array overwrite of a `contains` set: an id that is kept must survive. |
-| A3 | **S3 (wrong-type link) gets no SPARQL check in core.** Rely on the store's SHACL validation (`sh:class`). See [Findings](#findings): the store does not validate on write today. |
+| A3 | **S3 (wrong-type link) gets no SPARQL check in core.** Rely on the store's SHACL validation (`sh:class`). See [Findings](#findings): the store does not validate on write today. **Superseded for `contains` properties by [Decision 7](#decision-7-of-8--class-check-for-ids-linked-into-a-contains-property)** (lead developer, after F1); A3 still holds for every other object property. |
 | A4 | **S4 Rule A.** `contains` is translated into a SHACL constraint that is persisted with the shapes: an owned value node has at most one owner across `contains` predicates, `sh:path [sh:inversePath [sh:alternativePath (p1 p2 …)]] ; sh:maxCount 1` (a plain `sh:inversePath p` for a single predicate). Other, non-owning references to the value are allowed. |
 | A5 | **S5.** Non-owning references to an owned node are allowed. Dangling references left after the owner is deleted are accepted. There is no adoption ASK, no `NOT EXISTS` reference backstop and no type guard in SPARQL. |
 | A6 | **S1 design (accepted after the first pass).** `buildOwnedSelfDelete` and `buildOwnedCascade` take an optional `keep` list. A `FILTER(?old NOT IN (…))` covers the bare `{id}` values of the new value or array. Set-remove skips ids that are also in `add`. A nested create carrying the current id (`{id: current, contentUrl: 'b'}`) keeps today's full-rewrite behaviour: it deletes all of the node's triples and re-inserts the new ones. This is documented. |
@@ -166,7 +167,7 @@ did not early-return. Stop the container afterwards with
 
 ## Decisions (resolved by priority: 1 maintainability and simplicity, 2 scalability, 3 performance)
 
-### Decision 1 of 6 — Where the generated single-owner constraint lives
+### Decision 1 of 8 — Where the generated single-owner constraint lives
 
 - **(a) A property shape on the value shape** (`ImageObject sh:property [ sh:path ^(…) ; sh:maxCount 1 ]`).
   - Pro: it is the literal form of A4.
@@ -200,7 +201,7 @@ that declares `contains`. Its two costs are small and contained: one accessor, a
 that lets readers skip it (Decision 4). It also avoids building synthetic shapes into the in-memory
 registry.
 
-### Decision 2 of 6 — Which predicates are grouped in one `sh:alternativePath`
+### Decision 2 of 8 — Which predicates are grouped in one `sh:alternativePath`
 
 - (a) All `contains` predicates in the registry.
   - Con: the group depends on what the process happens to import, so re-sync output varies by
@@ -227,7 +228,7 @@ Rules for building the group:
 
 Accepted limitation: predicate sets with no overlap across packages are not cross-checked.
 
-### Decision 3 of 6 — Deterministic IRI and lifecycle of the generated shape
+### Decision 3 of 8 — Deterministic IRI and lifecycle of the generated shape
 
 - **IRI:** `${shapeIri}.singleOwner`, e.g. `{base}shape/my-pkg/Project.singleOwner`.
   - `.` cannot appear in a class-derived name.
@@ -250,7 +251,7 @@ Accepted limitation: predicate sets with no overlap across packages are not cros
     pruned as an orphan.
   - Backlog 046 provenance tagging, when it lands, tags the generated shape like any other.
 
-### Decision 4 of 6 — Visibility to the in-memory registry and to consumers
+### Decision 4 of 8 — Visibility to the in-memory registry and to consumers
 
 - The generated shape is **built only at sync time** (`buildSingleOwnerShapeData`) and is **never
   registered** in memory. `getAllNodeShapes`, `getSubShapes`, `getPropertyShapes`, forms and
@@ -260,9 +261,9 @@ Accepted limitation: predicate sets with no overlap across packages are not cros
   means "hide in UIs", not "not a user shape".
 - **CN follow-up (outside core):** `fetchShapeCatalog` should filter `core:generated` NodeShapes.
   Until then CN would read a NodeShape with no targetClass. Record it in CN's backlog when this
-  ships; core does not edit CN.
+  ships; core does not edit CN. How CN does it is [Decision 8](#decision-8-of-8--cn-catalog-follow-up).
 
-### Decision 5 of 6 — F2: should subject delete delete the immediately-owned child?
+### Decision 5 of 8 — F2: should subject delete delete the immediately-owned child?
 
 - (a) **Yes, match the README and the replace semantics.**
   - Pro: one rule: "when a `contains` edge goes away, the owned node goes" holds for replace,
@@ -286,9 +287,12 @@ reading. It is the narrower of the two readings.
 
 **This is a behaviour change.** A node linked by `{id}` into a contains slot is now deleted with its
 owner, which ownership-by-linking (A1) implies. It ships as a minor bug fix, with a changeset line
-that says so. **Flagged for the lead developer to confirm.**
+that says so. **Confirmed by the lead developer (2026-10-12)**, on the condition that core refuses
+to link a node of the wrong class into such a slot ([Decision 7](#decision-7-of-8--class-check-for-ids-linked-into-a-contains-property)).
+Without that check, a Person linked by mistake into `Project.image` would be deleted with the
+project.
 
-### Decision 6 of 6 — F3: `contains` properties without a valueShape
+### Decision 6 of 8 — F3: `contains` properties without a valueShape
 
 - (a) Keep today's behaviour. Rejected: it wipes a non-owned predicate IRI.
 - (b) **The value shape decides.**
@@ -307,10 +311,105 @@ that says so. **Flagged for the lead developer to confirm.**
 **Choice: (b).** It closes F3 without a new mechanism, and `PathNode`/`List` roots of a replaced
 `sh:path` are still cleaned up. `*` and `+` evaluate the same in Fuseki, so performance is unchanged.
 
+### Decision 7 of 8 — Class check for ids linked into a `contains` property
+
+Context. A1 allows linking an existing node by `{id}` into a `contains` slot. With Decision 5 a
+linked node is deleted on replace, on remove and with its owner. F1 shows that nothing validates
+`sh:class` on write. So if "Alice", a `schema:Person`, is linked into `Project.image` (value shape
+`ImageObject`) by mistake, the next image replace or project delete wipes Alice. The lead developer
+asked for a core check. It supersedes A3 for `contains` properties.
+
+**Where it runs.** In `SparqlDataset.createQuery` and `SparqlDataset.updateQuery`, after `lower()`
+and before the update is sent.
+- The check needs the store, so it cannot live in `validate()`, which is pure and also runs on the
+  client.
+- `SparqlDataset` is the one place that holds both the lowered IR and a query channel
+  (`executeSparqlSelect`). `FusekiStore` (both copies) and every other SPARQL store inherit it.
+  `BackendAPIStore` forwards mutations to the server, where the server's `SparqlDataset` runs the
+  check.
+- A non-SPARQL `IDataset` implementation is not covered. It has no generic query channel. This is
+  recorded as a limitation.
+
+**Scope: (a) `contains` properties only**, versus (b) every object property with a value shape.
+- (a) Pro: it guards exactly the destructive case (the owner deletes what it holds). Every other
+  mutation skips the query.
+- (a) Pro: plain references are never questioned. In CN they often point at nodes in another
+  dataset (CN routes shapes to different datasets) or at external IRIs, where the dataset that runs
+  the mutation cannot see the node.
+- (b) Con: a round trip on most updates that set any reference.
+- (b) Con: a value shape on a plain reference is often a hint, for example a polymorphic `author`.
+  Checking it strictly would refuse data the shapes accept today. That is a breaking change for a
+  data-quality issue that SHACL validation (A3) is the right tool for.
+- **Choice: (a).** It is the smallest rule that closes the hazard Decision 5 creates (priority 1),
+  and it costs nothing on mutations that link no owned value (priorities 2 and 3).
+
+**Which properties.** A field is checked when its property shape has `contains: true` and a
+`valueShape` whose targetClass resolves (`getTargetClassId`). A `contains` property without a value
+shape (`PropertyShape.path`) has no expected class and is not checked. Decision 6 already keeps
+those slots from deleting anything that is not `dependent`-typed.
+
+**Acceptable classes.** The value shape's targetClass, the targetClass of every registered sub-shape
+(`getSubShapes(valueShape)`), and the property's `sh:class` if it declares one. Only the registry is
+consulted, never `rdfs:subClassOf` in the store. That keeps the check independent of whether the
+ontology is loaded in the dataset. An RDFS-inferring store adds superclass types anyway, which can
+only make a node pass.
+
+**Ids that do not exist, or have no `rdf:type`: allowed.** The check refuses a node only when the
+store holds at least one `rdf:type` for it and none of those types is acceptable.
+- `rdf:nil` is linked into `List.rest`, which is `contains` with value shape `List`, on every shape
+  sync. It is never typed. Refusing untyped ids would break shape sync. `rdf:nil` is also skipped
+  statically, so a shape sync never pays for a query because of it.
+- Upload-then-attach keeps working whatever the write order, and so does a node that another
+  request creates later.
+- An untyped id is no evidence of the wrong kind of thing. The Alice case is a typed node and is
+  refused.
+- Limitation, recorded: an id linked while untyped and typed `Person` later is not caught. SHACL
+  validation (`sh:class`) is the backstop.
+
+**What counts as a link.** A bare `{id}` (a `NodeReferenceValue` with no `shape` or `fields`) in a
+`contains` field:
+- as a single value, as an item of an array overwrite, or as an item of a set `add`;
+- in `create`, `update`, `upsert` and `update_where` (`.where()` and `.forAll()`) mutations;
+- at any depth inside nested creates, because a nested create's own fields can link too.
+
+Not links:
+- a nested create, even with a predefined id, because the mutation writes its type itself;
+- set `remove` items;
+- `delete*` mutations.
+
+**Cost.** Collecting the links is a walk over the IR, with no I/O. With no links, no query is sent.
+Otherwise the check sends one SELECT per mutation for all distinct ids, then compares the types in
+memory:
+
+```sparql
+SELECT ?id ?type WHERE { VALUES ?id { <a> <b> } ?id <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type }
+```
+
+**Error.** It is thrown before the update is sent, so nothing is written. Every violation is listed:
+
+```
+Cannot link <http://ex/alice> into the contains property "image" of <…/shape/my-pkg/Project>:
+it is typed <https://schema.org/Person>, but "image" only owns instances of
+<https://schema.org/ImageObject> (or a registered sub-shape). An owner deletes what it contains
+when the value is replaced or removed, or when the owner is deleted.
+```
+
+### Decision 8 of 8 — CN catalog follow-up
+
+Recorded for CN; nothing is implemented in this repository.
+- CN's `fetchShapeCatalog` hides `core:generated` NodeShapes **only together with** an
+  "owned/contained" flag in CN's shape UI. The flag mirrors the decorator's `contains: true` on a
+  property shape.
+- If CN's shape UI has no such flag yet, it is added in the same CN change.
+- The reason: hiding the generated shape removes the only visible trace of the single-owner rule,
+  so the UI has to show ownership where it is declared.
+- A read-only check of CN is done separately. The follow-up goes into CN's backlog in wrap-up
+  (Phase 6), with consent.
+
 ### Remaining open items
 
-None blocking. Two confirmations for the lead developer: Decision 5 (delete behaviour change) and
-the CN catalog follow-up in Decision 4.
+None. Decision 5 is confirmed together with Decision 7, and the CN catalog follow-up is
+Decision 8.
 
 ---
 
@@ -333,6 +432,11 @@ the CN catalog follow-up in Decision 4.
    - a pure helper computes the group and data;
    - the meta-model gains `targetObjectsOf` and `generated` on NodeShape;
    - `syncShapes` folds the generated shape into each shape's thunk.
+5. **Class check for linked owned ids** (Decision 7):
+   - a pure module collects the bare `{id}` links of `contains` fields from a lowered mutation and
+     judges them against the types the store returns;
+   - `SparqlDataset.createQuery`/`updateQuery` run one SELECT per mutation with links and throw
+     before the update is sent.
 
 ## Contracts
 
@@ -485,11 +589,43 @@ SHACL reading: every object of `ex:attachments` or `schema:image` may have at mo
 pointing at it through either predicate. Plain references through other predicates are not
 counted (A4, A5).
 
+### C7 — owned-link class check (`src/sparql/ownedLinkCheck.ts`, new)
+
+```ts
+/** One bare `{id}` linked into a `contains` field that declares a value shape. */
+export type OwnedLink = {
+  id: string;
+  property: string;          // property-shape id
+  label: string;             // property label, for the message
+  shape: string;             // declaring node-shape id
+  acceptedClasses: string[]; // value shape targetClass + registered sub-shapes' + sh:class
+};
+/** Pure IR walk: every owned link in a create/update/upsert/update_where mutation. */
+export function collectOwnedLinks(
+  ir: IRCreateMutation | IRUpdateMutation | IRUpsertMutation | IRUpdateWhereMutation,
+): OwnedLink[];
+/** `SELECT ?id ?type WHERE { VALUES ?id { … } ?id rdf:type ?type }` for the distinct ids. */
+export function ownedLinkTypesQuery(ids: string[]): string;
+/** Throws the Decision 7 error for every link whose id is typed and has no accepted class. */
+export function assertOwnedLinkTypes(
+  links: OwnedLink[], typesById: ReadonlyMap<string, ReadonlySet<string>>,
+): void;
+```
+
+`SparqlDataset` gains `protected async checkOwnedLinks(ir)`. It returns without I/O when
+`collectOwnedLinks` is empty. Otherwise it sends `ownedLinkTypesQuery` through
+`executeSparqlSelect`, maps the bindings and calls `assertOwnedLinkTypes`. `createQuery` and
+`updateQuery` (every kind) await it before `executeSparqlUpdate`. Links to `rdf:nil` are never
+collected.
+
 ## Files expected to change
 
 | File | Change |
 |---|---|
 | `src/sparql/irToAlgebra.ts` | `keep` on both helpers. Collect `keep` in `processUpdateFields` (replace, array, set-mod). Skip self-delete for valueShape-less contains fields. Change the cascade path from `oneOrMore` to `zeroOrMore`. Add the one-hop child blocks in `deleteToAlgebra`. Update the section comments. |
+| `src/sparql/ownedLinkCheck.ts` (new) | C7 |
+| `src/sparql/SparqlDataset.ts` | `checkOwnedLinks` before every create and update (C7) |
+| `src/tests/owned-link-check.test.ts` (new) | C7 unit tests (stub dataset) and live Fuseki test |
 | `src/shapes/singleOwnerConstraint.ts` (new) | C4 |
 | `src/shapes/syncShapes.ts` | `buildSyncThunk` deletes and creates the generated shape. Add generated IRIs to `localShapeIris`. Throw on an IRI collision. |
 | `src/shapes/index.ts` | Export C4 |
@@ -526,6 +662,13 @@ counted (A4, A5).
   The duplicate DELETE is set-idempotent, but re-run the shape-sync live suite. Note backlog 047
   flakiness: on a red run, capture the output before changing anything.
 - **Backlog 009.** A green live suite without Docker proves nothing. Confirm the container started.
+- **The live "delete WHERE size" test** in `shacl-cascade.test.ts` counts solutions exactly. With
+  Decision 5, `TBox.owns` (value shape `TCell`) adds one block that matches `cell0`'s own triples,
+  so the expected count grows by those triples. Update it deliberately; the remaining-triples
+  assertion must not change.
+- **Class check and existing suites (Decision 7).** Live suites that link `{id}`s into `contains`
+  slots must still pass. Untyped ids are allowed, so only a wrongly typed seed would fail; such a
+  failure is a finding, not something to work around.
 
 ## Test strategy
 
@@ -537,9 +680,10 @@ counted (A4, A5).
 
 # Tasks
 
-Dependency graph: **P1 ∥ P2** (independent files: `irToAlgebra.ts` versus `syncShapes`/meta-model) →
-**P3** (live tests for both) → **P4** (README) ∥ **P5** (changeset) → **P6** (wrap-up docs). P4 and
-P5 only need the contracts, so they can start after P1/P2 are merged. Each phase is one commit.
+Dependency graph: **P1 ∥ P1b ∥ P2** (independent files: `irToAlgebra.ts`; `ownedLinkCheck.ts` and
+`SparqlDataset.ts`; `syncShapes` and the meta-model) → **P3** (live tests for P1 and P2; P1b carries
+its own live test) → **P4** (README) ∥ **P5** (changeset) → **P6** (wrap-up docs). P4 and P5 only
+need the contracts, so they can start after P1, P1b and P2 are merged. Each phase is one commit.
 
 ## Phase 1 — Owned-delete fixes in `irToAlgebra` (S1, Decisions 5, 6)
 
@@ -586,11 +730,62 @@ fixture with a valueShape-less `contains` property `TSlot.anyPath`):
 - `subject delete skips valueShape-less contains properties` asserts that a TSlot delete has no
   `?d` block for `anyPath`.
 - `multi-id delete suffixes child vars` asserts `?d0_1`.
+- Live `delete WHERE size` (existing): the expected solution count includes the new `owns` one-hop
+  block (see Pitfalls).
 
 Validation:
 - Quick: `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs src/tests/shacl-cascade.test.ts src/tests/sparql-mutation-golden.test.ts src/tests/sparql-mutation-algebra.test.ts` exits 0. Any golden change must be the intended `+`→`*` or the new blocks.
 - `npm run typecheck` exits 0.
 - Full (review): `npm test`.
+
+## Phase 1b — Class check for linked owned ids (Decision 7, C7) ∥ Phase 1, Phase 2
+
+Tasks:
+1. New `src/sparql/ownedLinkCheck.ts` (C7):
+   - `collectOwnedLinks` walks `data.fields` recursively (nested creates included). For each field
+     whose property shape (`findPropertyShapeById`) is `contains` with a `valueShape` and a
+     resolvable targetClass, it collects the bare `{id}`s of a single value, of an array, and of a
+     set `add`. `remove` items, nested creates and `rdf:nil` are not collected.
+   - `acceptedClasses` = the value shape's targetClass, every `getSubShapes(valueShape)`
+     targetClass, and `ps.class`.
+   - `ownedLinkTypesQuery` emits full IRIs (`assertSafeIri`), deduplicated, in first-seen order.
+   - `assertOwnedLinkTypes` collects every violation and throws one `Error` with the C7 message
+     lines.
+2. `SparqlDataset`: `checkOwnedLinks(ir)` is called in `createQuery` (after the id is assigned) and in
+   `updateQuery` for `update`, `upsert` and `update_where`, before `executeSparqlUpdate`.
+
+Tests (`src/tests/owned-link-check.test.ts`, new; fixtures: `TPhoto` (targetClass `ex:Photo`),
+`TPanorama extends TPhoto` (`ex:Panorama`), `TPerson` (`ex:Person`), and `TAlbum` with `cover`
+(`contains`, shape TPhoto, maxCount 1), `photos` (`contains`, shape TPhoto) and `featured`
+(**not** contains, shape TPhoto), plus `TSlotHolder.any` (`contains`, no shape)):
+- `collect: single, array, set-add` asserts ids and `property` labels for
+  `cover: {id:a}`, `photos: [{id:b},{id:c}]` and `photos: {add:[{id:d}], remove:[{id:e}]}`;
+  `e` is absent.
+- `collect: nested create is not a link, its fields are` asserts that
+  `cover: {id: n1, …nested fields}` yields nothing for n1, while a nested album's `cover: {id:x}`
+  inside a create yields x.
+- `collect: non-contains, shape-less contains and rdf:nil are skipped` asserts an empty list for
+  `featured: {id}`, `any: {id}` and a link to `rdf:nil`.
+- `collect: update_where` (`UpdateBuilder.from(TAlbum).forAll().set({cover:{id:a}})`) yields a.
+- `acceptedClasses includes registered sub-shapes` asserts `ex:Photo` and `ex:Panorama`.
+- `query` asserts the exact `SELECT ?id ?type WHERE { VALUES ?id { <a> <b> } … }` string, with
+  duplicate ids appearing once.
+- Stub dataset (`class StubDataset extends SparqlDataset`, records selects and updates, answers
+  selects from a map):
+  - `no links → no select`: an update of a literal field sends 0 selects and 1 update;
+  - `one select for many links`: `photos: [{id:a},{id:b},{id:c}]` sends exactly 1 select;
+  - `wrong type refuses and writes nothing`: a typed `ex:Person` → rejects with a message containing
+    `"cover"`, the id and `<http://example.org/olc#Photo>`; 0 updates sent;
+  - `sub-shape class passes`, `untyped or unknown id passes`, `one of several types matching passes`;
+  - `create checks too`: `CreateBuilder.from(TAlbum).set({cover:{id: alice}})` rejects.
+- Live Fuseki (`ensureFuseki`; container confirmed in the output): seed `alice a ex:Person` and
+  `p1 a ex:Photo`, then through `FusekiStore`:
+  - an update linking alice into `cover` rejects, and `album1` has no `cover` edge afterwards;
+  - linking p1 succeeds and the edge exists.
+
+Validation:
+- Quick: `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs src/tests/owned-link-check.test.ts src/tests/sparql-fuseki.test.ts src/tests/sparql-fuseki-shape-sync.test.ts` exits 0, with `[ensureFuseki] Fuseki is ready` (or the running container) in the output.
+- `npm run typecheck` exits 0.
 
 ## Phase 2 — Single-owner SHACL generation and persistence (S4, Decisions 1-4) ∥ Phase 1
 
@@ -706,9 +901,12 @@ Tasks (README.md "Owned properties (`contains` / `dependent`)"):
   only deletes `dependent`-typed values.
 - **Single-owner constraint.** Shape sync writes `<Shape>.singleOwner`
   (`sh:targetObjectsOf` + inverse `sh:maxCount 1`), with a short turtle excerpt from C6.
-- **Caveat.** Core does not check `sh:class` of linked ids or the single-owner rule at write time,
-  and the default Fuseki setup does not validate SHACL on write. Run a SHACL validator to enforce
-  them.
+- **Class check.** Linking a node into a `contains` property that declares a `shape` is refused when
+  the node is typed and none of its types is the shape's class (or a registered sub-shape's). Untyped
+  and not-yet-existing ids are allowed.
+- **Caveat.** Core does not check the single-owner rule, or `sh:class` on non-owning references, at
+  write time. The default Fuseki setup does not validate SHACL on write. Run a SHACL validator to
+  enforce them.
 
 Validation: the README renders. Manually check that the code samples match the final API names:
 `grep -n "singleOwner" README.md` shows the section.
@@ -727,7 +925,8 @@ Owned (`contains`) values:
 - re-sending the current `{id}` is now a no-op, where before it deleted that node's own triples;
 - array overwrite keeps the retained ids;
 - deleting a subject now deletes its immediately-owned children, as documented;
-- a `contains` property without a value shape only deletes `dependent`-typed values.
+- a `contains` property without a value shape only deletes `dependent`-typed values;
+- linking a node of the wrong class into a `contains` property that declares a shape is refused.
 Shape sync now also writes a generated `<Shape>.singleOwner` SHACL NodeShape (`core:generated`)
 that limits each owned value to one owner across the shape's `contains` predicates.
 ```
@@ -743,10 +942,13 @@ Tasks:
 2. Delete `docs/backlog/048-owned-property-replace-deletes-any-node.md` and this plan, as was done
    for report 025.
 3. Record the follow-ups in the report:
-   - CN `fetchShapeCatalog` should filter `core:generated`;
+   - CN `fetchShapeCatalog` filters `core:generated` only together with an owned/contained flag in
+     CN's shape UI (Decision 8);
    - CN `ownedProperties.ts` duplicates `collectContainment`;
    - enable SHACL validation (on write or on demand) in the CN stack;
-   - `rdf:first`-nested PathNodes in sequence paths are not cascade-cleaned on sync (F4).
+   - `rdf:first`-nested PathNodes in sequence paths are not cascade-cleaned on sync (F4);
+   - the class check (Decision 7) does not cover non-SPARQL `IDataset` implementations, nor ids
+     typed only after they were linked.
    Ask before creating any of these as backlog items.
 
 Validation:
