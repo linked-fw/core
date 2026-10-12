@@ -1726,3 +1726,118 @@ Only M4, L7 and L8 are new; L9 is the unresolved part of M2.
 - `ownedLinkCheck.ts` → `irToAlgebra.ts` adds an import edge but no cycle.
 - The owned and cascade variables (`d{n}`, `c_*`) do not collide with blank-node (`bn{n}`,
   `p{n}`, `o{n}`) or where-clause (`a{n}_…`) variables.
+
+---
+
+# Iteration 2 — Ideation
+
+Source: [Review (iteration 1)](#review-iteration-1) (M4, L7, L8). Approaches chosen by the lead
+developer (2026-10-12). L9 (silent live suites, backlog 009) stays a follow-up.
+
+## Gap 1 of 3 — Bulk delete cost grows with every registered dependent type (M4)
+
+**Context.** `bulkDeleteUnion` and `deleteToAlgebra` call `buildOwnedCascade`, which emits one
+block per dependent type in the *whole registry* (4 in a process with core's PropertyShape, List
+and PathNode plus one app type). Each block is a property-path closure per subject. Baseline,
+measured again on the iteration-1 code with a scratch probe (20,000 owners, each with an owned
+image, plus 20,000 unrelated subjects linking their own images through the same predicate):
+
+| Shape | Cascade blocks | Root-only DELETE | `deleteAll` (2 runs) |
+|---|---|---|---|
+| `ROwner` (image + dependent node) | 4 | 552 ms | 2194 / 1854 ms |
+| `RImgOnly` (image only) | 4 | 197 ms | 1256 / 1219 ms |
+
+The by-id delete has the same fan-out: one cascade block per id per registered dependent type.
+
+**Approaches.**
+- **(a) Emit only the dependent types reachable from the deleted shape.** Walk from the shape (and
+  its registered sub-shapes) through every property on a `contains` predicate to its value shape
+  and that shape's sub-shapes, transitively; collect the `dependent` targetClasses met. A property
+  on a `contains` predicate **without** a value shape is polymorphic and could reach anything, so
+  it keeps every dependent type (this keeps the shape-sync delete exact: `PropertyShape.path`).
+  - Pro: a shape that reaches no dependent type (every `Thing.image` owner) emits exactly the
+    pre-iteration-1 bulk SPARQL plus the child blocks; no closure at all.
+  - Pro: no change for shape sync, whose NodeShape delete reaches a shape-less slot.
+  - Con: data whose edges are not described by the reached shapes (a `contains` predicate used on
+    a node whose shape does not declare it) is no longer cascaded from a bulk or by-id delete.
+    Accepted: the cascade is shape-driven everywhere else, and the replace path is unchanged.
+- (b) Document the cost in the README. Pro: no code. Con: every schema-derived bulk delete stays ~5×
+  slower than needed.
+- (c) One closure block with `VALUES ?type { … }` for all dependent types. Pro: one path
+  evaluation. Con: it changes the solution shape of every cascade and the shape-sync delete, and
+  still pays for the closure when nothing is reachable.
+
+**Chosen: (a)**, for bulk and by-id deletes. The replace/remove cascade is not narrowed (it runs
+for one old value, not per subject).
+
+## Gap 2 of 3 — The changeset does not say plain properties are now checked (L8)
+
+**Chosen:** add a Behaviour-changes bullet: a property *without* `contains` on a predicate that is
+`contains` anywhere in the registry (a CN project shape that declares `schema:image` plainly) is
+class-checked too, and how to resolve a refusal (link a node of the value shape's class or a
+registered sub-shape's class, register a shape for the subclass, declare `sh:class`, or use a
+predicate that no shape owns).
+
+## Gap 3 of 3 — The README does not state the delete/replace rule difference (L7)
+
+**Chosen:** the README "What a delete removes" paragraph says that subject deletes use the
+deleted shape's *own* `contains` properties, whereas replace and the class check use the
+registry-wide predicate rule; a plain property on a `contains` predicate therefore deletes its
+old value on replace but not when its subject is deleted. Whether ownership should be per
+property everywhere is an open design question.
+
+---
+
+# Iteration 2 — Plan
+
+| Gap | Decision |
+|---|---|
+| 1 (M4) | Cascade blocks of subject deletes (bulk and by id) only for the dependent types reachable from the deleted shape (C11). |
+| 2 (L8) | Changeset bullet on plain properties on `contains` predicates. |
+| 3 (L7) | README sentence on the delete versus replace rule. |
+
+## Contracts
+
+### C11 — reachable dependent types (`irToAlgebra.ts`)
+
+```ts
+/** The dependent targetClasses a delete of `shapeId` can reach, in `collectContainment` order. */
+function reachableDependentTypes(shapeId: string): string[];
+
+export function buildOwnedCascade(
+  rootTerm, varPrefix, anchor?, keep?,
+  dependentTypes?: string[],   // NEW: restrict the blocks to these types (default: all)
+);
+```
+
+- Start: the shape and its registered sub-shapes. Edge: a flattened property whose simple path is
+  in `containsPreds`. With a value shape, visit it and its sub-shapes; without one, return every
+  dependent type. Collect the `dependent` shapes' targetClasses. Memoized per shape on the
+  registry version.
+- `deleteToAlgebra` and `bulkDeleteUnion` pass the result; an empty result emits no cascade block.
+- Variable names stay `c_own{i}` with `i` the index in the narrowed list.
+
+Files: `src/sparql/irToAlgebra.ts`, `src/tests/shacl-cascade.test.ts`,
+`.changeset/owned-replace-noop-single-owner.md`, `README.md`.
+
+---
+
+# Iteration 2 — Phases
+
+## Phase 13 — Narrow the subject-delete cascade (Gap 1, C11)
+
+Tests (`shacl-cascade.test.ts`):
+- `TCard` (owns non-dependent `TPlainCell`) by id and `all()`: no `?c_own` block; child blocks stay;
+- `TBox` (owns dependent `TCell`): exactly one cascade block, for `TCell`;
+- `TSlot` (shape-less `contains`): every dependent type;
+- `NodeShape` delete (shape sync): every dependent type, unchanged;
+- existing live tests (delete WHERE size, bulk and by-id deletes) unchanged.
+
+Validation: targeted `shacl-cascade`, `mutation-where-union`, `sparql-mutation-golden`,
+`sparql-fuseki-shape-sync`, `shacl-syncshapes` pass with Fuseki confirmed; typecheck. The scratch
+20k probe is re-run for timings and correctness, then deleted.
+
+## Phase 14 — Changeset and README (Gaps 2, 3)
+
+Validation: full `npm test` exits 0 with Fuseki confirmed; `npx linked build` exits 0; :3939
+stopped, :3030 untouched.
