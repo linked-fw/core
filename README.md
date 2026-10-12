@@ -310,7 +310,8 @@ allowed. They are not cleaned up: after the owner is deleted they dangle.
 
 **The single-owner constraint.** An owned node has at most one owner. Shape sync persists this as
 a generated SHACL NodeShape per declaring shape, `<Shape>.singleOwner`, next to the shape itself.
-It groups the shape's own and inherited `contains` predicates (simple paths only, sorted by IRI),
+It groups the predicates of the shape's own and inherited `contains` properties that declare a
+`shape` (simple paths only, sorted by IRI; a shape-less slot may hold a shared IRI, so it is left out),
 is marked `core:generated true`, and has no `sh:targetClass`, so catalog readers can skip it. It is
 never registered in memory. For a `Project` that owns `schema:image` and `ex:attachments`:
 

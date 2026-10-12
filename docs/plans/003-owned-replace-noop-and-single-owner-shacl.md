@@ -1520,6 +1520,23 @@ with a shape → the group holds only the latter; a shape with only a shape-less
 
 Validation: `single-owner-constraint`, `shacl-syncshapes`, `sparql-fuseki-shape-sync` pass; typecheck.
 
+### Phase 9 status: done
+
+Built as planned: `ownedPredicateGroup` skips `contains` properties without a `valueShape`; its
+doc comment says why. README: the single-owner paragraph says the group holds `contains`
+properties that declare a `shape`. The turtle example is unchanged (both of its properties
+declare a shape).
+
+Validation (2026-10-12):
+- `single-owner-constraint`, `shacl-syncshapes`, `sparql-fuseki-shape-sync`,
+  `shape-wire-idempotence`: `[ensureFuseki] Fuseki is ready`; 4 suites, 40 passed, 1 skipped (the
+  SHACL endpoint `test.skip`). New: `shape-less contains is skipped` (fixtures `Folder` with a
+  shape-less and a shaped `contains` property → only `schema:image`; `LooseFolder` with only a
+  shape-less one → empty group and `null` data).
+- `npm run typecheck`: exit 0.
+
+Deviations: none.
+
 ## Phase 10 — Live negative tests (Gap 4, cases 1-5)
 
 Tests (`shacl-cascade.test.ts`, live block):

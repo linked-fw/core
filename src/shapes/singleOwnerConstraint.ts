@@ -37,16 +37,20 @@ export function singleOwnerShapeIri(shapeIri: string): string {
 }
 
 /**
- * Sorted simple-path IRIs of the shape's own and inherited `contains` properties.
+ * Sorted simple-path IRIs of the shape's own and inherited `contains` properties that declare a
+ * value shape.
  *
  * Inherited properties are flattened exactly as shape sync flattens them. Contains properties
- * with a complex path are skipped, as the containment cascade skips them. Sorting by IRI keeps
+ * with a complex path are skipped, as the containment cascade skips them. Contains properties
+ * without a value shape are skipped too: such a slot is polymorphic (like `sh:path`) and its
+ * value may be a shared IRI, so the replace, the subject delete and the class check do not treat
+ * it as owning that value, and neither does the single-owner rule. Sorting by IRI keeps
  * the stored list independent of declaration order, so a re-sync writes identical triples.
  */
 export function ownedPredicateGroup(nodeShape: NodeShapeData): string[] {
   const preds = new Set<string>();
   for (const ps of getUniquePropertyShapes(nodeShape)) {
-    if (!ps.contains) continue;
+    if (!ps.contains || !ps.valueShape) continue;
     const predId = getSimplePathId(ps.path);
     if (predId) preds.add(predId);
   }

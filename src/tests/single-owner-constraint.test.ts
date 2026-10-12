@@ -80,6 +80,29 @@ class Album extends Shape {
   }
 }
 
+// A shape-less `contains` slot (polymorphic, like `sh:path`) is not part of the group.
+@linkedShape({name: 'Folder'})
+class Folder extends Shape {
+  static targetClass = ex('Folder');
+  @objectProperty({path: ex('anything'), maxCount: 1, contains: true})
+  get anything(): unknown {
+    return null;
+  }
+  @objectProperty({path: schema('image'), shape: ImageObject, maxCount: 1, contains: true})
+  get image(): ImageObject {
+    return null;
+  }
+}
+
+@linkedShape({name: 'LooseFolder'})
+class LooseFolder extends Shape {
+  static targetClass = ex('LooseFolder');
+  @objectProperty({path: ex('anything'), maxCount: 1, contains: true})
+  get anything(): unknown {
+    return null;
+  }
+}
+
 const iriOf = (cls: typeof Shape) => cls.shape.id;
 
 type Call = {kind: string; id?: string};
@@ -121,6 +144,12 @@ describe('single-owner constraint data', () => {
   test('no contains → null', () => {
     expect(ownedPredicateGroup(ImageObject.shape)).toEqual([]);
     expect(buildSingleOwnerShapeData(ImageObject.shape, iriOf(ImageObject))).toBeNull();
+  });
+
+  test('shape-less contains is skipped', () => {
+    expect(ownedPredicateGroup(Folder.shape)).toEqual([`${SCHEMA}image`]);
+    expect(ownedPredicateGroup(LooseFolder.shape)).toEqual([]);
+    expect(buildSingleOwnerShapeData(LooseFolder.shape, iriOf(LooseFolder))).toBeNull();
   });
 
   test('complex-path contains is skipped', () => {
