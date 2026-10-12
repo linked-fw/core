@@ -892,3 +892,19 @@ createPropertyShape(
   shacl.Literal,
   NodeShape,
 );
+
+// NodeShape.targetObjectsOf (sh:targetObjectsOf — values are predicate IRIs) and
+// NodeShape.generated (core:generated — marks a shape core generates at sync time,
+// e.g. the `<Shape>.singleOwner` constraint, so catalog readers can skip it).
+createPropertyShape(
+  {path: shacl.targetObjectsOf, shape: Shape},
+  'targetObjectsOf',
+  shacl.IRI,
+  NodeShape,
+);
+createPropertyShape(
+  {path: coreOntology.generated, datatype: xsd.boolean, maxCount: 1},
+  'generated',
+  shacl.Literal,
+  NodeShape,
+);

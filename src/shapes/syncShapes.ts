@@ -15,6 +15,7 @@ import {DeleteBuilder} from '../queries/DeleteBuilder.js';
 import type {IDataset} from '../interfaces/IDataset.js';
 import {rdfList} from './List.js';
 import {serializePathToNodeData} from './serializePathToNodeData.js';
+import {buildSingleOwnerShapeData, singleOwnerShapeIri} from './singleOwnerConstraint.js';
 
 /**
  * The npm scope of framework shapes (NodeShape/PropertyShape/List/PathNode/Shape) that
@@ -97,22 +98,41 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
  * The per-shape `delete → create` thunk shared by `syncShapes()` and `syncShape()`. The delete
  * cascade-cleans the shape's old property-shape / list / path subtrees; the create rebuilds them.
  *
+ * The shape's generated single-owner constraint (`<iri>.singleOwner`, see
+ * `singleOwnerConstraint.ts`) rides the same thunk: delete main → delete generated → create
+ * main → create generated. The generated shape is always deleted and only re-created when the
+ * shape still has a qualifying `contains` property, so a shape that loses its last one loses
+ * its constraint on the next sync without any pruning.
+ *
  * `ds` (optional) targets an explicit dataset — both the delete and the create run against it
  * instead of the global router. Omitted → today's global behavior.
  */
 function buildSyncThunk(nodeShape: NodeShapeData, iri: string, ds?: IDataset): () => Promise<void> {
+  const create = (data: Record<string, unknown>, id: string) =>
+    (NodeShape.create(data as never).withId(id) as unknown as {
+      exec: (target?: IDataset) => Promise<unknown>;
+    }).exec(ds);
+  const generatedIri = singleOwnerShapeIri(iri);
   return () => {
     // Build the data fresh on each invocation, so every run writes from the current
     // shape metadata.
     const data = buildNodeShapeData(nodeShape, iri);
+    const generated = buildSingleOwnerShapeData(nodeShape, iri);
     return (DeleteBuilder.from(NodeShape, {id: iri}).exec(ds) as Promise<unknown>)
-      .then(() =>
-        (NodeShape.create(data as never).withId(iri) as unknown as {
-          exec: (target?: IDataset) => Promise<unknown>;
-        }).exec(ds),
-      )
+      .then(() => DeleteBuilder.from(NodeShape, {id: generatedIri}).exec(ds) as Promise<unknown>)
+      .then(() => create(data, iri))
+      .then(() => (generated ? create(generated, generatedIri) : undefined))
       .then(() => undefined);
   };
+}
+
+/** Throw when a registered shape IRI equals another registered shape's generated IRI. */
+function assertNoGeneratedIriCollision(iri: string, isRegistered: (iri: string) => boolean): void {
+  if (isRegistered(singleOwnerShapeIri(iri))) {
+    throw new Error(
+      `Shape IRI ${singleOwnerShapeIri(iri)} collides with a generated single-owner shape`,
+    );
+  }
 }
 
 /** Options controlling how {@link syncShapes} treats store shapes that are not in code. */
@@ -190,6 +210,11 @@ export async function syncShapes(
     userShapes.push({iri, nodeShape: shapeClass.shape});
   }
   const localShapeIris = new Set(userShapes.map((s) => s.iri));
+  for (const {iri} of userShapes) {
+    assertNoGeneratedIriCollision(iri, (id) => localShapeIris.has(id));
+  }
+  // The generated single-owner shapes are written by the same thunks, so they are never orphans.
+  for (const {iri} of userShapes) localShapeIris.add(singleOwnerShapeIri(iri));
   // Namespaces this process actually writes — the ownership scope for `'ownedNamespaces'` pruning.
   const ownedNamespaces = new Set(userShapes.map((s) => shapeNamespace(s.iri)));
 
@@ -266,5 +291,6 @@ export function syncShape(target: typeof Shape | string, ds?: IDataset): () => P
     throw new Error(`syncShape: refusing to sync framework/meta shape ${iri}`);
   }
 
+  assertNoGeneratedIriCollision(iri, (id) => !!getShapeClass(id));
   return buildSyncThunk(nodeShape, iri, ds);
 }

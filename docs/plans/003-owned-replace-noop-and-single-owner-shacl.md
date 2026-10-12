@@ -5,7 +5,7 @@ summary: >
   `contains` properties without a value shape fall back to the `dependent` rule. Shape sync persists
   a generated single-owner SHACL constraint per declaring shape. Store-side SHACL validation is not
   enforced today; this is recorded as a limitation.
-status: Tasks
+status: Implementation
 packages: [core]
 source_backlog: docs/backlog/048-owned-property-replace-deletes-any-node.md
 ---
@@ -627,6 +627,34 @@ extends Project`):
 Validation:
 - Quick: `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs src/tests/single-owner-constraint.test.ts src/tests/shape-wire-idempotence.test.ts src/tests/metadata.test.ts` exits 0.
 - `npm run typecheck` exits 0.
+
+### Phase 2 status: done
+
+Built as planned: `targetObjectsOf` and `generated` on the NodeShape meta-model (`shacl.ts`,
+`linked-core.ts`, `Package.ts`), `src/shapes/singleOwnerConstraint.ts` (C4), and `buildSyncThunk`
+running delete main → delete generated → create main → create generated (if non-null).
+`syncShapes` adds every user shape's generated IRI to `localShapeIris` and throws
+`Shape IRI <x> collides with a generated single-owner shape`.
+
+Validation (2026-10-12):
+- Quick gate (`single-owner-constraint`, `shacl-syncshapes`, `shape-wire-idempotence`,
+  `metadata`): 4 suites, 44 tests passed. `single-owner-constraint.test.ts` has 11 tests.
+- Live `sparql-fuseki-shape-sync.test.ts` re-run with the new thunk: `[ensureFuseki] Fuseki is
+  ready`, 3 tests passed.
+- `npm test` (jest + `tsc -p tsconfig-tests.json`): exit 0. 95 suites passed, 4 skipped;
+  2129 tests passed, 120 skipped (the skipped count is unchanged from before the phase).
+- `npx linked build`: Build successful.
+
+Deviations (no contract change):
+- The C4 helpers are exported from `src/index.ts`, next to `syncShapes`, not from
+  `src/shapes/index.ts`. That barrel is side-effect-only by design ("Nothing is exported from
+  here"). They are also reachable as `@_linked/core/shapes/singleOwnerConstraint`.
+- `targetObjectsOf` is declared `{path: shacl.targetObjectsOf, shape: Shape}`, the same form as
+  the neighbouring `targetNode` and `ignoredProperties` accessors (values are predicate IRIs).
+- `syncShape(target)` also throws on the collision (it checks whether `<iri>.singleOwner` is a
+  registered shape), since its thunk deletes that IRI too.
+- The existing `shacl-syncshapes.test.ts` assertions on exact delete lists now include the
+  `<iri>.singleOwner` delete, which is the intended behaviour.
 
 ## Phase 3 — Live Fuseki tests (after P1 and P2)
 
