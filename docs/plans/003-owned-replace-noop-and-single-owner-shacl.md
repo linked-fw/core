@@ -2257,3 +2257,114 @@ the constraints nested in the main create, and delete them with the main shape.
 - A removed accessor's constraint disappears with the main delete.
 
 Add a live test that asserts zero triples under `${psIri}.singleOwner` after a NodeShape delete.
+
+---
+
+# Iteration 4 — Ideation
+
+Source: [Review (iteration 3)](#review-iteration-3) (M5, L12, L13, L14). The lead developer
+adopted the reviewed alternative (2026-10-12).
+
+## Gap 1 of 1 — Sync cost and fragility of separately managed generated shapes
+
+**Context.** Iteration 3's thunk costs SELECT + DELETE + CREATE per shape, plus one DELETE when
+stale constraints exist and one CREATE per constraint (M5; `main` costs 2). The SELECT fetches
+every generated NodeShape and filters by IRI prefix in JS (M5), which a shape name containing
+`/` defeats (L12). Constraints are created in separate requests after the main create (L13), and
+`shapeNamespace` recognises them by the `.singleOwner` suffix (L14).
+
+**Approaches.**
+- (a) One SELECT per `syncShapes` call, filtered with `STRSTARTS` in SPARQL. Pro: small change.
+  Con: still ≥3 requests per shape, still prefix ownership (L12), still non-atomic (L13).
+- **(b) Owned constraints: `NodeShape.generatedShapes` → `core:generatedShape`**, `contains: true`,
+  value shape `NodeShape`. The main shape owns its generated shapes.
+  - Delete: the subject delete's one-hop block (Decision 5) deletes each generated NodeShape's own
+    triples; the NodeShape cascade (every dependent type, via shape-less `PropertyShape.path`)
+    follows the new predicate to `…/owners` (PropertyShape) and `…/owners/inv` (PathNode).
+    `sh:inversePath schema:image` is a shape-less slot, so the predicate IRI is never touched.
+  - Create: the constraints are nested under `generatedShapes` in the main create, with their
+    fixed IRIs. A nested create is not a link, so the class check sends no SELECT.
+  - Pro: 2 requests per shape again, as on `main`; atomic with the main shape (L13); no SELECT,
+    no prefix matching (M5, L12); a removed accessor's constraint goes with the main delete; a
+    removed shape's constraints go with its orphan delete through the cascade.
+  - Con: one more meta-model predicate, which joins the registry-wide cascade alternation
+    (negligible); main NodeShapes carry one more edge that catalog readers may see.
+- **Chosen: (b).**
+
+**Pruning.** Generated shapes are still `a sh:NodeShape`, so the orphan sweep reads them.
+- Option 1: protect the IRIs derived from the in-code shapes' constraints (`localShapeIris`, as
+  today, with no suffix recognition).
+- Option 2: skip every NodeShape that is the object of a `core:generatedShape` edge whose subject
+  is an in-code shape. Needs the edges, i.e. a richer read than the id-only SELECT.
+- **Chosen: option 1.** It is a pure in-memory derivation from the same function that builds the
+  constraints, needs no extra read, and is exactly the set the thunks write. A stale generated
+  shape (removed accessor or removed shape) is not protected: its owner's delete cascades it, and
+  `'all'` may also delete it directly, which is harmless. `'ownedNamespaces'` needs no special
+  case (L14): an in-code generated IRI is protected, and a stale one goes with its owner.
+
+**Single-owner constraint for `core:generatedShape` itself:** none. `NodeShape` is declared in
+`@_linked/core`, which sync never materializes, so no generated shape is built for it.
+
+**CN check (read-only, 2026-10-12).** `fetchShapeCatalog` (`src/utils/shapeCatalogQuery.ts`
+L61-110) selects named NodeShape fields only (`label`, `targetClass`, …, `properties`), so it does
+not see `generatedShapes`; generated shapes have no `sh:targetClass` and are dropped by
+`projectShapeCatalog`. `PATH_STRUCTURE_QUERY` (L210) reads the path structure of every
+`sh:path` in the store, including the generated `…/owners` paths; no catalog property shape
+refers to them, so they are unused (already true since iteration 1). `shaclParser.ts` parses
+Turtle text, not the store. No CN reader walks every value of a NodeShape. Nothing to change in
+CN; the follow-up (explicit `core:generated` filter, Decision 8) stands.
+
+---
+
+# Iteration 4 — Plan
+
+## Contracts
+
+### C15 — meta-model
+
+- `src/ontologies/linked-core.ts`: `generatedShape = ns('generatedShape')`.
+- `src/utils/Package.ts`: `createPropertyShape({path: coreOntology.generatedShape, shape:
+  NodeShape, contains: true}, 'generatedShapes', shacl.IRI, NodeShape)` (multi-valued), next to
+  `targetObjectsOf` / `generated`.
+
+### C16 — sync (`src/shapes/syncShapes.ts`)
+
+- `buildNodeShapeData` adds `generatedShapes: buildSingleOwnerConstraints(...).map(({iri, data}) =>
+  ({__id: iri, ...data}))` when non-empty.
+- Thunk: `DeleteBuilder.from(NodeShape, {id: iri})` → `NodeShape.create(data).withId(iri)`.
+  Exactly 2 requests.
+- Removed: `storedGeneratedShapes`, prefix matching, the `.singleOwner` case in
+  `shapeNamespace`. Kept: `localShapeIris` gets the in-code generated IRIs; the collision check.
+
+### C17 — persisted triples
+
+C13 plus `<…/Thing> core:generatedShape <…/Thing/image.singleOwner>`.
+
+Files: `linked-core.ts`, `Package.ts`, `syncShapes.ts`, `singleOwnerConstraint.ts` (docs),
+tests (`single-owner-constraint`, `shacl-syncshapes`, `sparql-fuseki-shape-sync`), `README.md`,
+changeset.
+
+---
+
+# Iteration 4 — Phases
+
+## Phase 18 — Owned generated shapes (C15-C17)
+
+Unit: a SPARQL stub dataset records requests for `syncShape(Project, ds)()`: exactly 1 DELETE
+and 1 INSERT, no SELECT (the nested create sends no class-check query); the INSERT contains
+`core:generatedShape` edges to both constraint IRIs and their triples; the DELETE contains the
+one-hop `generatedShape` block. Thunk plan with the dispatch mock: delete main, create main.
+Prune: `'all'` and `'ownedNamespaces'` keep in-code generated IRIs.
+
+Live: a NodeShape delete leaves zero triples under its generated shapes (`…singleOwner`,
+`…/owners`, `…/owners/inv`) while `schema:image` and its label survive; re-sync idempotent;
+removed accessor cleaned up; subclass adds none; hand-written NodeShape at a generated-looking
+IRI survives; `'all'` and `'ownedNamespaces'` syncs keep in-code generated shapes.
+
+Validation: targeted suites pass with Fuseki confirmed (new live tests proven to run);
+typecheck; `npx linked build`.
+
+## Phase 19 — Docs
+
+README sync-lifecycle text, changeset, docstrings; M5/L12/L13/L14 marked resolved. Validation:
+`npm test` exits 0 with Fuseki confirmed; `npx linked build`; :3939 stopped, :3030 untouched.
