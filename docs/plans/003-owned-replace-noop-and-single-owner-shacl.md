@@ -2418,3 +2418,94 @@ Validation (2026-10-12):
 - :3939 stopped; :3030 not touched.
 
 Deviations: none.
+
+---
+
+# Review (iteration 4)
+
+Reviewed 2026-10-12: `git diff d7ce8b3..HEAD` (e1156dc, f37f6d2, 00a76d6).
+
+## Test run
+
+- `npm test`: `[ensureFuseki] Fuseki is ready`. 96 suites passed and 4 skipped (type-only); 2183
+  tests passed and 121 skipped. `EXIT=0`. :3939 was stopped afterwards and :3030 was untouched.
+- New live tests:
+  - a NodeShape delete removes its generated shapes completely, and not the predicate IRI;
+  - `'all'` and `'ownedNamespaces'` pruning keep the generated shapes of in-code shapes;
+  - a sync is two requests and sends no class-check query.
+
+## Data-deletion safety
+
+- **The owned-child block deletes only nodes linked from this shape by `core:generatedShape`.**
+  - `NodeShape.generatedShapes` (`Package.ts:913-918`) is `contains` with value shape NodeShape.
+  - Only sync writes that edge, and only to `${iri}/${label}.singleOwner`. That IRI is unique per
+    declaring shape and accessor; subclasses write none.
+  - So no generated shape has two owners through sync.
+- **The cascade** adds `core:generatedShape` to the path alternation. It still deletes only
+  dependent-typed nodes, and NodeShape is not dependent, so no other shape is reachable through it.
+  `sh:inversePath <predicate>` is shape-less, so the predicate IRI is kept (live-tested).
+- **Class check:** generated shapes are nested creates, so they are not links. Their
+  `targetObjectsOf {id}` is on a non-`contains` predicate, and `inversePath {id}` has no value
+  shape. No SELECT is sent (live-tested).
+- **Single-owner rule:** `NodeShape` lives in `@_linked/core`, which sync skips, so
+  `core:generatedShape` gets no constraint of its own.
+- **Pruning:** generated IRIs are computed in memory (`syncShapes.ts:231-233`).
+  - A stale generated shape goes with its owner's delete.
+  - Under `'all'` it is also pruned directly. The double delete is harmless.
+  - Under `'ownedNamespaces'`, a generated shape whose owner edge is gone is never pruned: its
+    namespace is now `…/Thing/` (L16).
+
+## Status of all findings
+
+| Finding | Status |
+|---|---|
+| H1 class check vs delete rule | Resolved (iteration 1) |
+| H2 bulk deletes | Resolved (iteration 1) |
+| M1 changeset behaviour changes | Resolved (iteration 1). The changeset is still `minor`, which is the lead developer's call. |
+| M2 live negatives | Resolved, except L9 |
+| M3 group without value shape | Resolved (iteration 1; per-accessor since iteration 3) |
+| M4 bulk-delete cost | Resolved (iteration 2) |
+| M5 sync cost | **Resolved**: 2 requests per shape, live-tested |
+| L1 sync deletes non-generated | Resolved (iteration 3); superseded by ownership |
+| L2 / L13 non-atomic constraint writes | **Resolved**: written nested in the main create |
+| L3 TOCTOU | Documented |
+| L4 stale comments | Resolved |
+| L5 backlog 048 | Open: wrap-up deletes it |
+| L6 performance | No action |
+| L7 delete vs replace rule | Documented; an open design question |
+| L8 plain properties checked | Resolved |
+| L9 silent live suites | Open (follow-up) |
+| L10 README narrowing | Resolved (7f1660e) |
+| L11 two registry caches | Open (optional) |
+| L12 prefix matching | **Resolved**: no prefix matching remains |
+| L14 suffix special case | **Resolved**: removed |
+
+## New findings
+
+### Critical / High / Medium
+
+None.
+
+### Low
+
+**L15. A store-only NodeShape that already sits at a generated IRI would be adopted, then wiped.**
+- The collision check only compares registered shapes (`syncShapes.ts:137-147`).
+- A store-only NodeShape at the same IRI, for example a CN project shape, gets linked by the
+  nested create. The next sync's owned-child block then deletes all of its triples.
+- It needs a hand-made NodeShape at `…/<Shape>/<accessor>.singleOwner`, which is unlikely.
+- **Fix:** document it, or have the collision check also ASK the store for an unowned NodeShape
+  at that IRI.
+
+**L16. Under `'ownedNamespaces'`, a generated shape without its owner edge is never pruned.**
+- Removing the special case makes its namespace `…/Thing/`.
+- This only happens to data written before iteration 4 (unreleased) or to an owner removed by raw
+  SPARQL.
+- **Fix:** none needed before release; note it in the report.
+
+**L17. One README line is far over the wrap width.** It is the line that ends "…is never touched.
+`singleOwnerShapeIri`, …". **Fix:** rewrap it.
+
+## Verdict
+
+M5, L12, L13 and L14 are resolved. Nothing outside a shape's own subtree can be deleted through
+the new edge. Ready for wrap-up. L5, L9, L11, L15, L16 and L17 remain as minor follow-ups.
