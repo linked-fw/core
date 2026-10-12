@@ -326,7 +326,9 @@ declares `contains` deletes its old value on replace, but not when its subject i
 Whether ownership should be decided per property everywhere is an open design question. The
 cascade into `dependent` descendants only emits blocks for the dependent shapes the deleted
 shape can reach through its owned properties, so deleting a shape that owns only non-dependent
-values costs one extra block per owned property.
+values costs one extra block per owned property. The walk follows only the `contains` properties
+the reached shapes declare: an owned edge that none of those shapes declares is not followed,
+and the node behind it is left in place rather than deleted.
 
 Non-owning references to an owned node, through other properties or from other subjects, are
 allowed. They are not cleaned up: after the owner is deleted they dangle. The same holds when two
