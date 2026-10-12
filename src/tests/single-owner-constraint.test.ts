@@ -10,8 +10,8 @@ import {literalProperty, objectProperty} from '../shapes/SHACL';
 import {setQueryDispatch} from '../queries/queryDispatch';
 import {syncShapes, syncShape} from '../shapes/syncShapes';
 import {
-  buildSingleOwnerShapeData,
-  ownedPredicateGroup,
+  buildSingleOwnerConstraints,
+  singleOwnerProperties,
   singleOwnerShapeIri,
 } from '../shapes/singleOwnerConstraint';
 import {getAllNodeShapes} from '../utils/ShapeClass';
@@ -108,10 +108,19 @@ const iriOf = (cls: typeof Shape) => cls.shape.id;
 type Call = {kind: string; id?: string};
 let calls: Call[];
 
-function installMock(existingIds: string[]) {
+/**
+ * Query dispatch stub. `generatedIds` answers the sync thunk's SELECT of generated NodeShapes
+ * (a select with a where clause); `existingIds` answers the orphan sweep's plain SELECT.
+ */
+function installMock(existingIds: string[], generatedIds: string[] = []) {
   calls = [];
   setQueryDispatch({
-    selectQuery: async () => existingIds.map((id) => ({id})) as any,
+    selectQuery: async (q: any) => {
+      const ir = lower(q) as any;
+      const filtered = !!ir?.where;
+      calls.push({kind: filtered ? 'select-generated' : 'select'});
+      return (filtered ? generatedIds : existingIds).map((id) => ({id})) as any;
+    },
     askQuery: async () => existingIds.length > 0,
     createQuery: async (q: any) => {
       calls.push({kind: 'create', id: (lower(q) as any)?.data?.id});
@@ -119,77 +128,60 @@ function installMock(existingIds: string[]) {
     },
     updateQuery: async () => ({} as any),
     deleteQuery: async (q: any) => {
-      calls.push({kind: 'delete', id: (lower(q) as any)?.ids?.[0]?.id});
+      for (const ref of (lower(q) as any)?.ids ?? []) calls.push({kind: 'delete', id: ref.id});
       return {deleted: [], count: 0};
     },
   });
 }
 
+const genOf = (cls: typeof Shape, label: string) => singleOwnerShapeIri(`${iriOf(cls)}/${label}`);
+
 describe('single-owner constraint data', () => {
   test('IRI', () => {
-    expect(singleOwnerShapeIri('https://linked.cm/shape/my-pkg/Project')).toBe(
-      'https://linked.cm/shape/my-pkg/Project.singleOwner',
+    expect(singleOwnerShapeIri('https://linked.cm/shape/my-pkg/Thing/image')).toBe(
+      'https://linked.cm/shape/my-pkg/Thing/image.singleOwner',
     );
-    expect(singleOwnerShapeIri(iriOf(Project))).toBe(`${iriOf(Project)}.singleOwner`);
   });
 
-  test('ownedPredicateGroup sorts and flattens', () => {
-    const both = [`${EX}attachments`, `${SCHEMA}image`];
-    expect(ownedPredicateGroup(Project.shape)).toEqual(both);
-    // inherited contains properties are flattened into the subclass's group
-    expect(ownedPredicateGroup(SubProject.shape)).toEqual(both);
-    expect(ownedPredicateGroup(Workspace.shape)).toEqual([`${SCHEMA}image`]);
+  test('one constraint per own contains property, in declaration order', () => {
+    expect(singleOwnerProperties(Project.shape).map((ps) => ps.label)).toEqual(['image', 'attachments']);
+    expect(buildSingleOwnerConstraints(Project.shape, iriOf(Project)).map((c) => c.iri)).toEqual([
+      genOf(Project, 'image'),
+      genOf(Project, 'attachments'),
+    ]);
+    // Workspace's plain `logo` reference is not owned.
+    expect(singleOwnerProperties(Workspace.shape).map((ps) => ps.label)).toEqual(['image']);
   });
 
-  test('no contains → null', () => {
-    expect(ownedPredicateGroup(ImageObject.shape)).toEqual([]);
-    expect(buildSingleOwnerShapeData(ImageObject.shape, iriOf(ImageObject))).toBeNull();
+  test('a subclass inherits the property but adds no constraint', () => {
+    expect(singleOwnerProperties(SubProject.shape)).toEqual([]);
+    expect(buildSingleOwnerConstraints(SubProject.shape, iriOf(SubProject))).toEqual([]);
   });
 
-  test('shape-less contains is skipped', () => {
-    expect(ownedPredicateGroup(Folder.shape)).toEqual([`${SCHEMA}image`]);
-    expect(ownedPredicateGroup(LooseFolder.shape)).toEqual([]);
-    expect(buildSingleOwnerShapeData(LooseFolder.shape, iriOf(LooseFolder))).toBeNull();
+  test('no contains, shape-less contains and complex-path contains: none', () => {
+    expect(buildSingleOwnerConstraints(ImageObject.shape, iriOf(ImageObject))).toEqual([]);
+    expect(singleOwnerProperties(Folder.shape).map((ps) => ps.label)).toEqual(['image']);
+    expect(buildSingleOwnerConstraints(LooseFolder.shape, iriOf(LooseFolder))).toEqual([]);
+    expect(buildSingleOwnerConstraints(Album.shape, iriOf(Album))).toEqual([]);
   });
 
-  test('complex-path contains is skipped', () => {
-    expect(ownedPredicateGroup(Album.shape)).toEqual([]);
-    expect(buildSingleOwnerShapeData(Album.shape, iriOf(Album))).toBeNull();
-  });
-
-  test('two-predicate data', () => {
-    const gen = singleOwnerShapeIri(iriOf(Project));
-    const data = buildSingleOwnerShapeData(Project.shape, iriOf(Project)) as any;
+  test('data: a plain inverse path of the one predicate', () => {
+    const [image, attachments] = buildSingleOwnerConstraints(Project.shape, iriOf(Project));
+    const data = image.data as any;
     expect(data.generated).toBe(true);
-    expect(data.targetObjectsOf).toEqual([{id: `${EX}attachments`}, {id: `${SCHEMA}image`}]);
+    expect(data.targetObjectsOf).toEqual([{id: `${SCHEMA}image`}]);
     // no targetClass: the constraint targets objects, not instances
     expect(data.targetClass).toBeUndefined();
     expect(data.properties).toHaveLength(1);
     const ps = data.properties[0];
-    expect(ps.__id).toBe(`${gen}/owners`);
+    expect(ps.__id).toBe(`${image.iri}/owners`);
     expect(ps.label).toBe('owners');
     expect(ps.maxCount).toBe(1);
-    expect(ps.path.__id).toBe(`${gen}/owners/inv`);
+    expect(ps.path.__id).toBe(`${image.iri}/owners/inv`);
     expect(ps.path.shape).toBe(PathNode);
-    const alt = ps.path.inversePath;
-    expect(alt.__id).toBe(`${gen}/owners/inv/alt`);
-    expect(alt.shape).toBe(PathNode);
-    const list = alt.alternativePath;
-    expect(list.shape).toBe(List);
-    expect(list.__id).toBe(`${gen}/owners/inv/alt/0`);
-    expect(list.first).toEqual({id: `${EX}attachments`});
-    expect(list.rest.__id).toBe(`${gen}/owners/inv/alt/1`);
-    expect(list.rest.first).toEqual({id: `${SCHEMA}image`});
-    expect(list.rest.rest).toEqual({id: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'});
-  });
-
-  test('single-predicate data', () => {
-    const gen = singleOwnerShapeIri(iriOf(Workspace));
-    const data = buildSingleOwnerShapeData(Workspace.shape, iriOf(Workspace)) as any;
-    expect(data.targetObjectsOf).toEqual([{id: `${SCHEMA}image`}]);
-    const path = data.properties[0].path;
-    expect(path.__id).toBe(`${gen}/owners/inv`);
-    expect(path.inversePath).toEqual({id: `${SCHEMA}image`});
+    expect(ps.path.inversePath).toEqual({id: `${SCHEMA}image`});
+    expect((attachments.data as any).targetObjectsOf).toEqual([{id: `${EX}attachments`}]);
+    expect((attachments.data as any).properties[0].path.inversePath).toEqual({id: `${EX}attachments`});
   });
 
   test('not registered', () => {
@@ -205,51 +197,76 @@ describe('single-owner constraint sync', () => {
 
   test('sync thunk plan', async () => {
     const main = iriOf(Project);
-    const gen = singleOwnerShapeIri(main);
     await syncShape(Project)();
-    expect(calls.map((c) => `${c.kind}:${c.id}`)).toEqual([
+    expect(calls.map((c) => (c.id ? `${c.kind}:${c.id}` : c.kind))).toEqual([
+      'select-generated',
       `delete:${main}`,
-      `delete:${gen}`,
       `create:${main}`,
-      `create:${gen}`,
+      `create:${genOf(Project, 'image')}`,
+      `create:${genOf(Project, 'attachments')}`,
     ]);
   });
 
-  test('a shape without contains only deletes its generated shape', async () => {
+  test('stored generated shapes under the shape are deleted; others are not', async () => {
+    const main = iriOf(Project);
+    const removed = `${main}/oldAccessor.singleOwner`;
+    installMock([], [genOf(Project, 'image'), removed, genOf(Workspace, 'image'), `${main}.singleOwner`]);
+    await syncShape(Project)();
+    expect(calls.filter((c) => c.kind === 'delete').map((c) => c.id)).toEqual([
+      main,
+      genOf(Project, 'image'),
+      removed,
+    ]);
+    expect(calls.filter((c) => c.kind === 'create').map((c) => c.id)).toEqual([
+      main,
+      genOf(Project, 'image'),
+      genOf(Project, 'attachments'),
+    ]);
+  });
+
+  test('a shape without contains deletes nothing generated when none is stored', async () => {
     const main = iriOf(ImageObject);
     await syncShape(ImageObject)();
-    expect(calls.map((c) => `${c.kind}:${c.id}`)).toEqual([
+    expect(calls.map((c) => (c.id ? `${c.kind}:${c.id}` : c.kind))).toEqual([
+      'select-generated',
       `delete:${main}`,
-      `delete:${singleOwnerShapeIri(main)}`,
       `create:${main}`,
     ]);
   });
 
-  test('prune keeps generated', async () => {
-    const gen = singleOwnerShapeIri(iriOf(Project));
+  test('prune keeps generated shapes of code shapes', async () => {
+    const gen = genOf(Project, 'image');
     const ORPHAN = 'https://linked.cm/shape/single-owner-test/Gone';
     installMock([iriOf(Project), gen, ORPHAN]);
     const plan = await syncShapes(undefined, {orphanScope: 'all'});
-    // one thunk per code shape, plus the one orphan
-    const userShapeCount = [Project, SubProject, Workspace, Album, ImageObject].length;
-    expect(plan.length).toBeGreaterThanOrEqual(userShapeCount + 1);
     for (const run of plan) await run();
     const deletes = calls.filter((c) => c.kind === 'delete').map((c) => c.id);
-    // the generated shape is deleted exactly once — by Project's own thunk, never as an orphan
-    expect(deletes.filter((id) => id === gen)).toHaveLength(1);
+    expect(deletes).not.toContain(gen);
     expect(deletes).toContain(ORPHAN);
     expect(calls.filter((c) => c.kind === 'create').map((c) => c.id)).toContain(gen);
+  });
+
+  test('ownedNamespaces prunes a stale generated shape by its declaring namespace', async () => {
+    const pkgNs = iriOf(Project).slice(0, iriOf(Project).lastIndexOf('/') + 1);
+    const stale = `${pkgNs}Gone/image.singleOwner`;
+    const foreign = 'https://linked.cm/shape/other-pkg/Thing/image.singleOwner';
+    installMock([stale, foreign]);
+    const plan = await syncShapes(undefined, {orphanScope: 'ownedNamespaces'});
+    for (const run of plan) await run();
+    const deletes = calls.filter((c) => c.kind === 'delete').map((c) => c.id);
+    expect(deletes).toContain(stale);
+    expect(deletes).not.toContain(foreign);
   });
 });
 
 describe('single-owner IRI collision', () => {
   test('a registered shape at a generated IRI throws', async () => {
     installMock([]);
-    @linkedShape({name: 'Workspace.singleOwner'})
+    @linkedShape({name: 'Workspace/image.singleOwner'})
     class Colliding extends Shape {
       static targetClass = ex('Colliding');
     }
-    expect(Colliding.shape.id).toBe(singleOwnerShapeIri(iriOf(Workspace)));
+    expect(Colliding.shape.id).toBe(genOf(Workspace, 'image'));
     await expect(syncShapes()).rejects.toThrow(
       `Shape IRI ${Colliding.shape.id} collides with a generated single-owner shape`,
     );

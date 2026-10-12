@@ -10,8 +10,8 @@ import './live.js';
 export {syncShapes, syncShape} from './shapes/syncShapes.js';
 export {
   singleOwnerShapeIri,
-  ownedPredicateGroup,
-  buildSingleOwnerShapeData,
+  singleOwnerProperties,
+  buildSingleOwnerConstraints,
 } from './shapes/singleOwnerConstraint.js';
 export {rdfList} from './shapes/List.js';
 export {serializePathToNodeData} from './shapes/serializePathToNodeData.js';

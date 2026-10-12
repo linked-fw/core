@@ -86,7 +86,7 @@ class E2EImage extends Shape {
   }
 }
 
-// Two `contains` properties: the generated single-owner shape groups both predicates.
+// Two `contains` properties: one generated single-owner shape per property.
 @linkedShape
 class E2EProject extends Shape {
   static targetClass = ex('Project');
@@ -100,12 +100,22 @@ class E2EProject extends Shape {
   }
 }
 
-// One `contains` property, removed from the registered shape in the last test.
+// Inherits both `contains` properties: their constraints stay at E2EProject only.
+@linkedShape
+class E2ESubProject extends E2EProject {
+  static targetClass = ex('SubProject');
+}
+
+// Two `contains` properties; `banner` is removed from the registered shape in a test.
 @linkedShape
 class E2EOwnerLoss extends Shape {
   static targetClass = ex('OwnerLoss');
   @objectProperty({path: ex('banner'), shape: E2EImage, maxCount: 1, contains: true})
   get banner(): E2EImage {
+    return null;
+  }
+  @objectProperty({path: ex('icon'), shape: E2EImage, maxCount: 1, contains: true})
+  get icon(): E2EImage {
     return null;
   }
 }
@@ -260,55 +270,85 @@ describe('shape sync e2e (Fuseki)', () => {
 });
 
 describe('single-owner constraint e2e (Fuseki)', () => {
-  const GEN = () => singleOwnerShapeIri(E2EProject.shape.id);
+  const genOf = (shapeIri: string, label: string) => singleOwnerShapeIri(`${shapeIri}/${label}`);
+  const IMAGE = () => genOf(E2EProject.shape.id, 'image');
+  const ATTACHMENTS = () => genOf(E2EProject.shape.id, 'attachments');
   const genTriples = (gen: string) =>
     count(`?s ?p ?o . FILTER(STRSTARTS(STR(?s), "${gen}"))`);
+  const generatedUnder = (shapeIri: string) =>
+    count(
+      `?g <${RDF}type> <${SH}NodeShape> ; <${CORE}generated> true . ` +
+        `FILTER(STRSTARTS(STR(?g), "${shapeIri}/"))`,
+    );
 
-  test('generated single-owner shape is persisted', async () => {
+  test('one generated single-owner shape per contains property is persisted', async () => {
     if (!available) return;
     await runSync();
-    const gen = GEN();
-    expect(
-      await has(
-        `<${gen}> <${RDF}type> <${SH}NodeShape> ; <${CORE}generated> true ; ` +
-          `<${SH}targetObjectsOf> <${ex('attachments').id}>, <${schemaImage.id}>`,
-      ),
-    ).toBe(true);
-    expect(await has(`<${gen}> <${SH}targetClass> ?c`)).toBe(false);
-    expect(await has(`<${gen}> <${SH}property> <${gen}/owners> . <${gen}/owners> <${SH}maxCount> 1`)).toBe(
-      true,
-    );
-    const r = await executeSparqlQuery(
-      `SELECT ?p WHERE { <${gen}> <${SH}property>/<${SH}path>/<${SH}inversePath>/<${SH}alternativePath>/<${RDF}rest>*/<${RDF}first> ?p }`,
-    );
-    expect(r.results.bindings.map((b: any) => b.p.value).sort()).toEqual([
-      ex('attachments').id,
-      schemaImage.id,
-    ]);
+    for (const [gen, predicate] of [
+      [IMAGE(), schemaImage.id],
+      [ATTACHMENTS(), ex('attachments').id],
+    ]) {
+      expect(
+        await has(
+          `<${gen}> <${RDF}type> <${SH}NodeShape> ; <${CORE}generated> true ; ` +
+            `<${SH}targetObjectsOf> <${predicate}> ; <${SH}property> <${gen}/owners> . ` +
+            `<${gen}/owners> <${RDF}type> <${SH}PropertyShape> ; <${SH}maxCount> 1 ; ` +
+            `<${SH}path> <${gen}/owners/inv> . <${gen}/owners/inv> <${SH}inversePath> <${predicate}>`,
+        ),
+      ).toBe(true);
+      expect(await count(`<${gen}> <${SH}targetObjectsOf> ?p`)).toBe(1);
+      expect(await has(`<${gen}> <${SH}targetClass> ?c`)).toBe(false);
+      expect(await has(`?x <${SH}alternativePath> ?l . FILTER(STRSTARTS(STR(?x), "${gen}"))`)).toBe(false);
+    }
+    expect(await generatedUnder(E2EProject.shape.id)).toBe(2);
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  test('a subclass adds no constraint', async () => {
+    if (!available) return;
+    await runSync();
+    expect(await has(`<${E2ESubProject.shape.id}> <${RDF}type> <${SH}NodeShape>`)).toBe(true);
+    expect(await generatedUnder(E2ESubProject.shape.id)).toBe(0);
+    expect(await count(`?g <${CORE}generated> true ; <${SH}targetObjectsOf> <${schemaImage.id}>`)).toBe(1);
   }, LIVE_FUSEKI_TIMEOUT);
 
   test('re-sync is idempotent', async () => {
     if (!available) return;
     await runSync();
-    const before = await genTriples(GEN());
-    expect(before).toBeGreaterThan(0);
+    const before = [await genTriples(IMAGE()), await genTriples(ATTACHMENTS())];
+    expect(before[0]).toBeGreaterThan(0);
+    expect(before[1]).toBeGreaterThan(0);
     await runSync();
-    expect(await genTriples(GEN())).toBe(before);
+    expect([await genTriples(IMAGE()), await genTriples(ATTACHMENTS())]).toEqual(before);
   }, LIVE_FUSEKI_TIMEOUT);
 
-  test('losing the last contains property removes the constraint', async () => {
+  test('a removed accessor loses its constraint; the kept one survives', async () => {
     if (!available) return;
-    const gen = singleOwnerShapeIri(E2EOwnerLoss.shape.id);
+    const banner = genOf(E2EOwnerLoss.shape.id, 'banner');
+    const icon = genOf(E2EOwnerLoss.shape.id, 'icon');
     await syncShape(E2EOwnerLoss)();
-    expect(await genTriples(gen)).toBeGreaterThan(0);
+    expect(await genTriples(banner)).toBeGreaterThan(0);
+    const iconTriples = await genTriples(icon);
+    expect(iconTriples).toBeGreaterThan(0);
 
     (E2EOwnerLoss.shape as any).propertyShapes = (
       E2EOwnerLoss.shape as any
     ).propertyShapes.filter((ps: PropertyShapeData) => ps.label !== 'banner');
     await syncShape(E2EOwnerLoss)();
 
-    expect(await genTriples(gen)).toBe(0);
+    expect(await genTriples(banner)).toBe(0);
+    expect(await genTriples(icon)).toBe(iconTriples);
     expect(await has(`<${E2EOwnerLoss.shape.id}> <${RDF}type> <${SH}NodeShape>`)).toBe(true);
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  test('a hand-written NodeShape at a generated-looking IRI is not deleted (not core:generated)', async () => {
+    if (!available) return;
+    const handmade = genOf(E2EProject.shape.id, 'handmade');
+    await executeSparqlUpdate(
+      `INSERT DATA { <${handmade}> <${RDF}type> <${SH}NodeShape> ; <${SH}targetClass> <${ex('X').id}> . }`,
+    );
+    await syncShape(E2EProject)();
+    expect(await count(`<${handmade}> ?p ?o`)).toBe(2);
+    await executeSparqlUpdate(`DELETE WHERE { <${handmade}> ?p ?o }`);
   }, LIVE_FUSEKI_TIMEOUT);
 
   // The test Fuseki (secoresearch/fuseki, datasets created through the admin API) exposes

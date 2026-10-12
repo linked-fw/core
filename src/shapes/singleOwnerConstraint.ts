@@ -3,84 +3,90 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
-import {getUniquePropertyShapes, type NodeShapeData} from './nodeShapeData.js';
+import {getPropertyShapes, type NodeShapeData, type PropertyShapeData} from './nodeShapeData.js';
 import {getSimplePathId} from '../paths/normalizePropertyPath.js';
 import {serializePathToNodeData} from './serializePathToNodeData.js';
-import type {PathExpr} from '../paths/PropertyPathExpr.js';
 
 /**
- * The single-owner SHACL constraint generated from a shape's `contains` properties.
+ * The single-owner SHACL constraints generated from `contains` properties.
  *
- * A `contains` property says the subject owns the value node. The generated NodeShape states
- * the matching store-side rule: every object of one of the declaring shape's `contains`
- * predicates has at most one subject pointing at it through any of those predicates.
+ * A `contains` property says the subject owns the value node. For every such property, shape
+ * sync writes one generated NodeShape stating the matching store-side rule: every object of the
+ * property's predicate has at most one subject pointing at it through that predicate.
  *
  * ```turtle
- * <…/Project.singleOwner> a sh:NodeShape ;
+ * <…/Thing/image.singleOwner> a sh:NodeShape ;
  *     core:generated true ;
- *     sh:targetObjectsOf ex:attachments, schema:image ;
- *     sh:property <…/Project.singleOwner/owners> .
- * <…/Project.singleOwner/owners> sh:maxCount 1 ;
- *     sh:path [ sh:inversePath [ sh:alternativePath (ex:attachments schema:image) ] ] .
+ *     sh:targetObjectsOf schema:image ;
+ *     sh:property <…/Thing/image.singleOwner/owners> .
+ * <…/Thing/image.singleOwner/owners> a sh:PropertyShape ;
+ *     sh:maxCount 1 ;
+ *     sh:path [ sh:inversePath schema:image ] .
  * ```
  *
- * Non-owning references to the value through other predicates are not counted. The shape is
- * built only at sync time and is never registered in the in-memory shape registry.
+ * One constraint per accessor, written only by the class that declares it: subclasses inherit
+ * the property but add no constraint, since the rule targets the predicate's objects whoever the
+ * subject is. Non-owning references through other predicates are not counted, and neither is
+ * ownership through two different `contains` predicates (a documented limitation). The shapes
+ * are built only at sync time and are never registered in the in-memory shape registry.
  */
 
-/** Suffix that turns a declaring shape's IRI into its generated single-owner shape's IRI. */
+/** Suffix that turns a property shape's IRI into its generated single-owner shape's IRI. */
 const SINGLE_OWNER_SUFFIX = '.singleOwner';
 
-/** The deterministic IRI of a declaring shape's generated single-owner NodeShape. */
-export function singleOwnerShapeIri(shapeIri: string): string {
-  return `${shapeIri}${SINGLE_OWNER_SUFFIX}`;
+/**
+ * The deterministic IRI of the generated single-owner NodeShape of one property shape:
+ * `${propertyShapeIri}.singleOwner`, e.g. `…/shape/my-pkg/Thing/image.singleOwner`.
+ */
+export function singleOwnerShapeIri(propertyShapeIri: string): string {
+  return `${propertyShapeIri}${SINGLE_OWNER_SUFFIX}`;
 }
 
 /**
- * Sorted simple-path IRIs of the shape's own and inherited `contains` properties that declare a
- * value shape.
+ * The shape's OWN `contains` properties that get a single-owner constraint: those that declare
+ * a value shape and have a simple path, in declaration order.
  *
- * Inherited properties are flattened exactly as shape sync flattens them. Contains properties
- * with a complex path are skipped, as the containment cascade skips them. Contains properties
- * without a value shape are skipped too: such a slot is polymorphic (like `sh:path`) and its
- * value may be a shared IRI, so the replace, the subject delete and the class check do not treat
- * it as owning that value, and neither does the single-owner rule. Sorting by IRI keeps
- * the stored list independent of declaration order, so a re-sync writes identical triples.
+ * Inherited properties are not included; their declaring shape writes their constraint.
+ * Complex paths are skipped, as the containment cascade skips them. A `contains` property
+ * without a value shape is a polymorphic slot (like `sh:path`) whose value may be a shared IRI,
+ * so the replace, the subject delete and the class check do not treat it as owning that value,
+ * and neither does the single-owner rule.
  */
-export function ownedPredicateGroup(nodeShape: NodeShapeData): string[] {
-  const preds = new Set<string>();
-  for (const ps of getUniquePropertyShapes(nodeShape)) {
-    if (!ps.contains || !ps.valueShape) continue;
-    const predId = getSimplePathId(ps.path);
-    if (predId) preds.add(predId);
-  }
-  return [...preds].sort();
+export function singleOwnerProperties(nodeShape: NodeShapeData): PropertyShapeData[] {
+  return getPropertyShapes(nodeShape, false).filter(
+    (ps) => ps.contains && !!ps.valueShape && !!getSimplePathId(ps.path),
+  );
 }
 
 /**
- * Create-pipeline data for the generated single-owner NodeShape of `nodeShape` (stored at
- * {@link singleOwnerShapeIri}`(shapeIri)`), or `null` when the shape has no qualifying
- * `contains` property.
+ * Create-pipeline data for the generated single-owner NodeShapes of `nodeShape`, one per
+ * {@link singleOwnerProperties} entry. Each is stored at
+ * {@link singleOwnerShapeIri}`(${shapeIri}/${label})`: the property shape's IRI exactly as shape
+ * sync writes it (`buildPropertyShapeData`).
  */
-export function buildSingleOwnerShapeData(
+export function buildSingleOwnerConstraints(
   nodeShape: NodeShapeData,
   shapeIri: string,
-): Record<string, unknown> | null {
-  const group = ownedPredicateGroup(nodeShape);
-  if (group.length === 0) return null;
-  const psIri = `${singleOwnerShapeIri(shapeIri)}/owners`;
-  const owners: PathExpr =
-    group.length === 1 ? {id: group[0]} : {alt: group.map((id) => ({id}))};
-  return {
-    generated: true,
-    targetObjectsOf: group.map((id) => ({id})),
-    properties: [
-      {
-        __id: psIri,
-        label: 'owners',
-        maxCount: 1,
-        path: serializePathToNodeData({inv: owners}, psIri),
+): Array<{iri: string; data: Record<string, unknown>}> {
+  return singleOwnerProperties(nodeShape).flatMap((ps) => {
+    const predicate = getSimplePathId(ps.path);
+    if (!predicate) return [];
+    const iri = singleOwnerShapeIri(`${shapeIri}/${ps.label}`);
+    const psIri = `${iri}/owners`;
+    return [{
+      iri,
+      data: {
+        generated: true,
+        targetObjectsOf: [{id: predicate}],
+        properties: [
+          {
+            __id: psIri,
+            label: 'owners',
+            maxCount: 1,
+            path: serializePathToNodeData({inv: {id: predicate}}, psIri),
+          },
+        ],
       },
-    ],
-  };
+    }];
+  });
 }

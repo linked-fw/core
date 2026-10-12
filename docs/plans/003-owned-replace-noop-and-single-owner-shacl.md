@@ -2075,6 +2075,43 @@ collision throws.
 Validation: `single-owner-constraint`, `shacl-syncshapes`, `shape-wire-idempotence`, `metadata`
 pass; typecheck.
 
+### Phase 15 status: done (Phases 15 and 16 in one commit)
+
+Built per C12 and C14:
+- `singleOwnerConstraint.ts`: `singleOwnerShapeIri(propertyShapeIri)`, `singleOwnerProperties`
+  (own `contains` properties with a value shape and a simple path) and
+  `buildSingleOwnerConstraints` (one `{iri, data}` per property, plain `sh:inversePath`).
+  `ownedPredicateGroup` and `buildSingleOwnerShapeData` are removed; `src/index.ts` exports the
+  new three.
+- `syncShapes.ts`: the thunk runs SELECT of `core:generated true` NodeShapes (filtered to
+  `${iri}/`) → delete main → delete those, only if any (one multi-id delete) → create main →
+  create each constraint. `localShapeIris` holds every in-code generated IRI; `shapeNamespace`
+  maps a `….singleOwner` IRI to its declaring shape's namespace for `'ownedNamespaces'`; the
+  collision check compares each generated IRI with the registered shapes.
+- **L1 resolved:** sync deletes only NodeShapes the store marks `core:generated`; a
+  hand-written NodeShape at a generated-looking IRI survives (live test).
+- **L2 not done** (see Iteration 3 Ideation): no batch entry point on `IDataset`. The
+  unconditional generated delete is gone; a shape without stored generated shapes costs SELECT +
+  delete + create.
+
+Validation (2026-10-12):
+- Unit: `single-owner-constraint` (12 tests, rewritten: IRIs, per-property data, subclass adds
+  none, skips, thunk plan with stored generated shapes under and outside the prefix, prune 'all'
+  and 'ownedNamespaces', collision), `shacl-syncshapes` (the exact delete lists lose the
+  unconditional `.singleOwner` delete): 45 passed with `shape-wire-idempotence` and `metadata`.
+- Live `sparql-fuseki-shape-sync`: 8 passed, 1 skipped (SHACL endpoint). New: persisted per
+  accessor (C13 triples, no `sh:alternativePath`), subclass adds none, idempotent re-sync per
+  constraint, removed accessor cleaned up while the kept one is unchanged, hand-written NodeShape
+  survives. All 5 proven to run with a temporary `throw` (5 failures), removed afterwards.
+- `npm test`: exit 0. `[ensureFuseki] Fuseki is ready`; 96 suites passed, 4 skipped; 2181 tests
+  passed, 121 skipped. `npx linked build`: Build successful.
+
+Deviation: the live tests (planned Phase 16) are in the same commit, so that no commit leaves
+the live shape-sync suite red against the new IRIs. Phase 16 is therefore the docs phase;
+Phase 17 is not used. Old per-shape `<Shape>.singleOwner` shapes written by earlier commits of
+this unreleased branch are not cleaned up by the thunk (they are not under `${iri}/`); an
+`'all'` prune removes them.
+
 ## Phase 16 — Live sync tests
 
 `sparql-fuseki-shape-sync`: persisted per accessor (C13 triples); idempotent re-sync triple

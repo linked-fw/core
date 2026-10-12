@@ -189,10 +189,9 @@ describe('syncShapes with a partial registry (deep imports)', () => {
     for (const run of plan) await run();
     const deletes = storeCalls.filter((c) => c.kind === 'delete').map((c) => c.id);
     const creates = storeCalls.filter((c) => c.kind === 'create').map((c) => c.id);
-    // only the registered shapes are touched (delete→recreate), plus the delete of each one's
-    // generated single-owner shape (neither has a `contains` property, so none is re-created)
-    const own = [TOther.shape.id, TUser.shape.id];
-    expect(deletes.sort()).toEqual([...own, ...own.map((id) => `${id}.singleOwner`)].sort());
+    // only the registered shapes are touched (delete→recreate); neither has a `contains`
+    // property or a stored generated shape, so no single-owner shape is deleted or created
+    expect(deletes.sort()).toEqual([TOther.shape.id, TUser.shape.id].sort());
     expect(creates.sort()).toEqual([TOther.shape.id, TUser.shape.id].sort());
   });
 
@@ -221,9 +220,9 @@ describe('syncShape (single)', () => {
   test('materializes only the target shape — no other shape, no orphan sweep', async () => {
     await syncShape(TUser)();
     const ids = (k: string) => calls.filter((c) => c.kind === k).map((c) => c.id);
-    // exactly delete + create for the target (plus the delete of its generated single-owner
-    // shape, which TUser — no `contains` property — never re-creates)
-    expect(ids('delete')).toEqual([userIri(), `${userIri()}.singleOwner`]);
+    // exactly delete + create for the target (TUser has no `contains` property and no stored
+    // generated shape under its IRI, so nothing else is deleted)
+    expect(ids('delete')).toEqual([userIri()]);
     expect(ids('create')).toEqual([userIri()]);
     // the other shape is untouched (no collateral delete/create)
     expect(calls.some((c) => c.id === otherIri())).toBe(false);
@@ -234,7 +233,7 @@ describe('syncShape (single)', () => {
   test('IRI form resolves to the same result as the class form', async () => {
     await syncShape(userIri())();
     const ids = (k: string) => calls.filter((c) => c.kind === k).map((c) => c.id);
-    expect(ids('delete')).toEqual([userIri(), `${userIri()}.singleOwner`]);
+    expect(ids('delete')).toEqual([userIri()]);
     expect(ids('create')).toEqual([userIri()]);
   });
 
@@ -245,10 +244,8 @@ describe('syncShape (single)', () => {
     // delete→create each run, target only, no duplication of other ids
     expect(calls.map((c) => `${c.kind}:${c.id}`)).toEqual([
       `delete:${userIri()}`,
-      `delete:${userIri()}.singleOwner`,
       `create:${userIri()}`,
       `delete:${userIri()}`,
-      `delete:${userIri()}.singleOwner`,
       `create:${userIri()}`,
     ]);
   });
@@ -297,7 +294,7 @@ describe('dataset threading — sync into an explicit store, global router untou
     await syncShape(TUser, store)();
 
     const ids = (k: string) => storeCalls.filter((c) => c.kind === k).map((c) => c.id);
-    expect(ids('delete')).toEqual([userIri(), `${userIri()}.singleOwner`]);
+    expect(ids('delete')).toEqual([userIri()]);
     expect(ids('create')).toEqual([userIri()]);
     // The global store never saw a single query.
     expect(calls).toEqual([]);
