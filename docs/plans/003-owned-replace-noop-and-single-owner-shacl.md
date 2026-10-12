@@ -6,7 +6,7 @@ summary: >
   a generated single-owner SHACL constraint per declaring shape. Linking a node of the wrong class
   into a `contains` property is refused by one batched type query per mutation. Store-side SHACL
   validation is not enforced today; this is recorded as a limitation.
-status: Implementation
+status: Review
 packages: [core]
 source_backlog: docs/backlog/048-owned-property-replace-deletes-any-node.md
 ---
@@ -1079,3 +1079,153 @@ Validation:
 - `npm test` exits 0 with Docker up.
 - `npx linked build` exits 0.
 - `git status` shows only the intended files.
+
+---
+
+# Review
+
+Reviewed 2026-10-12 against the accepted decisions (A1-A7, Decisions 1-8) and contracts C1-C7.
+Evidence came from the diff (`git diff main...HEAD`), the SPARQL emitted by a throwaway jest
+scratch test (deleted afterwards), and a trace of the write path through `_linked-fuseki`,
+`_linked-server` and CN.
+
+## Test run
+
+- `npm test`: `[ensureFuseki] Fuseki is ready` (test container on :3939). 96 suites passed and 4
+  skipped (type-only suites); 2162 tests passed and 121 skipped. Typecheck exit 0. The test
+  container was stopped afterwards and :3030 was not touched.
+- Architecture: `core:generated` is in `linked-core.ts`, `sh:targetObjectsOf` is in `shacl.ts`, the
+  generated IRI derives from `getNodeShapeUri`, and the release goes through a changeset only. No
+  violations of ontologies.md, runtime-instances.md or publishing.md were found.
+
+## Intent check
+
+- **S1 (no-op re-send):** met for a single value, an array overwrite and set add+remove. The
+  `FILTER NOT IN` sits inside each UNION branch, as the pitfall requires. The emitted SPARQL for
+  `forAll()` and for two `contains` fields in one update was checked.
+- **Decision 5:** met for the id delete (`deleteToAlgebra`). **Not** applied to `deleteAll` or
+  `delete().where()` (H2).
+- **Decision 6:** met. `PropertyShape.path`-style slots no longer self-delete. The cascade uses `*`.
+- **Decision 7:** met on every DSL write path. One gap is caused by the predicate-level `contains`
+  rule (H1).
+- **S4:** met. The shape is persisted, re-sync is idempotent, `'all'` pruning keeps generated
+  shapes, and nothing is registered in memory.
+
+## Write path (question 1)
+
+Every DSL create, update, upsert and update-where reaches `SparqlDataset.createQuery` or
+`updateQuery`.
+- `_linked-fuseki/src/shapes/FusekiStore.ts:66` extends `SparqlDataset` and implements only
+  `executeSparqlSelect` and `executeSparqlUpdate`.
+- Upsert is a flag on `UpdateBuilder` (`UpdateBuilder.ts:308`), so it goes through `updateQuery`.
+- The server (`_linked-server/src/backend.ts:67-84`) runs `fromJSON`, then `LinkedStorage.*Query`.
+- In CN, `linked.backend.storage.js:86-118` creates `FusekiStore`s. `AppDataRouter` forwards
+  through `ExecutionGateway` to the store's own `createQuery`/`updateQuery`, and
+  `HostAgentForwarder` extends `SparqlDataset`.
+- No code outside `SparqlDataset.ts` calls `createToSparql`, `updateToSparql`, `upsertToSparql` or
+  `updateWhereToSparql`.
+- No in-memory or other `IDataset` exists in core, `packages-local` or CN.
+
+Raw SPARQL (`rawQuery(...,'update')`, `fetch` to `/update`, Graph Store imports) skips the check,
+as designed. Callers include CN `DraftProvider.ts` and the translation writes in
+`ProjectProvider.ts`.
+
+## Findings
+
+### High
+
+**H1. The class check is per property; the owned delete is per predicate.**
+- `processUpdateFields` decides `isContainsField` from the registry-wide predicate set
+  (`irToAlgebra.ts:1971`). Its `hasValueShape` (`:1976`) only asks whether *this* property shape
+  has a value shape.
+- `buildRule` (`ownedLinkCheck.ts:109-110`) returns null unless *this* property shape has
+  `contains`.
+- So for a shape that declares the same predicate **without** `contains`, the check is skipped
+  but the replace still self-deletes the old value. Scratch evidence: `ROther.img`, plain, shares
+  `ex:img` with `ROwner.img`, which is `contains`. `collectOwnedLinks` returns `[]`, and
+  `updateToSparql` emits `?old_img ?uc0_sp ?uc0_so` plus the cascade.
+- This is concrete for CN. `@_linked/schema` `Thing.image` is `contains`. CN strips `contains` from
+  project-authored shapes (`runtimeShapeRegistry.ts:38-52`), so a project shape declaring
+  `schema:image` links unchecked, and its next replace deletes whatever was linked.
+- Backlog 048's "decided by predicate across the whole registry" root cause is therefore still
+  open. The README's claim, "core checks the class of every id linked into a `contains`
+  property", does not hold here.
+- **Fix:** apply one rule to both. Either run the check for any field whose predicate is in
+  `collectContainment().containsPreds` and that has a value shape, or make the replace
+  self-delete per property (`ps.contains`).
+
+**H2. `deleteAll` and `delete().where()` do not delete owned children.**
+- `deleteAllToAlgebra` and `deleteWhereToAlgebra` (`irToAlgebra.ts:2766-2860`) have neither the
+  Decision 5 one-hop blocks nor the dependent cascade. Scratch `DeleteBuilder.from(ROwner).all()`
+  emits only `?a0 ?p ?o`.
+- The README ("`parent.delete()` deletes the immediately-owned children") and the changeset
+  ("deleting a subject now deletes its immediately-owned children") read as if all deletes do. Bulk
+  deletes still orphan every owned image.
+- **Fix:** add the same per-predicate UNION blocks, rooted at `?a0`, to both bulk paths. If that is
+  deferred, narrow the README and changeset to "delete by id".
+
+### Medium
+
+**M1. Breaking behaviour for consumers, under-signalled for a minor.**
+- With `Thing.image` `contains`, deleting any schema-derived entity by id now deletes its linked
+  ImageObject. That includes an image shared across entities through `{id}`, which existing data
+  may already hold.
+- Linking a node typed only with an unregistered subclass of `schema:ImageObject` is now refused,
+  unless the store infers the supertype.
+- A `contains` property without a shape no longer deletes a typed non-dependent old value, so it
+  orphans now.
+- The changeset lists these in one sentence each, with no warning.
+- **Fix:** add a "Behaviour changes" block to the changeset that names `Thing.image` and asks apps
+  to check for shared images before upgrading. Consider whether this warrants a major.
+
+**M2. Missing live negative tests.**
+- The live tests assert triples (good), but they do not cover:
+  - set-remove of an id the subject does not own. The new anchor is what makes that safe:
+    `irToAlgebra.ts:2017`, which before this change cascaded from any IRI.
+  - a kept id that has a dependent subtree. The subtree must survive.
+  - upsert and `forAll()` with a kept id.
+  - a two-owner (stolen `{id}`) delete.
+- Live tests also `return` silently when Fuseki is down (backlog 009).
+- **Fix:** add these four live cases, and fail rather than return when `CI` is set.
+
+**M3. The single-owner group includes `contains` properties without a value shape.**
+- `ownedPredicateGroup` (`singleOwnerConstraint.ts:46-52`) filters only on `ps.contains`. Decisions
+  6 and 7 treat shape-less slots as polymorphic, and their values may be shared IRIs.
+- A user shape with such a slot gets an `sh:maxCount 1` inverse constraint that a validator will
+  report on legitimate sharing.
+- **Fix:** require `ps.valueShape` in the group, or document why shape-less slots are included.
+
+### Low
+
+**L1. Sync deletes whatever NodeShape sits at `<iri>.singleOwner`, generated or not**
+(`syncShapes.ts:121`). The collision check only covers registered shapes, not store-only (CN
+project) shapes. **Fix:** guard the delete with `core:generated true`, or extend the collision
+check to the store.
+
+**L2. Sync is four non-atomic updates per shape, and every sync adds a DELETE round trip for each
+shape, with or without `contains`** (`syncShapes.ts:120-124`). A crash between "create main" and
+"create generated" leaves the constraint missing until the next sync, which heals it (benign).
+**Fix:** skip the generated delete when the store has no generated shape, or fold both into one
+UPDATE.
+
+**L3. The check is a separate SELECT before the UPDATE (TOCTOU)** (`SparqlDataset.ts:203-211`).
+A node typed concurrently is not caught. **Fix:** document it with the existing "typed later"
+limitation.
+
+**L4. Stale comments.**
+- `irToAlgebra.ts:2406` still says `(c1|c2|…)+`.
+- The `deleteToAlgebra` docstring (`:2596-2599`) omits the immediate-child blocks.
+- The `buildOwnedSelfDelete` docstring (`:2556-2566`) omits `keep`, and does not say that callers
+  skip it for shape-less properties.
+- `SHACL.ts:204-207` (`contains` doc) does not mention the class check or the subject-delete rule.
+- **Fix:** update these four comments.
+
+**L5. Backlog 048 now describes fixed behaviour.** H1 is its still-open part. **Fix:** in wrap-up,
+carry H1 (if deferred) into the report and delete 048 as planned.
+
+**L6. Performance is acceptable.**
+- No SELECT is sent without links (verified, stub test), and `rdf:nil` is skipped.
+- Each `NOT IN` filter is evaluated after the edge triple binds `?old`.
+- `*` with a bound root costs the same as `+`.
+- Each delete gains one UNION block per owned predicate.
+- No action needed.
