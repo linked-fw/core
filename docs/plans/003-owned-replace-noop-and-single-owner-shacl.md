@@ -1229,3 +1229,283 @@ carry H1 (if deferred) into the report and delete 048 as planned.
 - `*` with a bound root costs the same as `+`.
 - Each delete gains one UNION block per owned predicate.
 - No action needed.
+
+---
+
+# Iteration 1 — Ideation
+
+Source: the [Review](#review) above. Six gaps are taken into this iteration. The approach for each
+was chosen by the lead developer (2026-10-12); the alternatives are recorded so that the choice can
+be revisited. L1 and L2 stay follow-ups, L5 belongs to wrap-up, and L6 needs no action.
+
+## Gap 1 of 6 — The class check and the owned delete use different ownership rules (H1)
+
+**Context.** The replace self-delete decides ownership **per predicate**, across the whole registry
+(`collectContainment().containsPreds`, `processUpdateFields`), and needs a value shape on the
+property being written. The class check (`ownedLinkCheck.ts` `buildRule`) decides it **per
+property** (`ps.contains`). A shape that declares a `contains` predicate *without* `contains`
+therefore links unchecked, and its next replace deletes whatever was linked. In CN this is
+concrete: `@_linked/schema` `Thing.image` is `contains`, CN strips `contains` from
+project-authored shapes, so a project shape with `schema:image` links any node unchecked.
+
+**Approaches.**
+- **(a) The class check follows the delete's predicate rule.** A field is checked when its simple
+  path predicate is in `containsPreds` and its property declares a value shape whose targetClass
+  resolves. The accepted classes are unchanged (value shape, registered sub-shapes, `sh:class`).
+  - Pro: one rule for "this field owns its value" in both places; it closes the CN hole with no
+    change to what any mutation deletes.
+  - Pro: no new registry scan (`collectContainment` is memoized on the registry version).
+  - Con: a plain property that shares a predicate with another shape's `contains` property is now
+    checked, which costs a SELECT and can refuse a link its author did not think of as owning. That
+    is the honest outcome: the replace would delete that value.
+- **(b) The delete follows per-property ownership (`ps.contains`).**
+  - Pro: ownership is readable from the property alone.
+  - Con: it changes the registry-wide predicate semantics that `collectContainment`, the cascade
+    path, the single-owner `sh:targetObjectsOf` and CN's `ownedProperties.ts` rely on.
+  - Con: CN project shapes (contains stripped) would stop cleaning up replaced images: the
+    backlog 032 orphans come back.
+- (c) Check per property and per predicate (union of both). Same result as (a), since every
+  `contains` property with a simple path is in `containsPreds`; (a) is the simpler statement.
+
+**Chosen: (a).** Rationale: it makes the check exactly as wide as the destructive operation it
+guards (priority 1), without a semantics change. **Follow-up for the lead developer:** whether
+ownership should become per property everywhere (option (b), including the cascade and
+`collectContainment`). That is a design change, not a bug fix, and is not part of this plan.
+
+Remaining asymmetry, recorded: the subject delete (Decision 5) uses the deleted shape's *own*
+`contains` properties. A shape whose plain property shares a `contains` predicate deletes the old
+value on replace but not on subject delete. That is the safe direction (nothing extra is deleted).
+
+## Gap 2 of 6 — Bulk deletes do not delete owned children (H2)
+
+**Context.** `deleteAllToAlgebra` and `deleteWhereToAlgebra` emit the root wildcard and the
+blank-node blocks only: no Decision 5 child blocks and no dependent cascade. The README and the
+changeset read as if every delete removes owned children.
+
+**Approaches.**
+- **(a) The same blocks, rooted at the bulk subject variable `?a0`.** For a shape with a
+  `contains` property: one block per `ownedValueShapePredicates` predicate
+  (`?a0 <p> ?dN . ?dN ?dN_p ?dN_o`) and the `buildOwnedCascade` blocks, all in the existing UNION
+  next to the root wildcard and the blank-node blocks.
+  - Pro: one rule for every delete; README and changeset hold as written.
+  - Con: one UNION block per owned predicate and per dependent type. They add solutions.
+- (b) Narrow README and changeset to "delete by id".
+  - Pro: no code. Con: bulk deletes keep orphaning every owned image; two rules.
+- (c) Lower a bulk delete into "SELECT the ids, then delete by id".
+  - Con: two round trips, an unbounded id list, and a non-atomic delete.
+
+**Chosen: (a).** Correctness and cost notes:
+- Every new block starts with the subject's type triple (`?a0 rdf:type <S>`). With ARQ's usual
+  linear join the triple is redundant; if a store evaluates a UNION branch on its own, it keeps
+  `?a0 (c…)* ?own` from running with both ends unbound (a zero-or-more path with an unbound
+  subject matches every node in the graph).
+- `delete().where()`: the blocks are joined with the filtered pattern, so only matched subjects'
+  children are deleted.
+- With the `*` path, `?a0` itself is matched when its shape is `dependent`. Its triples are already
+  in the delete template; DELETE works on a set of triples, so nothing is deleted twice and nothing
+  extra is deleted.
+- Shapes without a `contains` property emit exactly what they emit today (golden tests unchanged).
+- Unchanged and recorded: bulk deletes do not delete *incoming* references (`?s ?p ?a0`), unlike
+  the by-id delete. That difference predates this plan.
+
+## Gap 3 of 6 — Behaviour changes are under-signalled for a minor (M1)
+
+**Approaches.** (a) Keep minor, add an explicit "Behaviour changes" section to the changeset.
+(b) Release as major.
+
+**Chosen: (a).** Rationale:
+- No API or type changes. Every behaviour change either implements behaviour the README already
+  promised (delete removes owned children) or prevents data loss (the re-sent-id wipe, the
+  wrong-type link, the shape-less slot deleting a shared predicate IRI).
+- Data that shares one image between two owners already breaks the documented single-owner rule.
+- A major makes every consumer wait for a manual Renovate approval for a bug-fix release.
+
+The section names the three changes concretely: by-id and bulk deletes now delete owned children
+(`Thing.image` from `@_linked/schema`: linked ImageObjects are deleted with their parent, including
+ones linked by `{id}`); linked `{id}`s into owned properties are class-checked (a node typed only
+with an unregistered subclass is refused; the fix is to register a shape for that class, or
+declare `sh:class`); `contains` properties without a value shape no longer delete the old value's
+own triples (they may leave orphans).
+
+## Gap 4 of 6 — Missing live negative tests (M2)
+
+**Chosen:** add live Fuseki tests for
+1. set-remove of an id the subject does not own (the node must survive);
+2. a kept id that has a dependent subtree (the subtree survives);
+3. upsert with a kept id;
+4. `update().forAll()` and `update().where()` with a kept id;
+5. a delete where two owners point at the same node (the resulting behaviour is documented);
+6. bulk delete deletes owned children (Gap 2);
+7. the class check under the predicate rule (Gap 1).
+
+Each run is proven with a temporary `throw` after the availability guard (or the
+`[ensureFuseki] Fuseki is ready` line). Turning the silent `return` into a failure on `CI`
+(the second half of M2) is backlog 009's subject and is not part of this iteration.
+
+## Gap 5 of 6 — The single-owner group includes shape-less `contains` properties (M3)
+
+**Approaches.** (a) Require `ps.valueShape` in `ownedPredicateGroup`. (b) Document why they are
+included.
+
+**Chosen: (a).** It is consistent with Decisions 6 and 7: a shape-less `contains` slot is
+polymorphic, its value may be a shared IRI, and the delete and the class check already treat it as
+not owning that value. A validator would otherwise report legitimate sharing. The README turtle is
+unaffected (both of its properties declare a shape).
+
+## Gap 6 of 6 — Stale comments and README gaps (L3, L4)
+
+**Chosen:** update
+- the owned-subtree section comment in `irToAlgebra.ts` (`(c1|c2|…)+` → `*`);
+- the `deleteToAlgebra` docstring (immediate-child blocks; the bulk paths);
+- the `buildOwnedSelfDelete` docstring (`keep`; callers skip it for shape-less properties);
+- the `contains` doc in `SHACL.ts` (class check, delete rule, single-owner shape);
+- README: the L3 race (the check is a SELECT before the UPDATE; a node typed in between is not
+  caught) next to the "typed later" limitation, the predicate rule of the class check, and bulk
+  delete behaviour.
+
+---
+
+# Iteration 1 — Plan
+
+## Decisions
+
+| Gap | Decision |
+|---|---|
+| 1 (H1) | Class check per predicate: `getSimplePathId(ps.path) ∈ containsPreds` and `ps.valueShape`. Delete semantics unchanged. |
+| 2 (H2) | `deleteAll` / `delete().where()` get the child blocks and the cascade, rooted at `?a0`, each block led by the type triple. |
+| 3 (M1) | Minor, with a "Behaviour changes" section in the changeset. |
+| 4 (M2) | Seven live cases (Gap 4 list); the CI failure mode stays with backlog 009. |
+| 5 (M3) | `ownedPredicateGroup` requires a value shape. |
+| 6 (L3, L4) | Comments and README as listed in Gap 6. |
+
+## File changes
+
+| File | Change |
+|---|---|
+| `src/sparql/irToAlgebra.ts` | Export `collectContainment` (read-only use by the class check). `bulkDeleteUnion` gains the owned blocks. Comments (Gap 6). |
+| `src/sparql/ownedLinkCheck.ts` | `buildRule` uses the predicate rule; the message names the shared predicate when the property itself is not `contains`. |
+| `src/shapes/singleOwnerConstraint.ts` | `ownedPredicateGroup` skips properties without a value shape. |
+| `src/shapes/SHACL.ts` | `contains` doc. |
+| `src/tests/owned-link-check.test.ts` | Unit and live tests for the predicate rule. |
+| `src/tests/shacl-cascade.test.ts` | Bulk delete unit tests; live cases 1-6. |
+| `src/tests/single-owner-constraint.test.ts` | Shape-less `contains` is not in the group. |
+| `README.md`, `.changeset/owned-replace-noop-single-owner.md` | Gaps 2, 3 and 6. |
+
+## Contracts
+
+### C8 — class check rule (`ownedLinkCheck.ts`)
+
+A field is checked when **all** hold: its property shape has a simple path whose predicate is in
+`collectContainment().containsPreds`; it declares a `valueShape`; that value shape's targetClass
+resolves. `OwnedLink` gains one optional field:
+
+```ts
+/** Set when the property is not `contains` itself but shares this `contains` predicate. */
+sharedPredicate?: string;
+```
+
+The message for such a link says why the property owns its value:
+
+```
+Cannot link <…/alice> into the property "img" of <…/ROther>, whose predicate <ex:img> is a
+contains predicate (another shape owns its values through it): it is typed <…/Person>, but
+"img" only owns instances of <…/Image>. …
+```
+
+### C9 — bulk delete (`deleteAllToAlgebra`, `deleteWhereToAlgebra`)
+
+For a shape with a `contains` property (`shapeHasContainsProperty`), e.g. `DeleteBuilder.from(TCard).all()`:
+
+```sparql
+DELETE { ?a0 ?p ?o . ?d0 ?d0_p ?d0_o . ?d1 ?d1_p ?d1_o . ?c_own0 ?c_op0 ?c_ov0 . … }
+WHERE { ?a0 rdf:type <TCard> .
+  { ?a0 ?p ?o . }
+  UNION { …blank-node blocks (unchanged)… }
+  UNION { ?a0 rdf:type <TCard> . ?a0 <holds> ?d0 . ?d0 ?d0_p ?d0_o . }
+  UNION { ?a0 rdf:type <TCard> . ?a0 <cells> ?d1 . ?d1 ?d1_p ?d1_o . }
+  UNION { ?a0 rdf:type <TCard> . ?a0 (c1|c2|…)* ?c_own0 . ?c_own0 rdf:type <Dep0> . ?c_own0 ?c_op0 ?c_ov0 . }
+  UNION … }
+```
+
+`delete().where()` has the same UNION, joined with the filtered pattern as the blank-node UNION
+already is. A shape without a `contains` property emits exactly today's SPARQL.
+
+### C10 — single-owner group
+
+`ownedPredicateGroup(nodeShape)` = the sorted simple-path predicates of the flattened properties
+with `contains` **and** a `valueShape`.
+
+---
+
+# Iteration 1 — Phases
+
+Phases 7-12, in order, one commit each. 7, 8 and 9 touch different files and could run in
+parallel; they are run in sequence here because they share the test runs.
+
+## Phase 7 — Class check per predicate (Gap 1, C8)
+
+Tasks: export `collectContainment`; `buildRule` uses the predicate rule and fills
+`sharedPredicate`; message per C8.
+
+Tests (`owned-link-check.test.ts`): a fixture `TScrapbook` with a plain (non-`contains`)
+`ex:cover` property of shape TPhoto, and a plain shape-less property on a `contains` predicate.
+- collect: the plain `cover` link is collected with `sharedPredicate = ex:cover`; the shape-less
+  one is not;
+- stub dataset: linking alice into `TScrapbook.cover` rejects with the C8 message; 0 updates;
+- live (Gap 4 case 7): the same update through `FusekiStore` rejects and writes no edge.
+
+Validation: the targeted jest file passes with `[ensureFuseki] Fuseki is ready`; typecheck exit 0.
+
+## Phase 8 — Bulk deletes delete owned children (Gap 2, C9)
+
+Tasks: `bulkDeleteUnion` adds the child blocks and the cascade blocks (type-triple-led) for a
+shape with a `contains` property; both bulk paths use it.
+
+Tests (`shacl-cascade.test.ts`):
+- unit: `TCard.all()` has a `#holds> ?d0 . ?d0 ?d0_p ?d0_o` and a `#cells> ?d1` branch, each led by
+  the type triple, no `OPTIONAL`; `TBox.all()` has the cascade `)* ?c_own`; `TSlot.all()` has no
+  `?d` block; `where()` has the same blocks; a shape without `contains` is unchanged (existing
+  `mutation-where-union` assertions);
+- live (Gap 4 case 6): `TCard.all()` deletes both cards and their held/cells children and keeps an
+  unowned TPlainCell; `TBox.where(...)`/`all()` deletes the dependent chain; `where()` deletes only
+  the matched subject's children.
+
+Validation: targeted `shacl-cascade`, `mutation-where-union`, `sparql-mutation-golden`,
+`sparql-mutation-algebra` pass with Fuseki confirmed; typecheck exit 0.
+
+## Phase 9 — Single-owner group requires a value shape (Gap 5, C10)
+
+Tasks: filter in `ownedPredicateGroup`; doc comment.
+
+Tests (`single-owner-constraint.test.ts`): a shape with a shape-less `contains` property and one
+with a shape → the group holds only the latter; a shape with only a shape-less `contains` → `null`.
+
+Validation: `single-owner-constraint`, `shacl-syncshapes`, `sparql-fuseki-shape-sync` pass; typecheck.
+
+## Phase 10 — Live negative tests (Gap 4, cases 1-5)
+
+Tests (`shacl-cascade.test.ts`, live block):
+1. set-remove of an id card1 does not own (card2 owns it) → the node and card2's edge survive;
+2. `TBox.owns` re-sent as the current id with a dependent `next` chain → every cell survives;
+3. upsert with the current id → the node survives;
+4. `forAll()` and `where()` with the current id → the kept node survives, other cards' old values
+   are deleted;
+5. two owners point at one node, delete one owner → the node's own triples are deleted; the other
+   owner's edge stays and dangles (A5). Documented in README.
+
+Validation: the targeted file passes; every live test gets past its guard (temporary `throw`
+proof, removed afterwards).
+
+## Phase 11 — Comments and README (Gap 6)
+
+Tasks: the comment updates and README additions of Gap 6, plus the two-owner result of Phase 10.
+
+Validation: `grep` shows no `(c1|c2|…)+` left in `irToAlgebra.ts`; README section reads
+consistently with C8, C9 and C10; `npx linked build` exits 0.
+
+## Phase 12 — Changeset "Behaviour changes" (Gap 3)
+
+Tasks: rewrite `.changeset/owned-replace-noop-single-owner.md` (still minor) with the section.
+
+Validation: full `npm test` exits 0 with Fuseki confirmed; `npx linked build` exits 0; the test
+container is stopped afterwards (:3030 untouched).
