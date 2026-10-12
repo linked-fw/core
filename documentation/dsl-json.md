@@ -344,8 +344,9 @@ put `__id` on the value of a plain single-valued property *replace*
 (`update({ image: { __id, contentUrl } })`): it re-targets that *same* node and **adds** another
 value instead of replacing (violating `sh:maxCount 1`, so reads become ambiguous). For a replace,
 **omit `__id`** — the engine drops the old edge and writes a fresh node, so the value replaces
-cleanly. (For a `contains`/owned relation the old node's own triples are currently left behind on
-replace — see core backlog 032; use `delete()` or `{ "@remove": … }` for full cleanup.)
+cleanly. (For a `contains`/owned relation that declares a value shape, the old node itself is
+deleted on replace, with its owned subtree; re-sending the current `{ "@id": … }` keeps it. See the
+README section "Owned properties".)
 
 ### Upsert
 

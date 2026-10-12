@@ -27,10 +27,12 @@ import {serializePathToNodeData} from './serializePathToNodeData.js';
  * One constraint per accessor, written only by the class that declares it: subclasses inherit
  * the property but add no constraint, since the rule targets the predicate's objects whoever the
  * subject is. The declaring shape owns its constraints through `core:generatedShape`
- * (`NodeShape.generatedShapes`, `contains`): shape sync writes them nested in the shape's create
- * and deletes them with the shape. Non-owning references through other predicates are not counted, and neither is
- * ownership through two different `contains` predicates (a documented limitation). The shapes
- * are built only at sync time and are never registered in the in-memory shape registry.
+ * (`NodeShape.generatedShapes`, `contains`): shape sync writes them nested in the shape's
+ * create and deletes them with the shape.
+ *
+ * Non-owning references through other predicates are not counted, and neither is ownership
+ * through two different `contains` predicates (a documented limitation). The shapes are built
+ * only at sync time and are never registered in the in-memory shape registry.
  */
 
 /** Suffix that turns a property shape's IRI into its generated single-owner shape's IRI. */
@@ -71,6 +73,7 @@ export function buildSingleOwnerConstraints(
   shapeIri: string,
 ): Array<{iri: string; data: Record<string, unknown>}> {
   return singleOwnerProperties(nodeShape).flatMap((ps) => {
+    // Always set: `singleOwnerProperties` keeps simple paths only. The guard narrows the type.
     const predicate = getSimplePathId(ps.path);
     if (!predicate) return [];
     const iri = singleOwnerShapeIri(`${shapeIri}/${ps.label}`);

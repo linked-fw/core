@@ -87,7 +87,7 @@ class TAlbum extends Shape {
 
 // A plain (non-`contains`) property on a predicate that TAlbum declares `contains`. The
 // replace delete decides ownership by predicate, so a replace through it deletes the old
-// value; the class check must apply the same rule (backlog 048, review H1).
+// value; the class check must apply the same rule (report 032).
 @linkedShape
 class TScrapbook extends Shape {
   static targetClass = ex('Scrapbook');

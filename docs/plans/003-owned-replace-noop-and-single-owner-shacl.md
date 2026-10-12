@@ -2509,3 +2509,23 @@ None.
 
 M5, L12, L13 and L14 are resolved. Nothing outside a shape's own subtree can be deleted through
 the new edge. Ready for wrap-up. L5, L9, L11, L15, L16 and L17 remain as minor follow-ups.
+
+---
+
+## REVIEW
+
+Wrap-up (2026-10-12):
+- Code review of `git diff main...HEAD`: one `isBareNodeReference` shared by the replace keep list
+  and the class check (the duplicate in `ownedLinkCheck.ts` removed); docstrings rewrapped
+  (`buildOwnedSelfDelete`, `deleteToAlgebra`, `singleOwnerConstraint.ts`); no leftovers of the
+  grouped constraint or the select-based sync remain; a test comment pointing at backlog 048 now
+  points at report 032.
+- README line over the wrap width rewrapped (L17). `documentation/dsl-json.md` no longer says the
+  owned old node is left behind on replace.
+- Changeset verified against the final behaviour and extended (exports, meta-model terms, set
+  add+remove, narrowed cascade, write-time enforcement note).
+- Architecture: `docs/architecture/owned-values.md` (new), `ontologies.md`,
+  `runtime-instances.md`.
+- Follow-ups: backlog 051 (L11), 052 (L15, L16), 053 (per-property ownership), 054 (SHACL on
+  write); L9 is backlog 009; the batch/raw-update API is backlog 018.
+- `npx linked build` and `npm test` green with live Fuseki. PR-ready.

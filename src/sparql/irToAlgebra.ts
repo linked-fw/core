@@ -1913,7 +1913,7 @@ export function createToAlgebra(
 // ---------------------------------------------------------------------------
 
 /** A bare `{id}` reference: a link to an existing node, not a nested create. */
-function isBareNodeReference(value: unknown): value is NodeReferenceValue {
+export function isBareNodeReference(value: unknown): value is NodeReferenceValue {
   return (
     !!value &&
     typeof value === 'object' &&
@@ -2531,7 +2531,8 @@ function reachableDependentTypes(shapeId: string): string[] {
   if (!everything) {
     for (const id of owned) {
       const nodeShape = shapeOf(id);
-      if ((nodeShape as {dependent?: boolean} | undefined)?.dependent && nodeShape?.targetClass?.id) {
+      const dependent = (nodeShape as {dependent?: boolean} | undefined)?.dependent;
+      if (dependent && nodeShape?.targetClass?.id) {
         reached.add(nodeShape.targetClass.id);
       }
     }
@@ -2635,14 +2636,15 @@ function keepFilter(
 
 /**
  * Build DELETE + WHERE OPTIONAL that removes the *old node's own* one-hop triples when a
- * `contains` edge is replaced, unset, or set-removed. Callers use it only for a property that
- * declares a value shape; a shape-less `contains` slot (like `sh:path`) may hold a shared IRI,
- * so its old value is left to `buildOwnedCascade`, which deletes it only when it is
- * dependent-typed. A `contains` edge asserts exclusive
+ * `contains` edge is replaced, unset, or set-removed. A `contains` edge asserts exclusive
  * ownership, so overwriting it must delete the previously owned child fully — not merely
  * unlink it — or the child orphans (backlog 032). This is `contains`-driven and deliberately
  * does NOT require the child shape to be `dependent`: ownership via the edge is sufficient.
  * Owned descendants *below* the old node are cascaded separately by `buildOwnedCascade`.
+ *
+ * Callers use it only for a property that declares a value shape. A shape-less `contains`
+ * slot (like `sh:path`) may hold a shared IRI, so its old value is left to
+ * `buildOwnedCascade`, which deletes it only when it is dependent-typed.
  *
  * The owning edge `<subject> <prop> ?old` is re-asserted INSIDE the WHERE group so `?old`
  * is bound there: when no old value exists the group matches nothing and the DELETE is a
@@ -2687,9 +2689,9 @@ export function buildOwnedSelfDelete(
  * owns something, one block per immediately-owned child (`<s> <p> ?dN . ?dN ?dN_p ?dN_o`,
  * for each of the shape's own and inherited `contains` properties with a value shape and
  * a simple path) and one block per dependent type its owned subtree can reach
- * (`reachableDependentTypes`; none for a shape that owns only non-dependent values). The bulk deletes
- * (`deleteAllToAlgebra`, `deleteWhereToAlgebra`) add the same owned blocks, rooted at the
- * subject variable (see `bulkDeleteUnion`).
+ * (`reachableDependentTypes`; none for a shape that owns only non-dependent values). The
+ * bulk deletes (`deleteAllToAlgebra`, `deleteWhereToAlgebra`) add the same owned blocks,
+ * rooted at the subject variable (see `bulkDeleteUnion`).
  *
  * The blocks must not be chained as OPTIONALs. A chain of OPTIONALs is a join, so
  * the solutions multiply: own triples x incoming references x owned triples of each
@@ -2737,13 +2739,22 @@ export function deleteToAlgebra(
       const child = varTerm(`d${n}${idx}`);
       const childOwn = tripleOf(child, varTerm(`d${n}${idx}_p`), varTerm(`d${n}${idx}_o`));
       deletePatterns.push(childOwn);
-      blocks.push({type: 'bgp', triples: [tripleOf(subjectTerm, iriTerm(predicate), child), childOwn]});
+      blocks.push({
+        type: 'bgp',
+        triples: [tripleOf(subjectTerm, iriTerm(predicate), child), childOwn],
+      });
     });
 
     // Cascade-delete the owned subtree — only for shapes that actually own something
     // (have a `contains` property); a plain entity delete is left untouched.
     if (hasContains && cascadeTypes.length > 0) {
-      const cascade = buildOwnedCascade(subjectTerm, `c${idx}_`, undefined, undefined, cascadeTypes);
+      const cascade = buildOwnedCascade(
+        subjectTerm,
+        `c${idx}_`,
+        undefined,
+        undefined,
+        cascadeTypes,
+      );
       deletePatterns.push(...cascade.deletePatterns);
       blocks.push(...cascade.whereOptionals);
     }

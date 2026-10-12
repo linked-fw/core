@@ -361,8 +361,9 @@ The declaring shape owns its generated shapes through `core:generatedShape`, a `
 requests: deleting the shape deletes the generated shapes with it (their own triples, property
 shapes and path nodes, never the predicate IRI), and the create writes the current ones nested in
 the same request. A removed or renamed accessor therefore loses its constraint, a pruned shape
-takes its constraints with it, and a NodeShape the shape does not own is never touched. `singleOwnerShapeIri`, `singleOwnerProperties` and `buildSingleOwnerConstraints` are
-exported if you need to recompute them.
+takes its constraints with it, and a NodeShape the shape does not own is never touched.
+`singleOwnerShapeIri`, `singleOwnerProperties` and `buildSingleOwnerConstraints` are exported if
+you need to recompute them.
 
 Each constraint counts owners through its own predicate only. A node owned through two different
 `contains` predicates (`schema:image` from one subject, `ex:attachments` from another) is not

@@ -30,12 +30,11 @@ import type {
   IRUpdateWhereMutation,
   IRUpsertMutation,
 } from '../queries/IntermediateRepresentation.js';
-import type {NodeReferenceValue} from '../utils/NodeReference.js';
 import {findPropertyShapeById, type PropertyShapeData} from '../shapes/nodeShapeData.js';
 import {getSubShapes, getTargetClassId} from '../utils/ShapeClass.js';
 import {rdf} from '../ontologies/rdf.js';
 import {assertSafeIri} from './sparqlUtils.js';
-import {collectContainment} from './irToAlgebra.js';
+import {collectContainment, isBareNodeReference} from './irToAlgebra.js';
 import {getSimplePathId} from '../paths/normalizePropertyPath.js';
 import {isSparqlSelectResults, type SparqlQueryResults} from './resultMapping.js';
 
@@ -69,18 +68,6 @@ const RDF_TYPE = rdf.type.id;
 
 function isNodeData(value: unknown): value is IRNodeData {
   return !!value && typeof value === 'object' && 'shape' in value && 'fields' in value;
-}
-
-function isBareReference(value: unknown): value is NodeReferenceValue {
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    !(value instanceof Date) &&
-    typeof (value as {id?: unknown}).id === 'string' &&
-    !('shape' in value) &&
-    !('fields' in value)
-  );
 }
 
 /**
@@ -144,7 +131,7 @@ function walk(data: IRNodeData, cache: Map<string, OwnedRule | null>, out: Owned
         // A nested create is not a link — the mutation writes its type itself — but its
         // own fields can link.
         walk(item, cache, out);
-      } else if (rule && isBareReference(item) && item.id !== RDF_NIL) {
+      } else if (rule && isBareNodeReference(item) && item.id !== RDF_NIL) {
         out.push({id: item.id, ...rule});
       }
     }
