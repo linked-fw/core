@@ -1607,3 +1607,33 @@ Tasks: rewrite `.changeset/owned-replace-noop-single-owner.md` (still minor) wit
 
 Validation: full `npm test` exits 0 with Fuseki confirmed; `npx linked build` exits 0; the test
 container is stopped afterwards (:3030 untouched).
+
+### Phase 12 status: done
+
+`.changeset/owned-replace-noop-single-owner.md` stays `minor` (rationale in Gap 3). Its summary
+now covers bulk deletes and the predicate rule, and a **Behaviour changes** section names the
+three changes: deletes (by id and bulk) delete owned children, with `Thing.image` and shared
+images as the example; linked `{id}`s are class-checked, with the unregistered-subclass case and
+its fix (register a shape for the subclass, or declare `sh:class`); shape-less `contains`
+properties leave a non-dependent old value in place.
+
+Validation (2026-10-12):
+- `npm test` (jest + typecheck): exit 0. `[ensureFuseki] Fuseki is ready`; 96 suites passed,
+  4 skipped; 2178 tests passed, 121 skipped (16 more passing than the review run's 2162; the
+  skipped count is unchanged).
+- `npx linked build`: Build successful.
+- The :3939 test container was stopped (`docker compose -f src/tests/docker-compose.test.yml
+  down`); :3030 was not touched.
+
+Deviations: none.
+
+## Iteration 1 — open follow-ups (for the lead developer)
+
+- Whether ownership should become per property everywhere (Gap 1 option (b)), including the
+  cascade and `collectContainment`.
+- The subject deletes use the deleted shape's own `contains` properties, the replace uses the
+  predicate rule (Gap 1, remaining asymmetry; the safe direction).
+- Bulk deletes do not delete incoming references, unlike the delete by id (pre-existing).
+- L1 (sync deletes any NodeShape at `<iri>.singleOwner`) and L2 (four non-atomic updates per
+  shape) from the Review.
+- Live suites still return silently without Fuseki outside `CI` handling (backlog 009).
