@@ -21,6 +21,7 @@ import {
   deleteToSparql,
   deleteWhereToSparql,
   updateToSparql,
+  updateWhereToSparql,
   upsertToSparql,
   buildOwnedCascade,
   buildOwnedSelfDelete,
@@ -29,6 +30,7 @@ import type {
   IRDeleteAllMutation,
   IRDeleteMutation,
   IRDeleteWhereMutation,
+  IRUpdateWhereMutation,
   IRUpdateMutation,
   IRUpsertMutation,
 } from '../queries/IntermediateRepresentation';
@@ -665,6 +667,131 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
     expect(await countTriples('pred')).toBe(1);
     expect(await hasEdge('slot1', 'anyPath', 'pred2')).toBe(true);
     expect(await hasEdge('slot1', 'anyPath', 'pred')).toBe(false);
+  });
+
+  test('set-remove of an id the subject does not own deletes nothing of it', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('cells')} ${iri('a')} .
+        ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('cells')} ${iri('x')} . }`,
+    );
+    await executeSparqlUpdate(materializeCell('a', 'a'));
+    await executeSparqlUpdate(materializeCell('x', 'x'));
+
+    await executeSparqlUpdate(
+      updateToSparql(
+        lower(
+          UpdateBuilder.from(TCard).for(`${C}card1`).set({cells: {remove: [{id: `${C}x`}]}} as any),
+        ) as IRUpdateMutation,
+      ),
+    );
+
+    expect(await countTriples('x')).toBe(2);
+    expect(await hasEdge('card2', 'cells', 'x')).toBe(true);
+    expect(await countTriples('a')).toBe(2);
+    expect(await hasEdge('card1', 'cells', 'a')).toBe(true);
+  });
+
+  test('a kept id keeps its dependent subtree', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('b1')} rdf:type ${iri('TBox')} ; ${iri('owns')} ${iri('cell0')} .
+        ${iri('cell0')} rdf:type ${iri('TCell')} ; ${iri('next')} ${iri('cell1')} .
+        ${iri('cell1')} rdf:type ${iri('TCell')} ; ${iri('next')} ${iri('cell2')} .
+        ${iri('cell2')} rdf:type ${iri('TCell')} . }`,
+    );
+
+    await executeSparqlUpdate(
+      updateToSparql(
+        lower(UpdateBuilder.from(TBox).for(`${C}b1`).set({owns: {id: `${C}cell0`}})) as IRUpdateMutation,
+      ),
+    );
+
+    expect(await hasEdge('b1', 'owns', 'cell0')).toBe(true);
+    expect(await countTriples('cell0')).toBe(2);
+    expect(await countTriples('cell1')).toBe(2);
+    expect(await countTriples('cell2')).toBe(1);
+  });
+
+  test('upsert with the current id keeps the owned node', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} . }`,
+    );
+    await executeSparqlUpdate(materializeCell('plain1', 'a'));
+
+    await executeSparqlUpdate(
+      upsertToSparql(
+        lower(
+          UpdateBuilder.upsertFrom(TCard).for(`${C}card1`).set({holds: {id: `${C}plain1`}}),
+        ) as IRUpsertMutation,
+      ),
+    );
+
+    expect(await countTriples('plain1')).toBe(2);
+    expect(await hasEdge('card1', 'holds', 'plain1')).toBe(true);
+  });
+
+  test('forAll() and where() with the current id keep it, and replace the others', async () => {
+    if (!fusekiAvailable) return;
+    const seed = async () => {
+      await clearAllData();
+      await executeSparqlUpdate(
+        `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('title')} "x" ; ${iri('holds')} ${iri('plain1')} .
+          ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('title')} "y" ; ${iri('holds')} ${iri('plain2')} . }`,
+      );
+      await executeSparqlUpdate(materializeCell('plain1', 'a'));
+      await executeSparqlUpdate(materializeCell('plain2', 'b'));
+    };
+
+    // forAll: every card now holds plain1; plain1 is kept, card2's old plain2 is deleted.
+    await seed();
+    await executeSparqlUpdate(
+      updateWhereToSparql(
+        lower(UpdateBuilder.from(TCard).forAll().set({holds: {id: `${C}plain1`}})) as IRUpdateWhereMutation,
+      ),
+    );
+    expect(await countTriples('plain1')).toBe(2);
+    expect(await countTriples('plain2')).toBe(0);
+    expect(await hasEdge('card1', 'holds', 'plain1')).toBe(true);
+    expect(await hasEdge('card2', 'holds', 'plain1')).toBe(true);
+
+    // where(): only the matched card is touched; its kept value survives.
+    await seed();
+    await executeSparqlUpdate(
+      updateWhereToSparql(
+        lower(
+          UpdateBuilder.from(TCard)
+            .where((c: any) => c.title.equals('x'))
+            .set({holds: {id: `${C}plain1`}}),
+        ) as IRUpdateWhereMutation,
+      ),
+    );
+    expect(await countTriples('plain1')).toBe(2);
+    expect(await countTriples('plain2')).toBe(2);
+    expect(await hasEdge('card1', 'holds', 'plain1')).toBe(true);
+    expect(await hasEdge('card2', 'holds', 'plain2')).toBe(true);
+  });
+
+  test('two owners of one node: deleting one deletes the node, the other edge dangles', async () => {
+    if (!fusekiAvailable) return;
+    // card2 links plain1 by {id} although card1 already owns it, which breaks the
+    // single-owner rule. Nothing refuses that on write (the rule is SHACL only).
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} .
+        ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} . }`,
+    );
+    await executeSparqlUpdate(materializeCell('plain1', 'a'));
+
+    await executeSparqlUpdate(
+      deleteToSparql(lower(DeleteBuilder.from(TCard, {id: `${C}card1`})) as IRDeleteMutation),
+    );
+
+    expect(await countTriples('card1')).toBe(0);
+    expect(await countTriples('plain1')).toBe(0);
+    // The other owner keeps its edge, which now points at a node with no triples.
+    expect(await countTriples('card2')).toBe(2);
+    expect(await hasEdge('card2', 'holds', 'plain1')).toBe(true);
   });
 
   test('deleteAll deletes every subject\'s owned children, keeps unowned nodes', async () => {

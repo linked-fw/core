@@ -1551,6 +1551,27 @@ Tests (`shacl-cascade.test.ts`, live block):
 Validation: the targeted file passes; every live test gets past its guard (temporary `throw`
 proof, removed afterwards).
 
+### Phase 10 status: done
+
+Added the five live cases to the backlog-032 live block of `shacl-cascade.test.ts`:
+1. set-remove of `x`, owned by card2, through card1: `x` keeps its 2 triples and card2's edge;
+   card1's own cell is untouched;
+2. `TBox.owns` re-sent as the current `cell0` with a dependent `next` chain: every cell keeps its
+   triples;
+3. upsert with the current id: the node keeps its triples;
+4. `forAll()` with the current id: the kept node survives, card2's old value is deleted and both
+   cards hold the kept node; `where(title = 'x')`: only card1 is touched, card2 and its value are
+   unchanged;
+5. two owners of one node (a stolen `{id}`), delete one owner by id: the node's own triples are
+   deleted; the other owner's edge stays and dangles (A5). The README records this in Phase 11.
+
+Validation (2026-10-12):
+- `shacl-cascade.test.ts`: `[ensureFuseki] Fuseki is ready`; 40 passed. The 5 new tests were
+  proven to run with a temporary `throw` after their guard (5 failures), removed afterwards.
+- `npm run typecheck`: exit 0.
+
+Deviations: none. No code change was needed: every case behaved as the plan expected.
+
 ## Phase 11 — Comments and README (Gap 6)
 
 Tasks: the comment updates and README additions of Gap 6, plus the two-owner result of Phase 10.
