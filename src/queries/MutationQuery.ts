@@ -305,7 +305,12 @@ export class MutationQueryFactory extends QueryFactory {
               `The property 'shape' is reserved in LINCD and should not be used here in this way. The ${propShape.label} property already defines the shape of the value as ${propShape.label}. If you want to use a different shape, use the 'shape' key in the @objectProperty decorator.`,
             );
           }
-          delete value.shape;
+          // Drop it from a copy, never from the caller's object: the same data
+          // is lowered again after the mutation ran (LiveQueryStore derives the
+          // mutation's effects from it), and without its `shape` key the value
+          // can no longer be validated.
+          const {shape: _shape, ...rest} = value;
+          value = rest;
         }
 
         if (this.isSetModification(value, propShape)) {

@@ -102,8 +102,8 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
  */
 function buildSyncThunk(nodeShape: NodeShapeData, iri: string, ds?: IDataset): () => Promise<void> {
   return () => {
-    // Build the data fresh on each invocation: the create pipeline mutates the node-data
-    // (it strips nested `shape` keys), so a shared object can't be re-used across runs.
+    // Build the data fresh on each invocation, so every run writes from the current
+    // shape metadata.
     const data = buildNodeShapeData(nodeShape, iri);
     return (DeleteBuilder.from(NodeShape, {id: iri}).exec(ds) as Promise<unknown>)
       .then(() =>

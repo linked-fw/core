@@ -7,6 +7,11 @@ import {mutationEffects} from '../queries/queryDependencies';
 import {fromJSON} from '../queries/fromJSON';
 import {Person, Team, ids, predicate} from '../test-helpers/live-fixtures';
 import type {NodeReferenceValue} from '../utils/NodeReference';
+import {lower} from '../queries/lower';
+import {NodeShape, PropertyShape} from '../shapes/SHACL';
+import {serializePathToNodeData} from '../shapes/serializePathToNodeData';
+import '../shapes/List';
+import {PathNode} from '../shapes/PathNode';
 
 import '../ontologies/rdf';
 import '../ontologies/xsd';
@@ -119,6 +124,45 @@ describe('mutationEffects — create and upsert', () => {
       ids: [ids.P1],
       membership: [PERSON],
     });
+  });
+});
+
+describe('mutationEffects — after the mutation ran', () => {
+  // The store hands LiveQueryStore the builder that was just executed, and
+  // mutationEffects lowers it a second time. A nested value of a property that
+  // declares no shape names its own in a `shape` key (a property shape's
+  // `sh:path` when it is not a plain IRI); lowering must not consume that key,
+  // or the second lowering fails validation and no live query is refetched.
+  const shapeIri = 'https://example.org/shape/Effects';
+  const create = () =>
+    NodeShape.create({
+      properties: [
+        {
+          __id: `${shapeIri}/parent`,
+          label: 'parent',
+          path: serializePathToNodeData({inv: {id: 'https://example.org/child'}}, `${shapeIri}/parent`),
+        },
+      ],
+    } as never).withId(shapeIri);
+
+  test('a create whose nested value names its shape can be lowered again', () => {
+    const mutation = create();
+    lower(mutation as any); // what exec does
+    const e = mutationEffects(mutation as any);
+    expect(e.op).toBe('create');
+    // The nested property shape and its inverse-path node are created too.
+    expect(sorted(e.membership)).toEqual(
+      [NodeShape.shape.id, PathNode.shape.id, PropertyShape.shape.id].sort(),
+    );
+  });
+
+  test('lowering leaves the nested value as it was', () => {
+    const mutation = create();
+    const before = JSON.stringify((mutation as any)._lowerSpec().data);
+    lower(mutation as any);
+    const path = ((mutation as any)._lowerSpec().data.properties[0] as {path: {shape?: unknown}}).path;
+    expect(path.shape).toBeDefined();
+    expect(JSON.stringify((mutation as any)._lowerSpec().data)).toBe(before);
   });
 });
 
