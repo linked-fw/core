@@ -1841,3 +1841,34 @@ Validation: targeted `shacl-cascade`, `mutation-where-union`, `sparql-mutation-g
 
 Validation: full `npm test` exits 0 with Fuseki confirmed; `npx linked build` exits 0; :3939
 stopped, :3030 untouched.
+
+### Phase 13 status: done
+
+Built per C11: `reachableDependentTypes(shapeId)` (memoized on the registry version) and an
+`onlyTypes` parameter on `buildOwnedCascade`; `deleteToAlgebra` and `bulkDeleteUnion` pass the
+reachable types and emit no cascade block when there are none. The by-id delete had the same
+fan-out (one block per id per registered dependent type) and is narrowed the same way.
+
+Validation (2026-10-12):
+- Targeted (`shacl-cascade`, `mutation-where-union`, `sparql-mutation-golden`,
+  `sparql-mutation-algebra`, `sparql-fuseki-shape-sync`, `shacl-syncshapes`, `owned-link-check`):
+  `[ensureFuseki] Fuseki is ready`; 148 passed, 1 skipped. New test "subject-delete cascade: only
+  reachable dependent types" (TCard none; TBox/TBag only TCell; TCell into itself; TSlot and the
+  shape-sync `NodeShape` delete every type). Two iteration-1 assertions changed deliberately:
+  TCard `all()`/`where()` now have no `?c_own` block; the type-triple-led cascade is asserted on
+  TBox instead. No live count changed (the "delete WHERE size" count is the same).
+- `npm run typecheck`: exit 0.
+- Scratch probe (20,000 owners with an owned image, plus 20,000 unrelated `Other` subjects with
+  their own images on the same predicate; deleted afterwards):
+
+  | Shape | Cascade blocks before → after | Root-only | `deleteAll` before | `deleteAll` after |
+  |---|---|---|---|---|
+  | `ROwner` (image + dependent node) | 4 → 1 | 571 ms | 2194 / 1854 ms | 1367 / 913 ms |
+  | `RImgOnly` (image only) | 4 → 0 | 196 ms | 1256 / 1219 ms | 374 / 359 ms |
+
+  Correctness is unchanged in both runs: every owner, its image and its dependent node deleted;
+  the 20,000 `Other` subjects and their images survive (exactly 60,000 triples left);
+  `where(n7)` deletes one owner and its image only (4–8 ms).
+
+Deviation: a dependent start shape counts as reachable only when an owned edge leads back to it
+(TCell `next` → TCell), so a TCell delete still cascades its chain.

@@ -13,7 +13,7 @@ import {
 } from '../test-helpers/fuseki-test-store';
 import {linkedPackage} from '../utils/Package';
 import {Shape} from '../shapes/Shape';
-import {literalProperty, objectProperty} from '../shapes/SHACL';
+import {literalProperty, NodeShape, objectProperty} from '../shapes/SHACL';
 import {DeleteBuilder} from '../queries/DeleteBuilder';
 import {UpdateBuilder} from '../queries/UpdateBuilder';
 import {
@@ -472,12 +472,8 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     expect(where).toMatch(
       new RegExp(`\\{\\s*${CARD_TYPE}\\s*\\?a0 <http:\\/\\/example\\.org\\/c#cells> \\?d1 \\.\\s*\\?d1 \\?d1_p \\?d1_o \\.\\s*\\}`),
     );
-    // The dependent cascade, rooted at the subject variable and led by the type triple.
-    const cascade = branchesOf(sparql).filter((b) => /\?c_own\d/.test(b));
-    expect(cascade.length).toBeGreaterThan(0);
-    for (const b of cascade) {
-      expect(b).toMatch(new RegExp(`${CARD_TYPE}\\s*\\?a0 \\([^)]*\\)\\* \\?c_own\\d`));
-    }
+    // TPlainCell is not dependent and owns nothing: no cascade closure at all.
+    expect(where).not.toMatch(/\?c_own\d/);
     expect(where).not.toContain('OPTIONAL');
     const del = deleteBlockOf(sparql);
     expect(del).toContain('?a0 ?p ?o .');
@@ -489,6 +485,10 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     const box = deleteAllToSparql(lower(DeleteBuilder.from(TBox).all()) as IRDeleteAllMutation);
     expect(box).toContain('?a0 <http://example.org/c#owns> ?d0 .');
     expect(box).toMatch(/\?a0 \([^)]*<http:\/\/example\.org\/c#next>[^)]*\)\* \?c_own\d/);
+    // The cascade block is led by the type triple, so it never runs with ?a0 unbound.
+    for (const b of branchesOf(box).filter((b) => /\?c_own\d/.test(b))) {
+      expect(b).toMatch(/\?a0 rdf:type <http:\/\/example\.org\/c#TBox> \.\s*\?a0 \([^)]*\)\* \?c_own\d/);
+    }
     expect(box).not.toContain('#ref> ?d');
     const slot = deleteAllToSparql(lower(DeleteBuilder.from(TSlot).all()) as IRDeleteAllMutation);
     expect(slot).not.toMatch(/\?d\d/);
@@ -503,8 +503,38 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     expect(where).toContain('FILTER');
     expect(where).toContain('?a0 <http://example.org/c#holds> ?d0 .');
     expect(where).toContain('?a0 <http://example.org/c#cells> ?d1 .');
-    expect(where).toMatch(/\?c_own\d/);
+    expect(where).not.toMatch(/\?c_own\d/);
     expect(where).not.toContain('OPTIONAL');
+    const box = deleteWhereToSparql(
+      lower(DeleteBuilder.from(TBox).where((b: any) => b.ref.equals({id: `${C}x`}))) as IRDeleteWhereMutation,
+    );
+    expect(box).toMatch(/\?c_own0 rdf:type <http:\/\/example\.org\/c#TCell>/);
+  });
+
+  // The subject deletes emit a cascade block only per dependent type the shape can reach.
+  const cascadeTypesOf = (sparql: string) =>
+    [...sparql.matchAll(/\?c\w*_own\d+ rdf:type (\S+) \./g)].map((m) => m[1]);
+
+  test('subject-delete cascade: only reachable dependent types', () => {
+    const byId = (shape: any) =>
+      deleteToSparql(lower(DeleteBuilder.from(shape, {id: `${C}s1`})) as IRDeleteMutation);
+    const all = (shape: any) =>
+      deleteAllToSparql(lower(DeleteBuilder.from(shape).all()) as IRDeleteAllMutation);
+    const TCELL = `<${C}TCell>`;
+    // Owns only a non-dependent value: none.
+    expect(cascadeTypesOf(byId(TCard))).toEqual([]);
+    expect(cascadeTypesOf(all(TCard))).toEqual([]);
+    // Owns a dependent TCell (which owns TCell): exactly TCell.
+    expect(cascadeTypesOf(byId(TBox))).toEqual([TCELL]);
+    expect(cascadeTypesOf(all(TBag))).toEqual([TCELL]);
+    // A dependent shape that owns its own kind cascades into it.
+    expect(cascadeTypesOf(byId(TCell))).toEqual([TCELL]);
+    // A shape-less contains slot may reach anything: every dependent type.
+    const every = cascadeTypesOf(byId(TSlot));
+    expect(every).toEqual(expect.arrayContaining([TCELL, 'shacl:PropertyShape', 'rdf:List', 'core:PathNode']));
+    expect(cascadeTypesOf(all(TSlot))).toEqual(every);
+    // The shape-sync delete of a NodeShape reaches PropertyShape.path (shape-less): unchanged.
+    expect(cascadeTypesOf(byId(NodeShape))).toEqual(every);
   });
 });
 

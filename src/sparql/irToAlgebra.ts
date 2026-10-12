@@ -53,6 +53,7 @@ import {
   getNodeShape,
   getRegistryVersion,
   getShapeClass,
+  getSubShapes,
   getTargetClassId,
 } from '../utils/ShapeClass.js';
 import {UnresolvedContextError} from '../queries/QueryContext.js';
@@ -2472,6 +2473,74 @@ export function collectContainment(): {containsPreds: string[]; dependentTypes: 
   return containmentCache;
 }
 
+let reachableCache = new Map<string, string[]>();
+let reachableCacheVersion = -1;
+
+/**
+ * The dependent targetClasses a subject delete of `shapeId` can reach through `contains`
+ * edges, in `collectContainment` order. A subject delete emits one cascade block per type it
+ * returns, and each block is a property-path closure per subject, so a shape that owns only
+ * non-dependent values (every `Thing.image` owner) pays for none.
+ *
+ * The walk starts at the shape and its registered sub-shapes and follows every flattened
+ * property on a `contains` predicate (the registry-wide predicate rule the cascade path uses)
+ * to its value shape and that shape's sub-shapes. A property on a `contains` predicate with no
+ * value shape is polymorphic (`sh:path`) and may reach anything, so it yields every dependent
+ * type; that keeps the shape-sync delete of a NodeShape exact.
+ */
+function reachableDependentTypes(shapeId: string): string[] {
+  const version = getRegistryVersion();
+  if (version !== reachableCacheVersion) {
+    reachableCache = new Map();
+    reachableCacheVersion = version;
+  }
+  const cached = reachableCache.get(shapeId);
+  if (cached) return cached;
+
+  const {containsPreds, dependentTypes} = collectContainment();
+  const shapeOf = (id: string) => getShapeClass(id)?.shape ?? getNodeShape(id);
+  const reached = new Set<string>();
+  // Shapes whose instances an owned edge can lead to. The start shapes join only when an
+  // edge leads back to them (a dependent shape that owns its own kind, like a list cell).
+  const owned = new Set<string>();
+  const seen = new Set<string>();
+  const queue: string[] = [];
+  const visit = (id: string, viaEdge: boolean) => {
+    for (const sid of [id, ...getSubShapes(id).map((sub) => sub.id)]) {
+      if (viaEdge) owned.add(sid);
+      if (seen.has(sid)) continue;
+      seen.add(sid);
+      queue.push(sid);
+    }
+  };
+  visit(shapeId, false);
+  let everything = false;
+  while (queue.length > 0 && !everything) {
+    const nodeShape = shapeOf(queue.shift()!);
+    if (!nodeShape) continue;
+    for (const ps of getPropertyShapes(nodeShape, true)) {
+      const predicate = getSimplePathId(ps.path);
+      if (!predicate || !containsPreds.includes(predicate)) continue;
+      if (!ps.valueShape?.id) {
+        everything = true;
+        break;
+      }
+      visit(ps.valueShape.id, true);
+    }
+  }
+  if (!everything) {
+    for (const id of owned) {
+      const nodeShape = shapeOf(id);
+      if ((nodeShape as {dependent?: boolean} | undefined)?.dependent && nodeShape?.targetClass?.id) {
+        reached.add(nodeShape.targetClass.id);
+      }
+    }
+  }
+  const result = everything ? dependentTypes : dependentTypes.filter((t) => reached.has(t));
+  reachableCache.set(shapeId, result);
+  return result;
+}
+
 /**
  * Build DELETE patterns + WHERE OPTIONAL blocks that cascade-delete the owned subtree
  * reachable from `rootTerm` via `contains` edges. `varPrefix` keeps generated variables
@@ -2479,14 +2548,19 @@ export function collectContainment(): {containsPreds: string[]; dependentTypes: 
  *
  * `anchor`, when given, leads every block: the triple that binds a variable root, so
  * each block stays correct on its own (as a UNION branch) when no such root exists.
+ * `onlyTypes`, when given, restricts the blocks to those dependent types (a subject delete
+ * passes the types its shape can reach); by default every registered dependent type gets one.
  */
 export function buildOwnedCascade(
   rootTerm: SparqlTerm,
   varPrefix: string,
   anchor?: SparqlTriple,
   keep?: SparqlTerm[],
+  onlyTypes?: string[],
 ): {deletePatterns: SparqlTriple[]; whereOptionals: SparqlAlgebraNode[]} {
-  const {containsPreds, dependentTypes} = collectContainment();
+  const containment = collectContainment();
+  const {containsPreds} = containment;
+  const dependentTypes = onlyTypes ?? containment.dependentTypes;
   if (containsPreds.length === 0 || dependentTypes.length === 0) {
     return {deletePatterns: [], whereOptionals: []};
   }
@@ -2612,7 +2686,8 @@ export function buildOwnedSelfDelete(
  * blocks: per id its own triples, its incoming references and, for a shape that
  * owns something, one block per immediately-owned child (`<s> <p> ?dN . ?dN ?dN_p ?dN_o`,
  * for each of the shape's own and inherited `contains` properties with a value shape and
- * a simple path) and one block per dependent type of its owned subtree. The bulk deletes
+ * a simple path) and one block per dependent type its owned subtree can reach
+ * (`reachableDependentTypes`; none for a shape that owns only non-dependent values). The bulk deletes
  * (`deleteAllToAlgebra`, `deleteWhereToAlgebra`) add the same owned blocks, rooted at the
  * subject variable (see `bulkDeleteUnion`).
  *
@@ -2637,6 +2712,7 @@ export function deleteToAlgebra(
   const blocks: SparqlAlgebraNode[] = [];
   const hasContains = shapeHasContainsProperty(query.shape);
   const ownedChildPredicates = hasContains ? ownedValueShapePredicates(query.shape) : [];
+  const cascadeTypes = hasContains ? reachableDependentTypes(query.shape) : [];
 
   for (let i = 0; i < query.ids.length; i++) {
     const subjectTerm = iriTerm(query.ids[i].id);
@@ -2666,8 +2742,8 @@ export function deleteToAlgebra(
 
     // Cascade-delete the owned subtree — only for shapes that actually own something
     // (have a `contains` property); a plain entity delete is left untouched.
-    if (hasContains) {
-      const cascade = buildOwnedCascade(subjectTerm, `c${idx}_`);
+    if (hasContains && cascadeTypes.length > 0) {
+      const cascade = buildOwnedCascade(subjectTerm, `c${idx}_`, undefined, undefined, cascadeTypes);
       deletePatterns.push(...cascade.deletePatterns);
       blocks.push(...cascade.whereOptionals);
     }
@@ -2791,9 +2867,12 @@ function bulkDeleteUnion(
         triples: [typeTriple, tripleOf(subject, iriTerm(predicate), child), childOwn],
       });
     });
-    const cascade = buildOwnedCascade(subject, 'c_', typeTriple);
-    deletePatterns.push(...cascade.deletePatterns);
-    blocks.push(...cascade.whereOptionals);
+    const cascadeTypes = reachableDependentTypes(shapeId);
+    if (cascadeTypes.length > 0) {
+      const cascade = buildOwnedCascade(subject, 'c_', typeTriple, undefined, cascadeTypes);
+      deletePatterns.push(...cascade.deletePatterns);
+      blocks.push(...cascade.whereOptionals);
+    }
   }
   if (blocks.length === 0) return null;
   return unionOf([{type: 'bgp', triples: [rootWildcard]}, ...blocks]);
