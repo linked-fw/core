@@ -816,6 +816,31 @@ Validation:
 - Quick: `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs src/tests/owned-link-check.test.ts src/tests/sparql-fuseki.test.ts src/tests/sparql-fuseki-shape-sync.test.ts` exits 0, with `[ensureFuseki] Fuseki is ready` (or the running container) in the output.
 - `npm run typecheck` exits 0.
 
+### Phase 1b status: done
+
+Built as planned: `src/sparql/ownedLinkCheck.ts` (C7) and `SparqlDataset.checkOwnedLinks`, awaited in
+`createQuery` (after the id is assigned) and in `updateQuery` for every kind, before
+`executeSparqlUpdate`.
+
+Validation (2026-10-12):
+- Quick gate (`owned-link-check`, `sparql-fuseki`, `sparql-fuseki-shape-sync`): `[ensureFuseki]
+  Fuseki is ready`; 3 suites, 113 tests passed. `owned-link-check.test.ts` has 13 tests (7
+  collect/assert, 5 stub dataset, 1 live). The live test was confirmed to run its assertions, not
+  early-return, with a temporary log line, which was then removed.
+- `npm test`: exit 0. 96 suites passed, 4 skipped; 2155 tests passed, 120 skipped. Shape sync and
+  every other live suite pass with the check in place.
+- `npx linked build`: Build successful.
+
+Deviations (additive, no contract change):
+- `OwnedLink` also carries `expectedClass` (the value shape's targetClass) so that the message
+  names that class and lists the other accepted classes separately:
+  `… only owns instances of <Photo> (or of <Panorama>, a registered sub-shape or sh:class).`
+- An extra export `ownedLinkTypesFromResults(json)` maps the SELECT answer. It rejects an ASK
+  response.
+- Fixtures: the shape-less `contains` field is `TAlbum.any`, not a separate `TSlotHolder`. A
+  `TAlbum.subAlbum` (`contains`, shape TAlbum) covers links nested inside a nested create.
+- The live test follows the repository's `if (!fusekiAvailable) return` pattern (backlog 009).
+
 ## Phase 2 — Single-owner SHACL generation and persistence (S4, Decisions 1-4) ∥ Phase 1
 
 Tasks:
