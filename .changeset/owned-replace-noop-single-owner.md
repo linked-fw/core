@@ -24,6 +24,13 @@ that limits each owned value to one owner across the shape's shaped `contains` p
   and none of its types is the shape's class, a registered sub-shape's class, or `sh:class`. A node
   typed only with a subclass that has no registered shape is refused. To accept it, register a shape
   for that subclass (extending the value shape), or declare `sh:class`.
+- **Plain properties on a `contains` predicate are checked too.** Ownership is decided per
+  predicate across the registry, so a property *without* `contains` whose predicate another shape
+  declares `contains` is class-checked as well (and a replace through it deletes the old value).
+  Example: a project shape that declares `schema:image` without `contains`, while
+  `@_linked/schema` declares `Thing.image` as `contains`. To resolve a refusal, link a node of the
+  value shape's class (or a registered sub-shape's class), register a shape for the node's
+  subclass, declare `sh:class` on the property, or use a predicate that no shape owns.
 - **Shape-less `contains` properties keep non-dependent old values.** A `contains` property without
   a value shape (a polymorphic slot such as `sh:path`) no longer deletes the old value's own triples
   on replace or remove. A non-dependent old value is now left in place and may orphan.

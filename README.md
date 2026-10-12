@@ -319,6 +319,15 @@ subject (they do not delete incoming references to the subjects, which a delete 
 shared predicate IRI) only ever deletes `dependent`-typed values; a non-dependent old value is
 left in place.
 
+Subject deletes and replaces decide ownership differently. A subject delete (by id or in bulk)
+uses the deleted shape's *own* `contains` properties. Replace, set-remove and the class check use
+the registry-wide predicate rule above. So a plain property on a predicate that another shape
+declares `contains` deletes its old value on replace, but not when its subject is deleted.
+Whether ownership should be decided per property everywhere is an open design question. The
+cascade into `dependent` descendants only emits blocks for the dependent shapes the deleted
+shape can reach through its owned properties, so deleting a shape that owns only non-dependent
+values costs one extra block per owned property.
+
 Non-owning references to an owned node, through other properties or from other subjects, are
 allowed. They are not cleaned up: after the owner is deleted they dangle. The same holds when two
 subjects own one node (an `{id}` linked into a second owner, which breaks the single-owner rule

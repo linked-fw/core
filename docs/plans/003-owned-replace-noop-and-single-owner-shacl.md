@@ -1872,3 +1872,20 @@ Validation (2026-10-12):
 
 Deviation: a dependent start shape counts as reachable only when an owned edge leads back to it
 (TCell `next` → TCell), so a TCell delete still cascades its chain.
+
+### Phase 14 status: done
+
+- Changeset: a Behaviour-changes bullet says plain properties on a predicate that is `contains`
+  anywhere in the registry (a project shape declaring `schema:image` without `contains`) are
+  class-checked too, and lists how to resolve a refusal.
+- README "What a delete removes": subject deletes use the deleted shape's own `contains`
+  properties, replace/set-remove/class check use the registry-wide predicate rule; per-property
+  ownership is an open design question; the cascade only covers reachable dependent shapes.
+
+Validation (2026-10-12):
+- `npm test` (jest + typecheck): exit 0. `[ensureFuseki] Fuseki is ready`; 96 suites passed,
+  4 skipped; 2179 tests passed, 121 skipped.
+- `npx linked build`: Build successful.
+- :3939 test container stopped; :3030 not touched.
+
+Deviations: none.
