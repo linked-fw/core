@@ -1045,6 +1045,18 @@ that limits each owned value to one owner across the shape's `contains` predicat
 
 Validation: `npx changeset status` lists `@_linked/core` as minor.
 
+### Phase 5 status: done
+
+`.changeset/owned-replace-noop-single-owner.md` written by hand with the text above.
+
+Validation (2026-10-12):
+- `changeset status`: "Packages to be bumped: minor — @_linked/core". Run from a throwaway clone
+  outside the CN workspace with a local `main` branch: inside `packages-local/` the CLI resolves
+  the CN workspace root and reports "There is no .changeset folder".
+- `npm test`: exit 0. `[ensureFuseki] Fuseki is ready`; 96 suites passed, 4 skipped; 2162 tests
+  passed, 121 skipped. Typecheck exit 0.
+- `npx linked build`: Build successful.
+
 ## Phase 6 — Wrap-up docs (last)
 
 Tasks:
