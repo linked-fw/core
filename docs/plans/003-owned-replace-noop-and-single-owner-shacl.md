@@ -738,6 +738,35 @@ Validation:
 - `npm run typecheck` exits 0.
 - Full (review): `npm test`.
 
+### Phase 1 status: done
+
+Built as planned: `keep` on `buildOwnedSelfDelete`/`buildOwnedCascade` (a `keepFilter` wraps each
+block in `FILTER(?old NOT IN (…))` next to the edge that binds `?old`), `keptReferences` for the
+single value and the overwrite array, the re-added-id skip in set-modification, self-delete only
+for `contains` fields with a `valueShape`, the cascade path `(c…)*`, and the one-hop
+`<s> <p> ?dN . ?dN ?dN_p ?dN_o` blocks in `deleteToAlgebra` (`ownedValueShapePredicates`).
+
+Validation (2026-10-12):
+- Quick gate (`shacl-cascade`, `sparql-mutation-golden`, `sparql-mutation-algebra`): 3 suites,
+  80 tests passed. 13 tests are new in `shacl-cascade.test.ts`. No golden string changed.
+- `npm test` (jest + `tsc -p tsconfig-tests.json`): `[ensureFuseki] Fuseki is ready`; 95 suites
+  passed, 4 skipped; 2142 tests passed, 120 skipped. Typecheck exit 0.
+- `npx linked build`: Build successful.
+
+Deviations (no contract change):
+- The set-remove cascade now leads with the owning edge (`<s> <p> <x>`), as the self-delete
+  already did. It had no anchor. With the `*` path the removed node is itself a match, and it must
+  only be deleted while the subject still owns it. This is what the Pitfalls entry assumed.
+- Two live solution-count tests changed deliberately:
+  - `shacl-cascade` "delete WHERE size": +2 for the new `owns` one-hop block (cell0's type and
+    `next`);
+  - `mutation-where-union` "replacing a contains property": a dependent-typed old value of a
+    property with a value shape is now matched by both the self-delete and the `*` cascade.
+    That overlap is added (+ its own triples), never multiplied, and the deleted triples are
+    unchanged.
+- Not changed, recorded for wrap-up: `deleteAll`/`deleteWhere` (bulk deletes) do not cascade or
+  delete owned children. That was already true before this plan.
+
 ## Phase 1b — Class check for linked owned ids (Decision 7, C7) ∥ Phase 1, Phase 2
 
 Tasks:
