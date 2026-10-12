@@ -524,6 +524,94 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
     );
     expect(Number(orphans.results.bindings[0]?.c?.value ?? 0)).toBe(0);
   });
+
+  const hasEdge = async (s: string, p: string, o: string): Promise<boolean> => {
+    const res = await executeSparqlQuery(`ASK { ${iri(s)} ${iri(p)} ${iri(o)} }`);
+    return res.boolean === true;
+  };
+
+  test('re-sending the current id keeps the owned node', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} . }`,
+    );
+    await executeSparqlUpdate(materializeCell('plain1', 'a'));
+
+    await executeSparqlUpdate(replaceHolds('plain1'));
+
+    expect(await countTriples('plain1')).toBe(2);
+    expect(await hasEdge('card1', 'holds', 'plain1')).toBe(true);
+  });
+
+  test('array overwrite keeps retained, deletes dropped', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ` +
+        `${iri('cells')} ${iri('a')}, ${iri('b')}, ${iri('c')} . }`,
+    );
+    for (const id of ['a', 'b', 'c']) await executeSparqlUpdate(materializeCell(id, id));
+
+    await executeSparqlUpdate(
+      updateToSparql(
+        lower(
+          UpdateBuilder.from(TCard)
+            .for(`${C}card1`)
+            .set({cells: [{id: `${C}a`}, {id: `${C}b`}]} as any),
+        ) as IRUpdateMutation,
+      ),
+    );
+
+    expect(await countTriples('a')).toBe(2);
+    expect(await countTriples('b')).toBe(2);
+    expect(await countTriples('c')).toBe(0);
+    expect(await hasEdge('card1', 'cells', 'a')).toBe(true);
+    expect(await hasEdge('card1', 'cells', 'b')).toBe(true);
+    expect(await hasEdge('card1', 'cells', 'c')).toBe(false);
+  });
+
+  test('subject delete removes owned child, keeps referenced-only nodes', async () => {
+    if (!fusekiAvailable) return;
+    // card1 owns plain1. box1 only refers to plain2 (not owned by anyone) and, as a
+    // non-owning reference, to plain1, which will dangle after card1 is deleted (A5).
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} .
+        ${iri('box1')} rdf:type ${iri('TBox')} ; ${iri('ref')} ${iri('plain2')} ; ${iri('tag')} ${iri('plain1')} . }`,
+    );
+    await executeSparqlUpdate(materializeCell('plain1', 'a'));
+    await executeSparqlUpdate(materializeCell('plain2', 'b'));
+
+    await executeSparqlUpdate(
+      deleteToSparql(lower(DeleteBuilder.from(TCard, {id: `${C}card1`})) as IRDeleteMutation),
+    );
+
+    expect(await countTriples('card1')).toBe(0);
+    expect(await countTriples('plain1')).toBe(0);
+    expect(await countTriples('plain2')).toBe(2);
+    // The referencing subject is untouched, including its now-dangling reference.
+    expect(await countTriples('box1')).toBe(3);
+    expect(await hasEdge('box1', 'tag', 'plain1')).toBe(true);
+  });
+
+  test('replacing a valueShape-less contains value keeps a plain predicate IRI', async () => {
+    if (!fusekiAvailable) return;
+    const RDFS = 'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n';
+    await executeSparqlUpdate(
+      `${RDF}${RDFS}INSERT DATA { ${iri('pred')} rdfs:label "x" .
+        ${iri('slot1')} rdf:type ${iri('TSlot')} ; ${iri('anyPath')} ${iri('pred')} . }`,
+    );
+
+    await executeSparqlUpdate(
+      updateToSparql(
+        lower(
+          UpdateBuilder.from(TSlot).for(`${C}slot1`).set({anyPath: {id: `${C}pred2`}} as any),
+        ) as IRUpdateMutation,
+      ),
+    );
+
+    expect(await countTriples('pred')).toBe(1);
+    expect(await hasEdge('slot1', 'anyPath', 'pred2')).toBe(true);
+    expect(await hasEdge('slot1', 'anyPath', 'pred')).toBe(false);
+  });
 });
 
 // The shape sync deletes every shape description through this path on every boot.

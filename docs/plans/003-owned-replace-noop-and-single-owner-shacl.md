@@ -406,6 +406,17 @@ Recorded for CN; nothing is implemented in this repository.
 - A read-only check of CN is done separately. The follow-up goes into CN's backlog in wrap-up
   (Phase 6), with consent.
 
+Read-only check of CN (2026-10-12):
+- CN's `projectShapeCatalog` (`src/utils/shapeCatalogQuery.ts` L339-341) already drops NodeShapes
+  without `sh:targetClass`. The generated single-owner shape is therefore hidden from CN's catalog
+  today, but only incidentally. An explicit `core:generated` filter is still recommended.
+- CN reads `contains` in the catalog (`shapeCatalogQuery.ts` L106, L400), but no UI component
+  displays it. The CN change is therefore: show an owned flag on properties in the shape UI, plus
+  the explicit `core:generated` filter.
+- CN `src/data/shapeInstances.ts` L24, L65 calls core's `registerRuntimeShapes(catalog)` directly,
+  bypassing `runtimeShapeRegistry.ts`'s `withoutOwnership`. Project-authored shapes may leak
+  ownership (`contains`) into the runtime registry that way. Recorded as a CN follow-up.
+
 ### Remaining open items
 
 None. Decision 5 is confirmed together with Decision 7, and the CN catalog follow-up is
@@ -940,6 +951,35 @@ Validation:
 - `npm run test:fuseki` exits 0, with the new tests listed as passed (not early-returned) in the
   `--verbose` output.
 - Afterwards: `docker compose -f src/tests/docker-compose.test.yml down`.
+
+### Phase 3 status: done
+
+Added the planned live tests:
+- `shacl-cascade.test.ts` (in the backlog-032 live block): re-sending the current id keeps the
+  owned node; array overwrite keeps retained ids and deletes the dropped one; subject delete
+  removes the owned child, keeps an unowned node, and leaves the referencing subject (with its now
+  dangling reference) untouched; replacing a value-shape-less `contains` value keeps the plain
+  predicate IRI and its label.
+- `sparql-fuseki-shape-sync.test.ts` (new `single-owner constraint e2e` block, fixtures
+  `E2EImage`, `E2EProject` with `schema:image` + `ex:attachments`, `E2EOwnerLoss` with one
+  `contains` property): the generated shape is persisted (`core:generated true`, both
+  `sh:targetObjectsOf`, no `sh:targetClass`, `owners` with `sh:maxCount 1`, two alternative-path
+  members); re-sync is idempotent (triple count under `<…E2EProject.singleOwner>` unchanged);
+  removing the last `contains` property and re-running `syncShape` leaves 0 generated triples.
+- The SHACL endpoint test is a visible `test.skip`: the test Fuseki's admin-created datasets
+  expose only `gsp-r`, `gsp-rw`, `query` and `update` (checked through `/$/datasets/<name>`).
+
+Validation (2026-10-12):
+- Targeted (`sparql-fuseki-shape-sync`, `shacl-cascade`): `[ensureFuseki] Fuseki is ready`; 2
+  suites, 35 passed, 1 skipped. Every live test was confirmed to get past its availability guard
+  with a temporary `throw` after the guard (12 failures as expected), which was then removed.
+- `npm run test:fuseki`: 3 suites, 214 passed, 1 skipped; the script stops the container itself.
+- `npm test`: 96 suites passed, 4 skipped; 2162 tests passed, 121 skipped (the extra skip is the
+  SHACL endpoint test). Typecheck exit 0.
+
+Deviations (no contract change):
+- The ownership-loss case uses a dedicated `E2EOwnerLoss` fixture and filters its property shapes,
+  the same way Phase B mutates `E2EPerson`, rather than seeding a generated IRI.
 
 ## Phase 4 — README "Owned properties" (after P1 and P2) ∥ Phase 5
 

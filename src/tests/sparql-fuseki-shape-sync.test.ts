@@ -32,7 +32,8 @@ import {
   type PropertyShapeData,
 } from '../shapes/SHACL';
 import {getAllShapeClasses} from '../utils/ShapeClass';
-import {syncShapes, type SyncShapesOptions} from '../shapes/syncShapes';
+import {syncShapes, syncShape, type SyncShapesOptions} from '../shapes/syncShapes';
+import {singleOwnerShapeIri} from '../shapes/singleOwnerConstraint';
 import {rdfList} from '../shapes/List';
 import {UpdateBuilder} from '../queries/UpdateBuilder';
 import {xsd} from '../ontologies/xsd';
@@ -74,7 +75,43 @@ class E2EGone extends Shape {
   }
 }
 
+const schemaImage = {id: 'https://schema.org/image'};
+
+@linkedShape
+class E2EImage extends Shape {
+  static targetClass = {id: 'https://schema.org/ImageObject'};
+  @literalProperty({path: ex('contentUrl'), maxCount: 1})
+  get contentUrl(): string {
+    return '';
+  }
+}
+
+// Two `contains` properties: the generated single-owner shape groups both predicates.
+@linkedShape
+class E2EProject extends Shape {
+  static targetClass = ex('Project');
+  @objectProperty({path: schemaImage, shape: E2EImage, maxCount: 1, contains: true})
+  get image(): E2EImage {
+    return null;
+  }
+  @objectProperty({path: ex('attachments'), shape: E2EImage, contains: true})
+  get attachments(): E2EImage[] {
+    return [];
+  }
+}
+
+// One `contains` property, removed from the registered shape in the last test.
+@linkedShape
+class E2EOwnerLoss extends Shape {
+  static targetClass = ex('OwnerLoss');
+  @objectProperty({path: ex('banner'), shape: E2EImage, maxCount: 1, contains: true})
+  get banner(): E2EImage {
+    return null;
+  }
+}
+
 const SH = 'http://www.w3.org/ns/shacl#';
+const CORE = 'https://linked.cm/ont/core/';
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 const P = () => E2EPerson.shape.id;
 const G = () => E2EGone.shape.id;
@@ -220,4 +257,62 @@ describe('shape sync e2e (Fuseki)', () => {
     expect(await has(`?cell <${RDF}first> <${ex('m2').id}>`)).toBe(false);
     expect(await has(`?cell <${RDF}first> <${ex('m3').id}>`)).toBe(false);
   }, LIVE_FUSEKI_TIMEOUT);
+});
+
+describe('single-owner constraint e2e (Fuseki)', () => {
+  const GEN = () => singleOwnerShapeIri(E2EProject.shape.id);
+  const genTriples = (gen: string) =>
+    count(`?s ?p ?o . FILTER(STRSTARTS(STR(?s), "${gen}"))`);
+
+  test('generated single-owner shape is persisted', async () => {
+    if (!available) return;
+    await runSync();
+    const gen = GEN();
+    expect(
+      await has(
+        `<${gen}> <${RDF}type> <${SH}NodeShape> ; <${CORE}generated> true ; ` +
+          `<${SH}targetObjectsOf> <${ex('attachments').id}>, <${schemaImage.id}>`,
+      ),
+    ).toBe(true);
+    expect(await has(`<${gen}> <${SH}targetClass> ?c`)).toBe(false);
+    expect(await has(`<${gen}> <${SH}property> <${gen}/owners> . <${gen}/owners> <${SH}maxCount> 1`)).toBe(
+      true,
+    );
+    const r = await executeSparqlQuery(
+      `SELECT ?p WHERE { <${gen}> <${SH}property>/<${SH}path>/<${SH}inversePath>/<${SH}alternativePath>/<${RDF}rest>*/<${RDF}first> ?p }`,
+    );
+    expect(r.results.bindings.map((b: any) => b.p.value).sort()).toEqual([
+      ex('attachments').id,
+      schemaImage.id,
+    ]);
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  test('re-sync is idempotent', async () => {
+    if (!available) return;
+    await runSync();
+    const before = await genTriples(GEN());
+    expect(before).toBeGreaterThan(0);
+    await runSync();
+    expect(await genTriples(GEN())).toBe(before);
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  test('losing the last contains property removes the constraint', async () => {
+    if (!available) return;
+    const gen = singleOwnerShapeIri(E2EOwnerLoss.shape.id);
+    await syncShape(E2EOwnerLoss)();
+    expect(await genTriples(gen)).toBeGreaterThan(0);
+
+    (E2EOwnerLoss.shape as any).propertyShapes = (
+      E2EOwnerLoss.shape as any
+    ).propertyShapes.filter((ps: PropertyShapeData) => ps.label !== 'banner');
+    await syncShape(E2EOwnerLoss)();
+
+    expect(await genTriples(gen)).toBe(0);
+    expect(await has(`<${E2EOwnerLoss.shape.id}> <${RDF}type> <${SH}NodeShape>`)).toBe(true);
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  // The test Fuseki (secoresearch/fuseki, datasets created through the admin API) exposes
+  // only query, update and graph-store services: no `fuseki:shacl` endpoint to validate a
+  // double-owned image against the persisted constraint. Skipped visibly, not returned early.
+  test.skip('SHACL endpoint reports a double-owned image (no SHACL service in the test Fuseki)', () => {});
 });
