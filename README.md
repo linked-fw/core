@@ -336,27 +336,35 @@ subjects own one node (an `{id}` linked into a second owner, which breaks the si
 below): deleting either owner deletes the node, and the other owner's edge dangles.
 
 **The single-owner constraint.** An owned node has at most one owner. Shape sync persists this as
-a generated SHACL NodeShape per declaring shape, `<Shape>.singleOwner`, next to the shape itself.
-It groups the predicates of the shape's own and inherited `contains` properties that declare a
-`shape` (simple paths only, sorted by IRI; a shape-less slot may hold a shared IRI, so it is left out),
-is marked `core:generated true`, and has no `sh:targetClass`, so catalog readers can skip it. It is
-never registered in memory. For a `Project` that owns `schema:image` and `ex:attachments`:
+one generated SHACL NodeShape per `contains` property that declares a `shape` (simple paths only;
+a shape-less slot may hold a shared IRI, so it is left out). It is written only by the class that
+declares the property, at the property shape's IRI plus `.singleOwner`: `Thing.image` gets one
+constraint at `Thing`, not one per subclass. It is marked `core:generated true` and has no
+`sh:targetClass`, so catalog readers can skip it, and it is never registered in memory. For
+`Thing.image`:
 
 ```turtle
-<…/shape/my-pkg/Project.singleOwner> a sh:NodeShape ;
+<…/shape/my-pkg/Thing/image.singleOwner> a sh:NodeShape ;
     core:generated true ;
-    sh:targetObjectsOf ex:attachments, schema:image ;
-    sh:property <…/Project.singleOwner/owners> .
+    sh:targetObjectsOf schema:image ;
+    sh:property <…/Thing/image.singleOwner/owners> .
 
-<…/Project.singleOwner/owners> a sh:PropertyShape ;
+<…/Thing/image.singleOwner/owners> a sh:PropertyShape ;
     rdfs:label "owners" ;
     sh:maxCount 1 ;
-    sh:path [ sh:inversePath [ sh:alternativePath ( ex:attachments schema:image ) ] ] .
+    sh:path [ sh:inversePath schema:image ] .
 ```
 
-(The path nodes are stored with deterministic IRIs under `…/owners/inv`, not as blank nodes.) With
-a single predicate the path is a plain `sh:inversePath schema:image`. `singleOwnerShapeIri`,
-`ownedPredicateGroup` and `buildSingleOwnerShapeData` are exported if you need to recompute it.
+(The inverse path node is stored with a deterministic IRI, `…/owners/inv`, not as a blank node.)
+Each sync deletes and re-creates the generated shapes under the declaring shape's IRI, so a
+removed or renamed accessor loses its constraint; only NodeShapes marked `core:generated` are
+deleted. `singleOwnerShapeIri`, `singleOwnerProperties` and `buildSingleOwnerConstraints` are
+exported if you need to recompute them.
+
+Each constraint counts owners through its own predicate only. A node owned through two different
+`contains` predicates (`schema:image` from one subject, `ex:attachments` from another) is not
+reported. That needs overlapping value shapes, and the class check already refuses a wrongly
+typed link.
 
 > **Not enforced on write.** Core does not check the single-owner rule, or `sh:class` on
 > non-owning references, when it writes. The default Fuseki setup does not validate SHACL on

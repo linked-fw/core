@@ -2120,8 +2120,27 @@ constraint; a hand-written non-generated NodeShape at a generated-looking IRI su
 
 Validation: the suite passes with Fuseki confirmed; new live tests proven to run.
 
-## Phase 17 — Docs
+## Phase 17 — Docs (done as Phase 16, see the Phase 15 deviation)
 
 README turtle and limitation sentence (cross-predicate double ownership), changeset text,
 docstrings. Validation: `npm test` exits 0 with Fuseki confirmed; `npx linked build` exits 0;
 :3939 stopped, :3030 untouched.
+
+### Phase 16 status: done (docs)
+
+- README "The single-owner constraint": one generated shape per shaped `contains` property,
+  written by the declaring class only, at `<property shape IRI>.singleOwner`; the C13 turtle for
+  `Thing.image`; the sync lifecycle (removed accessors cleaned up, only `core:generated` shapes
+  deleted); the new exports; the limitation that ownership through two different `contains`
+  predicates is not reported.
+- Changeset: the single-owner paragraph describes the per-accessor constraint and its lifecycle.
+- `SHACL.ts` `contains` doc: the per-property generated shape. `singleOwnerConstraint.ts` and
+  `syncShapes.ts` docstrings were updated in Phase 15.
+
+Validation (2026-10-12):
+- `npm test`: exit 0. `[ensureFuseki] Fuseki is ready`; 96 suites passed, 4 skipped; 2181 tests
+  passed, 121 skipped.
+- `npx linked build`: Build successful.
+- :3939 stopped; :3030 not touched.
+
+Deviations: none beyond the phase renumbering recorded under Phase 15.

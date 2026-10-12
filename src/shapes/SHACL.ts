@@ -214,8 +214,9 @@ export interface ObjectPropertyShapeConfig extends PropertyShapeConfig {
    * - Without a `shape` (a polymorphic slot): only `dependent`-typed values are deleted.
    * - In both cases the cascade follows the edge to `dependent`-typed descendants.
    *
-   * Shape sync also persists a generated `<Shape>.singleOwner` SHACL shape that limits each
-   * value of the shape's shaped `contains` properties to one owner. It is not enforced on write.
+   * With a `shape`, shape sync also persists a generated SHACL shape for this property (at its
+   * property shape's IRI plus `.singleOwner`, written by the declaring class only) that limits
+   * each value of the predicate to one owner. It is not enforced on write.
    */
   contains?: boolean;
 }

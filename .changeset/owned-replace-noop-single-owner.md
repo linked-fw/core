@@ -10,8 +10,11 @@ Owned (`contains`) values:
 - a `contains` property without a value shape only deletes `dependent`-typed values;
 - linking a node of the wrong class into an owned property that declares a shape is refused.
 
-Shape sync now also writes a generated `<Shape>.singleOwner` SHACL NodeShape (`core:generated`)
-that limits each owned value to one owner across the shape's shaped `contains` predicates.
+Shape sync now also writes one generated SHACL NodeShape (`core:generated`) per `contains`
+property with a value shape, at `<property shape IRI>.singleOwner`, written only by the class that
+declares the property. It limits each value of that predicate to one owner. Sync re-creates these
+shapes and removes the ones of removed accessors, and never deletes a NodeShape that is not marked
+`core:generated`.
 
 **Behaviour changes.** Check these before upgrading:
 - **Deletes now delete owned children.** `@_linked/schema` declares `Thing.image` as `contains`,
