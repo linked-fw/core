@@ -12,9 +12,10 @@ Owned (`contains`) values:
 
 Shape sync now also writes one generated SHACL NodeShape (`core:generated`) per `contains`
 property with a value shape, at `<property shape IRI>.singleOwner`, written only by the class that
-declares the property. It limits each value of that predicate to one owner. Sync re-creates these
-shapes and removes the ones of removed accessors, and never deletes a NodeShape that is not marked
-`core:generated`.
+declares the property. It limits each value of that predicate to one owner. The declaring shape owns
+these through a new `core:generatedShape` edge (`NodeShape.generatedShapes`), so sync still sends two
+requests per shape: the delete removes them and the create writes them nested. A removed accessor's
+constraint goes with the next sync.
 
 **Behaviour changes.** Check these before upgrading:
 - **Deletes now delete owned children.** `@_linked/schema` declares `Thing.image` as `contains`,

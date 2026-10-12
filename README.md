@@ -356,9 +356,12 @@ constraint at `Thing`, not one per subclass. It is marked `core:generated true` 
 ```
 
 (The inverse path node is stored with a deterministic IRI, `…/owners/inv`, not as a blank node.)
-Each sync deletes and re-creates the generated shapes under the declaring shape's IRI, so a
-removed or renamed accessor loses its constraint; only NodeShapes marked `core:generated` are
-deleted. `singleOwnerShapeIri`, `singleOwnerProperties` and `buildSingleOwnerConstraints` are
+The declaring shape owns its generated shapes through `core:generatedShape`, a `contains` edge:
+`<…/Thing> core:generatedShape <…/Thing/image.singleOwner>`. Syncing a shape is still two
+requests: deleting the shape deletes the generated shapes with it (their own triples, property
+shapes and path nodes, never the predicate IRI), and the create writes the current ones nested in
+the same request. A removed or renamed accessor therefore loses its constraint, a pruned shape
+takes its constraints with it, and a NodeShape the shape does not own is never touched. `singleOwnerShapeIri`, `singleOwnerProperties` and `buildSingleOwnerConstraints` are
 exported if you need to recompute them.
 
 Each constraint counts owners through its own predicate only. A node owned through two different

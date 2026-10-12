@@ -46,7 +46,7 @@ const displayRank = ns('displayRank');
 const displayHidden = ns('displayHidden');
 
 // Provenance marker: a NodeShape core generates at sync time from another shape's code
-// (today the `<Shape>.singleOwner` constraint derived from `contains`), rather than one a
+// (today the `<propertyShape>.singleOwner` constraint derived from `contains`), rather than one a
 // developer declared. Catalog readers skip shapes with `core:generated true`.
 const generated = ns('generated');
 

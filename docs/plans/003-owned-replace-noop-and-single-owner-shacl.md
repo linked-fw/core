@@ -2397,3 +2397,24 @@ the same IRI, which re-links it).
 
 README sync-lifecycle text, changeset, docstrings; M5/L12/L13/L14 marked resolved. Validation:
 `npm test` exits 0 with Fuseki confirmed; `npx linked build`; :3939 stopped, :3030 untouched.
+
+### Phase 19 status: done
+
+- README "The single-owner constraint": the `core:generatedShape` ownership edge, sync as two
+  requests (delete removes them, create writes them nested), removed accessors and pruned shapes
+  take their constraints with them, unowned NodeShapes are never touched.
+- Changeset: the single-owner paragraph describes the ownership edge and the two-request sync.
+- Docstrings: `singleOwnerConstraint.ts` module doc, `linked-core.ts` `generated` comment;
+  `buildSyncThunk`, `Package.ts` and the `generatedShape` term were documented in Phase 18.
+
+Review findings: **M5 resolved** (2 requests per shape, no SELECT), **L12 resolved** (no prefix
+matching; ownership is the edge), **L13 resolved** (constraints are created in the same request
+as the shape), **L14 resolved** (no suffix recognition in `shapeNamespace`).
+
+Validation (2026-10-12):
+- `npm test`: exit 0. `[ensureFuseki] Fuseki is ready`; 96 suites passed, 4 skipped; 2183 tests
+  passed, 121 skipped.
+- `npx linked build`: Build successful.
+- :3939 stopped; :3030 not touched.
+
+Deviations: none.

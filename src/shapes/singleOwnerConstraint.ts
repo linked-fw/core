@@ -26,7 +26,9 @@ import {serializePathToNodeData} from './serializePathToNodeData.js';
  *
  * One constraint per accessor, written only by the class that declares it: subclasses inherit
  * the property but add no constraint, since the rule targets the predicate's objects whoever the
- * subject is. Non-owning references through other predicates are not counted, and neither is
+ * subject is. The declaring shape owns its constraints through `core:generatedShape`
+ * (`NodeShape.generatedShapes`, `contains`): shape sync writes them nested in the shape's create
+ * and deletes them with the shape. Non-owning references through other predicates are not counted, and neither is
  * ownership through two different `contains` predicates (a documented limitation). The shapes
  * are built only at sync time and are never registered in the in-memory shape registry.
  */
