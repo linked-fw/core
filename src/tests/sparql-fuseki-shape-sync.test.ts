@@ -29,8 +29,11 @@ import {
   addPropertyShape,
   createPropertyShapeData,
   PropertyShape,
+  NodeShape,
   type PropertyShapeData,
 } from '../shapes/SHACL';
+import {DeleteBuilder} from '../queries/DeleteBuilder';
+import type {SparqlQueryResults} from '../sparql/resultMapping';
 import {getAllShapeClasses} from '../utils/ShapeClass';
 import {syncShapes, syncShape, type SyncShapesOptions} from '../shapes/syncShapes';
 import {singleOwnerShapeIri} from '../shapes/singleOwnerConstraint';
@@ -349,6 +352,59 @@ describe('single-owner constraint e2e (Fuseki)', () => {
     await syncShape(E2EProject)();
     expect(await count(`<${handmade}> ?p ?o`)).toBe(2);
     await executeSparqlUpdate(`DELETE WHERE { <${handmade}> ?p ?o }`);
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  test('a NodeShape delete removes its generated shapes completely, not the predicate IRI', async () => {
+    if (!available) return;
+    const RDFS = 'http://www.w3.org/2000/01/rdf-schema#';
+    await runSync();
+    await executeSparqlUpdate(`INSERT DATA { <${schemaImage.id}> <${RDFS}label> "image" . }`);
+    expect(await has(`<${E2EProject.shape.id}> <${CORE}generatedShape> <${IMAGE()}>`)).toBe(true);
+    expect(await genTriples(IMAGE())).toBeGreaterThan(0);
+
+    await DeleteBuilder.from(NodeShape, {id: E2EProject.shape.id}).exec();
+
+    // Zero triples under each generated shape: the shape, `…/owners` and `…/owners/inv`.
+    expect(await genTriples(IMAGE())).toBe(0);
+    expect(await genTriples(ATTACHMENTS())).toBe(0);
+    expect(await count(`?s ?p ?o . FILTER(STRSTARTS(STR(?s), "${E2EProject.shape.id}"))`)).toBe(0);
+    // The predicate IRI the constraint pointed at, and its own description, are untouched.
+    expect(await has(`<${schemaImage.id}> <${RDFS}label> "image"`)).toBe(true);
+    // E2ESubProject (a separate shape) still references the same predicate in its own paths.
+    expect(await has(`<${E2ESubProject.shape.id}/image> <${SH}path> <${schemaImage.id}>`)).toBe(true);
+
+    await syncShape(E2EProject)();
+    expect(await generatedUnder(E2EProject.shape.id)).toBe(2);
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  test("'all' and 'ownedNamespaces' pruning keep the generated shapes of in-code shapes", async () => {
+    if (!available) return;
+    for (const orphanScope of ['all', 'ownedNamespaces'] as const) {
+      await runSync({orphanScope});
+      expect(await generatedUnder(E2EProject.shape.id)).toBe(2);
+      expect(await genTriples(IMAGE())).toBeGreaterThan(0);
+    }
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  test('a sync is two requests and sends no class-check query', async () => {
+    if (!available) return;
+    class CountingStore extends FusekiStore {
+      selects = 0;
+      updates = 0;
+      protected async executeSparqlSelect(sparql: string): Promise<SparqlQueryResults> {
+        this.selects++;
+        return super.executeSparqlSelect(sparql);
+      }
+      protected async executeSparqlUpdate(sparql: string): Promise<void> {
+        this.updates++;
+        return super.executeSparqlUpdate(sparql);
+      }
+    }
+    const store = new CountingStore(FUSEKI_BASE_URL, DATASET_NAME);
+    await syncShape(E2EProject, store)();
+    expect(store.selects).toBe(0);
+    expect(store.updates).toBe(2);
+    expect(await generatedUnder(E2EProject.shape.id)).toBe(2);
   }, LIVE_FUSEKI_TIMEOUT);
 
   // The test Fuseki (secoresearch/fuseki, datasets created through the admin API) exposes

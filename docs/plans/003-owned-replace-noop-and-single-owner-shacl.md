@@ -2364,6 +2364,35 @@ IRI survives; `'all'` and `'ownedNamespaces'` syncs keep in-code generated shape
 Validation: targeted suites pass with Fuseki confirmed (new live tests proven to run);
 typecheck; `npx linked build`.
 
+### Phase 18 status: done
+
+Built per C15-C17: `core:generatedShape` in `linked-core.ts`; `NodeShape.generatedShapes`
+(`contains`, value shape NodeShape) in `Package.ts`; `buildNodeShapeData` nests the constraints
+under `generatedShapes`; the thunk is delete main → create main. `storedGeneratedShapes`, the
+prefix matching and the `.singleOwner` case in `shapeNamespace` are removed. Pruning protects the
+in-code generated IRIs derived in memory (option 1).
+
+Validation (2026-10-12):
+- `single-owner-constraint` (11): thunk plan is delete + create; a recording `SparqlDataset`
+  receives exactly 2 updates and 0 selects for `Project` (DELETE has the
+  `<Project> core:generatedShape ?dN` block; INSERT has both edges, `sh:targetObjectsOf` and the
+  `…/owners/inv` inverse path) and for `ImageObject` (no edge); `'all'` and `'ownedNamespaces'`
+  keep the in-code generated IRI; `syncShape(NodeShape)` is refused (no constraint for the
+  meta-model).
+- `shacl-syncshapes`: unchanged expectations still hold (delete + create per shape).
+- Live `sparql-fuseki-shape-sync` (12: 11 passed, 1 skipped): new — a NodeShape delete leaves 0
+  triples under both generated shapes and under the shape's IRI, `schema:image`'s label and
+  another shape's path to it survive; `'all'` and `'ownedNamespaces'` syncs keep both generated
+  shapes; a live sync is 2 updates and 0 selects. The iteration-3 tests (persisted, subclass adds
+  none, idempotent, removed accessor, hand-written NodeShape) pass unchanged. All 8 single-owner
+  live tests proven to run with a temporary `throw` (8 failures), removed afterwards.
+- `npm test`: exit 0. `[ensureFuseki] Fuseki is ready`; 96 suites passed, 4 skipped; 2183 tests
+  passed, 121 skipped. `npx linked build`: Build successful.
+
+Deviations: none. Shapes written by iterations 1-3 of this unreleased branch without the
+`core:generatedShape` edge are not removed by a sync (only by an `'all'` prune, or by re-syncing
+the same IRI, which re-links it).
+
 ## Phase 19 — Docs
 
 README sync-lifecycle text, changeset, docstrings; M5/L12/L13/L14 marked resolved. Validation:

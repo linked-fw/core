@@ -91,65 +91,40 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
   d.properties = getUniquePropertyShapes(nodeShape).map((ps) =>
     buildPropertyShapeData(ps, shapeIri),
   );
+  // The single-owner constraints of the shape's own `contains` properties, owned through
+  // `core:generatedShape` and written nested in the same create with their fixed IRIs.
+  const generated = buildSingleOwnerConstraints(nodeShape, shapeIri);
+  if (generated.length > 0) {
+    d.generatedShapes = generated.map(({iri, data}) => ({__id: iri, ...data}));
+  }
   return d;
 }
 
 /**
- * The IRIs of the generated (`core:generated true`) NodeShapes in the store that belong to the
- * shape at `shapeIri`: those under `${shapeIri}/`, where its property shapes and their
- * single-owner constraints (`${shapeIri}/${label}.singleOwner`) live. One SELECT; the prefix is
- * filtered here. Only shapes the store marks as generated are returned, so a hand-written
- * NodeShape at a generated-looking IRI is never deleted by sync.
- */
-async function storedGeneratedShapes(shapeIri: string, ds?: IDataset): Promise<string[]> {
-  const rows = (await (NodeShape as unknown as {
-    select: () => {
-      where: (fn: (s: {generated: {equals: (v: boolean) => unknown}}) => unknown) => {
-        exec: (target?: IDataset) => Promise<Array<{id: string}> | null>;
-      };
-    };
-  })
-    .select()
-    .where((s) => s.generated.equals(true))
-    .exec(ds)) ?? [];
-  const prefix = `${shapeIri}/`;
-  return rows.map((row) => row.id).filter((id) => typeof id === 'string' && id.startsWith(prefix));
-}
-
-/**
- * The per-shape `delete → create` thunk shared by `syncShapes()` and `syncShape()`. The delete
- * cascade-cleans the shape's old property-shape / list / path subtrees; the create rebuilds them.
+ * The per-shape `delete → create` thunk shared by `syncShapes()` and `syncShape()`: exactly two
+ * requests. The delete cascade-cleans the shape's old property-shape / list / path subtrees; the
+ * create rebuilds them.
  *
  * The single-owner constraints generated from the shape's own `contains` properties
- * (`${iri}/${label}.singleOwner`, see `singleOwnerConstraint.ts`) ride the same thunk: find the
- * stored generated shapes under `${iri}/` → delete main → delete those (if any) → create main →
- * create each current constraint. A removed or renamed accessor therefore loses its constraint
- * on the next sync without any pruning, and only shapes marked `core:generated` are deleted.
+ * (`${iri}/${label}.singleOwner`, see `singleOwnerConstraint.ts`) are owned by the shape through
+ * `core:generatedShape` (a `contains` property with value shape NodeShape). The delete removes
+ * each one's own triples (the immediate owned-child block) and their property shapes and path
+ * nodes (the dependent cascade); the create writes the current ones nested, in the same request
+ * as the shape. A removed or renamed accessor therefore loses its constraint on the next sync,
+ * and a NodeShape the shape does not own is never touched.
  *
- * The steps are separate requests. `IDataset` has no batch or raw-update entry point, and
- * lowering the builders to one SPARQL request here would bypass dataset routing and the
- * server forwarding.
- *
- * `ds` (optional) targets an explicit dataset — every step runs against it instead of the
+ * `ds` (optional) targets an explicit dataset — both requests run against it instead of the
  * global router. Omitted → today's global behavior.
  */
 function buildSyncThunk(nodeShape: NodeShapeData, iri: string, ds?: IDataset): () => Promise<void> {
-  const create = (data: Record<string, unknown>, id: string) =>
-    (NodeShape.create(data as never).withId(id) as unknown as {
-      exec: (target?: IDataset) => Promise<unknown>;
-    }).exec(ds);
   return async () => {
     // Build the data fresh on each invocation, so every run writes from the current
     // shape metadata.
     const data = buildNodeShapeData(nodeShape, iri);
-    const constraints = buildSingleOwnerConstraints(nodeShape, iri);
-    const stale = await storedGeneratedShapes(iri, ds);
     await DeleteBuilder.from(NodeShape, {id: iri}).exec(ds);
-    if (stale.length > 0) {
-      await DeleteBuilder.from(NodeShape, stale.map((id) => ({id}))).exec(ds);
-    }
-    await create(data, iri);
-    for (const constraint of constraints) await create(constraint.data, constraint.iri);
+    await (NodeShape.create(data as never).withId(iri) as unknown as {
+      exec: (target?: IDataset) => Promise<unknown>;
+    }).exec(ds);
   };
 }
 
@@ -195,12 +170,6 @@ export interface SyncShapesOptions {
 
 /** The owning namespace of a shape IRI — everything up to and including the last `/` or `#`. */
 function shapeNamespace(iri: string): string {
-  // A generated single-owner shape (`…/pkg/Thing/image.singleOwner`) belongs to the namespace
-  // of its declaring shape (`…/pkg/Thing`), not to `…/pkg/Thing/`.
-  if (iri.endsWith('.singleOwner')) {
-    const declaring = iri.slice(0, iri.lastIndexOf('/'));
-    if (declaring) iri = declaring;
-  }
   const cut = Math.max(iri.lastIndexOf('/'), iri.lastIndexOf('#'));
   return cut >= 0 ? iri.slice(0, cut + 1) : iri;
 }
@@ -255,7 +224,10 @@ export async function syncShapes(
   for (const {iri, nodeShape} of userShapes) {
     assertNoGeneratedIriCollision(nodeShape, iri, (id) => localShapeIris.has(id));
   }
-  // The generated single-owner shapes are written by the same thunks, so they are never orphans.
+  // The generated single-owner shapes of in-code shapes are written by the same thunks, so they
+  // are never orphans. Derived in memory from the same function that builds them; a stale
+  // generated shape (removed accessor or shape) is not protected and goes with its owner's
+  // delete, through the `core:generatedShape` cascade.
   for (const {iri, nodeShape} of userShapes) {
     for (const generated of generatedIrisOf(nodeShape, iri)) localShapeIris.add(generated);
   }

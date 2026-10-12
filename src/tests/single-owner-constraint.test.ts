@@ -19,6 +19,9 @@ import {getPropertyShapes} from '../shapes/nodeShapeData';
 import {PathNode} from '../shapes/PathNode';
 import {List} from '../shapes/List';
 import {lower} from '../queries/lower';
+import {SparqlDataset} from '../sparql/SparqlDataset';
+import type {SparqlQueryResults} from '../sparql/resultMapping';
+import {NodeShape} from '../shapes/SHACL';
 import '../shapes/List';
 import '../shapes/PathNode';
 
@@ -104,23 +107,15 @@ class LooseFolder extends Shape {
 }
 
 const iriOf = (cls: typeof Shape) => cls.shape.id;
+const SH = 'http://www.w3.org/ns/shacl#';
 
 type Call = {kind: string; id?: string};
 let calls: Call[];
 
-/**
- * Query dispatch stub. `generatedIds` answers the sync thunk's SELECT of generated NodeShapes
- * (a select with a where clause); `existingIds` answers the orphan sweep's plain SELECT.
- */
-function installMock(existingIds: string[], generatedIds: string[] = []) {
+function installMock(existingIds: string[]) {
   calls = [];
   setQueryDispatch({
-    selectQuery: async (q: any) => {
-      const ir = lower(q) as any;
-      const filtered = !!ir?.where;
-      calls.push({kind: filtered ? 'select-generated' : 'select'});
-      return (filtered ? generatedIds : existingIds).map((id) => ({id})) as any;
-    },
+    selectQuery: async () => existingIds.map((id) => ({id})) as any,
     askQuery: async () => existingIds.length > 0,
     createQuery: async (q: any) => {
       calls.push({kind: 'create', id: (lower(q) as any)?.data?.id});
@@ -192,70 +187,74 @@ describe('single-owner constraint data', () => {
   });
 });
 
+/** A SPARQL dataset that records every request it is sent; selects answer with no rows. */
+class RecordingSparqlDataset extends SparqlDataset {
+  selects: string[] = [];
+  updates: string[] = [];
+  protected async executeSparqlSelect(sparql: string): Promise<SparqlQueryResults> {
+    this.selects.push(sparql);
+    return {head: {vars: []}, results: {bindings: []}};
+  }
+  protected async executeSparqlUpdate(sparql: string): Promise<void> {
+    this.updates.push(sparql);
+  }
+}
+
 describe('single-owner constraint sync', () => {
   beforeEach(() => installMock([]));
 
-  test('sync thunk plan', async () => {
+  test('sync thunk plan: delete main, create main (constraints nested)', async () => {
     const main = iriOf(Project);
     await syncShape(Project)();
     expect(calls.map((c) => (c.id ? `${c.kind}:${c.id}` : c.kind))).toEqual([
-      'select-generated',
-      `delete:${main}`,
-      `create:${main}`,
-      `create:${genOf(Project, 'image')}`,
-      `create:${genOf(Project, 'attachments')}`,
-    ]);
-  });
-
-  test('stored generated shapes under the shape are deleted; others are not', async () => {
-    const main = iriOf(Project);
-    const removed = `${main}/oldAccessor.singleOwner`;
-    installMock([], [genOf(Project, 'image'), removed, genOf(Workspace, 'image'), `${main}.singleOwner`]);
-    await syncShape(Project)();
-    expect(calls.filter((c) => c.kind === 'delete').map((c) => c.id)).toEqual([
-      main,
-      genOf(Project, 'image'),
-      removed,
-    ]);
-    expect(calls.filter((c) => c.kind === 'create').map((c) => c.id)).toEqual([
-      main,
-      genOf(Project, 'image'),
-      genOf(Project, 'attachments'),
-    ]);
-  });
-
-  test('a shape without contains deletes nothing generated when none is stored', async () => {
-    const main = iriOf(ImageObject);
-    await syncShape(ImageObject)();
-    expect(calls.map((c) => (c.id ? `${c.kind}:${c.id}` : c.kind))).toEqual([
-      'select-generated',
       `delete:${main}`,
       `create:${main}`,
     ]);
   });
 
-  test('prune keeps generated shapes of code shapes', async () => {
+  test('exactly two SPARQL requests per shape, no select (no class-check query)', async () => {
+    const ds = new RecordingSparqlDataset();
+    await syncShape(Project, ds)();
+    expect(ds.selects).toEqual([]);
+    expect(ds.updates).toHaveLength(2);
+    const [del, create] = ds.updates;
+    // The predicate prints as `core:generatedShape` (prefixed) or as a full IRI.
+    const EDGE = String.raw`(?:core:generatedShape|<https://linked\.cm/ont/core/generatedShape>)`;
+    const esc = (iri: string) => iri.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // The delete removes the generated shapes as owned children of the main shape …
+    expect(del).toMatch(new RegExp(`<${esc(iriOf(Project))}> ${EDGE} \\?d\\d+ \\.`));
+    // … and the create writes them nested, with their fixed IRIs.
+    for (const label of ['image', 'attachments']) {
+      const gen = genOf(Project, label);
+      expect(create).toMatch(new RegExp(`<${esc(iriOf(Project))}> ${EDGE} <${esc(gen)}>`));
+      expect(create).toMatch(new RegExp(`<${esc(gen)}> (?:shacl:targetObjectsOf|<${esc(SH)}targetObjectsOf>)`));
+      expect(create).toMatch(new RegExp(`<${esc(gen)}/owners/inv> (?:shacl:inversePath|<${esc(SH)}inversePath>)`));
+    }
+    // A shape without contains: the same two requests, no generated shape.
+    const plain = new RecordingSparqlDataset();
+    await syncShape(ImageObject, plain)();
+    expect(plain.selects).toEqual([]);
+    expect(plain.updates).toHaveLength(2);
+    expect(plain.updates[1]).not.toMatch(new RegExp(EDGE));
+  });
+
+  test('prune keeps generated shapes of code shapes (all and ownedNamespaces)', async () => {
     const gen = genOf(Project, 'image');
     const ORPHAN = 'https://linked.cm/shape/single-owner-test/Gone';
-    installMock([iriOf(Project), gen, ORPHAN]);
-    const plan = await syncShapes(undefined, {orphanScope: 'all'});
-    for (const run of plan) await run();
-    const deletes = calls.filter((c) => c.kind === 'delete').map((c) => c.id);
-    expect(deletes).not.toContain(gen);
-    expect(deletes).toContain(ORPHAN);
-    expect(calls.filter((c) => c.kind === 'create').map((c) => c.id)).toContain(gen);
+    for (const orphanScope of ['all', 'ownedNamespaces'] as const) {
+      installMock([iriOf(Project), gen, ORPHAN]);
+      const plan = await syncShapes(undefined, {orphanScope});
+      for (const run of plan) await run();
+      const deletes = calls.filter((c) => c.kind === 'delete').map((c) => c.id);
+      expect(deletes).not.toContain(gen);
+      expect(deletes).toContain(ORPHAN);
+    }
   });
 
-  test('ownedNamespaces prunes a stale generated shape by its declaring namespace', async () => {
-    const pkgNs = iriOf(Project).slice(0, iriOf(Project).lastIndexOf('/') + 1);
-    const stale = `${pkgNs}Gone/image.singleOwner`;
-    const foreign = 'https://linked.cm/shape/other-pkg/Thing/image.singleOwner';
-    installMock([stale, foreign]);
-    const plan = await syncShapes(undefined, {orphanScope: 'ownedNamespaces'});
-    for (const run of plan) await run();
-    const deletes = calls.filter((c) => c.kind === 'delete').map((c) => c.id);
-    expect(deletes).toContain(stale);
-    expect(deletes).not.toContain(foreign);
+  test('no constraint is generated for the meta-model itself (core is never synced)', () => {
+    // NodeShape.generatedShapes is `contains` with a value shape, but NodeShape lives in
+    // @_linked/core, which sync skips; syncShape refuses it outright.
+    expect(() => syncShape(NodeShape)).toThrow(/framework|meta/i);
   });
 });
 
