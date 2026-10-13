@@ -115,7 +115,9 @@ whenever any test in the file — including an offline one — runs. Tests never
 - Per-file name probe: `DATASET_NAME === 'nashville-test-zz-probe'` inside `zz-probe.test.ts`.
 - Backlog 047: `sparql-fuseki-shape-sync` 20× in a loop, 20/20 green; full parallel suite 5×,
   5/5 identical. No failure reproduced.
-- CI on the PR: see PR section.
+- CI on [PR #331](https://github.com/linked-fw/core/pull/331), Build & Test 1m10s (previous PR: 1m21s):
+  `[ensureFuseki] Fuseki is ready`, `[fuseki] live tests: 281 total — 280 passed, 0 failed, 1 skipped`,
+  `Tests: 121 skipped, 2183 passed, 2304 total`.
 
 ## Backlog disposition
 
