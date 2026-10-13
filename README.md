@@ -321,11 +321,11 @@ predicates: from the owner's shape it follows that shape's `contains` properties
 shapes, then those shapes' `contains` properties. When a value is typed with a registered
 sub-shape of the declared value shape, the `contains` properties the sub-shape adds are followed
 too, but only from nodes of that sub-shape's class (`?img a ex:Photo . ?img ex:thumbnail ?t`).
-That needs a class only that sub-shape (and shapes extending it) targets: a sub-shape without a
-`targetClass`, or sharing it with a shape that does not extend it (its parent, a sibling, a shape
-of another hierarchy), cannot be told apart, so its extra `contains` properties are not followed
-through the parent (core warns once). A same-class "profile" of a sub-shape that adds nothing of
-its own changes nothing. When a sub-shape redeclares an inherited `contains` property without
+The class must tell those nodes apart: an added property is not followed through the parent
+(core warns once) when the sub-shape has no `targetClass`, shares it with one of its
+super-shapes, or shares it with another shape that holds the same predicate as a plain property.
+Another shape that merely shares the class, without that predicate, changes nothing; nor does a
+same-class "profile" of a sub-shape that adds nothing of its own. When a sub-shape redeclares an inherited `contains` property without
 `contains`, the inherited ownership still applies.
 
 Recursion has a limit. A shape that owns its own kind (a list cell owning the next cell through

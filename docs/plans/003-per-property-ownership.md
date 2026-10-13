@@ -937,11 +937,20 @@ reviewer's "must keep" (from H2 / M3) no longer holds.
 Re-checked after iteration 2 (Review 2, M-C): M-B (a user sub-shape claiming a library class) is
 now skipped by the registry-wide `classGuard`, so it cannot widen library deletes; M-A (a same-class
 user profile switching off a library sub-shape's ownership) is fixed, and a profile that adds
-nothing is ignored. Remaining effect of user-authored shapes on library deletes: a user shape
-that takes a library class *and* adds `contains` makes nothing worse — it is skipped (warned), so
-library deletes behave as without it. The verdict stands: `withoutOwnership` is no longer needed
-for isolation; keep stripping `contains` only while user-authored `contains` properties accept
-client `{id}`s.
+nothing is ignored.
+
+Re-checked after iteration 3 (Review 3, M-2): the guard is now decided per edge. A user shape
+that takes a library sub-shape's class no longer switches that sub-shape's ownership off unless
+it declares the same predicate as a plain property; in that one case the library edge is not
+followed (warned) — the safe direction, since following it would delete the user shape's
+references. A user sub-shape claiming a library class with a plain property on the predicate is
+skipped (M-B). So user-authored shapes cannot widen library deletes, and narrow them only by
+declaring a conflicting plain property on a library-owned predicate under a library class, which
+`withoutOwnership` (it strips `contains`, not `targetClass` or plain properties) would not prevent
+anyway. Final verdict: `withoutOwnership` is not needed for isolation; the app may drop it, keeping
+`contains` stripping only while user-authored `contains` properties accept client `{id}`s. A
+catalog check that flags user shapes reusing a library sub-shape's class is a useful app-side
+addition, not a core requirement.
 
 Tasks: README, `owned-values.md`, changeset, `linked-core.ts:29`, golden rename, consumer verdict
 in this doc. Validation: stale-claim grep; gates as above.
@@ -1075,6 +1084,9 @@ Validation: quick gate green; `npm test` 2244 passed, 0 failed,
 Validation: M-1 / M-2 repros fail on `c02348e` and pass after; all of `owned-walk-recursion`
 passes; quick gate, `npm test` (0 failed live), `npx linked build`.
 
-### Phase 12: docs and consumer verdict
+### Phase 12: docs and consumer verdict — DONE
+
+Result: README, `owned-values.md`, changeset describe the per-edge guard; consumer verdict
+re-checked above.
 
 Validation: README / `owned-values.md` / changeset match the per-edge rule; gates as above.

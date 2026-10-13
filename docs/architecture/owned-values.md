@@ -55,15 +55,16 @@ asserts ownership. One UNION branch per path from the root.
   a predicate its own shape does not own. A path stops after `MAX_OWNED_RECURSION` (4) hops into
   a shape already on it; deeper values are left (orphans, the safe direction), as is anything
   behind an untyped node on such a cycle.
-- **Sub-shapes.** For every registered descendant of a reached shape whose class tells its nodes
-  apart (`classGuard`: every registered shape targeting that class, registry-wide, is the
-  sub-shape or one of its descendants), its added `contains` properties are followed from nodes
-  of that class only (`?n a <SubClass> . ?n <c> ?m`); guarded edges never join a closure. Core
-  writes the concrete class's `rdf:type` on create, so no inference is needed. A sub-shape
-  without a `targetClass`, or sharing it with a shape that does not extend it (parent, sibling,
-  another hierarchy), is not followed (warned once with the cause); a same-class profile of a
-  guardable sub-shape that adds nothing is skipped silently. Recursion typing uses the same
-  classes. A sub-shape redeclaring an inherited `contains` property as plain does not remove the
+- **Sub-shapes.** For every registered descendant of a reached shape, each added `contains`
+  property is followed from nodes of the sub-shape's class only (`?n a <SubClass> . ?n <c> ?m`);
+  guarded edges never join a closure. Core writes the concrete class's `rdf:type` on create, so no
+  inference is needed. Per edge (`blockedGuard`, registry-wide), it is not followed when the
+  sub-shape has no `targetClass`, when one of its super-shapes holds the class (their own nodes
+  would match), or when another shape holding the class declares the predicate as a plain
+  property (following it would delete that shape's references) — warned once with the cause. A
+  sharer without the predicate does not block it. A sub-shape adding nothing beyond its direct
+  super-shape (a profile, a data-only copy) is skipped silently. Recursion typing accepts the
+  declaring shape's class and every registered descendant's. A sub-shape redeclaring an inherited `contains` property as plain does not remove the
   inherited ownership (`getPropertyShapes` keeps both).
 - **`rdf:nil`** is never deleted: every walk node and the replaced-value self-delete carry
   `FILTER(!sameTerm(?n, rdf:nil))`.
