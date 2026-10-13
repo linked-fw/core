@@ -1,5 +1,5 @@
 ---
-summary: The contract of owned (`contains`) values — when an owned node is deleted (replace, set-remove, subject delete, bulk delete), how ownership is decided (per predicate vs per shape), the class check on linked ids, and the generated single-owner SHACL shapes that shape sync persists and owns through `core:generatedShape`.
+summary: The contract of owned (`contains`) values — when an owned node is deleted (replace, set-remove, subject delete, bulk delete), how ownership is decided (per predicate vs per shape), blank-node values (written and deleted through blank-capable `sh:nodeKind` properties), the class check on linked ids, and the generated single-owner SHACL shapes that shape sync persists and owns through `core:generatedShape`.
 packages: [core]
 ---
 
@@ -16,9 +16,10 @@ rationale: [report 025](../reports/025-update-replace-contains-cascade.md) (repl
 - **`dependent: true`** on a shape: its instances have no independent existence and are deleted
   when a `contains` walk reaches them (list cells, property shapes, and the typed path nodes of
   versions before 2.30).
-- **Blank nodes** need neither flag: the cascade deletes every blank node reached through
-  `contains` edges, and the blank structure below it (following `rdf:first` too, from a blank
-  node only). Complex `sh:path` values are written this way (`__blank` nested node-data).
+- **Blank nodes** need neither flag. A nested create is written as a blank node when the
+  property that holds it is blank-capable (`sh:BlankNode`, `sh:BlankNodeOrIRI` without an id,
+  `sh:BlankNodeOrLiteral`), and it is deleted through that property; see
+  [Blank-node values](#blank-node-values). Complex `sh:path` values are written this way.
 
 Both are read from the live shape registry (`collectContainment` in `src/sparql/irToAlgebra.ts`),
 so no vocabulary is hardcoded.
@@ -51,8 +52,61 @@ Invariants:
   shape-sync delete exact). Edges no reached shape declares are not followed.
 - Non-owning references to an owned node are allowed and are left dangling when the owner goes.
 
+Blank values are a separate rule, below; they are deleted whether or not the property is
+`contains`.
+
 The replace and the subject delete decide ownership differently (per predicate vs per shape).
 Whether to unify them is open: [backlog 053](../backlog/053-per-property-ownership.md).
+
+## Blank-node values
+
+History and rationale: [report 034](../reports/034-shacl-complex-paths-as-blank-nodes.md) (blank
+SHACL paths) and the report of the `nodeKind` change that replaced its `__blank` node-data key.
+
+**Writing.** The lowering (`nestedNodeKind` in `src/sparql/irToAlgebra.ts`) decides from the
+`sh:nodeKind` of the property that holds a nested create, read from the registry of the side that
+runs the mutation. Nothing travels in the IR or on the DSL-JSON wire.
+
+| `nodeKind` | without id | with id |
+|---|---|---|
+| unset, `sh:IRI`, `sh:IRIOrLiteral` | IRI | IRI |
+| `sh:BlankNodeOrIRI` | blank | IRI |
+| `sh:BlankNode`, `sh:BlankNodeOrLiteral` | blank | error |
+| `sh:Literal` | error | error |
+
+A blank node gets a label fresh to its INSERT DATA (`_:bN`) and its field triples only, no
+`rdf:type`. Only a create writes one; an update / upsert / update-where whose value would be blank
+throws (a `DELETE/INSERT … WHERE` template mints its blank nodes once per WHERE solution). An id
+of the form `_:…` is refused wherever the lowering writes an IRI (link, `update().for()`, delete
+by id): a blank node is not addressable.
+
+The metamodel declares `PropertyShape.path`, the `PathNode` slots and `PathList.first` / `.rest`
+`sh:BlankNodeOrIRI`. `PathList` is a separate shape from `List` (both target `rdf:List`) because
+`List.first` holds literals in `sh:in` and `List.rest` must stay `sh:IRI` for user lists.
+
+**Deleting** (`buildBlankCascade`). One UNION branch per owner:
+
+```sparql
+<owner> (p1|…|pn) ?bn0 . FILTER(isBlank(?bn0))
+?bn0 (q1|…|qm)* ?bn . ?bn ?bnp ?bno .
+FILTER(isBlank(?bn) && NOT EXISTS { ?bn0 (q…)* ?mid . ?mid (q…)+ ?bn . FILTER(!isBlank(?mid)) })
+```
+
+| Mutation | Owner | `p…` |
+|---|---|---|
+| Delete by id, bulk delete | the subject (bulk: led by its type triple) | the subject shape's blank-capable predicates, sub-shapes included |
+| Any cascade (`buildOwnedCascade`: subject delete, `contains` replace / set-remove) | each dependent-typed node it deletes (`<root> (c…)* ?bo . ?bo a <T>`) | the blank-capable predicates of the shapes targeting `T` |
+| Replace / unset / overwrite of a blank-capable property | the old value itself (`<s> <p> ?old`, `?old` is `?bn0`) | — |
+
+- `q…` (`blankWalkPredicates`): the blank-capable predicates of the shapes the values can have
+  (value shape and sub-shapes, transitively). A blank-capable property without a value shape is
+  polymorphic and yields every blank-capable predicate of the registry.
+- Every deleted node is blank, so no IRI is ever deleted. The `NOT EXISTS` refuses a blank node
+  reached through an IRI (a property path cannot constrain intermediate nodes): a blank list's
+  `rdf:first` must not lead into a listed entity and delete that entity's blank values. Blank
+  structures core writes are trees, so the guard removes nothing they own.
+- Not covered: the blank values of an immediately-owned child that is not dependent-typed (the
+  child's own triples go, its blank values stay).
 
 ## The class check on linked ids
 
@@ -100,7 +154,8 @@ constraint as conforming whatever the data. The next sync replaces those nodes.
 - **Ownership:** `NodeShape.generatedShapes` (`core:generatedShape`) is a `contains` property with
   value shape `NodeShape`. Sync stays two requests per shape: the delete of the NodeShape removes
   the generated shapes (owned-child block), their property shapes (dependent cascade) and their
-  blank path nodes (the cascade's blank-node block), never the predicate IRI; the create writes the current ones nested.
+  blank path nodes (the blank-node cascade of each deleted property shape), never the predicate
+  IRI; the create writes the current ones nested.
 - **Markers:** `core:generated true` and no `sh:targetClass`, so catalog readers can skip them.
   They are never registered in the in-memory registry.
 - **Pruning:** `syncShapes` adds every in-code generated IRI to the protected set, so `'all'` and

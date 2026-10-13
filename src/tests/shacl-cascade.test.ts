@@ -430,7 +430,7 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     // No wildcard delete of the old value's own triples...
     expect(deleteBlockOf(sparql)).not.toMatch(/\?old_anyPath \?\w+ \?\w+ \./);
     // ...and every block that reads ?old_anyPath beyond the edge requires a dependent type, or
-    // (the blank-node block) that what it deletes is a blank node — never a shared IRI.
+    // (the blank-node blocks, through the dependent owner they start from) — never a shared IRI.
     for (const b of branchesOf(sparql).filter((b) => /\?old_anyPath \S/.test(b) && /\?uc0_/.test(b))) {
       expect(b).toMatch(
         /rdf:type (shacl:PropertyShape|rdf:List|core:PathNode|<http:\/\/example\.org\/c#TCell>)/,

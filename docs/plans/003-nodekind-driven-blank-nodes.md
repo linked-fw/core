@@ -225,7 +225,7 @@ Where blank cleanup is emitted:
 | `src/shapes/index.ts` | load `PathList` (registration); like `PathNode` it is not a root export |
 | tests | see phases |
 | `README.md`, `docs/architecture/owned-values.md` | the rule |
-| `docs/backlog/055-blank-node-support-next-steps.md` (new) | follow-ups |
+| `docs/backlog/054-blank-node-support-next-steps.md` (new) | follow-ups |
 | `.changeset/nodekind-driven-blank-nodes.md` | minor |
 
 ### Pitfalls
@@ -344,7 +344,7 @@ Tasks:
    labels normalized.
 2. README and `docs/architecture/owned-values.md`; comments in `PathNode.ts`, `List.ts`,
    `SelectQuery.ts`.
-3. `docs/backlog/055-blank-node-support-next-steps.md`.
+3. `docs/backlog/054-blank-node-support-next-steps.md`.
 
 Validation: equivalence test green; the same script run against this branch's `lib/` prints an
 INSERT DATA identical to 2.30.0's (diff empty after label normalization); docs grep for
@@ -393,3 +393,16 @@ INSERT DATA identical to 2.30.0's (diff empty after label normalization); docs g
   `sh:BlankNodeOrIRI` is accepted as an IRI.
 - Validation: `npm test` exit 0 — 2219 passed, 120 skipped; `[fuseki] live tests: 288 total —
   288 passed`.
+
+### Phase 4 — done
+
+- Equivalence: `node syncfixture.mjs` (a scratch script that runs `syncShape` on a fixture with
+  every complex path form, a `contains` property and an `sh:in` list, recording the SPARQL)
+  against the npm build of 2.30.0 and against this branch's `lib/` after `npx linked build`:
+  the INSERT DATA is 103 lines in both and `diff` is empty, **including the blank labels**. The
+  delete differs, as intended. Pinned as `src/tests/shape-sync-output-equivalence.test.ts`
+  (golden = the 2.30.0 output).
+- Docs: README "Blank-node values (`nodeKind`)" (new section, after owned properties), the
+  shape-sync paragraph no longer mentions `__blank`; `owned-values.md` gains "Blank-node values"
+  (writing table, deleting branches, guards, not covered).
+- Backlog `docs/backlog/054-blank-node-support-next-steps.md` (next free number).
