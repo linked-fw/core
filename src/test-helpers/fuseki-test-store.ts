@@ -3,7 +3,7 @@
  *
  * Provides utilities to:
  * - Ensure a Fuseki instance is running (auto-starts via Docker if needed)
- * - Check if a Fuseki instance is available
+ * - Check if a Fuseki instance is available, and whether this run requires one
  * - Create / delete an in-memory test dataset
  * - Load N-Triples data
  * - Execute SPARQL queries and updates
@@ -13,16 +13,42 @@
  */
 import {execSync} from 'node:child_process';
 import {existsSync} from 'node:fs';
-import {resolve} from 'node:path';
+import {basename, resolve} from 'node:path';
 
 export const FUSEKI_BASE_URL = process.env.FUSEKI_BASE_URL || 'http://localhost:3939';
 const FUSEKI_ADMIN_PASSWORD = process.env.FUSEKI_ADMIN_PASSWORD || 'admin';
-// One dataset per jest worker. The Fuseki suites each seed and clear the whole
-// dataset, so a single shared one makes them clobber each other whenever two run
-// concurrently — which is why the suite needed `--runInBand`. A worker only ever
-// runs one suite at a time, so per-worker isolation is sufficient, and it is
-// `'1'` under `--runInBand` (and outside jest), preserving today's behaviour.
-export const DATASET_NAME = `nashville-test-${process.env.JEST_WORKER_ID ?? '1'}`;
+/**
+ * One dataset per test file. Each live suite seeds and clears its whole dataset, so two files
+ * sharing one — in parallel workers, or one after another on the same worker — can clobber each
+ * other's fixtures. Naming it after the file isolates them under any jest invocation, and a
+ * failing dataset name points straight at its suite. Outside a test file (globalSetup, a plain
+ * node script) there is no `expect`, and the worker id is used instead.
+ */
+function datasetName(): string {
+  const testPath = typeof expect === 'undefined' ? undefined : expect.getState().testPath;
+  if (testPath) return `nashville-test-${basename(testPath).replace(/\.test\.tsx?$/, '')}`;
+  return `nashville-test-${process.env.JEST_WORKER_ID ?? '1'}`;
+}
+export const DATASET_NAME = datasetName();
+
+/**
+ * Set by jest globalSetup to `'1'` when it reached Fuseki and `'0'` when it did not. Workers
+ * inherit it, so every suite reads the same answer synchronously while jest collects tests.
+ * Lives here rather than in `fuseki-live.ts` because globalSetup must not import `@jest/globals`.
+ */
+export const FUSEKI_LIVE_ENV = 'LINKED_TEST_FUSEKI_LIVE';
+
+/**
+ * Whether a run must fail rather than skip when Fuseki is unreachable. `REQUIRE_FUSEKI` decides
+ * when set (`0`/`false` opt out, any other value requires); otherwise CI requires it, so a CI
+ * run whose Docker start failed cannot report the live suites as green.
+ */
+export function fusekiRequired(): boolean {
+  const explicit = process.env.REQUIRE_FUSEKI;
+  if (explicit) return explicit !== '0' && explicit.toLowerCase() !== 'false';
+  const ci = process.env.CI;
+  return Boolean(ci) && ci !== '0' && ci.toLowerCase() !== 'false';
+}
 
 /** Whether this process started Fuseki (so we know whether to stop it). */
 let startedByUs = false;
@@ -89,7 +115,7 @@ export async function ensureFuseki(): Promise<boolean> {
   try {
     execSync('docker compose version', {stdio: 'ignore'});
   } catch {
-    console.warn('[ensureFuseki] Docker Compose not available — skipping');
+    console.warn('[ensureFuseki] Docker Compose not available — cannot auto-start Fuseki');
     return false;
   }
 
