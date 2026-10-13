@@ -428,7 +428,17 @@ Validation (`src/tests/owned-link-check.test.ts`):
 - existing contains-property cases unchanged (accepted classes, nested, set add, rdf:nil).
 - Quick gate, `npm test`, `npx linked build`.
 
-### Phase 3 — `contains` requires a value shape; `dependent` deprecated
+### Phase 3 — `contains` requires a value shape; `dependent` deprecated — DONE
+
+Result: `createPropertyShape` throws for `contains` without `shape`; `PropertyShape.path` and the
+four shape-less `PathNode` slots lost `contains`; `PropertyShape`, `List`, `PathNode`, `PathList`
+lost `dependent`; `dependent` documented deprecated (option and `NodeShapeData`). Test shapes with
+a shape-less `contains` became plain (`mutation-decode-concrete-shape`, `owned-link-check`,
+`single-owner-constraint`) or were removed with their tests (`TSlot` in `shacl-cascade`);
+metamodel assertions updated (`shacl-metamodel`, `shacl-list-pathnode`).
+Validation: `npm test` 2221 passed, 0 failed, `[fuseki] live tests: 291 total — 291 passed`
+(shape-sync live suite unchanged: no stale property shapes / list cells / blank paths without
+`dependent`); `npx linked build` OK.
 
 Tasks:
 1. `createPropertyShape`: throw `` `contains` on "<label>" needs a `shape`: … `` when `contains` is set

@@ -27,12 +27,12 @@ import {shacl} from '../ontologies/shacl';
 const {linkedShape} = linkedPackage('mutation-decode-concrete-shape-test');
 const X = 'https://example.org/dcs#';
 
-// A polymorphic owned slot, like `PropertyShape.path`: no declared value shape, blank-capable.
+// A polymorphic slot, like `PropertyShape.path`: no declared value shape, blank-capable.
 @linkedShape
 class DHolder extends Shape {
   static targetClass = {id: `${X}Holder`};
 
-  @objectProperty({path: {id: `${X}slot`}, maxCount: 1, contains: true, nodeKind: shacl.BlankNodeOrIRI})
+  @objectProperty({path: {id: `${X}slot`}, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI})
   get slot(): unknown {
     return null;
   }

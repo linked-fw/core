@@ -83,11 +83,11 @@ class Album extends Shape {
   }
 }
 
-// A shape-less `contains` slot (polymorphic, like `sh:path`) is not part of the group.
+// A plain slot next to a `contains` property is not part of the group.
 @linkedShape({name: 'Folder'})
 class Folder extends Shape {
   static targetClass = ex('Folder');
-  @objectProperty({path: ex('anything'), maxCount: 1, contains: true})
+  @objectProperty({path: ex('anything'), maxCount: 1})
   get anything(): unknown {
     return null;
   }
@@ -100,7 +100,7 @@ class Folder extends Shape {
 @linkedShape({name: 'LooseFolder'})
 class LooseFolder extends Shape {
   static targetClass = ex('LooseFolder');
-  @objectProperty({path: ex('anything'), maxCount: 1, contains: true})
+  @objectProperty({path: ex('anything'), maxCount: 1})
   get anything(): unknown {
     return null;
   }

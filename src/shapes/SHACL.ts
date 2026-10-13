@@ -539,6 +539,16 @@ export function createPropertyShape<
   }
 
   if ((config as ObjectPropertyShapeConfig).contains) {
+    // Ownership is walked shape by shape, so an owned value needs a shape to walk into. A
+    // polymorphic slot holding blank structure needs no `contains`: blank values are deleted
+    // through their blank-capable `nodeKind`.
+    if (!(config as ObjectPropertyShapeConfig).shape) {
+      throw new Error(
+        `The contains property "${propertyKey}" needs a \`shape\`: ownership follows the value ` +
+          `shape to what it owns in turn. Declare the value's shape, or drop \`contains\` (a blank ` +
+          `value is deleted through a blank-capable \`nodeKind\` without it).`,
+      );
+    }
     propertyShape.contains = true;
   }
 

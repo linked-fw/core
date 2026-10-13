@@ -152,16 +152,21 @@ class TAlbum extends Shape {
   }
 }
 
-// A `contains` property WITHOUT a value shape — a polymorphic slot like `PropertyShape.path`,
-// whose value may be a shared predicate IRI. It must never self-delete its old value.
-@linkedShape
-class TSlot extends Shape {
-  static targetClass = ex('TSlot');
-  @objectProperty({path: ex('anyPath'), maxCount: 1, contains: true})
-  get anyPath(): unknown {
-    return null;
-  }
-}
+describe('contains needs a value shape', () => {
+  test('a contains property without a shape throws at decoration', () => {
+    expect(() => {
+      @linkedShape
+      class TNoShape extends Shape {
+        static targetClass = ex('TNoShape');
+        @objectProperty({path: ex('anyPath'), maxCount: 1, contains: true})
+        get anyPath(): unknown {
+          return null;
+        }
+      }
+      return TNoShape;
+    }).toThrow(/The contains property "anyPath" needs a `shape`/);
+  });
+});
 
 describe('owned-subtree walk', () => {
   const C0 = 'http://example.org/c#';
@@ -439,14 +444,6 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     expect(iriOld.whereOptionals[0].type).toBe('bgp');
   });
 
-  test('valueShape-less contains field: no self-delete, no subtree', () => {
-    const sparql = updateSparqlOf(
-      UpdateBuilder.from(TSlot).for(`${C}s1`).set({anyPath: {id: `${C}p`}} as any),
-    );
-    expect(deleteBlockOf(sparql)).not.toMatch(/\?old_anyPath \?\w+ \?\w+ \./);
-    expect(sparql).not.toMatch(/\?uc\d/);
-  });
-
   test('subject delete removes owned children', () => {
     const sparql = deleteToSparql(
       lower(DeleteBuilder.from(TCard, {id: `${C}card1`})) as IRDeleteMutation,
@@ -457,13 +454,6 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     expect(where).not.toContain('OPTIONAL');
     expect(deleteBlockOf(sparql)).toContain('?c_0_0 ?c_0_p ?c_0_o .');
     expect(deleteBlockOf(sparql)).toContain('?c_1_0 ?c_1_p ?c_1_o .');
-  });
-
-  test('subject delete skips valueShape-less contains properties', () => {
-    const sparql = deleteToSparql(
-      lower(DeleteBuilder.from(TSlot, {id: `${C}s1`})) as IRDeleteMutation,
-    );
-    expect(sparql).not.toMatch(/\?c_/);
   });
 
   test('multi-id delete prefixes child vars per id', () => {
@@ -499,8 +489,6 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
       expect(b).toMatch(/\?a0 rdf:type <http:\/\/example\.org\/c#TBox> \.\s*\?a0 <http:\/\/example\.org\/c#owns> \?c_0_0e \.\s*\?c_0_0e <http:\/\/example\.org\/c#next>\* \?c_0_0 \./);
     }
     expect(box).not.toContain('#ref>');
-    const slot = deleteAllToSparql(lower(DeleteBuilder.from(TSlot).all()) as IRDeleteAllMutation);
-    expect(slot).not.toMatch(/\?c_/);
   });
 
   test('delete().where() carries the same owned blocks, joined with the filtered match', () => {
@@ -697,26 +685,6 @@ describeFuseki('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)
     expect(await countTriples('t1')).toBe(0);
     expect(await countTriples('img2')).toBe(0);
     expect(await countTriples('t2')).toBe(2);
-  });
-
-  test('replacing a valueShape-less contains value keeps a plain predicate IRI', async () => {
-    const RDFS = 'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n';
-    await executeSparqlUpdate(
-      `${RDF}${RDFS}INSERT DATA { ${iri('pred')} rdfs:label "x" .
-        ${iri('slot1')} rdf:type ${iri('TSlot')} ; ${iri('anyPath')} ${iri('pred')} . }`,
-    );
-
-    await executeSparqlUpdate(
-      updateToSparql(
-        lower(
-          UpdateBuilder.from(TSlot).for(`${C}slot1`).set({anyPath: {id: `${C}pred2`}} as any),
-        ) as IRUpdateMutation,
-      ),
-    );
-
-    expect(await countTriples('pred')).toBe(1);
-    expect(await hasEdge('slot1', 'anyPath', 'pred2')).toBe(true);
-    expect(await hasEdge('slot1', 'anyPath', 'pred')).toBe(false);
   });
 
   test('set-remove of an id the subject does not own deletes nothing of it', async () => {

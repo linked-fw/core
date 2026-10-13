@@ -79,15 +79,14 @@ class TAlbum extends Shape {
   get subAlbum(): TAlbum {
     return null;
   }
-  @objectProperty({path: ex('any'), maxCount: 1, contains: true})
+  @objectProperty({path: ex('any'), maxCount: 1})
   get any(): unknown {
     return null;
   }
 }
 
-// A plain (non-`contains`) property on a predicate that TAlbum declares `contains`. The
-// replace delete decides ownership by predicate, so a replace through it deletes the old
-// value; the class check must apply the same rule (report 032).
+// A plain (non-`contains`) property on a predicate that TAlbum declares `contains`. Ownership
+// is per property, so it owns nothing: no class check, no delete on replace.
 @linkedShape
 class TScrapbook extends Shape {
   static targetClass = ex('Scrapbook');
@@ -97,8 +96,7 @@ class TScrapbook extends Shape {
   }
 }
 
-// The same shared predicate without a value shape: no expected class, and the replace does
-// not self-delete its value either.
+// The same shared predicate without a value shape: no expected class.
 @linkedShape
 class TLooseBook extends Shape {
   static targetClass = ex('LooseBook');
@@ -140,7 +138,7 @@ describe('collectOwnedLinks', () => {
     ).toEqual([['cover', `${O}x`]]);
   });
 
-  test('non-contains, shape-less contains and rdf:nil are skipped', () => {
+  test('non-contains properties and rdf:nil are skipped', () => {
     const b = UpdateBuilder.from(TAlbum)
       .for(`${O}al1`)
       .set({featured: {id: `${O}f`}, any: {id: `${O}p`}, photos: [{id: rdf.nil.id}]} as any);

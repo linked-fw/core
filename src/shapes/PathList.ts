@@ -21,18 +21,14 @@ import {rdf} from '../ontologies/rdf.js';
  * cannot be declared node-only, and making `List.rest` blank-capable would turn the tail cells of
  * every list built without ids into blank nodes. Both shapes target `rdf:List`; `List` is
  * registered first, so a lookup by `rdf:List` still returns `List`.
- *
- * `dependent` and the `contains` on `rest` keep removing the IRI-named, typed list cells of
- * versions before 2.30 through the typed cascade.
  */
-@linkedShape({name: 'PathList', dependent: true})
+@linkedShape({name: 'PathList'})
 export class PathList extends Shape {
   static targetClass = rdf.List;
 
   /**
-   * A predicate IRI, or an operator node (`PathNode`). Not `contains`: ownership is decided per
-   * predicate across the registry, and `rdf:first` of every other list holds values the list
-   * does not own. The blank-node cascade follows it anyway, because it is blank-capable.
+   * A predicate IRI, or an operator node (`PathNode`). Not `contains`: a predicate IRI is
+   * shared. The blank-node cascade follows it, because it is blank-capable.
    */
   @objectProperty({path: rdf.first, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI})
   get first(): unknown {
