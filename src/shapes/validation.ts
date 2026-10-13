@@ -43,7 +43,7 @@ import {xsd} from '../ontologies/xsd.js';
 import {isNodeReferenceValue, type NodeReferenceValue} from '../utils/NodeReference.js';
 import {getUniquePropertyShapes} from './nodeShapeData.js';
 import type {NodeShapeData, PropertyShapeData} from './nodeShapeData.js';
-import {getNodeShape, getShapeClass} from '../utils/ShapeClass.js';
+import {getNodeShape, getShapeClass, isSubShapeOf} from '../utils/ShapeClass.js';
 import {isExpressionNode} from '../expressions/ExpressionNode.js';
 import {asContextRef} from '../queries/QueryContext.js';
 
@@ -965,18 +965,21 @@ function unresolvedValueShapeMessage(ps: PropertyShapeData): string {
 }
 
 /**
- * The shape a nested value should be validated against: the property's declared
- * `valueShape`, or — for properties that declare none — the shape class carried
- * in the value's reserved `shape` key. Mirrors `convertUpdateValue`; returns
- * undefined when neither is available.
+ * The shape a nested value should be validated against: the shape class carried
+ * in the value's reserved `shape` key when the property declares no `valueShape`
+ * or the key names a subclass of it, otherwise the declared `valueShape`. Mirrors
+ * `convertUpdateValue`; returns undefined when neither is available.
  */
 function resolveValueShape(
   ps: PropertyShapeData,
   value: unknown,
 ): NodeShapeData | undefined {
-  if (ps.valueShape) return getShapeClass(ps.valueShape)?.shape;
-  const declared = (value as {shape?: {shape?: NodeShapeData}}).shape;
-  return declared?.shape;
+  const own = (value as {shape?: {shape?: NodeShapeData}}).shape?.shape;
+  if (!ps.valueShape) return own;
+  const declared = getShapeClass(ps.valueShape)?.shape;
+  // A value naming a subclass of the declared shape is validated as that subclass.
+  if (own && declared && isSubShapeOf(own, declared)) return own;
+  return declared;
 }
 
 function join(prefix: string, label: string): string {

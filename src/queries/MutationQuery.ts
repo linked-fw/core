@@ -13,7 +13,7 @@ import {
 import {getPropertyShapes} from '../shapes/nodeShapeData.js';
 import type {NodeShapeData, PropertyShapeData} from '../shapes/SHACL.js';
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
-import {resolveShapeConstructor} from '../utils/ShapeClass.js';
+import {isSubShapeOf, resolveShapeConstructor} from '../utils/ShapeClass.js';
 import {isExpressionNode, ExpressionNode} from '../expressions/ExpressionNode.js';
 import {createProxiedPathBuilder} from './ProxiedPathBuilder.js';
 import {asContextRef} from './QueryContext.js';
@@ -314,10 +314,14 @@ export class MutationQueryFactory extends QueryFactory {
         }
         //never keep a shape key in the value object
         if (value.shape) {
-          //double check that IF a shape value is provided, that it matches the shape from the @objectProperty decorator
-          if ((value.shape as typeof Shape).shape.id !== valueShape.id) {
+          // A value may name its own concrete shape when that is the declared value
+          // shape or a subclass of it (a Company under an Organization-typed property).
+          const ownShape = (value.shape as typeof Shape).shape;
+          if (ownShape && isSubShapeOf(ownShape, valueShape)) {
+            valueShape = ownShape;
+          } else if (!ownShape || ownShape.id !== valueShape.id) {
             throw new Error(
-              `The property 'shape' is reserved in LINCD and should not be used here in this way. The ${propShape.label} property already defines the shape of the value as ${propShape.label}. If you want to use a different shape, use the 'shape' key in the @objectProperty decorator.`,
+              `The 'shape' key of a value of ${propShape.label} must be its declared shape ${valueShape.label || valueShape.id} or a subclass of it, got ${ownShape?.label || ownShape?.id || 'an invalid shape'}.`,
             );
           }
           // Drop it from a copy, never from the caller's object: the same data

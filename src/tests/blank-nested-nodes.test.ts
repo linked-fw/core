@@ -99,8 +99,8 @@ describe('__blank nested node-data', () => {
   });
 
   test('round-trips over the DSL-JSON wire', () => {
-    // A slot that declares its value shape: a polymorphic slot (`sh:path`) does not pass
-    // inbound wire validation yet, whatever its node-data (see report: wire `__shape` values).
+    // A slot that declares its value shape. The polymorphic-slot (`sh:path`) round trip is
+    // covered in mutation-decode-concrete-shape.test.ts.
     const builder = (BTyped.create({
       op: serializePathToNodeData({inv: {id: `${X}b`}}),
     } as never) as any).withId(`${X}t1`);
