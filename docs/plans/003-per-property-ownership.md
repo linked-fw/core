@@ -4,7 +4,7 @@ summary: >
   array overwrite, the linked-id class check, subject and bulk deletes), replacing the
   registry-wide predicate rule with a shape-directed cascade computed at lowering time, and
   narrowing the generated single-owner constraint to owners of the declaring class.
-status: Plan
+status: Tasks
 packages: [core]
 source_backlog: docs/backlog/053-per-property-ownership.md
 ---
@@ -357,6 +357,120 @@ rule there requires for metamodel terms. `publishing.md`: minor changeset, no pu
   (starts Fuseki on :3939 via global setup; summary line `[fuseki] live tests: … 0 failed`).
 - Full per phase (lead request): `npm test` (jest + typecheck) and `npx linked build`.
 - Command source: `package.json` scripts, `jest.config.cjs`, report 033 live conventions.
+
+## Phases
+
+Dependency graph: Phase 1 → Phase 2 → Phase 3; Phase 4 is independent of 1–3 (only
+`singleOwnerConstraint.ts`, `shacl.ts`, metamodel accessors) and could run in parallel, but it
+touches `Package.ts` like Phase 3, so it runs after it. Phase 5 (docs, changeset) last. Every
+phase: quick gate, then `npm test` (0 failed in `[fuseki] live tests`) and `npx linked build`.
+
+### Phase 1 — shape-directed walk and per-property replace
+
+Tasks:
+1. In `irToAlgebra.ts` add `ownedEdges`, `ownedWalk` (Tarjan groups, memoized per registry
+   version) and `ownedSubtreeBlocks` per the contract.
+2. `processUpdateFields`: `isContainsField` from the field's own property shape (`contains` and
+   `valueShape`); replace / unset / overwrite / set-remove use `buildOwnedSelfDelete` + root blank
+   cascade + `ownedSubtreeBlocks(valueShape, …)`.
+3. `deleteToAlgebra` / `bulkDeleteUnion`: replace immediate-child blocks and the dependent cascade
+   with `ownedSubtreeBlocks(query.shape, subject, anchor)`.
+4. Remove `collectContainment`, `Containment`, `reachableDependentTypes`, `buildOwnedCascade`,
+   `ownedValueShapePredicates`, `ownedChildBlankCascade`, `shapeHasContainsProperty`.
+   `ownedLinkCheck` switches to `ps.contains` here already (it imports `collectContainment`);
+   its tests are adjusted in Phase 2.
+5. Update tests that asserted the old SPARQL (`shacl-cascade`, `blank-nested-nodes`,
+   `sparql-mutation-golden`).
+
+Validation (tests in `src/tests/shacl-cascade.test.ts` unless noted):
+- `plain property on an owned predicate` — shape `TRef` with plain `ex:owns` (value `TCell`), the
+  same predicate `TBox.owns` declares `contains`: assert the update SPARQL has no `?uc` /
+  wildcard delete of `?old_…`, only the edge delete.
+- `nested walk` — `TBox.owns` → `TCell.next` (self-loop): assert the delete of a TBox contains
+  `<box> <ex:owns> ?…` then `(<ex:next>)*` and no `rdf:type` guard; the replace contains the
+  `?old` self-delete and a block `?old <ex:next>+ ?…` (root group closure).
+- `sub-shape guard` — `TImg` (value shape) and `TPhoto extends TImg` adding `contains thumb`
+  (`TThumb`): assert the owner's delete contains `?w a <ex:TPhoto>` followed by `<ex:thumb>`; a
+  shape with no ownership-adding sub-shape emits no `a` guard.
+- `deep non-dependent owned value` — deleting the owner deletes `owns/next` cells without
+  `dependent` (no type triple in the block).
+- Live (`describeFuseki`): (a) plain property on a library-owned predicate keeps its old value on
+  replace (store: `<r> ex:owns <c1>`, `<c1> ex:label "x"`; update `TRef.owns` → `<c2>`; assert
+  `<c1> ex:label "x"` still present); (b) sub-shape owned value deleted (owner → `TImg` node typed
+  `ex:TPhoto` with `ex:thumb <t>`, `<t> ex:label "t"`; delete owner; assert `<t>` has no triples);
+  (c) existing live cases (orphan repro, keep list, deleteAll, where) still pass with `dependent`
+  removed from the fixtures where it is meaningless.
+- `blank-nested-nodes`: the blank cascade still deletes a property shape's blank `sh:path` on
+  shape-sync delete; the `List.first` agreement test is rewritten to: a typed `List` cell's blank
+  `rdf:first` member is kept (List has no blank-capable properties).
+- Shape-sync live suite (`sparql-fuseki-shape-sync`) passes unchanged: re-sync leaves no stale
+  property shapes, list cells or path blank nodes.
+- Quick gate, `npm test`, `npx linked build` pass.
+
+### Phase 2 — class check per property
+
+Tasks: `ownedLinkCheck.ts` — rule only for `ps.contains && ps.valueShape`; drop `sharedPredicate`
+from `OwnedLink` and the message; update file docstring.
+
+Validation (`src/tests/owned-link-check.test.ts`):
+- `plain property on a contains predicate is not checked` — `collectOwnedLinks` on a create
+  linking `{id}` through a plain property whose predicate another shape declares `contains`:
+  assert `[]`.
+- existing contains-property cases unchanged (accepted classes, nested, set add, rdf:nil).
+- Quick gate, `npm test`, `npx linked build`.
+
+### Phase 3 — `contains` requires a value shape; `dependent` deprecated
+
+Tasks:
+1. `createPropertyShape`: throw `` `contains` on "<label>" needs a `shape`: … `` when `contains` is set
+   without `shape`.
+2. `Package.ts`: `PropertyShape.path` without `contains`; `PropertyShape` and `List` registered
+   without `dependent`; `dependent` option docstring → deprecated.
+3. `PathNode.ts`: drop `dependent` and `contains` on the four shape-less slots
+   (`alternativePath` keeps `contains`, it has `shape: PathList`); `PathList.ts`, `List.class.ts`:
+   drop `dependent`; docs.
+4. `nodeShapeData.ts` `dependent` doc.
+5. Tests declaring shape-less `contains` (`TSlot` in `shacl-cascade`, others found by grep)
+   become decoration-throws tests or get a shape.
+
+Validation:
+- `contains without a shape throws at decoration` (`shacl-cascade.test.ts`): a
+  `@linkedShape` class with `@objectProperty({path, contains: true})` → assert the decoration
+  throws with a message naming the property and `shape`.
+- Shape-sync live suite still exact (NodeShape delete removes property shapes, `sh:in` cells,
+  blank paths) — proves `dependent` was not needed.
+- Quick gate, `npm test`, `npx linked build`.
+
+### Phase 4 — qualified single-owner constraint
+
+Tasks: `shacl.ts` terms; `Package.ts` accessors (`qualifiedValueShape`, `qualifiedMaxCount`,
+`NodeShape.class`, `NodeShape.or`); `buildSingleOwnerConstraints` per contract (warn once when no
+`targetClass`); `PathList` doc; golden fixture `shape-sync-output-equivalence.test.ts` updated
+deliberately (owners: `sh:qualifiedMaxCount 1`, `sh:qualifiedValueShape [ sh:class fx:Fixture ]`,
+no `sh:maxCount`).
+
+Validation:
+- `single-owner-constraint.test.ts`: one class → `qualifiedValueShape.class`; with a registered
+  sub-shape → `or` list of both classes sorted; no `targetClass` → `[]` and one warning across two
+  calls.
+- Live Jena (`sparql-fuseki-shape-sync.test.ts`, `/ds/shacl`): owner shape `TOwner` (class
+  `ex:Owner`) with `contains img`, sub-shapes `TOwnerA`, `TOwnerB`; data `<a> a ex:OwnerA ;
+  ex:img <i>`, `<b> a ex:OwnerB ; ex:img <i>` → assert `sh:conforms false`; data `<a> a ex:OwnerA ;
+  ex:img <i>`, `<r> a ex:Other ; ex:img <i>` → assert `sh:conforms true`.
+- Re-sync removes the old constraint's blank structure (count of blank nodes after two syncs
+  equals after one).
+- Quick gate, `npm test`, `npx linked build`.
+
+### Phase 5 — docs and changeset
+
+Tasks: rewrite `docs/architecture/owned-values.md` sections (ownership rule column, invariants,
+shape-less `contains`, class check, generated shapes, backlog pointer); README "Owned
+properties" (ownership rule, what a delete removes, single-owner Turtle, `dependent`
+deprecated); `SHACL.ts` `contains` docstring; `.changeset/per-property-ownership.md` (minor,
+Decision 12). Backlog 053 is removed at wrapup, not here.
+
+Validation: `grep -n "per predicate\|containsPreds\|collectContainment\|reachableDependentTypes\|buildOwnedCascade" README.md docs/architecture src`
+returns no stale hit; quick gate, `npm test`, `npx linked build`.
 
 ## Open-item map
 
