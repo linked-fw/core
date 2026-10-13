@@ -944,13 +944,17 @@ that takes a library sub-shape's class no longer switches that sub-shape's owner
 it declares the same predicate as a plain property; in that one case the library edge is not
 followed (warned) — the safe direction, since following it would delete the user shape's
 references. A user sub-shape claiming a library class with a plain property on the predicate is
-skipped (M-B). So user-authored shapes cannot widen library deletes, and narrow them only by
-declaring a conflicting plain property on a library-owned predicate under a library class, which
-`withoutOwnership` (it strips `contains`, not `targetClass` or plain properties) would not prevent
-anyway. Final verdict: `withoutOwnership` is not needed for isolation; the app may drop it, keeping
-`contains` stripping only while user-authored `contains` properties accept client `{id}`s. A
-catalog check that flags user shapes reusing a library sub-shape's class is a useful app-side
-addition, not a core requirement.
+skipped (M-B).
+
+Corrected after Review 4 (M-α): a user sub-shape of a library value shape that **takes a library
+class** (for example `UClaim extends Media` with `targetClass Photo`) and adds `contains x` is
+followed from every node of that class, so it *can* widen library deletes through `x`. Harm needs
+a reference on `x` that no registered shape of that class declares plainly (a plainly declared one
+blocks the guard). Final verdict: `withoutOwnership` keeps one job — stopping user shapes that
+reuse a library class from adding ownership to library-class nodes. The app can drop it once its
+catalog refuses (or strips `contains` from) user shapes whose `targetClass` is a class a library
+shape targets; user shapes with classes of their own are isolated by core. Stripping `dependent`
+is pointless either way (no effect).
 
 Tasks: README, `owned-values.md`, changeset, `linked-core.ts:29`, golden rename, consumer verdict
 in this doc. Validation: stale-claim grep; gates as above.
@@ -1090,3 +1094,32 @@ Result: README, `owned-values.md`, changeset describe the per-edge guard; consum
 re-checked above.
 
 Validation: README / `owned-values.md` / changeset match the per-edge rule; gates as above.
+
+## Review 4 (adversarial, after iteration 3)
+
+Live probes on :3939 (scratch deleted, tree clean). M-1, M-2, M-B, M3, M-A verified; inherited
+plain predicates block; grandchild guards under a blocked middle shape work; warnings one per
+(sub-shape, property).
+
+- **M-α** The consumer verdict's "cannot widen library deletes" is false: a user sub-shape taking
+  a library class and adding `contains` is followed from that class's nodes. Fixed in iteration 4
+  by correcting the verdict (behaviour is as designed: a sharer without the predicate does not
+  block).
+- L-α a sharer whose plain use of the predicate is inside a complex path is not seen by
+  `blockedGuard`; L-β the silent skip also hid a sub-shape with a class of its own (fixed in
+  iteration 4: silent only for a same-class or class-less copy of its direct super-shape);
+  L-γ recursion typing accepts a descendant's shared class, so inside a cycle a plain sharer does
+  not block (as an untyped hop outside a cycle would not).
+
+## Iteration 4
+
+### Gap 1 of 1: consumer verdict (M-α) — DONE
+
+Verdict corrected above (Phase 8 section). Code: L-β silent-skip condition narrowed. Docs:
+`owned-values.md` notes L-α and L-γ.
+
+Remaining lows (for the review pause): L-α (complex-path sharers), L-γ (cycle typing vs plain
+sharer), L-2 of Review 2 (an untyped node stops a multi-shape cycle), L-3 of Review 2 (`contains`
+wins over a plain redeclaration), L-4 of Review 2 (forAll over a cycle shape: keep filters guard
+only the root, pre-existing), the `MAX_OWNED_RECURSION` depth limit, branch counts (backlog 055),
+sub-shapes registered only in another process (single-owner constraint), and the app follow-ups.

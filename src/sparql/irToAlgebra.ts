@@ -2837,8 +2837,8 @@ const warnedUnguardable = new Set<string>();
  * sub-shape, the `contains` properties it adds, guarded by its `targetClass` (a node carries only
  * its concrete class's `rdf:type`, so each sub-shape lists its full extra set). An added property
  * whose guard cannot tell the sub-shape's nodes apart (`blockedGuard`) is not followed and is
- * warned once, unless the sub-shape adds nothing beyond its direct super-shape (a profile, or a
- * data-only copy), which is skipped silently: that super-shape's own entry covers it.
+ * warned once, unless the sub-shape is a profile or data-only copy of its direct super-shape (same
+ * class or none, nothing added), which is skipped silently: that super-shape's entry covers it.
  */
 function ownedEdges(shapeId: string): OwnedEdge[] {
   const nodeShape = shapeById(shapeId);
@@ -2864,7 +2864,10 @@ function ownedEdges(shapeId: string): OwnedEdge[] {
         add(ps, sub.targetClass!.id);
         continue;
       }
-      if (inherited.has(ps.id) && parent?.id !== shapeId) continue;
+      // A profile or data-only copy of its direct super-shape (same class, or none) is that
+      // super-shape's node by type: the super-shape's own entry covers the property.
+      const sameKind = !sub.targetClass?.id || sub.targetClass.id === parent?.targetClass?.id;
+      if (sameKind && inherited.has(ps.id) && parent?.id !== shapeId) continue;
       const key = `${sub.id} ${ps.id}`;
       if (warnedUnguardable.has(key)) continue;
       warnedUnguardable.add(key);

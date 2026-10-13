@@ -63,8 +63,11 @@ asserts ownership. One UNION branch per path from the root.
   would match), or when another shape holding the class declares the predicate as a plain
   property (following it would delete that shape's references) — warned once with the cause. A
   sharer without the predicate does not block it. A sub-shape adding nothing beyond its direct
-  super-shape (a profile, a data-only copy) is skipped silently. Recursion typing accepts the
-  declaring shape's class and every registered descendant's. A sub-shape redeclaring an inherited `contains` property as plain does not remove the
+  super-shape with its class or none (a profile, a data-only copy) is skipped silently.
+  Recursion typing accepts the declaring shape's class and every registered descendant's, so
+  inside a cycle a plain sharer of a descendant's class does not block (as an untyped hop outside
+  a cycle would not). Only simple paths of a sharer are checked: a plain use of the predicate
+  inside a sharer's complex path does not block. A sub-shape redeclaring an inherited `contains` property as plain does not remove the
   inherited ownership (`getPropertyShapes` keeps both).
 - **`rdf:nil`** is never deleted: every walk node and the replaced-value self-delete carry
   `FILTER(!sameTerm(?n, rdf:nil))`.
