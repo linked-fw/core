@@ -32,7 +32,7 @@ export function buildPropertyShapeData(ps: PropertyShapeData, shapeIri: string):
   const psIri = `${shapeIri}/${ps.label}`;
   const d: Record<string, unknown> = {
     __id: psIri,
-    path: serializePathToNodeData(ps.path, psIri),
+    path: serializePathToNodeData(ps.path),
   };
   // `rdfs:label` — the DSL label, i.e. the accessor name the property is reached
   // by in code (`person.memberships`). It is NOT `sh:name`, written below, which

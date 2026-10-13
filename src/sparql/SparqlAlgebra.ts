@@ -3,6 +3,8 @@
 export type SparqlTerm =
   | {kind: 'variable'; name: string}
   | {kind: 'iri'; value: string}
+  /** A blank node, `_:label`. Only ever written into INSERT DATA (see `generateNodeDataTriples`). */
+  | {kind: 'blank'; label: string}
   | {kind: 'literal'; value: string; datatype?: string; language?: string}
   | {kind: 'path'; value: string; uris: string[]};
 

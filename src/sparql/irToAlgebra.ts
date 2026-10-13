@@ -1833,21 +1833,43 @@ function fieldValueToTerms(
 }
 
 /**
+ * Mints the labels of the blank nodes of one INSERT DATA. Only a create passes one: blank
+ * nodes in a `DELETE/INSERT … WHERE` template are minted once per WHERE solution, and the
+ * update's cleanup UNION yields several, so the structure would be written several times.
+ */
+type BlankNodeMinter = {next: number};
+
+/**
  * Recursively generate triples for an IRNodeData (used in create and nested creates).
- * Returns the URI used for this node and all generated triples.
+ * Returns the term used for this node and all generated triples.
+ *
+ * A node marked `blank` (nested only, see `NodeDescriptionValue.__blank`) becomes a fresh
+ * blank node with its field triples and NO `rdf:type`: it is RDF syntax, like a SHACL path
+ * operator, which the spec defines as a blank node that is the subject of exactly one triple.
+ * Without a `blanks` minter (the update paths) a blank node throws.
  */
 function generateNodeDataTriples(
   data: IRNodeData,
   options?: SparqlOptions,
-): {uri: string; triples: SparqlTriple[]} {
-  const uri = data.id || generateEntityUri(data.shape, options);
+  blanks?: BlankNodeMinter,
+): {term: SparqlTerm; triples: SparqlTriple[]} {
   const triples: SparqlTriple[] = [];
-  const subjectTerm = iriTerm(uri);
-
-  // Type triple — resolve the SHACL NodeShapeData id in the IR to the ontology
-  // targetClass URI (sibling of PR #77's SELECT-side resolveShapeScanIri).
-  // Mutations were not covered by #77; see mutation-uri-fidelity.test.ts.
-  triples.push(tripleOf(subjectTerm, iriTerm(RDF_TYPE), iriTerm(resolveShapeScanIri(data.shape))));
+  let subjectTerm: SparqlTerm;
+  if (data.blank) {
+    if (!blanks) {
+      throw new Error(
+        'A blank nested node (__blank) can only be written by a create. An update writes its ' +
+          'INSERT once per WHERE solution, which would duplicate the blank node.',
+      );
+    }
+    subjectTerm = {kind: 'blank', label: `b${blanks.next++}`};
+  } else {
+    subjectTerm = iriTerm(data.id || generateEntityUri(data.shape, options));
+    // Type triple — resolve the SHACL NodeShapeData id in the IR to the ontology
+    // targetClass URI (sibling of PR #77's SELECT-side resolveShapeScanIri).
+    // Mutations were not covered by #77; see mutation-uri-fidelity.test.ts.
+    triples.push(tripleOf(subjectTerm, iriTerm(RDF_TYPE), iriTerm(resolveShapeScanIri(data.shape))));
+  }
 
   // Field triples
   for (const field of data.fields) {
@@ -1863,8 +1885,8 @@ function generateNodeDataTriples(
       for (const item of field.value) {
         if (item && typeof item === 'object' && 'shape' in item && 'fields' in item) {
           // Nested create
-          const nested = generateNodeDataTriples(item as IRNodeData, options);
-          triples.push(tripleOf(subjectTerm, propertyTerm, iriTerm(nested.uri)));
+          const nested = generateNodeDataTriples(item as IRNodeData, options, blanks);
+          triples.push(tripleOf(subjectTerm, propertyTerm, nested.term));
           triples.push(...nested.triples);
         } else {
           const terms = fieldValueToTerms(item, options, resolvePropertyDatatype(field.property));
@@ -1878,8 +1900,8 @@ function generateNodeDataTriples(
 
     // Handle nested IRNodeData
     if (typeof field.value === 'object' && 'shape' in field.value && 'fields' in field.value) {
-      const nested = generateNodeDataTriples(field.value as IRNodeData, options);
-      triples.push(tripleOf(subjectTerm, propertyTerm, iriTerm(nested.uri)));
+      const nested = generateNodeDataTriples(field.value as IRNodeData, options, blanks);
+      triples.push(tripleOf(subjectTerm, propertyTerm, nested.term));
       triples.push(...nested.triples);
       continue;
     }
@@ -1891,7 +1913,7 @@ function generateNodeDataTriples(
     }
   }
 
-  return {uri, triples};
+  return {term: subjectTerm, triples};
 }
 
 /**
@@ -1901,7 +1923,10 @@ export function createToAlgebra(
   query: IRCreateMutation,
   options?: SparqlOptions,
 ): SparqlInsertDataPlan {
-  const {triples} = generateNodeDataTriples(query.data, options);
+  if (query.data.blank) {
+    throw new Error('The root node of a create cannot be blank (__blank): it must be addressable.');
+  }
+  const {triples} = generateNodeDataTriples(query.data, options, {next: 0});
   return {
     type: 'insert_data',
     triples,
@@ -2026,7 +2051,7 @@ function processUpdateFields(
         for (const addItem of setMod.add) {
           if (addItem && typeof addItem === 'object' && 'shape' in addItem && 'fields' in addItem) {
             const nested = generateNodeDataTriples(addItem as IRNodeData, options);
-            insertPatterns.push(tripleOf(subjectTerm, propertyTerm, iriTerm(nested.uri)));
+            insertPatterns.push(tripleOf(subjectTerm, propertyTerm, nested.term));
             insertPatterns.push(...nested.triples);
           } else {
             const terms = fieldValueToTerms(addItem, options, resolvePropertyDatatype(field.property));
@@ -2068,7 +2093,7 @@ function processUpdateFields(
       for (const item of field.value) {
         if (item && typeof item === 'object' && 'shape' in item && 'fields' in item) {
           const nested = generateNodeDataTriples(item as IRNodeData, options);
-          insertPatterns.push(tripleOf(subjectTerm, propertyTerm, iriTerm(nested.uri)));
+          insertPatterns.push(tripleOf(subjectTerm, propertyTerm, nested.term));
           insertPatterns.push(...nested.triples);
         } else {
           const terms = fieldValueToTerms(item, options, resolvePropertyDatatype(field.property));
@@ -2087,7 +2112,7 @@ function processUpdateFields(
       oldValueTriples.push(tripleOf(subjectTerm, propertyTerm, oldVar));
 
       const nested = generateNodeDataTriples(field.value as IRNodeData, options);
-      insertPatterns.push(tripleOf(subjectTerm, propertyTerm, iriTerm(nested.uri)));
+      insertPatterns.push(tripleOf(subjectTerm, propertyTerm, nested.term));
       insertPatterns.push(...nested.triples);
       continue;
     }
@@ -2603,6 +2628,51 @@ export function buildOwnedCascade(
       ),
     );
   });
+
+  // Blank nodes carry no type (a SHACL path operator must be the subject of exactly one
+  // triple), so the typed blocks above cannot see them. Every blank node owned through
+  // `contains` edges (`?b0`) is deleted together with the blank structure below it (`?bn`).
+  // Inside a blank structure `rdf:first` is followed too: a sequence member that is itself a
+  // path operator is held by `rdf:first`, which is not a `contains` edge. Starting that
+  // closure only at a blank node keeps a list of IRIs from leading the cascade into the
+  // nodes it lists.
+  const insidePathExpr: PathExpr = {
+    zeroOrMore: {alt: [...containsPreds, rdf.first.id].map((id) => ({id}))},
+  };
+  const insidePathTerm: SparqlTerm = {
+    kind: 'path',
+    value: pathExprToSparql(insidePathExpr),
+    uris: collectPathUris(insidePathExpr),
+  };
+  const ownedBlank = varTerm(`${varPrefix}bn0`);
+  const blank = varTerm(`${varPrefix}bn`);
+  const bp = varTerm(`${varPrefix}bnp`);
+  const bo = varTerm(`${varPrefix}bno`);
+  const isBlank = (v: SparqlTerm): SparqlExpression => ({
+    kind: 'function_expr',
+    name: 'isBlank',
+    args: [{kind: 'variable_expr', name: (v as {name: string}).name}],
+  });
+  deletePatterns.push(tripleOf(blank, bp, bo));
+  whereOptionals.push(
+    keepFilter(
+      {
+        type: 'filter',
+        expression: {kind: 'logical_expr', op: 'and', exprs: [isBlank(ownedBlank), isBlank(blank)]},
+        inner: {
+          type: 'bgp',
+          triples: [
+            ...(anchor ? [anchor] : []),
+            tripleOf(rootTerm, pathTerm, ownedBlank),
+            tripleOf(ownedBlank, insidePathTerm, blank),
+            tripleOf(blank, bp, bo),
+          ],
+        },
+      },
+      rootTerm,
+      keep,
+    ),
+  );
   return {deletePatterns, whereOptionals};
 }
 

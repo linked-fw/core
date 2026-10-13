@@ -137,10 +137,10 @@ export class ShapeValidationError extends Error {
 
 /**
  * Keys that carry metadata about the node rather than a property value: `id` /
- * `__id` name it, and `shape` names the shape of a nested value when the
+ * `__id` name it, `__blank` asks for an anonymous node, and `shape` names the shape of a nested value when the
  * property shape itself doesn't declare one (see `convertUpdateValue`).
  */
-const RESERVED_KEYS = new Set(['id', '__id', 'shape']);
+const RESERVED_KEYS = new Set(['id', '__id', '__blank', 'shape']);
 
 /**
  * The message for an undeclared property key. Shared with the normalization path

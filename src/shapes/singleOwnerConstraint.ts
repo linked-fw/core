@@ -88,7 +88,7 @@ export function buildSingleOwnerConstraints(
             __id: psIri,
             label: 'owners',
             maxCount: 1,
-            path: serializePathToNodeData({inv: {id: predicate}}, psIri),
+            path: serializePathToNodeData({inv: {id: predicate}}),
           },
         ],
       },

@@ -172,7 +172,9 @@ describe('single-owner constraint data', () => {
     expect(ps.__id).toBe(`${image.iri}/owners`);
     expect(ps.label).toBe('owners');
     expect(ps.maxCount).toBe(1);
-    expect(ps.path.__id).toBe(`${image.iri}/owners/inv`);
+    // An untyped blank node, not an IRI: an IRI in sh:path is a predicate path (SHACL §2.3.1).
+    expect(ps.path.__blank).toBe(true);
+    expect(ps.path.__id).toBeUndefined();
     expect(ps.path.shape).toBe(PathNode);
     expect(ps.path.inversePath).toEqual({id: `${SCHEMA}image`});
     expect((attachments.data as any).targetObjectsOf).toEqual([{id: `${EX}attachments`}]);
@@ -228,7 +230,12 @@ describe('single-owner constraint sync', () => {
       const gen = genOf(Project, label);
       expect(create).toMatch(new RegExp(`<${esc(iriOf(Project))}> ${EDGE} <${esc(gen)}>`));
       expect(create).toMatch(new RegExp(`<${esc(gen)}> (?:shacl:targetObjectsOf|<${esc(SH)}targetObjectsOf>)`));
-      expect(create).toMatch(new RegExp(`<${esc(gen)}/owners/inv> (?:shacl:inversePath|<${esc(SH)}inversePath>)`));
+      expect(create).toMatch(
+        new RegExp(`<${esc(gen)}/owners> (?:shacl:path|<${esc(SH)}path>) (_:b\\d+) \\.`),
+      );
+      const blank = create.match(new RegExp(`<${esc(gen)}/owners> (?:shacl:path|<${esc(SH)}path>) (_:b\\d+) \\.`))![1];
+      expect(create).toContain(`${blank} shacl:inversePath`);
+      expect(create).not.toContain(`${gen}/owners/inv`);
     }
     // A shape without contains: the same two requests, no generated shape.
     const plain = new RecordingSparqlDataset();

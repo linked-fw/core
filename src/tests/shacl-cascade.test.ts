@@ -153,12 +153,15 @@ describe('owned-subtree cascade', () => {
     );
     expect(deletePatterns.length).toBeGreaterThan(0);
     // one OPTIONAL per dependent type; the path term carries the contains predicates
-    const paths = whereOptionals
+    // The typed blocks are plain BGPs; the blank-node block (a FILTER) is checked separately.
+    const typed = whereOptionals.filter((o: any) => o.type === 'bgp');
+    expect(typed).toHaveLength(whereOptionals.length - 1);
+    const paths = typed
       .flatMap((o: any) => o.triples)
       .filter((t: any) => t.predicate.kind === 'path')
       .map((t: any) => t.predicate.value);
     expect(paths.join(' ')).toMatch(/rest/); // List.rest is a contains edge
-    const types = whereOptionals
+    const types = typed
       .flatMap((o: any) => o.triples)
       .filter((t: any) => t.predicate.kind === 'iri' && t.predicate.value.endsWith('#type'))
       .map((t: any) => t.object.value);
@@ -424,9 +427,12 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     );
     // No wildcard delete of the old value's own triples...
     expect(deleteBlockOf(sparql)).not.toMatch(/\?old_anyPath \?\w+ \?\w+ \./);
-    // ...and every block that reads ?old_anyPath beyond the edge requires a dependent type.
+    // ...and every block that reads ?old_anyPath beyond the edge requires a dependent type, or
+    // (the blank-node block) that what it deletes is a blank node — never a shared IRI.
     for (const b of branchesOf(sparql).filter((b) => /\?old_anyPath \S/.test(b) && /\?uc0_/.test(b))) {
-      expect(b).toMatch(/rdf:type (shacl:PropertyShape|rdf:List|core:PathNode|<http:\/\/example\.org\/c#TCell>)/);
+      expect(b).toMatch(
+        /rdf:type (shacl:PropertyShape|rdf:List|core:PathNode|<http:\/\/example\.org\/c#TCell>)|FILTER\(isBlank\(\?uc0_bn0\) && isBlank\(\?uc0_bn\)\)/,
+      );
     }
     // The cascade still runs, so a dependent value (a PathNode) is cleaned up.
     expect(sparql).toMatch(/\?old_anyPath \([^)]*\)\* \?uc0_own\d/);
