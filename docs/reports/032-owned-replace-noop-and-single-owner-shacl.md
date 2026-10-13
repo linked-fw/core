@@ -237,7 +237,7 @@ live tests were each proven to run by a temporary failing assertion during imple
 - Each constraint counts owners through its own predicate only; ownership through two different
   `contains` predicates is not reported.
 - Replace and subject delete decide ownership differently (per predicate vs per shape)
-  ([backlog 053](../backlog/053-per-property-ownership.md)).
+  (backlog 053; resolved by [report 036](036-per-property-ownership.md): per property everywhere).
 - Generated-shape edge cases: a store-only NodeShape at a generated IRI is adopted and wiped; an
   ownerless generated shape is never pruned under `'ownedNamespaces'`
   ([backlog 052](../backlog/052-generated-shape-lifecycle-edge-cases.md)).
@@ -249,7 +249,7 @@ live tests were each proven to run by a temporary failing assertion during imple
   in `irToAlgebra.ts` into one.
 - [052](../backlog/052-generated-shape-lifecycle-edge-cases.md) — store-only NodeShape at a
   generated IRI; ownerless generated shapes under `'ownedNamespaces'`.
-- [053](../backlog/053-per-property-ownership.md) — per-property versus per-predicate ownership.
+- 053 — per-property versus per-predicate ownership; done in [report 036](036-per-property-ownership.md).
 - [009](../backlog/009-ci-test-integrity-fuseki.md) — live suites silent without Fuseki.
 - [018](../backlog/018-transactions.md) — a batch/raw-update entry point on `IDataset` would let
   sync and multi-step writes go in one request.

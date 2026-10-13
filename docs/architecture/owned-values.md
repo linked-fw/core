@@ -7,8 +7,9 @@ packages: [core]
 
 User-facing description: README "Owned properties (`contains` / `dependent`)". History and
 rationale: [report 025](../reports/025-update-replace-contains-cascade.md) (replace cascade),
-[report 032](../reports/032-owned-replace-noop-and-single-owner-shacl.md) (this contract) and plan
-003 (per-property ownership; its report replaces this pointer at wrapup).
+[report 032](../reports/032-owned-replace-noop-and-single-owner-shacl.md) (this contract) and
+[report 036](../reports/036-per-property-ownership.md) (per-property ownership, the
+shape-directed walk, the qualified single-owner constraint).
 
 ## Ownership
 

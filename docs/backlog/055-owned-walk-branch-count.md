@@ -8,7 +8,7 @@ packages: [core]
 
 # 055 — Owned-walk branch count
 
-Source: plan 003 (per-property ownership), iteration 1, gap 4. Contract:
+Source: [report 036](../reports/036-per-property-ownership.md) (per-property ownership, decision 20). Contract:
 [owned-values](../architecture/owned-values.md).
 
 ## Today
