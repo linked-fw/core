@@ -18,7 +18,7 @@ Source: plan 003 (per-property ownership), iteration 1, gap 4. Contract:
   properties). Paths repeat their prefix triples.
 - Measured: the core metamodel and `@_linked/schema` (41 shapes) stay at ≤ 8 branches per delete
   (`NodeShape` 8, `Thing` / `CreativeWork` 6). A synthetic DAG of width 3 and depth 4 gives 120;
-  a shape with two recursive sub-shape edges gives about 2^(K+1) with `MAX_OWNED_RECURSION` K = 4.
+  a shape with two recursive sub-shape edges gives 32 with `MAX_OWNED_RECURSION` K = 4 (doubling per step of K).
 - `OWNED_BRANCH_WARNING` (64) logs once per root shape. There is no cap.
 
 ## Options

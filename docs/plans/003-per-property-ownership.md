@@ -893,9 +893,10 @@ filter together): self-loop closures only; other recursion unrolled into typed h
 `OWNED_BRANCH_WARNING` = 64; backlog 055. Typing refinement: an unguarded recursive hop accepts the
 declaring shape's class or a registered sub-shape's (`?t IN (…)`).
 
-K choice: branch counts grow linearly with K for a single cycle (RA/RB: 2 + 1 + K) and as about
-2^(K+1) for a shape with two recursive sub-shape edges (K = 3 → 14, 4 → 30, 5 → 62 owned
-branches); K = 4 is the largest value that keeps that case under the 64-branch warning. Real
+K choice (measured, total UNION branches of a delete by id): a two-shape cycle grows linearly
+(RA/RB: K = 3 → 6, 4 → 7, 5 → 8; a three-shape cycle 7 / 8 / 9); a shape with two recursive
+sub-shape edges doubles per step (K = 3 → 16, 4 → 32, 5 → 64). K = 4 is the largest value that keeps
+that case clearly under the 64-branch warning; it unrolls a cycle five hops deep. Real
 models are unaffected (only self-loops): core metamodel + `@_linked/schema`, 41 shapes, max 8
 branches (NodeShape 8, PathList / PathNode 5, PropertyShape 4, List 3, Thing / CreativeWork 6,
 every other schema shape 2–3); synthetic width-3 depth-4 DAG 120 (warns).
