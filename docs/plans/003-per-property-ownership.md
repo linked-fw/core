@@ -689,3 +689,102 @@ Remaining gaps (all low; the independent review subagent's findings were not rec
 - L3: a sub-shape with the same `targetClass` as its parent cannot be told apart by its guard.
 - L4: DAG path enumeration in the walk has no cap (one branch per path).
 - L5: golden constant still named `GOLDEN_2_30_0`; README heading keeps "/ `dependent`" for the anchor.
+
+## Review (independent)
+
+Scope: `git diff main...HEAD` on `feat/per-property-ownership` (through `0548b83`). Live probes were
+scratch jest files against Fuseki :3939 (deleted afterwards). Evidence: `npm test` 2226 passed,
+0 failed, `[fuseki] live tests: 293 total — 293 passed`; `tsc -p tsconfig-tests.json` exit 0.
+
+### Critical
+
+No findings.
+
+### High
+
+1. **A recursive group of several shapes follows every member's owned predicates from every
+   group node, so it deletes through plain properties** (`src/sparql/irToAlgebra.ts:2865-2871`
+   `closureOf`, `2879-2891` `visit`, `2950-2962`). Scenario (live, reproduced): `RA { contains toB: RB;
+   plain peer on ex:toA }`, `RB { contains toA: RA }`. Data `a1 ex:toB b1 ; ex:toA a2` (a2 is a plain
+   reference). `DeleteBuilder.from(RA, a1)` emits `<a1> (ex:toB|ex:toA)+ ?r` and deletes `a2`
+   (2 triples → 0). The same holds for outgoing hops: an edge declared by member B is applied at
+   nodes that are A's. This is the cross-property leak Decision 1 removes; Decision 9 accepted
+   "without per-member distinction" but not this consequence. Fix: when a group member (or any
+   reachable shape) has a non-`contains` property on one of the group's closure predicates,
+   refuse at lowering (throw naming the shapes) or fall back to per-member typed hops; never emit
+   an untyped closure over a predicate someone uses as a reference.
+2. **Sub-shape guards are dropped inside recursive groups** (the implementer's L2 understated;
+   `closureOf` keeps guarded edges, `irToAlgebra.ts:2868`). Scenario (live, reproduced): `SC {
+   contains replies: SC; plain fork: SC }`, `SCSub extends SC { contains fork: SC }`. Data `c1
+   replies c2` (c2 a plain `SC`), `c2 fork c5`. Deleting `c1` emits `(replies|fork)*` and deletes
+   `c5` (2 → 0), although `c2` is not an `SCSub`. It also makes deletes registry-sensitive again:
+   any registered sub-shape of `Thing` (another package, a tenant catalog shape) adding
+   `contains x: Thing` turns `Thing` into a self-loop group and adds `x`, unguarded, to every
+   Thing-rooted delete. Fix: build the closure from unguarded edges only; turn a guarded
+   intra-group edge into an explicit guarded hop (or refuse it), and say so in owned-values.md.
+
+### Medium
+
+3. **A sub-shape with its parent's `targetClass` (or two sub-shapes sharing a class) guards
+   nothing** (`irToAlgebra.ts:2792-2797`, implementer's L3). Live: `HBSame extends HB` (same class
+   `ex:HB`) adds `contains extra`; deleting through `HB`, which declares no `extra`, deleted the
+   `extra` value (2 → 0). Common for profile-style shapes of one class. Fix: skip (and warn) a
+   sub-shape whose `targetClass` equals an ancestor's; document.
+4. **`rdf:nil` loses its triples on every List walk** (`List.rest` is `contains` with shape
+   `List`, so `rdf:rest+` reaches `rdf:nil`; `emit` deletes `rdf:nil ?p ?o`,
+   `irToAlgebra.ts:2931-2934`). Live: `rdf:nil a rdf:List ; rdfs:label "nil"` → 0 triples after
+   deleting a list holder. On main only a `rdf:List`-typed `rdf:nil` matched (dependent guard); now
+   any triple does. A dataset holding the RDF vocabulary loses `rdf:nil`'s description on every
+   NodeShape sync that rewrites an `sh:in` list. Fix: `FILTER(!sameTerm(?n, rdf:nil))` in `emit`
+   (or stop closures at `rdf:nil`).
+5. **Path enumeration is exponential, no cap** (`visit` has a per-call `seen` only,
+   `irToAlgebra.ts:2879-2891`; implementer's L4). Measured: core metamodel + `@_linked/schema`
+   shapes (42 registered) — NodeShape delete 8 UNION branches (3.4 KB), Thing 6, CreativeWork 6,
+   PathList / PathNode 5, PropertyShape 4: fine. A synthetic DAG of 19 shapes (width 3, depth 6,
+   each shape owning the 3 of the next layer) gives **1094 branches / 416 KB of SPARQL** for one
+   delete by id, and 1093 for `deleteAll`. Fix: one branch per target group (merge incoming
+   unguarded hop sequences into one alternation path), or throw above a branch cap.
+6. **Leftover scratch test committed**: `src/tests/zz-review-walk.test.ts` (added in `0548b83`;
+   prints SPARQL with `console.log`, no assertions, `as any`). At review time it was deleted in
+   the working tree but not committed. Fix: `git rm` it in the branch.
+7. **Consumer guidance**: the plan (item 9) suggests stripping `contains` from user-authored
+   shapes is no longer needed. With findings 2-3, a catalog shape extending a library shape still
+   widens deletes of library-class nodes through the parent shape. CN must keep
+   `withoutOwnership` (`create_now/src/utils/runtimeShapeRegistry.ts`). Fix: say so in the
+   changeset / owned-values.md.
+
+### Low
+
+8. Docs overclaim: README "Owned properties" ("follows the shapes, never the predicates"; sub-shape
+   properties followed "only from nodes of that sub-shape's class") and owned-values.md
+   (Sub-shapes bullet) are false inside recursive groups (findings 1-2). Fix with the code fix.
+9. Stale comment: `src/ontologies/linked-core.ts:29` still says `dependent` instances "may be
+   deleted when reached via a `contains` edge".
+10. Removed exports in a minor (`collectContainment`, `buildOwnedCascade`, `OwnedLink.sharedPredicate`):
+    no importer in `create_now/src`, `packages/*` or any `packages-local/*`; only a comment in
+    `create_now/src/utils/ownedProperties.ts:3-7`, which also still describes the predicate rule.
+    Reachable only through the `./*` subpath and named in the changeset: acceptable.
+11. Tests missing for: two-shape cycle, multi-member group precision, sub-shape guard inside a
+    group, same-class sub-shape, `rdf:nil`, a branch-count bound. `GOLDEN_2_30_0` name (L5).
+
+### Verified correct
+
+- Per-property rule: `processUpdateFields` derives `valueShapeId` from the field's own property
+  shape once (`irToAlgebra.ts:2085-2089`) for set-remove, replace, unset, array overwrite and nested
+  create; update / upsert / updateWhere / forAll and the DSL-JSON wire all lower through it.
+  `ownedLinkCheck.ts:102` is per property. No predicate-rule leftover in `src/` (grep).
+- Live probes: two-shape cycle `(toB|toA)*` terminates and deletes the chain; sub-shape guard out
+  of a group deletes `SCSub`'s attachment and keeps a plain `SC`'s; a node typed with two classes
+  is walked; shared node: delete via plain `HB` keeps it, delete via owning `HA` deletes it (the
+  `HB` edge dangles, as documented); plain-property replace keeps the old value; `.where()` with a
+  four-level chain deletes only the matched owner's subtree, `deleteAll` then the rest, an unowned
+  `SC` chain untouched; array overwrite and set-remove inside a recursive group delete the old
+  subtree (sub-shape attachment included) and keep re-sent ids.
+- Blank structure: shape-sync live suite (blank count stable across re-syncs, no orphan blank
+  nodes) passes; golden diff is only the qualified owners constraint (`sh:maxCount` →
+  `sh:qualifiedValueShape [ sh:class fx:Fixture ]` + `sh:qualifiedMaxCount 1`).
+- Single-owner (Jena, `/ds/shacl`): two sub-shape-class owners → `conforms false`
+  (`QualifiedMaxCountConstraintComponent`); owner + plain reference from another class → `true`;
+  one owner → `true`; no-`targetClass` shape → no constraint, one warning (unit).
+- Architecture: `owned-values.md` rewritten as planned; findings 1-2 contradict its own
+  ownership statement until fixed.
