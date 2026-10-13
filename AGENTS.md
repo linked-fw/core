@@ -6,6 +6,8 @@ Single-package repository for `@_linked/core` (query DSL, SHACL shape decorators
 
 Tests: `npm test`
 
+Live Fuseki tests: wrap them in `describeFuseki` (`src/test-helpers/fuseki-live.ts`), never an early `return`. jest globalSetup starts Fuseki (Docker, port 3939); without it the live blocks are skipped locally and the run fails under `CI` or `REQUIRE_FUSEKI=1`. `npm run test:fuseki` runs only the live blocks.
+
 ## Agent docs (`docs/`)
 
 Use this folder structure:

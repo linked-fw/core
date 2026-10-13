@@ -169,3 +169,23 @@ confirmed `DATASET_NAME === 'nashville-test-zz-probe'` inside a file named `zz-p
 (11 passed, 1 skipped each). Full parallel suite 5× with `REQUIRE_FUSEKI=1`: 5/5 identical
 (2183 passed, 280 live). No failure to capture; the two structural explanations 047 recorded
 (per-worker dataset reuse, silent pass on absence) are both removed.
+
+## Review
+
+Against the original intent (backlog 009) and the brief:
+
+| Goal | Result |
+|---|---|
+| CI runs the live suites | Already true before this change (measured, see Ideation); now **required** under `CI=true` — a failed Docker start fails the run instead of passing ~280 empty tests. |
+| All live suites, incl. shacl-cascade, shape-sync, owned-link-check | All 10 files, 281 live tests, counted by the reporter; `test:fuseki` selects them by name prefix. |
+| Silent skip → loud | Guard centralized in `describeFuseki`; skipped locally, fatal under CI / `REQUIRE_FUSEKI`. |
+| Dataset collisions (037) | Per-file dataset; 5 parallel full runs identical. |
+| CI time | No new job or step. The only newly executed CI tests are the two prefixed-names parse checks (≈ ms). |
+
+Findings:
+1. **Low** — `CI` set in a developer shell makes a Docker-less local run fail. Intended, and the error names the opt-out (`REQUIRE_FUSEKI=0`).
+2. **Low** — when `ensureFuseki` started a container that never answered, globalSetup throws and jest skips globalTeardown, leaving the container up. Same as before for the start path; not worth a try/finally in test infra.
+3. **Low** — the reporter counts by the outermost describe name; a `[fuseki]` block nested inside an offline describe would be missed. `describeFuseki` is only used at file top level; documented in the helper.
+4. **Info** — the shared workflow (`linked-fw/.github` `pr.yml@v1`) needs no change; no other `@_linked` repo is affected.
+
+No medium-or-higher findings, so no iteration.
