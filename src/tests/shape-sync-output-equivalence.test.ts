@@ -3,12 +3,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  *
- * Shape sync persists exactly what the 2.30.0 release persisted. 2.30.0 wrote complex sh:path
- * values as blank nodes through `__blank` node-data; this version mints them from the
- * sh:nodeKind of the metamodel's path properties instead. The golden below is the INSERT DATA
+ * Shape sync persists what the 2.30.0 release persisted, with one deliberate change. 2.30.0 wrote
+ * complex sh:path values as blank nodes through `__blank` node-data; this version mints them from
+ * the sh:nodeKind of the metamodel's path properties instead. The golden below is the INSERT DATA
  * 2.30.0 (`npm i @_linked/core@2.30.0`) sends for this fixture, captured from its published
  * build: every complex path form, a `contains` property (its generated single-owner shape) and an
  * `sh:in` list (IRI cells). Blank labels are compared normalized.
+ *
+ * The deliberate change (per-property ownership): the single-owner `owners` property shape counts
+ * only owners of the declaring class. 2.30.0 wrote `sh:maxCount 1`; it is now
+ * `sh:qualifiedValueShape [ sh:class fx:Fixture ] ; sh:qualifiedMaxCount 1`, and its blank labels
+ * follow on from the path's.
  */
 import {describe, expect, test} from '@jest/globals';
 import {linkedPackage} from '../utils/Package';
@@ -182,9 +187,11 @@ const GOLDEN_2_30_0 = `INSERT DATA {
   <https://linked.cm/shape/sync-fixture/Fixture/image.singleOwner> shacl:property <https://linked.cm/shape/sync-fixture/Fixture/image.singleOwner/owners> .
   <https://linked.cm/shape/sync-fixture/Fixture/image.singleOwner/owners> rdf:type shacl:PropertyShape .
   <https://linked.cm/shape/sync-fixture/Fixture/image.singleOwner/owners> rdfs:label "owners" .
-  <https://linked.cm/shape/sync-fixture/Fixture/image.singleOwner/owners> shacl:maxCount "1"^^xsd:integer .
   <https://linked.cm/shape/sync-fixture/Fixture/image.singleOwner/owners> shacl:path _:b15 .
   _:b15 shacl:inversePath <https://example.org/fx#image> .
+  <https://linked.cm/shape/sync-fixture/Fixture/image.singleOwner/owners> shacl:qualifiedValueShape _:b16 .
+  _:b16 shacl:class <https://example.org/fx#Fixture> .
+  <https://linked.cm/shape/sync-fixture/Fixture/image.singleOwner/owners> shacl:qualifiedMaxCount "1"^^xsd:integer .
 }`;
 
 const insertDataOf = (updates: string[]) => {
@@ -193,7 +200,7 @@ const insertDataOf = (updates: string[]) => {
 };
 const normalizeLabels = (sparql: string) => sparql.replace(/_:b\d+/g, '_:B');
 
-describe('shape sync output equals the 2.30.0 release', () => {
+describe('shape sync output equals the 2.30.0 release, but for the qualified single-owner constraint', () => {
   test('the INSERT DATA of a fixture with every complex path form', async () => {
     const ds = new Capture();
     await syncShape(Fixture, ds)();

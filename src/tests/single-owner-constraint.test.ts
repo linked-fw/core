@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
-import {describe, expect, test, beforeEach} from '@jest/globals';
+import {describe, expect, jest, test, beforeEach} from '@jest/globals';
 import {linkedPackage} from '../utils/Package';
 import {Shape} from '../shapes/Shape';
 import {literalProperty, objectProperty} from '../shapes/SHACL';
@@ -22,12 +22,14 @@ import {lower} from '../queries/lower';
 import {SparqlDataset} from '../sparql/SparqlDataset';
 import type {SparqlQueryResults} from '../sparql/resultMapping';
 import {NodeShape} from '../shapes/SHACL';
+import {PathList} from '../shapes/PathList';
 import '../shapes/List';
 import '../shapes/PathNode';
 
 const {linkedShape} = linkedPackage('single-owner-test');
 const EX = 'http://example.org/';
 const SCHEMA = 'https://schema.org/';
+const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 const ex = (n: string) => ({id: `${EX}${n}`});
 const schema = (n: string) => ({id: `${SCHEMA}${n}`});
 
@@ -69,6 +71,15 @@ class Workspace extends Shape {
   // A plain (non-owning) reference is not part of the group.
   @objectProperty({path: ex('logo'), shape: ImageObject, maxCount: 1})
   get logo(): ImageObject {
+    return null;
+  }
+}
+
+// Owns an image but has no targetClass: its owners cannot be named.
+@linkedShape({name: 'Classless'})
+class Classless extends Shape {
+  @objectProperty({path: schema('image'), shape: ImageObject, maxCount: 1, contains: true})
+  get image(): ImageObject {
     return null;
   }
 }
@@ -171,7 +182,9 @@ describe('single-owner constraint data', () => {
     const ps = data.properties[0];
     expect(ps.__id).toBe(`${image.iri}/owners`);
     expect(ps.label).toBe('owners');
-    expect(ps.maxCount).toBe(1);
+    // Qualified: only subjects of the owner classes count; a plain reference does not.
+    expect(ps.maxCount).toBeUndefined();
+    expect(ps.qualifiedMaxCount).toBe(1);
     // No id: `PropertyShape.path` is sh:BlankNodeOrIRI, so the create writes an untyped blank
     // node, not an IRI. An IRI in sh:path is a predicate path (SHACL §2.3.1).
     expect(ps.path.__id).toBeUndefined();
@@ -180,6 +193,42 @@ describe('single-owner constraint data', () => {
     expect(ps.path.inversePath).toEqual({id: `${SCHEMA}image`});
     expect((attachments.data as any).targetObjectsOf).toEqual([{id: `${EX}attachments`}]);
     expect((attachments.data as any).properties[0].path.inversePath).toEqual({id: `${EX}attachments`});
+  });
+
+  test('owners: the declaring class and every registered sub-shape\'s, sorted, as sh:or', () => {
+    const [image] = buildSingleOwnerConstraints(Project.shape, iriOf(Project));
+    const owners = (image.data as any).properties[0].qualifiedValueShape;
+    expect(owners.shape).toBe(NodeShape);
+    expect(owners.__id).toBeUndefined();
+    const classes: string[] = [];
+    for (let cell = owners.orShapes; cell.id !== `${RDF}nil`; cell = cell.rest) {
+      expect(cell.shape).toBe(PathList);
+      expect(cell.__id).toBeUndefined();
+      expect(cell.first.shape).toBe(NodeShape);
+      classes.push(cell.first.class.id);
+    }
+    expect(classes).toEqual([`${EX}Project`, `${EX}SubProject`]);
+  });
+
+  test('owners: one class is a plain sh:class, without sh:or', () => {
+    const [image] = buildSingleOwnerConstraints(Workspace.shape, iriOf(Workspace));
+    expect((image.data as any).properties[0].qualifiedValueShape).toEqual({
+      shape: NodeShape,
+      class: {id: `${EX}Workspace`},
+    });
+  });
+
+  test('a declaring shape without targetClass gets no constraint, and one warning', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(buildSingleOwnerConstraints(Classless.shape, iriOf(Classless))).toEqual([]);
+      expect(buildSingleOwnerConstraints(Classless.shape, iriOf(Classless))).toEqual([]);
+      const mine = warn.mock.calls.filter((c) => String(c[0]).includes(Classless.shape.id));
+      expect(mine).toHaveLength(1);
+      expect(String(mine[0][0])).toContain('no targetClass');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('not registered', () => {

@@ -299,7 +299,7 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
         await has(
           `<${gen}> <${RDF}type> <${SH}NodeShape> ; <${CORE}generated> true ; ` +
             `<${SH}targetObjectsOf> <${predicate}> ; <${SH}property> <${gen}/owners> . ` +
-            `<${gen}/owners> <${RDF}type> <${SH}PropertyShape> ; <${SH}maxCount> 1 ; ` +
+            `<${gen}/owners> <${RDF}type> <${SH}PropertyShape> ; <${SH}qualifiedMaxCount> 1 ; ` +
             `<${SH}path> ?inv . ?inv <${SH}inversePath> <${predicate}> . FILTER(isBlank(?inv))`,
         ),
       ).toBe(true);
@@ -417,18 +417,21 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
 
   // The persisted shapes, read back out of the store, validated by Jena SHACL. Before
   // complex paths were blank nodes, `sh:path <…/owners/inv>` was read as a predicate path
-  // that matches nothing, and this report said `sh:conforms true`.
+  // that matches nothing, and this report said `sh:conforms true`. The owners are typed with
+  // the sub-shape's class only: the dataset has no `rdfs:subClassOf`, so the constraint must
+  // name every owner class itself.
   const IMG = 'https://example.org/e2e#img1';
+  const RDF_TYPE = `<${RDF}type>`;
   const twoOwners =
-    `<${ex('p1').id}> <${schemaImage.id}> <${IMG}> .\n` +
-    `<${ex('p2').id}> <${schemaImage.id}> <${IMG}> .\n`;
+    `<${ex('p1').id}> ${RDF_TYPE} <${ex('SubProject').id}> ; <${schemaImage.id}> <${IMG}> .\n` +
+    `<${ex('p2').id}> ${RDF_TYPE} <${ex('SubProject').id}> ; <${schemaImage.id}> <${IMG}> .\n`;
 
-  test('Jena SHACL reports an image owned by two subjects against the synced shapes', async () => {
+  test('Jena SHACL reports an image owned by two subjects of a sub-shape against the synced shapes', async () => {
     await runSync();
     const shapes = await readDatasetAsTurtle();
     const report = await validateWithJenaShacl(shapes, twoOwners);
     expect(report).toMatch(/sh:conforms\s+false/);
-    expect(report).toContain('MaxCountConstraintComponent');
+    expect(report).toContain('QualifiedMaxCountConstraintComponent');
     expect(report).toMatch(new RegExp(`sh:focusNode\\s+<${IMG.replace(/[.#]/g, '\\$&')}>`));
     expect(report).toMatch(/sh:resultPath\s+\[\s*sh:inversePath\s+<https:\/\/schema\.org\/image>/);
     expect(report).toContain(`<${IMAGE()}/owners>`);
@@ -438,9 +441,38 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
     await runSync();
     const report = await validateWithJenaShacl(
       await readDatasetAsTurtle(),
-      `<${ex('p1').id}> <${schemaImage.id}> <${IMG}> .\n`,
+      `<${ex('p1').id}> ${RDF_TYPE} <${ex('Project').id}> ; <${schemaImage.id}> <${IMG}> .\n`,
     );
     expect(report).toMatch(/sh:conforms\s+true/);
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  test('Jena SHACL: an owner plus a plain reference through the same predicate conforms', async () => {
+    await runSync();
+    const report = await validateWithJenaShacl(
+      await readDatasetAsTurtle(),
+      `<${ex('p1').id}> ${RDF_TYPE} <${ex('SubProject').id}> ; <${schemaImage.id}> <${IMG}> .\n` +
+        `<${ex('r1').id}> ${RDF_TYPE} <${ex('Other').id}> ; <${schemaImage.id}> <${IMG}> .\n`,
+    );
+    expect(report).toMatch(/sh:conforms\s+true/);
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  test('the qualified owner shape is blank, names both classes, and a re-sync leaves no blank node behind', async () => {
+    await runSync();
+    const owners = `<${IMAGE()}/owners>`;
+    expect(await has(`${owners} <${SH}qualifiedMaxCount> 1`)).toBe(true);
+    expect(await has(`${owners} <${SH}maxCount> ?m`)).toBe(false);
+    for (const cls of ['Project', 'SubProject']) {
+      expect(
+        await has(
+          `${owners} <${SH}qualifiedValueShape> ?q . FILTER(isBlank(?q)) ` +
+            `?q <${SH}or>/<${RDF}rest>*/<${RDF}first> ?c . ?c <${SH}class> <${ex(cls).id}> . FILTER(isBlank(?c))`,
+        ),
+      ).toBe(true);
+    }
+    const blanks = await count('?b ?p ?o . FILTER(isBlank(?b))');
+    await runSync();
+    expect(await count('?b ?p ?o . FILTER(isBlank(?b))')).toBe(blanks);
+    expect(await orphanBlankNodes()).toBe(0);
   }, LIVE_FUSEKI_TIMEOUT);
 
   test('Jena SHACL misreads the IRI-named form earlier versions wrote (the bug this fixes)', async () => {

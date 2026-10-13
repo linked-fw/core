@@ -10,8 +10,9 @@ import {shacl} from '../ontologies/shacl.js';
 import {rdf} from '../ontologies/rdf.js';
 
 /**
- * A cell of the `rdf:List` inside a SHACL property path: the members of a sequence path, or the
- * operand of `sh:alternativePath`.
+ * A blank `rdf:List` cell of SHACL structure core writes: the members of a sequence path, the
+ * operand of `sh:alternativePath`, and the `sh:or` list of a generated single-owner constraint
+ * (`singleOwnerConstraint.ts`).
  *
  * Both properties are `sh:BlankNodeOrIRI`, so a cell written without an id is a blank node, and so
  * is an operator node (`PathNode`) held by `first`. That keeps a sequence path a blank list, which

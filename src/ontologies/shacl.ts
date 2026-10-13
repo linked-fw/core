@@ -34,6 +34,9 @@ const PropertyShape = ns('PropertyShape');
 const targetClass = ns('targetClass');
 const targetNode = ns('targetNode');
 const targetObjectsOf = ns('targetObjectsOf');
+const qualifiedValueShape = ns('qualifiedValueShape');
+const qualifiedMaxCount = ns('qualifiedMaxCount');
+const or = ns('or');
 const node = ns('node');
 const nodeKind = ns('nodeKind');
 const Shape = ns('Shape');
@@ -130,6 +133,9 @@ export const shacl = {
   targetClass,
   targetNode,
   targetObjectsOf,
+  qualifiedValueShape,
+  qualifiedMaxCount,
+  or,
   BlankNode,
   IRI,
   Literal,

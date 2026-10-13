@@ -918,3 +918,35 @@ createPropertyShape(
   shacl.IRI,
   NodeShape,
 );
+
+// The terms of the generated single-owner constraint (`singleOwnerConstraint.ts`):
+// `sh:qualifiedValueShape [ sh:or ( [ sh:class A ] [ sh:class B ] ) ]` and
+// `sh:qualifiedMaxCount`. The qualified shape and the `sh:or` list are written without ids, so
+// they are blank nodes, deleted with their property shape by the blank-node cascade. The list
+// cells are `PathList`s (blank-capable `rdf:List` cells); like `sh:path`, `orShapes` declares no
+// value shape (`PathList.ts` imports this module), so the create uses each value's own shape.
+createPropertyShape(
+  {path: shacl.qualifiedValueShape, shape: NodeShape, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI},
+  'qualifiedValueShape',
+  shacl.BlankNodeOrIRI,
+  PropertyShape,
+);
+createPropertyShape(
+  {path: shacl.qualifiedMaxCount, datatype: xsd.integer, maxCount: 1},
+  'qualifiedMaxCount',
+  shacl.Literal,
+  PropertyShape,
+);
+createPropertyShape(
+  {path: shacl.class, shape: Shape, maxCount: 1},
+  'class',
+  shacl.IRI,
+  NodeShape,
+);
+createPropertyShape(
+  {path: shacl.or, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI},
+  // `or` is reserved (a DSL-JSON combinator), so the accessor is `orShapes`.
+  'orShapes',
+  shacl.BlankNodeOrIRI,
+  NodeShape,
+);

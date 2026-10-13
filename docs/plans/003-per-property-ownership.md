@@ -460,7 +460,19 @@ Validation:
   blank paths) — proves `dependent` was not needed.
 - Quick gate, `npm test`, `npx linked build`.
 
-### Phase 4 — qualified single-owner constraint
+### Phase 4 — qualified single-owner constraint — DONE
+
+Result: `sh:qualifiedValueShape` / `sh:qualifiedMaxCount` / `sh:or` terms; accessors
+`PropertyShape.qualifiedValueShape`, `PropertyShape.qualifiedMaxCount`, `NodeShape.class`,
+`NodeShape.orShapes`. Deviations: the `sh:or` accessor is labelled `orShapes` (`or` is a
+reserved DSL-JSON label), and it declares no value shape (like `sh:path`): naming `PathList` by IRI
+failed the build's shape-reference check, and importing it would be a cycle. Golden fixture
+updated deliberately (owners: `sh:qualifiedValueShape [ sh:class fx:Fixture ]`,
+`sh:qualifiedMaxCount 1`, no `sh:maxCount`). Jena tests: two sub-shape owners → `conforms false`
+(`QualifiedMaxCountConstraintComponent`); an owner plus a plain reference → `conforms true`; one
+owner → `true`; re-sync leaves the blank-node count unchanged.
+Validation: `npm test` 2226 passed, 0 failed, `[fuseki] live tests: 293 total — 293 passed`;
+`npx linked build` OK.
 
 Tasks: `shacl.ts` terms; `Package.ts` accessors (`qualifiedValueShape`, `qualifiedMaxCount`,
 `NodeShape.class`, `NodeShape.or`); `buildSingleOwnerConstraints` per contract (warn once when no
