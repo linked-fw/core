@@ -383,3 +383,13 @@ INSERT DATA identical to 2.30.0's (diff empty after label normalization); docs g
   `shacl-cascade.test.ts` and `mutation-where-union.test.ts` pins updated.
 - Validation: `npm test` exit 0 — 2215 passed, 120 skipped; `[fuseki] live tests: 288 total —
   288 passed` (shape-sync migration, idempotent re-sync, orphan checks and Jena SHACL included).
+
+### Phase 3 — done
+
+- `iriTerm` refuses a `_:` id with one message naming the three cases (link, `update().for()`,
+  delete by id) and the way out (change it through the property that holds it).
+- The update / upsert / updateWhere refusal (from phase 1) is tested for all three, for a blank
+  value nested below an IRI one (`'alternativePath'` named), and an id'd value under
+  `sh:BlankNodeOrIRI` is accepted as an IRI.
+- Validation: `npm test` exit 0 — 2219 passed, 120 skipped; `[fuseki] live tests: 288 total —
+  288 passed`.

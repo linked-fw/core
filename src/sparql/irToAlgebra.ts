@@ -75,7 +75,20 @@ const XSD_DOUBLE = xsd.double.id;
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Every IRI the lowering writes goes through here, so this is where a blank-node label used as
+ * an id is refused: `_:b0` is SPARQL / N-Triples blank-node syntax, never an IRI (an IRI scheme
+ * starts with a letter).
+ */
 function iriTerm(value: string): SparqlTerm {
+  if (typeof value === 'string' && value.startsWith('_:')) {
+    throw new Error(
+      `${JSON.stringify(value)} is a blank-node label, not an IRI. A blank node has no id to ` +
+        `address it by: it cannot be linked, updated with update().for() or deleted by id. ` +
+        `Change it through the property that holds it (replace or unset that property, or ` +
+        `delete its owner).`,
+    );
+  }
   return {kind: 'iri', value};
 }
 

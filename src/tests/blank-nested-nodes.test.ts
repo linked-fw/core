@@ -21,7 +21,13 @@ import {Shape} from '../shapes/Shape';
 import {objectProperty, linkedProperty, NodeShape} from '../shapes/SHACL';
 import {PathNode} from '../shapes/PathNode';
 import {serializePathToNodeData} from '../shapes/serializePathToNodeData';
-import {createToSparql, deleteToSparql, updateToSparql} from '../sparql/irToAlgebra';
+import {
+  createToSparql,
+  deleteToSparql,
+  updateToSparql,
+  upsertToSparql,
+  updateWhereToSparql,
+} from '../sparql/irToAlgebra';
 import {lower} from '../queries/lower';
 import {lowerMutationJSON} from '../queries/lowerMutationJSON';
 import {fromJSON} from '../queries/fromJSON';
@@ -31,6 +37,8 @@ import type {
   IRCreateMutation,
   IRDeleteMutation,
   IRUpdateMutation,
+  IRUpdateWhereMutation,
+  IRUpsertMutation,
 } from '../queries/IntermediateRepresentation';
 import '../ontologies/rdf';
 import {shacl} from '../ontologies/shacl';
@@ -184,11 +192,62 @@ describe('nested creates minted from the property sh:nodeKind', () => {
     expect(() => lowerMutationJSON(wire)).toThrow(/__blank/);
   });
 
-  test('a blank node in an update is refused (minted once per WHERE solution)', () => {
-    const ir = lower(
-      UpdateBuilder.from(BHolder).for(`${X}h1`).set({slot: inverse(`${X}p`)} as never) as any,
-    ) as unknown as IRUpdateMutation;
-    expect(() => updateToSparql(ir)).toThrow(/Cannot write a blank node in an update.*'slot'/);
+});
+
+describe('where a blank node cannot be written or addressed: clear errors', () => {
+  const blankInUpdate = /Cannot write a blank node in an update.*'slot'.*give it an id/;
+
+  test('update, upsert and updateWhere refuse a value that would be minted blank', () => {
+    const set = {slot: inverse(`${X}p`)} as never;
+    expect(() =>
+      updateToSparql(lower(UpdateBuilder.from(BHolder).for(`${X}h1`).set(set) as any) as unknown as IRUpdateMutation),
+    ).toThrow(blankInUpdate);
+    expect(() =>
+      upsertToSparql(lower(UpdateBuilder.upsertFrom(BHolder).for(`${X}h1`).set(set) as any) as unknown as IRUpsertMutation),
+    ).toThrow(blankInUpdate);
+    expect(() =>
+      updateWhereToSparql(lower(UpdateBuilder.from(BHolder).forAll().set(set) as any) as unknown as IRUpdateWhereMutation),
+    ).toThrow(blankInUpdate);
+  });
+
+  test('a blank value nested deeper in an update is refused too', () => {
+    // The nested PathNode gets an id (an IRI), its operand list does not (blank).
+    const set = {slot: {...serializePathToNodeData({alt: [{id: `${X}a`}, {id: `${X}b`}]}), id: `${X}n1`}} as never;
+    expect(() =>
+      updateToSparql(lower(UpdateBuilder.from(BHolder).for(`${X}h1`).set(set) as any) as unknown as IRUpdateMutation),
+    ).toThrow(/Cannot write a blank node in an update.*'alternativePath'/);
+  });
+
+  test('an update may write a nested value with an id under sh:BlankNodeOrIRI: an IRI', () => {
+    const sparql = updateToSparql(
+      lower(
+        UpdateBuilder.from(BHolder).for(`${X}h1`).set({slot: {...inverse(`${X}p`), id: `${X}n1`}} as never) as any,
+      ) as unknown as IRUpdateMutation,
+    );
+    expect(sparql).toContain(`<${X}h1> <${X}slot> <${X}n1> .`);
+    expect(sparql.slice(0, sparql.indexOf('WHERE'))).not.toContain('_:');
+  });
+
+  const blankId = /"_:b0" is a blank-node label, not an IRI/;
+
+  test('linking a blank-node id is refused, in a create and in an update', () => {
+    expect(() => createToSparql(lower(createOf({slot: {id: '_:b0'}})) as unknown as IRCreateMutation)).toThrow(blankId);
+    expect(() =>
+      updateToSparql(
+        lower(UpdateBuilder.from(BHolder).for(`${X}h1`).set({slot: {id: '_:b0'}} as never) as any) as unknown as IRUpdateMutation,
+      ),
+    ).toThrow(blankId);
+  });
+
+  test('update().for() and a delete by a blank-node id are refused', () => {
+    expect(() =>
+      updateToSparql(
+        lower(UpdateBuilder.from(BHolder).for('_:b0').set({slot: {id: `${X}e1`}} as never) as any) as unknown as IRUpdateMutation,
+      ),
+    ).toThrow(blankId);
+    expect(() =>
+      deleteToSparql(lower(DeleteBuilder.from(BHolder, {id: '_:b0'})) as unknown as IRDeleteMutation),
+    ).toThrow(blankId);
   });
 });
 
