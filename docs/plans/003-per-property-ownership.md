@@ -1020,3 +1020,54 @@ and "contains wins" (L-3); consumer verdict re-checked above.
 
 Validation: README / `owned-values.md` / changeset describe the guardable rule, L-2 and L-3;
 gates as above.
+
+## Review 3 (adversarial, after iteration 2)
+
+Live probes on :3939 (scratch deleted, tree clean). M-A and M-B verified fixed; guarded
+grandchildren, `isSubShapeOf` order, caches, blank `rdf:nil` filter verified.
+
+- **M-1** Recursion typing (`shapeClasses`) drops a descendant's class when another shape also
+  holds it, so a typed node of a legitimate sub-shape stops a cycle (live: `b1` left).
+- **M-2** A user shape (no `contains`, not a sub-shape) that takes a library sub-shape's class
+  switches that sub-shape's guarded ownership off (live: `t1` orphaned); the consumer verdict's
+  "makes nothing worse" overclaims.
+- L-1 a data-only sub-shape without `targetClass` under a guardable sub-shape, adding nothing, is
+  warned misleadingly; L-2 the warning for a profile names its parent as "does not extend it".
+
+## Iteration 3 — Ideation
+
+### Gap 1 of 2: recursion typing (M-1)
+
+Chosen: an unguarded recursive hop accepts the declaring shape's class or any registered
+descendant's class (iteration 1's rule). The position is already reached through an owned edge
+whose value shape is the declaring shape, so the typing only refuses nodes of unrelated classes;
+a class shared with another shape adds the same value-shape assumption every untyped hop makes.
+
+### Gap 2 of 2: when a shared class still guards (M-2, L-1, L-2)
+
+Chosen: decide per edge. A sub-shape's added `contains p` is skipped when its class is held by
+one of its super-shapes (the M3 rule: the parent's own nodes would match), or when a shape holding
+the class that does not extend the sub-shape declares `p` as a **plain** property (M-B: following
+`p` would delete that shape's references). A holder that does not declare `p` at all (M-2), or
+declares it `contains` too, does not block the guard. Warnings name the cause per edge; a
+sub-shape that adds nothing beyond its direct super-shape is skipped silently (L-1, profiles).
+Rejected: skipping every shared class (M-2 orphans on registering an unrelated shape); asking the
+app to reject such catalog shapes (core would still orphan for any other caller).
+
+## Iteration 3 — Plan
+
+`irToAlgebra.ts`: `classGuard` becomes `blockedGuard(sub, predicate)` returning the reason or
+null; `ownedEdges` calls it per added edge; `shapeClasses` keeps every descendant class. Tests:
+M-1 and M-2 live repros (fail on `c02348e`), M-B and M3 still pass. Docs: README,
+`owned-values.md`, changeset, consumer verdict.
+
+## Iteration 3 — Phases
+
+### Phase 11: per-edge class guard and full recursion typing (Gaps 1, 2)
+
+Validation: M-1 / M-2 repros fail on `c02348e` and pass after; all of `owned-walk-recursion`
+passes; quick gate, `npm test` (0 failed live), `npx linked build`.
+
+### Phase 12: docs and consumer verdict
+
+Validation: README / `owned-values.md` / changeset match the per-edge rule; gates as above.
