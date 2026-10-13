@@ -10,19 +10,32 @@ import {objectProperty} from '../shapes/SHACL';
 import {serializePathToNodeData} from '../shapes/serializePathToNodeData';
 import {createToSparql} from '../sparql/irToAlgebra';
 import '../ontologies/rdf';
-import '../ontologies/shacl';
+import {shacl} from '../ontologies/shacl';
 import {lower} from '../queries/lower';
+import {PathList} from '../shapes/PathList';
+import {PathNode} from '../shapes/PathNode';
 
 const {linkedShape} = linkedPackage('path-translator-test');
 const B = 'https://example.org/ps';
 
-// Holder with a polymorphic (no valueShape) owned property, like `PropertyShape.path`, so any
-// path node-data fits (a blank node must be held through `contains`).
+// Holder with a polymorphic (no valueShape) blank-capable property, like `PropertyShape.path`,
+// so any path node-data fits and is written as blank nodes.
 @linkedShape
 class PHolder extends Shape {
   static targetClass = {id: 'https://example.org/p#PHolder'} as any;
 
-  @objectProperty({path: {id: 'https://example.org/p#path'}, maxCount: 1, contains: true})
+  @objectProperty({path: {id: 'https://example.org/p#path'}, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI})
+  get p(): unknown {
+    return null;
+  }
+}
+
+// The same slot without a blank-capable nodeKind: the property, not the node-data, decides.
+@linkedShape
+class PIriHolder extends Shape {
+  static targetClass = {id: 'https://example.org/p#PIriHolder'} as any;
+
+  @objectProperty({path: {id: 'https://example.org/p#path'}, maxCount: 1})
   get p(): unknown {
     return null;
   }
@@ -71,11 +84,22 @@ describe('serializePathToNodeData', () => {
     expect(s.match(/^\s*<[^>]+> /gm)).toHaveLength(2);
   });
 
-  test('the serialized node-data marks every operator node and list cell __blank', () => {
+  test('the serialized node-data carries no ids or markers: PathNode operators, PathList cells', () => {
     const data = serializePathToNodeData({alt: [{id: 'http://ex.org/a'}, {zeroOrMore: {id: 'http://ex.org/b'}}]}) as any;
-    expect(data).toMatchObject({__blank: true, alternativePath: {__blank: true, first: {id: 'http://ex.org/a'}}});
-    expect(data.alternativePath.rest).toMatchObject({__blank: true, first: {__blank: true, zeroOrMorePath: {id: 'http://ex.org/b'}}});
-    expect(JSON.stringify(data)).not.toContain('__id');
+    expect(data).toMatchObject({shape: PathNode, alternativePath: {shape: PathList, first: {id: 'http://ex.org/a'}}});
+    expect(data.alternativePath.rest).toMatchObject({shape: PathList, first: {shape: PathNode, zeroOrMorePath: {id: 'http://ex.org/b'}}});
+    expect(JSON.stringify(data)).not.toMatch(/__id|__blank/);
+  });
+
+  test('under a property that is not blank-capable the same node-data is written as IRIs', () => {
+    const s = createToSparql(
+      lower((PIriHolder.create({p: serializePathToNodeData({inv: {id: 'http://ex.org/parent'}})}) as any)
+        .withId('https://example.org/h2')) as any,
+    );
+    expect(s).not.toContain('_:');
+    expect(s).toContain('rdf:type core:PathNode');
+    // The PathNode slot is blank-capable, but its operand is a predicate reference: an IRI.
+    expect(s).toMatch(/> shacl:inversePath <http:\/\/ex\.org\/parent> \./);
   });
 
   test('alternative → PathNode with sh:alternativePath → rdf:List', () => {

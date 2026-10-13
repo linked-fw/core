@@ -357,7 +357,8 @@ constraint at `Thing`, not one per subclass. It is marked `core:generated true` 
 
 The inverse path is stored as an untyped blank node, as is every complex `sh:path` shape sync
 writes (inverse, alternative, sequence, `*`/`+`/`?`): an IRI in `sh:path` is a predicate path to a
-SHACL validator. Versions before 2.30 wrote IRI-named nodes (`…/owners/inv`); the next sync
+SHACL validator. Nothing marks them: `PropertyShape.path` and the path operator slots are
+declared `sh:BlankNodeOrIRI`, see [Blank-node values](#blank-node-values-nodekind). Versions before 2.30 wrote IRI-named nodes (`…/owners/inv`); the next sync
 replaces them, except an operator node inside a sequence (`…/seq/0/inv`), which is left
 unreferenced. To remove those:
 
@@ -367,13 +368,10 @@ DELETE { ?n ?p ?o } WHERE {
   FILTER(isIRI(?n)) FILTER NOT EXISTS { ?x ?y ?n }
 }
 ```
- Read a stored path's structure in the same query that finds it (`?ps sh:path ?p .
+
+Read a stored path's structure in the same query that finds it (`?ps sh:path ?p .
 ?p sh:inversePath ?x`): a blank node's label is not stable across queries.
 
-Nested node-data in a `create` may carry `__blank: true` to be written that way: a fresh blank
-node with only its field triples and no `rdf:type`. It is meant for RDF syntax such as SHACL
-paths, has no id (combining it with `__id`/`id` throws), cannot be the created root, and is
-refused in `update`/`upsert`, whose INSERT runs once per WHERE solution.
 The declaring shape owns its generated shapes through `core:generatedShape`, a `contains` edge:
 `<…/Thing> core:generatedShape <…/Thing/image.singleOwner>`. Syncing a shape is still two
 requests: deleting the shape deletes the generated shapes with it (their own triples, property
@@ -408,6 +406,55 @@ export class ListCell extends Shape { /* ... */ }
 > Rule of thumb: put `contains` on the **property** that owns the value; put `dependent` on the
 > **shape** whose instances never stand alone. They are separate mechanisms — `contains` decides
 > *what to follow*, `dependent` decides *what may be deleted when reached*.
+
+### Blank-node values (`nodeKind`)
+
+Every node core writes is IRI-named unless the **property** that holds it says otherwise. A
+nested create is written as a blank node when its property's `nodeKind` allows blank nodes:
+
+| `nodeKind` of the property | nested value without an id | with an id |
+|---|---|---|
+| unset, `shacl.IRI` (the `objectProperty` default), `shacl.IRIOrLiteral` | IRI (minted) | IRI |
+| `shacl.BlankNodeOrIRI` | blank node | IRI |
+| `shacl.BlankNode` | blank node | error |
+| `shacl.BlankNodeOrLiteral` | blank node | error |
+| `shacl.Literal` | error | error |
+
+```typescript
+@linkedShape
+export class Place extends Shape {
+  static targetClass = ex.Place;
+
+  @objectProperty({path: ex.geo, shape: GeoPoint, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI})
+  declare geo: GeoPoint;
+}
+
+// <place1> ex:geo _:b0 . _:b0 ex:lat "52.1" .
+await Place.create({geo: {lat: '52.1'}}).withId(place1);
+```
+
+A blank node is written with its field triples only, without `rdf:type`: its shape is the one the
+property declares. Nothing about it travels in DSL-JSON; the side that runs the mutation decides
+from its own copy of the shape. Core uses this for SHACL paths: `PropertyShape.path`, the
+`PathNode` slots and `PathList.first` / `.rest` are `sh:BlankNodeOrIRI`, so a predicate path (an
+`{id}`) stays an IRI and every operator node and list cell becomes a blank node.
+
+A blank value goes with what holds it. Deleting the subject (by id, `.all()`, `.where()`),
+replacing or unsetting the property, deleting or replacing an owned (`contains`) child, and the
+containment cascade (a dependent node it deletes) delete the blank value and the blank nodes below it, following only blank-capable properties.
+Only blank nodes are deleted: an IRI the structure refers to (`schema:image` in
+`[ sh:inversePath schema:image ]`, an entity a list lists) is never touched, nor is a blank node
+reached through one. `contains` is not needed for this.
+
+Not supported yet, and refused with an error rather than written wrongly:
+
+- an `update` / `upsert` / `updateWhere` whose new value would be a blank node (its INSERT runs
+  once per WHERE solution, so the node would be written several times). Create it with its
+  parent, or give it an id under `sh:BlankNodeOrIRI`;
+- addressing a blank node by id: linking `{id: '_:b0'}`, `update().for('_:b0')`, deleting
+  `{id: '_:b0'}`. Change it through the property that holds it.
+
+A select returns a blank value as its store label (Fuseki: `b0`), valid only within that result.
 
 ## Queries: Create, Select, Update, Delete
 
@@ -988,7 +1035,7 @@ const deleted = await Person.delete({id: 'https://my.app/node1'});
 // Delete multiple nodes
 const deleted = await Person.delete([{id: 'https://my.app/node1'}, {id: 'https://my.app/node2'}]);
 
-// Delete all instances of a shape (with blank node cleanup)
+// Delete all instances of a shape (with their blank-node values)
 await Person.deleteAll();
 
 // Conditional delete

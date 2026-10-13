@@ -153,9 +153,11 @@ describe('owned-subtree cascade', () => {
     );
     expect(deletePatterns.length).toBeGreaterThan(0);
     // one OPTIONAL per dependent type; the path term carries the contains predicates
-    // The typed blocks are plain BGPs; the blank-node block (a FILTER) is checked separately.
+    // The typed blocks are plain BGPs; the blank-node blocks (FILTERs, one per dependent type
+    // with blank-capable properties: PropertyShape and PathNode; not rdf:List, whose `List`
+    // shape declares `first` / `rest` not blank-capable) are checked separately.
     const typed = whereOptionals.filter((o: any) => o.type === 'bgp');
-    expect(typed).toHaveLength(whereOptionals.length - 1);
+    expect(whereOptionals.length - typed.length).toBe(2);
     const paths = typed
       .flatMap((o: any) => o.triples)
       .filter((t: any) => t.predicate.kind === 'path')
@@ -330,8 +332,8 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     const sparql = updateSparqlOf(
       UpdateBuilder.from(TCard).for(`${C}card1`).set({holds: {id: `${C}newplain`}}),
     );
-    // The keep filters; the blank-node block's own `FILTER(isBlank(…))` are not keep filters.
-    const filters = [...(sparql.match(/FILTER\([^)]*\)\)/g) ?? [])].filter((f: string) => !f.startsWith('FILTER(isBlank('));
+    // The keep filters; the blank-node blocks' own `isBlank` filters are not keep filters.
+    const filters = [...(sparql.match(/FILTER\([^)]*\)\)/g) ?? [])].filter((f: string) => !/isBlank\(/.test(f));
     expect(filters.length).toBeGreaterThan(0);
     // Only the new id is listed; an old value that differs is still deleted.
     for (const f of filters) expect(f).toBe('FILTER(?old_holds NOT IN (<http://example.org/c#newplain>))');
@@ -429,10 +431,10 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     // No wildcard delete of the old value's own triples...
     expect(deleteBlockOf(sparql)).not.toMatch(/\?old_anyPath \?\w+ \?\w+ \./);
     // ...and every block that reads ?old_anyPath beyond the edge requires a dependent type, or
-    // (the blank-node block) that what it deletes is a blank node — never a shared IRI.
+    // (the blank-node blocks, through the dependent owner they start from) — never a shared IRI.
     for (const b of branchesOf(sparql).filter((b) => /\?old_anyPath \S/.test(b) && /\?uc0_/.test(b))) {
       expect(b).toMatch(
-        /rdf:type (shacl:PropertyShape|rdf:List|core:PathNode|<http:\/\/example\.org\/c#TCell>)|FILTER\(isBlank\(\?uc0_bn0\)\)[\s\S]*FILTER\(isBlank\(\?uc0_bn\)\)/,
+        /rdf:type (shacl:PropertyShape|rdf:List|core:PathNode|<http:\/\/example\.org\/c#TCell>)/,
       );
     }
     // The cascade still runs, so a dependent value (a PathNode) is cleaned up.
