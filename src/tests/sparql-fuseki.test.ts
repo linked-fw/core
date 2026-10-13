@@ -3,7 +3,8 @@
  *
  * Tests the full pipeline: factory -> IR -> SPARQL -> execute against Fuseki -> map results
  *
- * These tests are skipped gracefully if Fuseki is not available on localhost:3030.
+ * Live blocks run through `describeFuseki`: skipped visibly without Fuseki, and a failure under CI
+ * or REQUIRE_FUSEKI (see test-helpers/fuseki-live.ts).
  *
  * Coverage: all 75 query factories from query-fixtures.ts
  */
@@ -37,7 +38,6 @@ import type {
 } from '../queries/IntermediateRepresentation';
 import type {SparqlJsonResults} from '../sparql/resultMapping';
 import {
-  ensureFuseki,
   createTestDataset,
   deleteTestDataset,
   loadTestData,
@@ -46,6 +46,7 @@ import {
   clearAllData,
   DATASET_NAME,
 } from '../test-helpers/fuseki-test-store';
+import {describeFuseki, fusekiLive} from '../test-helpers/fuseki-live';
 import {FusekiStore} from '../test-helpers/FusekiStore';
 import type {CountBuilder} from '../queries/CountBuilder';
 
@@ -137,21 +138,16 @@ const TEST_DATA = `
 // Fuseki availability and lifecycle
 // ---------------------------------------------------------------------------
 
-let fusekiAvailable = false;
 
 beforeAll(async () => {
-  fusekiAvailable = await ensureFuseki();
-  if (!fusekiAvailable) {
-    console.log('Fuseki not available, skipping integration tests');
-    return;
-  }
+  if (!fusekiLive) return;
   await createTestDataset();
   await clearAllData();
   await loadTestData(TEST_DATA);
 }, 30000);
 
 afterAll(async () => {
-  if (!fusekiAvailable) return;
+  if (!fusekiLive) return;
   await clearAllData();
 });
 
@@ -192,9 +188,8 @@ function extractNames(rows: ResultRow[]): string[] {
 // SELECT — basic property projections
 // =========================================================================
 
-describe('Fuseki SELECT — basic', () => {
+describeFuseki('Fuseki SELECT — basic', () => {
   test('selectName — all persons have name', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectName');
     expect(Array.isArray(result)).toBe(true);
@@ -213,7 +208,6 @@ describe('Fuseki SELECT — basic', () => {
   });
 
   test('selectFriends — returns friend references', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectFriends');
     expect(Array.isArray(result)).toBe(true);
@@ -233,7 +227,6 @@ describe('Fuseki SELECT — basic', () => {
   });
 
   test('selectBirthDate — date coercion', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectBirthDate');
     expect(Array.isArray(result)).toBe(true);
@@ -261,7 +254,6 @@ describe('Fuseki SELECT — basic', () => {
   });
 
   test('selectIsRealPerson — boolean coercion', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectIsRealPerson');
     expect(Array.isArray(result)).toBe(true);
@@ -277,7 +269,6 @@ describe('Fuseki SELECT — basic', () => {
   });
 
   test('selectAll — returns all persons (id only)', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectAll');
     expect(Array.isArray(result)).toBe(true);
@@ -286,7 +277,6 @@ describe('Fuseki SELECT — basic', () => {
   });
 
   test('selectAllProperties — all properties populated', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectAllProperties');
     expect(Array.isArray(result)).toBe(true);
@@ -301,7 +291,6 @@ describe('Fuseki SELECT — basic', () => {
   });
 
   test('selectNonExistingMultiple — multiple paths with nulls', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectNonExistingMultiple');
     expect(Array.isArray(result)).toBe(true);
@@ -318,9 +307,8 @@ describe('Fuseki SELECT — basic', () => {
 // SELECT — subject targeting / single result
 // =========================================================================
 
-describe('Fuseki SELECT — subject targeting', () => {
+describeFuseki('Fuseki SELECT — subject targeting', () => {
   test('selectById — single person by URI (singleResult)', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectById');
     expect(result).not.toBeNull();
@@ -331,7 +319,6 @@ describe('Fuseki SELECT — subject targeting', () => {
   });
 
   test('selectByIdReference — same as selectById', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectByIdReference');
     expect(result).not.toBeNull();
@@ -342,14 +329,12 @@ describe('Fuseki SELECT — subject targeting', () => {
   });
 
   test('selectNonExisting — returns null (singleResult)', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectNonExisting');
     expect(result).toBeNull();
   });
 
   test('selectUndefinedOnly — p3 with null hobby and bestFriend', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectUndefinedOnly');
     expect(result).not.toBeNull();
@@ -362,7 +347,6 @@ describe('Fuseki SELECT — subject targeting', () => {
   });
 
   test('selectOne — single result with LIMIT 1', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectOne');
     expect(result).not.toBeNull();
@@ -377,9 +361,8 @@ describe('Fuseki SELECT — subject targeting', () => {
 // SELECT — nested traversals
 // =========================================================================
 
-describe('Fuseki SELECT — nested traversals', () => {
+describeFuseki('Fuseki SELECT — nested traversals', () => {
   test('selectFriendsName — friends with names (nested grouping)', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectFriendsName');
     expect(Array.isArray(result)).toBe(true);
@@ -419,7 +402,6 @@ describe('Fuseki SELECT — nested traversals', () => {
   });
 
   test('selectNestedFriendsName — double nested (friends.friends.name)', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectNestedFriendsName');
     expect(Array.isArray(result)).toBe(true);
@@ -460,7 +442,6 @@ describe('Fuseki SELECT — nested traversals', () => {
   });
 
   test('selectMultiplePaths — name, friends, bestFriend.name', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectMultiplePaths');
     expect(Array.isArray(result)).toBe(true);
@@ -490,7 +471,6 @@ describe('Fuseki SELECT — nested traversals', () => {
   });
 
   test('selectBestFriendName — bestFriend.name', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectBestFriendName');
     expect(Array.isArray(result)).toBe(true);
@@ -509,7 +489,6 @@ describe('Fuseki SELECT — nested traversals', () => {
   });
 
   test('selectDeepNested — friends.bestFriend.bestFriend.name', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectDeepNested');
     expect(Array.isArray(result)).toBe(true);
@@ -535,7 +514,6 @@ describe('Fuseki SELECT — nested traversals', () => {
   });
 
   test('nestedObjectProperty — friends.bestFriend', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('nestedObjectProperty');
     expect(Array.isArray(result)).toBe(true);
@@ -574,7 +552,6 @@ describe('Fuseki SELECT — nested traversals', () => {
   });
 
   test('nestedObjectPropertySingle — same as nestedObjectProperty', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('nestedObjectPropertySingle');
     expect(Array.isArray(result)).toBe(true);
@@ -590,7 +567,6 @@ describe('Fuseki SELECT — nested traversals', () => {
   });
 
   test('selectDuplicatePaths — deduped bestFriend properties', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectDuplicatePaths');
     expect(Array.isArray(result)).toBe(true);
@@ -612,9 +588,8 @@ describe('Fuseki SELECT — nested traversals', () => {
 // SELECT — sub-selects
 // =========================================================================
 
-describe('Fuseki SELECT — sub-selects', () => {
+describeFuseki('Fuseki SELECT — sub-selects', () => {
   test('subSelectSingleProp — bestFriend.select(name)', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('subSelectSingleProp');
     expect(Array.isArray(result)).toBe(true);
@@ -630,7 +605,6 @@ describe('Fuseki SELECT — sub-selects', () => {
   });
 
   test('subSelectPluralCustom — friends.select(name, hobby)', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('subSelectPluralCustom');
     expect(Array.isArray(result)).toBe(true);
@@ -654,7 +628,6 @@ describe('Fuseki SELECT — sub-selects', () => {
   });
 
   test('subSelectAllProperties — friends.selectAll()', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('subSelectAllProperties');
     expect(Array.isArray(result)).toBe(true);
@@ -683,7 +656,6 @@ describe('Fuseki SELECT — sub-selects', () => {
   });
 
   test('subSelectAllPropertiesSingle — bestFriend.selectAll()', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('subSelectAllPropertiesSingle');
     expect(Array.isArray(result)).toBe(true);
@@ -707,7 +679,6 @@ describe('Fuseki SELECT — sub-selects', () => {
   });
 
   test('doubleNestedSubSelect — friends → bestFriend → name', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('doubleNestedSubSelect');
     expect(Array.isArray(result)).toBe(true);
@@ -738,7 +709,6 @@ describe('Fuseki SELECT — sub-selects', () => {
   });
 
   test('subSelectAllPrimitives — bestFriend.[name, birthDate, isRealPerson]', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('subSelectAllPrimitives');
     expect(Array.isArray(result)).toBe(true);
@@ -757,7 +727,6 @@ describe('Fuseki SELECT — sub-selects', () => {
   });
 
   test('subSelectArray — friends.select([name, hobby])', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('subSelectArray');
     expect(Array.isArray(result)).toBe(true);
@@ -780,7 +749,6 @@ describe('Fuseki SELECT — sub-selects', () => {
   });
 
   test('nestedQueries2 — friends.[firstPet, bestFriend.name]', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('nestedQueries2');
     expect(Array.isArray(result)).toBe(true);
@@ -814,7 +782,6 @@ describe('Fuseki SELECT — sub-selects', () => {
   });
 
   test('preloadBestFriend — bestFriend.preloadFor(component)', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('preloadBestFriend');
     expect(Array.isArray(result)).toBe(true);
@@ -839,9 +806,8 @@ describe('Fuseki SELECT — sub-selects', () => {
 // SELECT — outer where (FILTER)
 // =========================================================================
 
-describe('Fuseki SELECT — outer where (FILTER)', () => {
+describeFuseki('Fuseki SELECT — outer where (FILTER)', () => {
   test('whereHobbyEquals — filter hobby = Jogging', async () => {
-    if (!fusekiAvailable) return;
 
     // This uses inline .where() on a literal property (hobby).
     // The SPARQL has FILTER(?a1 = "Jogging") inside OPTIONAL.
@@ -863,7 +829,6 @@ describe('Fuseki SELECT — outer where (FILTER)', () => {
   });
 
   test('whereBestFriendEquals — filter bestFriend = entity(p3)', async () => {
-    if (!fusekiAvailable) return;
 
     // Phase 7 fixed URI-vs-literal: now uses <IRI> instead of "literal" in FILTER
     const result = await runSelectMapped('whereBestFriendEquals');
@@ -876,7 +841,6 @@ describe('Fuseki SELECT — outer where (FILTER)', () => {
   });
 
   test('selectWhereNameSemmy — outer where name filter', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectWhereNameSemmy');
     expect(Array.isArray(result)).toBe(true);
@@ -887,7 +851,6 @@ describe('Fuseki SELECT — outer where (FILTER)', () => {
   });
 
   test('outerWhere — select friends, filter name = Semmy', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('outerWhere');
     expect(Array.isArray(result)).toBe(true);
@@ -899,7 +862,6 @@ describe('Fuseki SELECT — outer where (FILTER)', () => {
   });
 
   test('outerWhereLimit — filter + limit', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('outerWhereLimit');
     expect(Array.isArray(result)).toBe(true);
@@ -908,7 +870,6 @@ describe('Fuseki SELECT — outer where (FILTER)', () => {
   });
 
   test('outerWhereDifferentPropsOr — different-property OR still matches rows with only one side bound', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('outerWhereDifferentPropsOr');
     expect(Array.isArray(result)).toBe(true);
@@ -922,7 +883,6 @@ describe('Fuseki SELECT — outer where (FILTER)', () => {
   });
 
   test('whereWithContext — filter bestFriend = context user (p3)', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('whereWithContext');
     expect(Array.isArray(result)).toBe(true);
@@ -935,7 +895,6 @@ describe('Fuseki SELECT — outer where (FILTER)', () => {
   });
 
   test('whereSomeImplicit — friends.name = Moa (FILTER)', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('whereSomeImplicit');
     expect(Array.isArray(result)).toBe(true);
@@ -949,7 +908,6 @@ describe('Fuseki SELECT — outer where (FILTER)', () => {
   });
 
   test('whereSomeExplicit — EXISTS friends.name = Moa', async () => {
-    if (!fusekiAvailable) return;
 
     const {sparql, ir, results} = await runSelect('whereSomeExplicit');
     expect(results.results).toBeDefined();
@@ -959,7 +917,6 @@ describe('Fuseki SELECT — outer where (FILTER)', () => {
   });
 
   test('whereWithContextPath — EXISTS friends.name = contextUser.name', async () => {
-    if (!fusekiAvailable) return;
 
     // Known semantic issue: generated SPARQL has FILTER(?a1_name = ?a1_name)
     // which is a tautology. Context path resolution produces the same variable
@@ -982,9 +939,8 @@ describe('Fuseki SELECT — outer where (FILTER)', () => {
 // these into SPARQL FILTER expressions inside OPTIONAL blocks.
 // =========================================================================
 
-describe('Fuseki SELECT — inline where', () => {
+describeFuseki('Fuseki SELECT — inline where', () => {
   test('whereFriendsNameEquals — friends filtered by name = Moa', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('whereFriendsNameEquals');
     expect(Array.isArray(result)).toBe(true);
@@ -1020,7 +976,6 @@ describe('Fuseki SELECT — inline where', () => {
   });
 
   test('whereFriendsNameEqualsChained — .where().name property access', async () => {
-    if (!fusekiAvailable) return;
 
     // Same filter as whereFriendsNameEquals but chains .name after .where().
     // Query: Person.select((p) => p.friends.where((f) => f.name.equals('Moa')).name)
@@ -1051,7 +1006,6 @@ describe('Fuseki SELECT — inline where', () => {
   });
 
   test('whereAnd — friends filtered by name=Moa AND hobby=Jogging', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('whereAnd');
     expect(Array.isArray(result)).toBe(true);
@@ -1074,7 +1028,6 @@ describe('Fuseki SELECT — inline where', () => {
   });
 
   test('whereOr — friends filtered by name=Jinx OR hobby=Jogging', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('whereOr');
     expect(Array.isArray(result)).toBe(true);
@@ -1103,7 +1056,6 @@ describe('Fuseki SELECT — inline where', () => {
   });
 
   test('whereAndOrAnd — (name=Jinx || hobby=Jogging) && name=Moa', async () => {
-    if (!fusekiAvailable) return;
 
     // Parenthesized as (A || B) && C due to Phase 15.
     // Filter: (name=Jinx || hobby=Jogging) && name=Moa
@@ -1130,7 +1082,6 @@ describe('Fuseki SELECT — inline where', () => {
   });
 
   test('whereAndOrAndNested — name=Jinx || (hobby=Jogging && name=Moa)', async () => {
-    if (!fusekiAvailable) return;
 
     // Filter: name=Jinx || (hobby=Jogging && name=Moa)
     const result = await runSelectMapped('whereAndOrAndNested');
@@ -1167,9 +1118,8 @@ describe('Fuseki SELECT — inline where', () => {
 // - countEquals: now uses HAVING for aggregate comparisons
 // =========================================================================
 
-describe('Fuseki SELECT — quantifiers and aggregates', () => {
+describeFuseki('Fuseki SELECT — quantifiers and aggregates', () => {
   test('whereEvery — NOT EXISTS filter', async () => {
-    if (!fusekiAvailable) return;
 
     const {sparql, ir, results} = await runSelect('whereEvery');
     expect(sparql).toContain('EXISTS');
@@ -1191,7 +1141,6 @@ describe('Fuseki SELECT — quantifiers and aggregates', () => {
   });
 
   test('whereSequences — EXISTS for some() quantifier', async () => {
-    if (!fusekiAvailable) return;
 
     const {sparql, ir, results} = await runSelect('whereSequences');
     expect(sparql).toContain('EXISTS');
@@ -1215,7 +1164,6 @@ describe('Fuseki SELECT — quantifiers and aggregates', () => {
   });
 
   test('countEquals — HAVING with aggregate', async () => {
-    if (!fusekiAvailable) return;
 
     const {sparql, ir, results} = await runSelect('countEquals');
     expect(sparql).toContain('HAVING');
@@ -1244,7 +1192,7 @@ describe('Fuseki SELECT — quantifiers and aggregates', () => {
 // SELECT — aggregation and GROUP BY
 // =========================================================================
 
-describe('Fuseki SELECT — aggregation', () => {
+describeFuseki('Fuseki SELECT — aggregation', () => {
   /** Find the first numeric-valued key on a row (the aggregate count). */
   function findCountValue(row: ResultRow): number | undefined {
     for (const key of Object.keys(row)) {
@@ -1255,7 +1203,6 @@ describe('Fuseki SELECT — aggregation', () => {
   }
 
   test('countFriends — count per person', async () => {
-    if (!fusekiAvailable) return;
 
     const {ir, results} = await runSelect('countFriends');
     const mapped = mapSparqlSelectResult(results, ir);
@@ -1279,7 +1226,6 @@ describe('Fuseki SELECT — aggregation', () => {
   });
 
   test('countNestedFriends — count(friends.friends)', async () => {
-    if (!fusekiAvailable) return;
 
     const {ir, results} = await runSelect('countNestedFriends');
     const mapped = mapSparqlSelectResult(results, ir);
@@ -1302,7 +1248,6 @@ describe('Fuseki SELECT — aggregation', () => {
   });
 
   test('countLabel — friends.select(numFriends: friends.size())', async () => {
-    if (!fusekiAvailable) return;
 
     const {ir, results} = await runSelect('countLabel');
     const mapped = mapSparqlSelectResult(results, ir);
@@ -1322,7 +1267,6 @@ describe('Fuseki SELECT — aggregation', () => {
   });
 
   test('customResultNumFriends — {numFriends: friends.size()}', async () => {
-    if (!fusekiAvailable) return;
 
     const {ir, results} = await runSelect('customResultNumFriends');
     const mapped = mapSparqlSelectResult(results, ir);
@@ -1342,7 +1286,6 @@ describe('Fuseki SELECT — aggregation', () => {
   });
 
   test('customResultEqualsBoolean — {isBestFriend: bestFriend.equals(p3)}', async () => {
-    if (!fusekiAvailable) return;
 
     // Known limitation: the boolean expression is not projected to SPARQL.
     // The result structure may lack the expected boolean field.
@@ -1356,9 +1299,8 @@ describe('Fuseki SELECT — aggregation', () => {
 // SELECT — ordering
 // =========================================================================
 
-describe('Fuseki SELECT — ordering', () => {
+describeFuseki('Fuseki SELECT — ordering', () => {
   test('sortByAsc — ascending order', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('sortByAsc');
     expect(Array.isArray(result)).toBe(true);
@@ -1371,7 +1313,6 @@ describe('Fuseki SELECT — ordering', () => {
   });
 
   test('sortByDesc — descending order', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('sortByDesc');
     expect(Array.isArray(result)).toBe(true);
@@ -1388,9 +1329,8 @@ describe('Fuseki SELECT — ordering', () => {
 // SELECT — shape casting
 // =========================================================================
 
-describe('Fuseki SELECT — shape casting', () => {
+describeFuseki('Fuseki SELECT — shape casting', () => {
   test('selectShapeSetAs — pets.as(Dog).guardDogLevel', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectShapeSetAs');
     expect(Array.isArray(result)).toBe(true);
@@ -1428,7 +1368,6 @@ describe('Fuseki SELECT — shape casting', () => {
   });
 
   test('selectShapeAs — firstPet.as(Dog).guardDogLevel', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectShapeAs');
     expect(Array.isArray(result)).toBe(true);
@@ -1459,9 +1398,8 @@ describe('Fuseki SELECT — shape casting', () => {
 // SELECT — Employee subclass
 // =========================================================================
 
-describe('Fuseki SELECT — Employee', () => {
+describeFuseki('Fuseki SELECT — Employee', () => {
   test('selectAllEmployeeProperties — Employee.selectAll()', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await runSelectMapped('selectAllEmployeeProperties');
     expect(Array.isArray(result)).toBe(true);
@@ -1484,9 +1422,8 @@ describe('Fuseki SELECT — Employee', () => {
 // MUTATION — CREATE
 // =========================================================================
 
-describe('Fuseki mutations — CREATE', () => {
+describeFuseki('Fuseki mutations — CREATE', () => {
   test('createSimple — insert and verify', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.createSimple)) as IRCreateMutation;
     const sparql = createToSparql(ir);
@@ -1507,7 +1444,6 @@ describe('Fuseki mutations — CREATE', () => {
   });
 
   test('createWithFriends — insert with nested friends', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.createWithFriends)) as IRCreateMutation;
     const sparql = createToSparql(ir);
@@ -1544,7 +1480,6 @@ describe('Fuseki mutations — CREATE', () => {
   });
 
   test('createWithFixedId — insert with predefined ID', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.createWithFixedId)) as IRCreateMutation;
     const sparql = createToSparql(ir);
@@ -1568,9 +1503,8 @@ describe('Fuseki mutations — CREATE', () => {
 // MUTATION — UPDATE
 // =========================================================================
 
-describe('Fuseki mutations — UPDATE', () => {
+describeFuseki('Fuseki mutations — UPDATE', () => {
   test('updateSimple — update hobby', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.updateSimple)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
@@ -1593,7 +1527,6 @@ describe('Fuseki mutations — UPDATE', () => {
   });
 
   test('updateOverwriteSet — overwrite friends to [p2]', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.updateOverwriteSet)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
@@ -1615,7 +1548,6 @@ describe('Fuseki mutations — UPDATE', () => {
   });
 
   test('updateUnsetSingleUndefined — unset hobby', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.updateUnsetSingleUndefined)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
@@ -1635,7 +1567,6 @@ describe('Fuseki mutations — UPDATE', () => {
   });
 
   test('updateUnsetSingleNull — unset hobby (null)', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.updateUnsetSingleNull)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
@@ -1654,7 +1585,6 @@ describe('Fuseki mutations — UPDATE', () => {
   });
 
   test('updateOverwriteNested — set bestFriend to nested create', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.updateOverwriteNested)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
@@ -1684,7 +1614,6 @@ describe('Fuseki mutations — UPDATE', () => {
   });
 
   test('updatePassIdReferences — set bestFriend to entity(p2)', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.updatePassIdReferences)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
@@ -1703,7 +1632,6 @@ describe('Fuseki mutations — UPDATE', () => {
   });
 
   test('updateAddRemoveMulti — add p2, remove p3 from friends', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.updateAddRemoveMulti)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
@@ -1726,7 +1654,6 @@ describe('Fuseki mutations — UPDATE', () => {
   });
 
   test('updateRemoveMulti — remove p2 from friends', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.updateRemoveMulti)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
@@ -1748,7 +1675,6 @@ describe('Fuseki mutations — UPDATE', () => {
   });
 
   test('updateAddRemoveSame — add p2 and remove p3 in one op', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.updateAddRemoveSame)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
@@ -1770,7 +1696,6 @@ describe('Fuseki mutations — UPDATE', () => {
   });
 
   test('updateUnsetMultiUndefined — unset all friends', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.updateUnsetMultiUndefined)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
@@ -1793,7 +1718,6 @@ describe('Fuseki mutations — UPDATE', () => {
   });
 
   test('updateNestedWithPredefinedId — nested create with fixed ID', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.updateNestedWithPredefinedId)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
@@ -1823,7 +1747,6 @@ describe('Fuseki mutations — UPDATE', () => {
   });
 
   test('updateBirthDate — update date field', async () => {
-    if (!fusekiAvailable) return;
 
     const ir = (await captureQuery(queryFactories.updateBirthDate)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
@@ -1850,7 +1773,7 @@ describe('Fuseki mutations — UPDATE', () => {
 // MUTATION — DELETE
 // =========================================================================
 
-describe('Fuseki mutations — UPSERT', () => {
+describeFuseki('Fuseki mutations — UPSERT', () => {
   // A node id that does not exist in the fixture graph, so the first upsert must create it.
   const NEW = `${ENT}upsert_new`;
 
@@ -1870,12 +1793,10 @@ describe('Fuseki mutations — UPSERT', () => {
   } as unknown as IRUpsertMutation);
 
   afterAll(async () => {
-    if (!fusekiAvailable) return;
     await executeSparqlUpdate(`DELETE WHERE { <${NEW}> ?p ?o . }`);
   });
 
   test('creates the node — and types it — when the id is absent', async () => {
-    if (!fusekiAvailable) return;
 
     await executeSparqlUpdate(upsertToSparql(upsertIr(NEW, {hobby: 'Chess'})));
 
@@ -1894,7 +1815,6 @@ describe('Fuseki mutations — UPSERT', () => {
   });
 
   test('replaces the property on a second upsert, without duplicating it', async () => {
-    if (!fusekiAvailable) return;
 
     await executeSparqlUpdate(upsertToSparql(upsertIr(NEW, {hobby: 'Chess'})));
     await executeSparqlUpdate(upsertToSparql(upsertIr(NEW, {hobby: 'Reading'})));
@@ -1909,7 +1829,6 @@ describe('Fuseki mutations — UPSERT', () => {
   });
 
   test('re-asserting the type on an existing node does not duplicate it', async () => {
-    if (!fusekiAvailable) return;
 
     await executeSparqlUpdate(upsertToSparql(upsertIr(NEW, {hobby: 'Chess'})));
     await executeSparqlUpdate(upsertToSparql(upsertIr(NEW, {hobby: 'Reading'})));
@@ -1920,7 +1839,6 @@ describe('Fuseki mutations — UPSERT', () => {
   });
 
   test('leaves properties it does not name alone', async () => {
-    if (!fusekiAvailable) return;
 
     await executeSparqlUpdate(upsertToSparql(upsertIr(NEW, {hobby: 'Chess', name: 'Ada'})));
     await executeSparqlUpdate(upsertToSparql(upsertIr(NEW, {hobby: 'Reading'})));
@@ -1938,9 +1856,8 @@ describe('Fuseki mutations — UPSERT', () => {
   });
 });
 
-describe('Fuseki mutations — DELETE', () => {
+describeFuseki('Fuseki mutations — DELETE', () => {
   test('deleteSingle — delete and verify', async () => {
-    if (!fusekiAvailable) return;
 
     const toDeleteUri = `${ENT}to-delete`;
     await executeSparqlUpdate(`
@@ -1970,7 +1887,6 @@ describe('Fuseki mutations — DELETE', () => {
   });
 
   test('deleteSingleRef — same as deleteSingle', async () => {
-    if (!fusekiAvailable) return;
 
     const toDeleteUri = `${ENT}to-delete`;
     await executeSparqlUpdate(`
@@ -1994,7 +1910,6 @@ describe('Fuseki mutations — DELETE', () => {
   });
 
   test('deleteMultiple — delete two entities', async () => {
-    if (!fusekiAvailable) return;
 
     const del1 = `${ENT}to-delete-1`;
     const del2 = `${ENT}to-delete-2`;
@@ -2023,7 +1938,6 @@ describe('Fuseki mutations — DELETE', () => {
   });
 
   test('deleteMultipleFull — delete two entities (full variant)', async () => {
-    if (!fusekiAvailable) return;
 
     const del1 = `${ENT}to-delete-1`;
     const del2 = `${ENT}to-delete-2`;
@@ -2056,7 +1970,7 @@ describe('Fuseki mutations — DELETE', () => {
 // COUNT — root-level aggregate, against real data
 // =========================================================================
 
-describe('Fuseki COUNT — root-level', () => {
+describeFuseki('Fuseki COUNT — root-level', () => {
   // The seed holds 4 Persons (p1..p4). e1/e2 are typed Employee only, so they carry
   // no Person type triple and must not be counted.
   const countOf = async (builder: CountBuilder): Promise<number> => {
@@ -2066,12 +1980,10 @@ describe('Fuseki COUNT — root-level', () => {
   };
 
   test('counts every instance of the shape', async () => {
-    if (!fusekiAvailable) return;
     expect(await countOf(Person.select().toCount())).toBe(4);
   });
 
   test('respects a where clause', async () => {
-    if (!fusekiAvailable) return;
     expect(
       await countOf(Person.select().where((p) => p.name.equals('Semmy')).toCount()),
     ).toBe(1);
@@ -2081,7 +1993,6 @@ describe('Fuseki COUNT — root-level', () => {
   });
 
   test('counts DISTINCT subjects, not rows', async () => {
-    if (!fusekiAvailable) return;
     // Only p1 has `pluralTestProp`, and two of its four values are named by this OR
     // — so the pattern yields TWO rows for ONE subject. A row-counting query reports
     // 2 persons; the answer is 1.
@@ -2105,7 +2016,6 @@ describe('Fuseki COUNT — root-level', () => {
   });
 
   test('ignores limit and offset', async () => {
-    if (!fusekiAvailable) return;
     // The whole point: a windowed builder still reports the total of the match set,
     // which is what a paging table needs for its page count.
     expect(
@@ -2114,19 +2024,16 @@ describe('Fuseki COUNT — root-level', () => {
   });
 
   test('respects a subject filter', async () => {
-    if (!fusekiAvailable) return;
     expect(await countOf(Person.select().for({id: `${ENT}p1`}).toCount())).toBe(1);
     expect(await countOf(Person.select().for({id: `${ENT}nope`}).toCount())).toBe(0);
   });
 
   test('respects MINUS', async () => {
-    if (!fusekiAvailable) return;
     // Only p1 and p2 have a hobby, so excluding them leaves 2.
     expect(await countOf(Person.select().minus((p) => p.hobby).toCount())).toBe(2);
   });
 
   test('counts explicit subjects', async () => {
-    if (!fusekiAvailable) return;
     expect(
       await countOf(
         Person.select().forAll([{id: `${ENT}p1`}, {id: `${ENT}p2`}]).toCount(),
@@ -2135,7 +2042,6 @@ describe('Fuseki COUNT — root-level', () => {
   });
 
   test('an unresolved context subject is refused, never counted as the whole shape', async () => {
-    if (!fusekiAvailable) return;
     // The regression this pins: a rehydrated `{"@ctx"}` subject whose context is
     // unset on THIS side must not lower to a bare scan and report 4 (every Person)
     // as the count of one node.
@@ -2153,7 +2059,6 @@ describe('Fuseki COUNT — root-level', () => {
   });
 
   test('a count answers end to end, over the select channel', async () => {
-    if (!fusekiAvailable) return;
     const store = new FusekiStore(
       process.env.FUSEKI_BASE_URL || 'http://localhost:3939',
       DATASET_NAME,
@@ -2179,11 +2084,10 @@ describe('Fuseki COUNT — root-level', () => {
 const FUSEKI_BASE_URL = process.env.FUSEKI_BASE_URL || 'http://localhost:3939';
 const FUSEKI_DATASET = DATASET_NAME;
 
-describe('SparqlDataset (via FusekiStore)', () => {
+describeFuseki('SparqlDataset (via FusekiStore)', () => {
   const store = new FusekiStore(FUSEKI_BASE_URL, FUSEKI_DATASET);
 
   test('selectQuery — returns mapped result rows', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await store.selectQuery(queryFactories.selectName());
 
@@ -2197,7 +2101,6 @@ describe('SparqlDataset (via FusekiStore)', () => {
   });
 
   test('selectQuery — nested traversals', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await store.selectQuery(queryFactories.selectFriendsName());
 
@@ -2211,7 +2114,6 @@ describe('SparqlDataset (via FusekiStore)', () => {
   });
 
   test('createQuery — creates entity and returns echoed result', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await store.createQuery(queryFactories.createSimple());
 
@@ -2232,7 +2134,6 @@ describe('SparqlDataset (via FusekiStore)', () => {
   });
 
   test('createQuery — respects custom __id (fixed URI)', async () => {
-    if (!fusekiAvailable) return;
 
     const customUri = `${ENT}custom-webid-test`;
 
@@ -2261,7 +2162,6 @@ describe('SparqlDataset (via FusekiStore)', () => {
   });
 
   test('createQuery — sequential creates do not corrupt shared object refs', async () => {
-    if (!fusekiAvailable) return;
 
     // Simulate the auth pattern: create user, then create account referencing user
     const userResult = await store.createQuery(queryFactories.createSimple());
@@ -2301,7 +2201,6 @@ describe('SparqlDataset (via FusekiStore)', () => {
   });
 
   test('updateQuery — updates entity and returns echoed result', async () => {
-    if (!fusekiAvailable) return;
 
     const result = await store.updateQuery(queryFactories.updateSimple());
 
@@ -2317,7 +2216,6 @@ describe('SparqlDataset (via FusekiStore)', () => {
   });
 
   test('deleteQuery — deletes entity and returns response', async () => {
-    if (!fusekiAvailable) return;
 
     const toDeleteUri = `${ENT}store-delete-test`;
     await executeSparqlUpdate(`

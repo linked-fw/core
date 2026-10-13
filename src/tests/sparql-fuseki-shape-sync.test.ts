@@ -6,11 +6,10 @@
  * End-to-end shape-sync test: materialize shapes into Fuseki, mutate the
  * code-side shapes, re-sync, and verify updates persist, orphans/old subtrees are cleaned,
  * and shared IRIs (enum members, predicate IRIs) survive. Reuses the existing Fuseki harness;
- * skips gracefully when Fuseki is unavailable.
+ * the live blocks run through `describeFuseki` (see test-helpers/fuseki-live.ts).
  */
 import {describe, expect, test, beforeAll} from '@jest/globals';
 import {
-  isFusekiAvailable,
   createTestDataset,
   clearAllData,
   executeSparqlQuery,
@@ -18,6 +17,7 @@ import {
   FUSEKI_BASE_URL,
   DATASET_NAME,
 } from '../test-helpers/fuseki-test-store';
+import {describeFuseki, fusekiLive} from '../test-helpers/fuseki-live';
 import {FusekiStore} from '../test-helpers/FusekiStore';
 import {setQueryDispatch} from '../queries/queryDispatch';
 import {linkedPackage} from '../utils/Package';
@@ -129,7 +129,6 @@ const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 const P = () => E2EPerson.shape.id;
 const G = () => E2EGone.shape.id;
 
-let available = false;
 
 async function runSync(options?: SyncShapesOptions) {
   const plan = await syncShapes(undefined, options);
@@ -142,8 +141,7 @@ async function count(where: string): Promise<number> {
 const has = async (where: string) => (await count(where)) > 0;
 
 beforeAll(async () => {
-  available = await isFusekiAvailable();
-  if (!available) return;
+  if (!fusekiLive) return;
   await createTestDataset();
   await clearAllData();
   setQueryDispatch(new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME) as any);
@@ -155,9 +153,8 @@ beforeAll(async () => {
 // (ESM Jest has no `jest` global, so the timeout is passed per test.)
 const LIVE_FUSEKI_TIMEOUT = 30000;
 
-describe('shape sync e2e (Fuseki)', () => {
+describeFuseki('shape sync e2e (Fuseki)', () => {
   test('Phase A: shapes materialize into the store', async () => {
-    if (!available) return;
     // NodeShape + targetClass
     expect(await has(`<${P()}> <${RDF}type> <${SH}NodeShape>`)).toBe(true);
     expect(await has(`<${P()}> <${SH}targetClass> <${ex('Person').id}>`)).toBe(true);
@@ -183,7 +180,6 @@ describe('shape sync e2e (Fuseki)', () => {
   }, LIVE_FUSEKI_TIMEOUT);
 
   test('Phase B: mutate code shapes, re-sync — updates persist & old subtrees cleaned', async () => {
-    if (!available) return;
 
     // Pre-seed shared IRIs that the cascade must NOT delete.
     await executeSparqlUpdate(
@@ -247,7 +243,6 @@ describe('shape sync e2e (Fuseki)', () => {
   }, LIVE_FUSEKI_TIMEOUT);
 
   test('Phase C: update() of a contains property cascade-cleans the old list subtree', async () => {
-    if (!available) return;
     const psIri = 'https://example.org/e2e#upd/prop';
 
     // create a property shape whose sh:in is an rdf:List of 3 IRI members
@@ -272,7 +267,7 @@ describe('shape sync e2e (Fuseki)', () => {
   }, LIVE_FUSEKI_TIMEOUT);
 });
 
-describe('single-owner constraint e2e (Fuseki)', () => {
+describeFuseki('single-owner constraint e2e (Fuseki)', () => {
   const genOf = (shapeIri: string, label: string) => singleOwnerShapeIri(`${shapeIri}/${label}`);
   const IMAGE = () => genOf(E2EProject.shape.id, 'image');
   const ATTACHMENTS = () => genOf(E2EProject.shape.id, 'attachments');
@@ -285,7 +280,6 @@ describe('single-owner constraint e2e (Fuseki)', () => {
     );
 
   test('one generated single-owner shape per contains property is persisted', async () => {
-    if (!available) return;
     await runSync();
     for (const [gen, predicate] of [
       [IMAGE(), schemaImage.id],
@@ -307,7 +301,6 @@ describe('single-owner constraint e2e (Fuseki)', () => {
   }, LIVE_FUSEKI_TIMEOUT);
 
   test('a subclass adds no constraint', async () => {
-    if (!available) return;
     await runSync();
     expect(await has(`<${E2ESubProject.shape.id}> <${RDF}type> <${SH}NodeShape>`)).toBe(true);
     expect(await generatedUnder(E2ESubProject.shape.id)).toBe(0);
@@ -315,7 +308,6 @@ describe('single-owner constraint e2e (Fuseki)', () => {
   }, LIVE_FUSEKI_TIMEOUT);
 
   test('re-sync is idempotent', async () => {
-    if (!available) return;
     await runSync();
     const before = [await genTriples(IMAGE()), await genTriples(ATTACHMENTS())];
     expect(before[0]).toBeGreaterThan(0);
@@ -325,7 +317,6 @@ describe('single-owner constraint e2e (Fuseki)', () => {
   }, LIVE_FUSEKI_TIMEOUT);
 
   test('a removed accessor loses its constraint; the kept one survives', async () => {
-    if (!available) return;
     const banner = genOf(E2EOwnerLoss.shape.id, 'banner');
     const icon = genOf(E2EOwnerLoss.shape.id, 'icon');
     await syncShape(E2EOwnerLoss)();
@@ -344,7 +335,6 @@ describe('single-owner constraint e2e (Fuseki)', () => {
   }, LIVE_FUSEKI_TIMEOUT);
 
   test('a hand-written NodeShape at a generated-looking IRI is not deleted (not core:generated)', async () => {
-    if (!available) return;
     const handmade = genOf(E2EProject.shape.id, 'handmade');
     await executeSparqlUpdate(
       `INSERT DATA { <${handmade}> <${RDF}type> <${SH}NodeShape> ; <${SH}targetClass> <${ex('X').id}> . }`,
@@ -355,7 +345,6 @@ describe('single-owner constraint e2e (Fuseki)', () => {
   }, LIVE_FUSEKI_TIMEOUT);
 
   test('a NodeShape delete removes its generated shapes completely, not the predicate IRI', async () => {
-    if (!available) return;
     const RDFS = 'http://www.w3.org/2000/01/rdf-schema#';
     await runSync();
     await executeSparqlUpdate(`INSERT DATA { <${schemaImage.id}> <${RDFS}label> "image" . }`);
@@ -378,7 +367,6 @@ describe('single-owner constraint e2e (Fuseki)', () => {
   }, LIVE_FUSEKI_TIMEOUT);
 
   test("'all' and 'ownedNamespaces' pruning keep the generated shapes of in-code shapes", async () => {
-    if (!available) return;
     for (const orphanScope of ['all', 'ownedNamespaces'] as const) {
       await runSync({orphanScope});
       expect(await generatedUnder(E2EProject.shape.id)).toBe(2);
@@ -387,7 +375,6 @@ describe('single-owner constraint e2e (Fuseki)', () => {
   }, LIVE_FUSEKI_TIMEOUT);
 
   test('a sync is two requests and sends no class-check query', async () => {
-    if (!available) return;
     class CountingStore extends FusekiStore {
       selects = 0;
       updates = 0;

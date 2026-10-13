@@ -25,12 +25,12 @@ import {mapSparqlSelectResult} from '../sparql/resultMapping';
 import {setQueryContext} from '../queries/QueryContext';
 import type {IRSelectQuery, ResultRow} from '../queries/IntermediateRepresentation';
 import {
-  ensureFuseki,
   createTestDataset,
   loadTestData,
   executeSparqlQuery,
   clearAllData,
 } from '../test-helpers/fuseki-test-store';
+import {describeFuseki, fusekiLive} from '../test-helpers/fuseki-live';
 
 import '../ontologies/rdf';
 import '../ontologies/xsd';
@@ -274,21 +274,16 @@ WHERE {
 // 2 + 5. Execution against Fuseki (skip-if-unavailable)
 // ---------------------------------------------------------------------------
 
-let fusekiAvailable = false;
 
 beforeAll(async () => {
-  fusekiAvailable = await ensureFuseki();
-  if (!fusekiAvailable) {
-    console.log('Fuseki not available — skipping nested-select pagination execution tests');
-    return;
-  }
+  if (!fusekiLive) return;
   await createTestDataset();
   await clearAllData();
   await loadTestData(TEST_DATA);
 }, 30000);
 
 afterAll(async () => {
-  if (!fusekiAvailable) return;
+  if (!fusekiLive) return;
   await clearAllData();
 });
 
@@ -302,9 +297,8 @@ const runMapped = async (factory: () => Promise<unknown>) => {
 const friendNames = (row: ResultRow): string[] =>
   ((row.friends as ResultRow[]) || []).map((f) => f.name as string).sort();
 
-describe('nested-select pagination — Fuseki execution', () => {
+describeFuseki('nested-select pagination — Fuseki execution', () => {
   test('inner .limit(2) returns exactly 2 friends (the ordered window)', async () => {
-    if (!fusekiAvailable) return;
     const row = (await runMapped(() => nestedLimit(2))) as ResultRow;
     expect(row).not.toBeNull();
     expect(row.id).toContain('pp1');
@@ -316,7 +310,6 @@ describe('nested-select pagination — Fuseki execution', () => {
   });
 
   test('inner .offset(2) slides the window past the first two', async () => {
-    if (!fusekiAvailable) return;
     const row = (await runMapped(() => nestedOffset(2))) as ResultRow;
     const names = friendNames(row);
     // 4 friends total, offset 2 → last two (f3,f4) → C,D.
@@ -324,28 +317,24 @@ describe('nested-select pagination — Fuseki execution', () => {
   });
 
   test('inner .offset(1).limit(2) returns the middle window', async () => {
-    if (!fusekiAvailable) return;
     const row = (await runMapped(() => nestedLimitOffset(2, 1))) as ResultRow;
     const names = friendNames(row);
     expect(names).toEqual(['B', 'C']);
   });
 
   test('inner .orderBy(name, DESC).limit(2) returns the two highest names', async () => {
-    if (!fusekiAvailable) return;
     const row = (await runMapped(() => nestedOrderDescLimit(2))) as ResultRow;
     const names = friendNames(row);
     expect(names).toEqual(['C', 'D']);
   });
 
   test('inner .orderBy(f => f.name, DESC).limit(2) — proxy form matches the string form', async () => {
-    if (!fusekiAvailable) return;
     const row = (await runMapped(() => nestedOrderDescLimitProxy(2))) as ResultRow;
     const names = friendNames(row);
     expect(names).toEqual(['C', 'D']);
   });
 
   test('inner window is scoped to the single subject (not global)', async () => {
-    if (!fusekiAvailable) return;
     // pp1 has 4 friends; limit 2 over pp1 must not be diluted by pp2's friends.
     const row = (await runMapped(() => nestedLimit(2))) as ResultRow;
     const names = friendNames(row);
@@ -353,7 +342,6 @@ describe('nested-select pagination — Fuseki execution', () => {
   });
 
   test('empty child set: parent still returned', async () => {
-    if (!fusekiAvailable) return;
     const row = (await runMapped(() => nestedLimitOnLonely(2))) as ResultRow;
     expect(row).not.toBeNull();
     expect(row.id).toContain('lonely');
@@ -374,7 +362,7 @@ describe('nested-select pagination — Fuseki execution', () => {
 // Top-n-per-parent ascending == FILTER(?rank <= n). Order key here is the IRI.
 // ---------------------------------------------------------------------------
 
-describe('nested-select pagination — Option B reference (multi-parent rank rewrite, raw SPARQL)', () => {
+describeFuseki('nested-select pagination — Option B reference (multi-parent rank rewrite, raw SPARQL)', () => {
   const topNPerParentSparql = (n: number) => `
 SELECT ?p ?cname WHERE {
   ?p <${PROP}hasFriend> ?c .
@@ -390,7 +378,6 @@ SELECT ?p ?cname WHERE {
 } ORDER BY ?p ?cname`;
 
   test('returns the top-2 children FOR EACH parent (both parents present)', async () => {
-    if (!fusekiAvailable) return;
     const result = await executeSparqlQuery(topNPerParentSparql(2));
     const byParent: Record<string, string[]> = {};
     for (const b of result.results.bindings) {

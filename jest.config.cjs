@@ -7,6 +7,8 @@ module.exports = {
   testMatch: ['<rootDir>/src/tests/*.test.ts'],
   globalSetup: '<rootDir>/src/tests/global-setup.ts',
   globalTeardown: '<rootDir>/src/tests/global-teardown.ts',
+  // Adds a `[fuseki] live tests: …` count to every run's output.
+  reporters: ['default', '<rootDir>/src/tests/fuseki-live-reporter.cjs'],
   extensionsToTreatAsEsm: ['.ts', '.tsx'],
   transform: {
     '^.+\\.(ts|tsx)$': [

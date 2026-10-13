@@ -5,7 +5,6 @@
  */
 import {describe, expect, test, beforeAll, afterAll, beforeEach} from '@jest/globals';
 import {
-  ensureFuseki,
   createTestDataset,
   executeSparqlQuery,
   executeSparqlUpdate,
@@ -13,6 +12,7 @@ import {
   FUSEKI_BASE_URL,
   DATASET_NAME,
 } from '../test-helpers/fuseki-test-store';
+import {describeFuseki} from '../test-helpers/fuseki-live';
 import {FusekiStore} from '../test-helpers/FusekiStore';
 import {linkedPackage} from '../utils/Package';
 import {Shape} from '../shapes/Shape';
@@ -313,8 +313,7 @@ describe('SparqlDataset owned-link check (stub store)', () => {
   });
 });
 
-describe('SparqlDataset owned-link check — live Fuseki', () => {
-  let fusekiAvailable = false;
+describeFuseki('SparqlDataset owned-link check — live Fuseki', () => {
   let store: FusekiStore;
   const RDF = 'PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n';
 
@@ -324,17 +323,13 @@ describe('SparqlDataset owned-link check — live Fuseki', () => {
   };
 
   beforeAll(async () => {
-    fusekiAvailable = await ensureFuseki();
-    if (fusekiAvailable) {
-      await createTestDataset();
-      store = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME);
-    }
+    await createTestDataset();
+    store = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME);
   });
   afterAll(async () => {
-    if (fusekiAvailable) await clearAllData();
+    await clearAllData();
   });
   beforeEach(async () => {
-    if (!fusekiAvailable) return;
     await clearAllData();
     await executeSparqlUpdate(
       `${RDF}INSERT DATA { <${O}album1> rdf:type <${O}Album> . <${O}alice> rdf:type <${O}Person> . <${O}p1> rdf:type <${O}Photo> . }`,
@@ -342,7 +337,6 @@ describe('SparqlDataset owned-link check — live Fuseki', () => {
   });
 
   test('linking a Person into a contains slot is refused; a Photo is linked', async () => {
-    if (!fusekiAvailable) return;
     await expect(
       UpdateBuilder.from(TAlbum).for(`${O}album1`).set({cover: {id: `${O}alice`}}).exec(store),
     ).rejects.toThrow('Cannot link');
@@ -353,7 +347,6 @@ describe('SparqlDataset owned-link check — live Fuseki', () => {
   });
 
   test('a plain property on a contains predicate is checked too', async () => {
-    if (!fusekiAvailable) return;
     await executeSparqlUpdate(`${RDF}INSERT DATA { <${O}sb1> rdf:type <${O}Scrapbook> . }`);
     await expect(
       UpdateBuilder.from(TScrapbook).for(`${O}sb1`).set({cover: {id: `${O}alice`}}).exec(store),
