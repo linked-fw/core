@@ -936,3 +936,68 @@ reviewer's "must keep" (from H2 / M3) no longer holds.
 
 Tasks: README, `owned-values.md`, changeset, `linked-core.ts:29`, golden rename, consumer verdict
 in this doc. Validation: stale-claim grep; gates as above.
+
+## Review 2 (adversarial, after iteration 1)
+
+Live probes on :3939 (scratch deleted, tree clean). H1, H2, M3 (direct), M4, M5 verified fixed;
+no variable collisions; bulk / where / forAll / set-remove paths exact; caches and warnings OK.
+
+- **M-A** A same-class profile under a library sub-shape switches the library sub-shape off
+  (`holders` counts the class twice and skips both; the warning wrongly says "no targetClass").
+- **M-B** A sub-shape whose class is also held by a shape outside the walked hierarchy guards
+  nothing: `?n a <C>` matches the other shape's nodes and deletes through its plain property.
+- **M-C** The consumer verdict does not hold until M-A / M-B are fixed.
+- L-1 docs understate the skip rule; L-2 an untyped node inside a multi-shape cycle stops the walk
+  (safe direction, regression from main); L-3 a sub-shape redeclaring an inherited `contains`
+  property as plain is ignored ("contains wins"); L-4 forAll over a cycle shape: keep filters
+  guard only the root (pre-existing); L-5 the blank cascade of a walk node lacks the `rdf:nil`
+  filter.
+
+## Iteration 2 — Ideation
+
+### Gap 1 of 3: which sub-shapes a class guard can tell apart (M-A, M-B)
+
+Chosen: a sub-shape `U` is guardable by its `targetClass` `C` only when every registered shape
+holding `C` (registry-wide) is `U` itself or a descendant of `U`. Then `?n a <C>` matches only
+nodes of `U` or of shapes that inherit `U`'s `contains` properties. Same-class descendants of a
+guardable `U` (profiles) add no guard of their own and are skipped (they are `U` nodes by type);
+a sub-shape sharing its class with a shape that is not its descendant (its parent, a sibling,
+another hierarchy) is skipped. Warnings name the cause (no `targetClass` / shares `<C>` with
+`<shape>`). Recursion typing uses the same guardable classes. Rejected: counting only within the
+walked hierarchy (M-B); skipping every holder of a shared class (M-A).
+
+### Gap 2 of 3: blank cascade of a walk node and `rdf:nil` (L-5)
+
+Chosen (cheap, same rule everywhere): the blank cascade branch of a walk node carries the node's
+`rdf:nil` filter too.
+
+### Gap 3 of 3: docs and the consumer verdict (M-C, L-1, L-2, L-3)
+
+Chosen: document the guardable rule, the untyped-node stop inside multi-shape cycles (L-2), and
+"`contains` wins" for a sub-shape redeclaring an inherited `contains` property as plain (L-3);
+re-state the consumer verdict. L-4 is pre-existing and recorded as a remaining low.
+
+## Iteration 2 — Plan
+
+- `irToAlgebra.ts`: `classHolders()` (registry-wide `targetClass` → shape ids, memoized per
+  registry version); `guardableClass(sub)` returns the class or the reason it is not guardable;
+  `ownedEdges` uses it (skipping silently a same-class descendant of a guardable sub-shape, since
+  it adds no guard of its own — its extra `contains` are warned); `shapeClasses` keeps only the
+  shape's own class plus guardable descendants' classes; the walk node's blank branch gets the
+  `rdf:nil` filter.
+- Tests in `owned-walk-recursion.test.ts`: M-A repro (library sub-shape keeps its ownership with a
+  same-class profile registered; warning names the profile, not the library shape), M-B repro
+  (foreign class holder → not followed, plain reference kept, warning names the other shape);
+  both must fail on `087dfaa`.
+
+## Iteration 2 — Phases
+
+### Phase 9: guardable sub-shapes and the blank `rdf:nil` filter (Gaps 1, 2)
+
+Validation: M-A / M-B live + pure repros fail on `087dfaa`, pass after; quick gate, `npm test`
+(0 failed live), `npx linked build`.
+
+### Phase 10: docs and consumer verdict (Gap 3)
+
+Validation: README / `owned-values.md` / changeset describe the guardable rule, L-2 and L-3;
+gates as above.
