@@ -34,7 +34,8 @@ import {ExpressionNode, isExpressionNode} from '../expressions/ExpressionNode.js
 import type {WherePathJSON} from './QueryBuilderSerialization.js';
 import type {ContextRefJSON} from './ContextRef.js';
 import {PendingQueryContext} from './QueryContext.js';
-import {getShapeClass} from '../utils/ShapeClass.js';
+import {getShapeClass, resolveShapeConstructor} from '../utils/ShapeClass.js';
+import type {ShapeConstructor} from '../shapes/Shape.js';
 import type {NodeShapeData, PropertyShapeData} from '../shapes/SHACL.js';
 import {
   encodeValueExpr,
@@ -280,7 +281,39 @@ function decodeValueToRawInner(
     return new ExpressionNode(ir, refs);
   }
   // Otherwise: a bare path-keyed nested-node create.
-  return decodeNodeDataToRaw(o as MutationNodeDataJSON, valueShapeOf(prop) ?? currentShape);
+  return decodeNestedNodeDataToRaw(o as MutationNodeDataJSON, valueShapeOf(prop) ?? currentShape);
+}
+
+/**
+ * Decode a nested node and, when it names its concrete shape (`__shape`), carry that
+ * shape as the reserved `shape` key `.set()` accepts on a nested value. Without it the
+ * builders validate and lower the value against the property's declared value shape —
+ * or none, for a polymorphic slot like `PropertyShape.path` — and reject the fields
+ * only the concrete shape has.
+ */
+/**
+ * The class for a node's `__shape`. Either registry — a project-authored shape exists only
+ * as metadata. Throws like `lowerMutationJSON` does, so both decode paths reject an
+ * unregistered shape instead of one of them silently validating against another.
+ */
+function requireNodeShapeClass(shapeId: string): ShapeConstructor {
+  const shapeClass = resolveShapeConstructor(shapeId);
+  if (!shapeClass) {
+    throw new Error(
+      `Shape '${shapeId}' is not registered. The receiving side must have the shape registered to decode mutation DSL-JSON.`,
+    );
+  }
+  return shapeClass;
+}
+
+function decodeNestedNodeDataToRaw(
+  json: MutationNodeDataJSON,
+  shape: NodeShapeData | undefined,
+): Record<string, unknown> {
+  const obj = decodeNodeDataToRaw(json, shape);
+  const shapeId = json[NODE_SHAPE_KEY];
+  if (typeof shapeId === 'string') obj.shape = requireNodeShapeClass(shapeId);
+  return obj;
 }
 
 function requireShapeForExpr(shape: NodeShapeData | undefined): NodeShapeData {
@@ -301,7 +334,7 @@ export function decodeNodeDataToRaw(
 ): Record<string, unknown> {
   const nodeShape =
     typeof json[NODE_SHAPE_KEY] === 'string'
-      ? getShapeClass(json[NODE_SHAPE_KEY] as string)?.shape ?? shape
+      ? requireNodeShapeClass(json[NODE_SHAPE_KEY] as string).shape
       : shape;
   const obj: Record<string, unknown> = {};
   if (typeof json[NODE_ID_KEY] === 'string') obj.id = json[NODE_ID_KEY];
