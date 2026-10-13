@@ -5,7 +5,7 @@ summary: >
   The core metamodel declares the SHACL path slots blank-capable, so shape sync writes the same
   blank path structure as 2.30 with nothing on the wire. Blank-node cleanup on delete / replace
   follows the blank-capable properties instead of `contains`.
-status: Ideation
+status: Tasks
 packages: [core]
 ---
 
@@ -161,3 +161,191 @@ comparing the INSERT DATA of a fixture sync against the 2.30.0 release, modulo b
 ## Selected route
 
 1A + PathList + 2A + 3A as above.
+
+## Plan
+
+### Architecture
+
+Minting moves from the node-data (`__blank`) to the lowering, where the property shape is known:
+`generateNodeDataTriples` asks `nestedNodeKind(field.property, nested)` for every nested create and
+passes the answer down. Nothing above the lowering (builders, IR, wire) knows about blank nodes.
+
+```ts
+// src/sparql/irToAlgebra.ts (internal)
+type NestedNodeKind = 'iri' | 'blank';
+/** sh:BlankNode, sh:BlankNodeOrIRI, sh:BlankNodeOrLiteral. */
+function isBlankCapable(ps: {nodeKind?: {id?: string}} | undefined): boolean;
+/** Decision 1's table; throws for the error rows. */
+function nestedNodeKind(propertyId: string, data: IRNodeData): NestedNodeKind;
+function generateNodeDataTriples(
+  data: IRNodeData,
+  options?: SparqlOptions,
+  blanks?: BlankNodeMinter, // only a create passes one; a blank node without it throws (3A)
+  kind?: NestedNodeKind,    // default 'iri' (the root)
+): {term: SparqlTerm; triples: SparqlTriple[]};
+
+/** Blank-capable simple-path predicates of a shape, its ancestors' and its sub-shapes'. */
+function blankCapablePredicates(shapeId: string): string[];
+/** The inner-walk closure from the given blank-capable property shapes (decision 6). */
+function blankWalkPredicates(start: PropertyShapeData[]): string[];
+/** One UNION branch: delete the blank values of `owner` through `first` and their blank descendants. */
+function buildBlankCascade(
+  ownerTriples: SparqlTriple[], // binds the owner (anchor / type / contains walk)
+  ownerTerm: SparqlTerm,
+  first: string[],
+  inner: string[],
+  varPrefix: string,
+): {deletePatterns: SparqlTriple[]; whereBlock: SparqlAlgebraNode} | null;
+```
+
+Where blank cleanup is emitted:
+
+| Mutation | Owner(s) | `first` predicates |
+|---|---|---|
+| delete by id, bulk delete | the subject | the subject shape's blank-capable predicates |
+| delete by id, bulk delete, `contains` replace / set-remove (`buildOwnedCascade`) | each dependent type the typed cascade reaches | that type's shapes' blank-capable predicates |
+| replace / unset / overwrite of a blank-capable property | the old value itself (`<s> <p> ?old`) | none: `?old` is `?bn0` |
+
+`iriTerm` (the lowering's IRI constructor) throws for a `_:` id (decision 7).
+
+### Expected file changes
+
+| File | Change |
+|---|---|
+| `src/shapes/PathList.ts` (new) | `PathList` shape (decision 3) |
+| `src/shapes/PathNode.ts` | slots `nodeKind: shacl.BlankNodeOrIRI`; `alternativePath` → `PathList`; comment |
+| `src/utils/Package.ts` | `PropertyShape.path` `sh:BlankNodeOrIRI`; register `PathList` |
+| `src/shapes/serializePathToNodeData.ts` | no `__blank`; lists from `PathList` |
+| `src/shapes/List.ts` | drop `__blank` from `RdfListNodeData` |
+| `src/queries/QueryFactory.ts`, `MutationQuery.ts`, `IRMutation.ts`, `IntermediateRepresentation.ts` | remove `__blank` / `blank` |
+| `src/queries/MutationSerialization.ts`, `lowerMutationJSON.ts` | remove the wire key |
+| `src/shapes/validation.ts` | `__blank` no longer reserved |
+| `src/sparql/irToAlgebra.ts` | minting, blank cascade, 3A errors; remove the old blank code |
+| `src/queries/SelectQuery.ts` | comment |
+| `src/index.ts` | export `PathList` next to `rdfList` |
+| tests | see phases |
+| `README.md`, `docs/architecture/owned-values.md` | the rule |
+| `docs/backlog/055-blank-node-support-next-steps.md` (new) | follow-ups |
+| `.changeset/nodekind-driven-blank-nodes.md` | minor |
+
+### Pitfalls
+
+- `findPropertyShapeById` must resolve the property on both sides; the server registry has the
+  metamodel and every registered/runtime shape (`nodeKind` travels in the shape wire format).
+- The closure for a polymorphic slot includes test shapes' predicates; tests must not pin the
+  full alternation.
+- Upsert / update paths call `generateNodeDataTriples` without a minter: blank minting there must
+  throw with a message naming the property (3A).
+- Legacy IRI `PathNode` / `rdf:List` nodes are still removed by the typed cascade (`contains`
+  kept).
+- `PathList` shares `rdf:List` as targetClass with `List`; `List` is registered first, so lookups
+  by targetClass keep returning `List`.
+
+### Architecture compliance
+
+`npx semantu-agents docs architecture`: `owned-values.md` (owned values and the cascade) applies;
+`ontologies.md`, `publishing.md`, `runtime-instances.md` do not constrain this change.
+`owned-values.md` currently states "Blank nodes need neither flag … `__blank` nested node-data";
+it is updated to the `nodeKind` rule and the new cascade rows. The ownership contract for IRI
+values (`contains` / `dependent`) is unchanged.
+
+### Test strategy
+
+Impacted package: core only. Quick gate after each phase (≈1-2 min):
+`npx jest --config jest.config.cjs src/tests/<touched files>` (with `NODE_OPTIONS=--experimental-vm-modules`)
+plus `npm run typecheck`. Full gate in review: `npm test` (all suites + typecheck; live Fuseki
+suites run when the test Fuseki on :3939 is up), `npm run test:fuseki` (must print the
+`[fuseki] live tests` summary with 0 skipped), `npx linked build`. Baseline before changes:
+2209 passed, 120 skipped; `[fuseki] live tests: 285 total — 285 passed`.
+
+## Phases
+
+Sequential: every phase edits `src/sparql/irToAlgebra.ts`.
+
+### Phase 1 — metamodel, minting, `__blank` removed
+
+Tasks:
+1. Add `PathList`; declare the metamodel node kinds (decision 4); `PathNode.alternativePath` →
+   `PathList`; export `PathList`.
+2. `nestedNodeKind` + `generateNodeDataTriples(kind)`; remove `assertBlankIsOwned`, the
+   blank-root check, `IRNodeData.blank`.
+3. Remove `__blank` from builders, IR, wire encode/decode, `RESERVED_KEYS`, `RdfListNodeData`,
+   `serializePathToNodeData`.
+4. Tests: rewrite `blank-nested-nodes.test.ts` creation cases on a `BlankNodeOrIRI` slot; update
+   `mutation-decode-concrete-shape.test.ts` (slot declared `sh:BlankNodeOrIRI`, wire has no
+   `__blank`, lowering via wire writes `_:b0`), `single-owner-constraint.test.ts`,
+   `shacl-path-translator.test.ts`.
+
+Validation:
+- `create under BlankNodeOrIRI without id` — SPARQL contains `<h1> <slot> _:b0 .` and
+  `_:b0 shacl:inversePath <…parent> .`, no `rdf:type` on `_:b0`;
+- `with id` — `<n1> rdf:type …` IRI node, no `_:`;
+- `BlankNode with id` → throws `/sh:BlankNode/`; `BlankNodeOrLiteral with id` → throws;
+  `Literal with nested object` → throws; `IRIOrLiteral` → IRI;
+- an unset-nodeKind `linkedProperty` and an `objectProperty` → IRI (unchanged);
+- each blank node of one create gets its own label (`_:b0`…`_:b2` for `seq [a, inv b]`);
+- wire round trip (`toJSON` → `lowerMutationJSON` / `fromJSON`) equals in-process lowering, JSON
+  contains no `__blank`;
+- `__blank` as input key → rejected as an undeclared property;
+- `grep -rn __blank src README.md docs/architecture` → no hits outside comments that explain its
+  removal (none expected);
+- quick gate + typecheck green.
+
+### Phase 2 — blank cascade follows blank-capable properties
+
+Tasks:
+1. `blankCapablePredicates`, `blankWalkPredicates`, `buildBlankCascade` (with the `NOT EXISTS`
+   guard).
+2. Delete by id and bulk delete: subject block; remove `blankNodeBlocks`.
+3. `buildOwnedCascade`: replace the `contains` blank block with one blank block per reached
+   dependent type that has blank-capable properties.
+4. `processUpdateFields`: replace / unset / overwrite of a blank-capable property gets a block
+   rooted at `?old` (bound through `<s> <p> ?old`, keep filter applied).
+
+Validation:
+- `NodeShape delete` text: a block `?c_own… rdf:type shacl:PropertyShape . ?c_own… shacl:path ?…bn0`
+  with `FILTER(isBlank(?…bn0))`, an inner walk containing `shacl:inversePath` and `rdf:first`,
+  `FILTER(isBlank(?…bn))` and `FILTER NOT EXISTS`; no block reaches `?bn0` through
+  `(contains)*` directly;
+- `plain shape delete` → no `isBlank`;
+- live: the #332 list regression (`blank-nested-nodes.test.ts`, slot `sh:BlankNodeOrIRI`) — the
+  holder and its cell go, `e1`'s blank child stays;
+- live: delete by id of a holder whose blank-capable slot holds `[ shacl:inversePath ex:image ]`
+  → the blank node is gone, `ex:image` triples untouched;
+- live: replace and unset of a blank-capable slot remove the old blank structure (inverse and an
+  alternative list with a nested operator) and never an IRI value;
+- live (existing): `mutation-where-union.test.ts` bulk deletes delete each blank subtree, solutions
+  add up (counts updated if the block shape changes);
+- live (existing): `sparql-fuseki-shape-sync.test.ts` — idempotent re-sync, no orphan blank
+  nodes, migration from IRI path nodes, Jena SHACL (two owners → `conforms false`, one owner →
+  `conforms true`);
+- quick gate + typecheck green.
+
+### Phase 3 — 3A errors
+
+Tasks: errors for update/upsert/updateWhere blank minting (message names the property and points
+to create / replace through the parent), and `_:` ids in `iriTerm`.
+
+Validation (`blank-nested-nodes.test.ts`):
+- `update().set({slot: inverse})` on a `BlankNodeOrIRI` slot → throws `/update/` and names the
+  property; same for `upsert` and `updateWhere`;
+- `update` with a nested create **with** id under `BlankNodeOrIRI` → IRI, no error;
+- `update().set({slot: {id: '_:b0'}})`, `create({slot: {id: '_:b0'}})` → throw `/blank node/`;
+- `UpdateBuilder.from(X).for('_:b0')` lowered → throws; `DeleteBuilder.from(X, {id: '_:b0'})`
+  lowered → throws;
+- quick gate + typecheck green.
+
+### Phase 4 — equivalence, docs, backlog
+
+Tasks:
+1. `src/tests/shape-sync-output-equivalence.test.ts`: the fixture sync's INSERT DATA (every
+   complex path form, a `contains` property → single-owner constraint, an `sh:in` list) equals a
+   golden captured from the 2.30.0 release (`node syncfixture.mjs` against the npm tarball), blank
+   labels normalized.
+2. README and `docs/architecture/owned-values.md`; comments in `PathNode.ts`, `List.ts`,
+   `SelectQuery.ts`.
+3. `docs/backlog/055-blank-node-support-next-steps.md`.
+
+Validation: equivalence test green; the same script run against this branch's `lib/` prints an
+INSERT DATA identical to 2.30.0's (diff empty after label normalization); docs grep for
+`__blank` → only the changeset / report history.
