@@ -788,3 +788,111 @@ No findings.
   one owner → `true`; no-`targetClass` shape → no constraint, one warning (unit).
 - Architecture: `owned-values.md` rewritten as planned; findings 1-2 contradict its own
   ownership statement until fixed.
+
+## Iteration 1 — Ideation
+
+Selected: independent-review findings 1–5, 7–9, 11 (finding 6, the stray probe, is removed in
+`96ef64a`; finding 10 is accepted). Decisions are the lead developer's.
+
+### Gap 1 of 5: recursive groups delete through plain properties (H1) and drop sub-shape guards (H2)
+
+Context: `closureOf` unions every member's owned predicates (guarded ones included) into one
+`(p…)*` closure, so a node of member A is walked through a predicate only member B owns (H1), and
+a sub-shape's guarded edge is followed from every node of the group (H2).
+
+Chosen: a closure (`p*` / `+`) only for a shape that owns *itself* through an unguarded edge
+(`S` declares `contains p` with value shape `S`): every `p` edge from an `S` node is then owned by
+`S`'s own declaration. Every other recursion (a group of several shapes, a guarded sub-shape edge
+into or inside a group) is **unrolled** into explicit per-hop steps, each typed with the declaring
+shape's class (`?n a <Class> . ?n <p> ?m`; a sub-shape hop with the sub-shape's class). Unrolling
+stops after `K` repeated shapes on one path (a hop whose target shape already occurs on the path);
+values below that depth are left in place (orphans, the safe direction), documented. Guarded edges
+never join a closure. Refinement: an unguarded recursive hop is typed with the declaring shape's
+class *or a registered sub-shape's* (`?n a ?t FILTER(?t IN (…))`), since a node carries only its
+concrete class; with one class it is a plain `?n a <C>` triple.
+
+Rejected: refusing such deletes (legitimate models); extra queries to compute the owned set first
+(two round trips per mutation, not atomic).
+
+### Gap 2 of 5: a sub-shape with its parent's class guards nothing (M3)
+
+Chosen: a registered sub-shape whose `targetClass` is also held by the walked shape or by another
+of its descendants cannot be told apart by `rdf:type`, so its extra `contains` edges are not
+followed; core warns once per such sub-shape. Rejected: following them unguarded (per-predicate
+ownership again).
+
+### Gap 3 of 5: the walk deletes `rdf:nil`'s triples (M4)
+
+Chosen: every node the walk (and the replaced-value self-delete) deletes is filtered with
+`FILTER(!sameTerm(?n, rdf:nil))`. Rejected: stopping closures at `rdf:nil` (a path cannot exclude
+an end node; the filter is needed anyway).
+
+### Gap 4 of 5: branch count is exponential in DAG width, no cap (M5)
+
+Chosen: no hard cap (a cap would silently under-delete). A unit test pins the branch counts of the
+core metamodel shapes and of a schema-like fixture; lowering warns once per root shape above 64
+branches. New backlog item for reducing branch counts (shared-prefix / per-level strategies).
+Rejected: throwing above a cap (turns a slow delete into a failed one).
+
+### Gap 5 of 5: docs overclaims and missing tests (L8, L9, L11, golden name, M7)
+
+Chosen: correct README, `owned-values.md`, changeset and `linked-core.ts:29`; rename
+`GOLDEN_2_30_0` to a version-neutral name; add tests for a two-shape cycle (terminates, precise),
+multi-member group precision (H1 repro keeps the plainly-referenced node), guard inside recursion
+(H2 repro), same-class sub-shape (M3), `rdf:nil` kept, branch-count bound. Each H/M repro must
+fail on the pre-iteration code (checked by reverting `src/sparql/irToAlgebra.ts` temporarily).
+The consumer note (M7, `withoutOwnership`) is re-evaluated after the fix, below.
+
+## Iteration 1 — Plan
+
+- `src/sparql/irToAlgebra.ts`:
+  - `ownedEdges(S)`: unguarded edges from `S`'s own and inherited `contains`; per descendant with a
+    `targetClass` held by no other shape in `{S} ∪ descendants(S)`, its extra `contains`, guarded
+    by that class; otherwise warn once per sub-shape (Gap 2).
+  - `ownedWalk(root)`: `closureOf(S)` = `S`'s unguarded edges with target `S`. A DFS from the root
+    emits one target per path; a hop whose target already occurs on the path counts as a repeat,
+    and a path stops after `MAX_OWNED_RECURSION = K` repeats. A hop is typed when guarded (the
+    sub-shape class) or when its source and target lie in one strongly connected group of several
+    shapes (the declaring shape's class and its sub-shapes' classes). Warn once per root above
+    `OWNED_BRANCH_WARNING = 64` targets (Gap 4).
+  - `ownedSubtreeBlocks`: typing triples / `IN` filters and `FILTER(!sameTerm(?n, rdf:nil))` on
+    every deleted node, wrapped around the BGP and the blank cascade (Gap 3).
+  - `buildOwnedSelfDelete`: the same `rdf:nil` filter for a variable old value.
+- Contracts: `OwnedHop` gains `typeClasses?: string[]` (the source node must have one of them);
+  `OwnedTarget.blankProps` is the target shape's own (no group union).
+- Tests: `src/tests/owned-walk-recursion.test.ts` (new; pure + `[fuseki]`), updates in
+  `shacl-cascade`, branch-count test.
+- Docs: README, `owned-values.md`, changeset, `linked-core.ts`, golden rename; backlog doc.
+- Pitfall: the real metamodel only has self-loops (`List.rest`, `NodeShape.generatedShapes`), so
+  shape sync output and its delete must not change beyond the `rdf:nil` filter.
+
+## Iteration 1 — Phases
+
+### Phase 6: precise recursion and same-class sub-shapes (Gaps 1, 2)
+
+Tasks: `ownedEdges` / `ownedWalk` / `ownedSubtreeBlocks` per the plan; measure `K`.
+Validation (`src/tests/owned-walk-recursion.test.ts`):
+- H1 repro (`RA {contains toB: RB; plain peer on ex:toA}`, `RB {contains toA: RA}`): pure — no
+  closure over `ex:toA|ex:toB`; live — deleting `a1` (`a1 toB b1 ; toA a2`, `b1 toA a3`) deletes
+  `b1`, `a3`, keeps `a2`.
+- Two-shape cycle: the walk terminates; live chain `a1→b1→a2→b2` is deleted to depth `K`.
+- H2 repro (`SC {contains replies: SC; plain fork: SC}`, `SCSub extends SC {contains fork: SC}`):
+  pure — closure is `replies*` only and `fork` is behind `a <SCSub>`; live — `c1 replies c2`,
+  `c2 fork c5` (c2 a plain SC): `c5` kept; with `c2 a SCSub`, `c5` deleted.
+- M3 repro (`HBSame extends HB`, same class, `contains extra`): deleting through `HB` keeps the
+  `extra` value; one warning.
+- Each repro fails with `src/sparql/irToAlgebra.ts` reverted to `83e9a51`.
+- Quick gate, `npm test` (0 failed live), `npx linked build`.
+
+### Phase 7: `rdf:nil` and branch counts (Gaps 3, 4)
+
+Tasks: nil filter; branch warning; backlog doc.
+Validation: `rdf:nil a rdf:List ; rdfs:label "nil"` keeps its triples after deleting a list holder
+and after replacing an `sh:in` list (live, fails on `83e9a51`); branch-count test pins NodeShape /
+PropertyShape / List / PathNode / PathList and a schema-like `Thing`/`ImageObject` fixture, and the
+warning fires once above 64 for a synthetic wide DAG. Gates as above.
+
+### Phase 8: docs and names (Gap 5)
+
+Tasks: README, `owned-values.md`, changeset, `linked-core.ts:29`, golden rename, consumer verdict
+in this doc. Validation: stale-claim grep; gates as above.
