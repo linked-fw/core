@@ -1123,3 +1123,29 @@ sharer), L-2 of Review 2 (an untyped node stops a multi-shape cycle), L-3 of Rev
 wins over a plain redeclaration), L-4 of Review 2 (forAll over a cycle shape: keep filters guard
 only the root, pre-existing), the `MAX_OWNED_RECURSION` depth limit, branch counts (backlog 055),
 sub-shapes registered only in another process (single-owner constraint), and the app follow-ups.
+
+## Review (iteration 4)
+
+Scope: a871ac5 (iteration 4 is that one commit). Quick suite green (58 tests, 24 live); a
+throwaway probe (deleted, never staged) checked the narrowed condition on :3939.
+
+- **No critical / high / medium.** The narrowed `sameKind` test sits after `blockedGuard` has
+  already refused the edge; both of its outcomes `continue` without `add`, so it decides only
+  warn-or-silent and cannot make the walk follow an edge it must skip. Edge selection is unchanged
+  from b5fc1f1. Probe: `QR contains v → QV`; `QM extends QV` (own class) adds `contains p`;
+  `QL extends QM` with class `QL`, shared by `QSharer` holding `p` plainly. Deleting a `QR` follows
+  `p` only under `rdf:type QM`, never under `QL`. `QL` is warned once. A class-less copy and a
+  `QM`-class copy of `QM` stay silent. The new warning is right: `QL` nodes carry only `QL`, so
+  `QM`'s entry does not cover them, and before this change that gap went unwarned.
+- L-δ (tests) no test pins L-β: nothing asserts that an own-class grandchild, blocked on a
+  property it inherits from its direct super-shape, is warned. A regression to the old condition
+  would pass the suite. The probe above is the missing test.
+- L-ε (docs) README says core warns when a sub-shape "has no `targetClass`" and exempts only a
+  "same-class profile". A class-less copy that adds nothing beyond its direct super-shape is also
+  silent (code, `owned-values.md`). The README should name that case too.
+- L-ζ (verdict) "Harm needs a reference on `x` that no registered shape of that class declares
+  plainly" should say "declares plainly through a simple path", because a complex-path plain use
+  does not block (L-α).
+- Verified: the corrected consumer verdict (M-α) matches the code. A user sub-shape with a class
+  of its own is followed only from nodes of that class. `owned-values.md` states L-α and L-γ
+  correctly.
