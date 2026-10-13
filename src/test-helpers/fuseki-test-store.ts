@@ -264,3 +264,60 @@ export async function executeSparqlUpdate(sparql: string): Promise<void> {
 export async function clearAllData(): Promise<void> {
   await executeSparqlUpdate('DELETE WHERE { ?s ?p ?o }');
 }
+
+/** Read the whole test dataset's default graph as Turtle (blank nodes labelled consistently). */
+export async function readDatasetAsTurtle(): Promise<string> {
+  const response = await fetch(`${FUSEKI_BASE_URL}/${DATASET_NAME}/sparql`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/sparql-query', Accept: 'text/turtle'},
+    body: 'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }',
+  });
+  if (!response.ok) {
+    throw new Error(`CONSTRUCT failed: ${response.status} ${response.statusText}\n${await response.text()}`);
+  }
+  return response.text();
+}
+
+/**
+ * The dataset the test image exposes a SHACL service on. `secoresearch/fuseki` defines one
+ * dataset, `ds`, in its own assembler and uncomments its `fuseki:shacl` endpoint when the
+ * container runs with `ENABLE_SHACL=true` (set in docker-compose.test.yml, together with
+ * `ENABLE_DATA_WRITE` for the graph-store PUT below). A dataset created through the admin API
+ * cannot have one: Fuseki refuses a service configuration uploaded to `/$/datasets`.
+ */
+const SHACL_DATASET = 'ds';
+
+/**
+ * Validate `dataTurtle` against `shapesTurtle` with Jena SHACL (Fuseki's `/ds/shacl` service).
+ * Replaces the default graph of `ds` with the data, then POSTs the shapes. Returns the
+ * validation report as Turtle. Callers sharing `ds` must not run in parallel; only one
+ * test file uses it.
+ */
+export async function validateWithJenaShacl(
+  shapesTurtle: string,
+  dataTurtle: string,
+): Promise<string> {
+  const put = await fetch(`${FUSEKI_BASE_URL}/${SHACL_DATASET}/data?default`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'text/turtle'},
+    body: dataTurtle,
+  });
+  if (!put.ok) {
+    throw new Error(
+      `Loading SHACL test data failed: ${put.status} ${put.statusText} — is the test Fuseki ` +
+        `running with ENABLE_DATA_WRITE/ENABLE_SHACL (src/tests/docker-compose.test.yml)?`,
+    );
+  }
+  const report = await fetch(`${FUSEKI_BASE_URL}/${SHACL_DATASET}/shacl?graph=default`, {
+    method: 'POST',
+    headers: {'Content-Type': 'text/turtle', Accept: 'text/turtle'},
+    body: shapesTurtle,
+  });
+  if (!report.ok) {
+    throw new Error(
+      `SHACL validation failed: ${report.status} ${report.statusText} — is the test Fuseki ` +
+        `running with ENABLE_SHACL=true (src/tests/docker-compose.test.yml)?\n${await report.text()}`,
+    );
+  }
+  return report.text();
+}

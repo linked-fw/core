@@ -613,7 +613,9 @@ export class QueryBuilderObject<
     // DSL read raw IRI predicates back out of a store (SHACL shape catalog etc.).
     //
     // NOTE: a polymorphic value (an `rdf:List` sequence path or a `PathNode`
-    // operator) resolves to its *node reference* here, not its structure. Full
+    // operator) resolves to its *node reference* here, not its structure. Shape
+    // sync writes those as blank nodes, so the reference is a blank-node label:
+    // valid only within that one result set, never a key to query again. Full
     // structural projection ("if List → members, if PathNode → operands") is the
     // `byShape` polymorphic-projection follow-up — see
     // packages/core/docs/backlog/031-byshape-polymorphic-projection.md.

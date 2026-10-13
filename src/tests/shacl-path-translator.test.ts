@@ -16,12 +16,13 @@ import {lower} from '../queries/lower';
 const {linkedShape} = linkedPackage('path-translator-test');
 const B = 'https://example.org/ps';
 
-// Holder with a polymorphic (no valueShape) object property so any path node-data fits.
+// Holder with a polymorphic (no valueShape) owned property, like `PropertyShape.path`, so any
+// path node-data fits (a blank node must be held through `contains`).
 @linkedShape
 class PHolder extends Shape {
   static targetClass = {id: 'https://example.org/p#PHolder'} as any;
 
-  @objectProperty({path: {id: 'https://example.org/p#path'}, maxCount: 1})
+  @objectProperty({path: {id: 'https://example.org/p#path'}, maxCount: 1, contains: true})
   get p(): unknown {
     return null;
   }
@@ -47,10 +48,34 @@ describe('serializePathToNodeData', () => {
     expect(s).toContain('rdf:nil');
   });
 
-  test('inverse → PathNode with sh:inversePath', () => {
+  test('inverse → an untyped blank node with exactly one triple (SHACL §2.3.1.3)', () => {
     const s = sparql({inv: {id: 'http://ex.org/parent'}});
-    expect(s).toContain('shacl:inversePath <http://ex.org/parent>');
-    expect(s).toContain('core:PathNode');
+    expect(s).toContain('<https://example.org/h> <https://example.org/p#path> _:b0 .');
+    expect(s).toContain('_:b0 shacl:inversePath <http://ex.org/parent> .');
+    // Only the triples the SHACL syntax defines: no type, no minted IRI.
+    expect(s).not.toContain('core:PathNode');
+    expect(s.match(/^\s*_:b0 /gm)).toHaveLength(1);
+    expect(s).not.toMatch(/pathnode_|\/inv>/);
+  });
+
+  test('sequence → blank list cells with only rdf:first / rdf:rest', () => {
+    const s = sparql({seq: [{id: 'http://ex.org/a'}, {inv: {id: 'http://ex.org/b'}}]});
+    expect(s).toContain('<https://example.org/h> <https://example.org/p#path> _:b0 .');
+    expect(s).toContain('_:b0 rdf:first <http://ex.org/a> .');
+    expect(s).toContain('_:b0 rdf:rest _:b1 .');
+    expect(s).toContain('_:b1 rdf:first _:b2 .');
+    expect(s).toContain('_:b2 shacl:inversePath <http://ex.org/b> .');
+    expect(s).toContain('_:b1 rdf:rest rdf:nil .');
+    expect(s).not.toContain('rdf:List');
+    // The only IRI subject is the holder itself.
+    expect(s.match(/^\s*<[^>]+> /gm)).toHaveLength(2);
+  });
+
+  test('the serialized node-data marks every operator node and list cell __blank', () => {
+    const data = serializePathToNodeData({alt: [{id: 'http://ex.org/a'}, {zeroOrMore: {id: 'http://ex.org/b'}}]}) as any;
+    expect(data).toMatchObject({__blank: true, alternativePath: {__blank: true, first: {id: 'http://ex.org/a'}}});
+    expect(data.alternativePath.rest).toMatchObject({__blank: true, first: {__blank: true, zeroOrMorePath: {id: 'http://ex.org/b'}}});
+    expect(JSON.stringify(data)).not.toContain('__id');
   });
 
   test('alternative → PathNode with sh:alternativePath → rdf:List', () => {

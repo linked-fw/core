@@ -3,6 +3,9 @@ services:
     image: secoresearch/fuseki:6.2.0
     environment:
       - ADMIN_PASSWORD=admin
+      - ENABLE_SHACL=true
+      - ENABLE_UPDATE=true
+      - ENABLE_DATA_WRITE=true
     ports:
       - '3939:3030'
     healthcheck:

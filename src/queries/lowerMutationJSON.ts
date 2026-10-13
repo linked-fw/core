@@ -155,7 +155,7 @@ export function decodeNodeData(
     typeof json.__shape === 'string' ? requireShape(json.__shape) : shape!;
   const fields: UpdateNodePropertyValue[] = [];
   for (const [key, val] of Object.entries(json)) {
-    if (key === '__id' || key === '__shape' || val === undefined) continue;
+    if (key === '__id' || key === '__shape' || key === '__blank' || val === undefined) continue;
     const prop = getPropertyShape(nodeShape, key);
     if (!prop) {
       throw new Error(
@@ -166,6 +166,10 @@ export function decodeNodeData(
   }
   const desc: NodeDescriptionValue = {shape: nodeShape, fields};
   if (typeof json.__id === 'string') desc.__id = json.__id;
+  if (json.__blank !== undefined) {
+    if (json.__blank !== true) throw new Error(`__blank must be true when given, got ${JSON.stringify(json.__blank)}`);
+    desc.__blank = true;
+  }
   return desc;
 }
 

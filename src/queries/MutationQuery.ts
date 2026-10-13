@@ -179,6 +179,18 @@ export class MutationQueryFactory extends QueryFactory {
     const props = getPropertyShapes(shape, true);
     const fields: UpdateNodePropertyValue[] = [];
     let id;
+    // `__blank` asks for an anonymous node (a blank node without a type). It has no id by
+    // definition, so it cannot be combined with one.
+    const blank = obj.__blank === true;
+    if ('__blank' in obj) {
+      if (obj.__blank !== true) {
+        throw new Error(`__blank must be true when given, got ${JSON.stringify(obj.__blank)}`);
+      }
+      delete obj.__blank;
+      if ('__id' in obj || 'id' in obj) {
+        throw new Error('A node cannot be both __blank and carry an id (__id or id).');
+      }
+    }
     if ('__id' in obj) {
       //if the object has a __id key, then we should use that in the result
       id = obj.__id.toString();
@@ -207,6 +219,9 @@ export class MutationQueryFactory extends QueryFactory {
     };
     if (id) {
       res.__id = id;
+    }
+    if (blank) {
+      res.__blank = true;
     }
 
     return res;

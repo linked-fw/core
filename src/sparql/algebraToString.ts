@@ -44,6 +44,8 @@ export function serializeTerm(
     case 'iri':
       if (collector) collectUri(collector, term.value);
       return formatUri(term.value);
+    case 'blank':
+      return `_:${sanitizeVarName(term.label)}`;
     case 'literal': {
       if (term.language) {
         return `"${escapeSparqlString(term.value)}"@${term.language}`;

@@ -15,8 +15,11 @@ import {List} from './List.js';
  * inverse (`sh:inversePath`), alternative (`sh:alternativePath` → an `rdf:List`), and the
  * cardinality forms (`sh:zeroOrMorePath`/`sh:oneOrMorePath`/`sh:zeroOrOnePath`).
  *
- * Each operator edge is `contains` (the operand subtree is owned), and the node itself is
- * `dependent`, so a property-shape's complex `sh:path` cascade-cleans on delete/replace.
+ * Shape sync writes these as untyped blank nodes (`__blank`, see `serializePathToNodeData`): the
+ * only form SHACL §2.3.1 defines, a blank node that is the subject of exactly one triple. Each
+ * operator edge is `contains`, so the blank-node block of the containment cascade removes the
+ * structure on delete/replace. The class stays `dependent` with its `core:PathNode` type for the
+ * IRI-named, typed nodes earlier versions wrote: the typed cascade removes those on the next sync.
  * Operands are polymorphic (a predicate IRI, a nested `PathNode`, or a `List`), so no fixed
  * `valueShape` is declared except for `alternativePath`, which is always an `rdf:List`.
  */

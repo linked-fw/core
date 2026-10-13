@@ -16,6 +16,8 @@ import {
   executeSparqlUpdate,
   FUSEKI_BASE_URL,
   DATASET_NAME,
+  readDatasetAsTurtle,
+  validateWithJenaShacl,
 } from '../test-helpers/fuseki-test-store';
 import {describeFuseki, fusekiLive} from '../test-helpers/fuseki-live';
 import {FusekiStore} from '../test-helpers/FusekiStore';
@@ -139,6 +141,11 @@ async function count(where: string): Promise<number> {
   return parseInt(r.results.bindings[0].c.value, 10);
 }
 const has = async (where: string) => (await count(where)) > 0;
+/** Triples whose subject is a blank node: complex-path structure, after this change. */
+const blankTriples = () => count(`?b ?p ?o . FILTER(isBlank(?b))`);
+/** Blank nodes nothing points at — leftovers a delete failed to cascade into. */
+const orphanBlankNodes = () =>
+  count(`?b ?p ?o . FILTER(isBlank(?b)) FILTER NOT EXISTS { ?x ?y ?b }`);
 
 beforeAll(async () => {
   if (!fusekiLive) return;
@@ -237,6 +244,9 @@ describeFuseki('shape sync e2e (Fuseki)', () => {
     expect(await has(`<${G()}> <${RDF}type> <${SH}NodeShape>`)).toBe(false);
     expect(await count(`<${G()}/tmp> ?p ?o`)).toBe(0);
 
+    // the replaced and removed paths left no blank structure behind
+    expect(await orphanBlankNodes()).toBe(0);
+
     // SAFETY: shared predicate IRI and shared enum IRI survived the cascade
     expect(await has(`<${ex('name').id}> <${RDF}type> <${ex('Predicate').id}>`)).toBe(true);
     expect(await has(`<${ex('Active').id}> <${RDF}type> <${ex('StatusValue').id}>`)).toBe(true);
@@ -290,9 +300,12 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
           `<${gen}> <${RDF}type> <${SH}NodeShape> ; <${CORE}generated> true ; ` +
             `<${SH}targetObjectsOf> <${predicate}> ; <${SH}property> <${gen}/owners> . ` +
             `<${gen}/owners> <${RDF}type> <${SH}PropertyShape> ; <${SH}maxCount> 1 ; ` +
-            `<${SH}path> <${gen}/owners/inv> . <${gen}/owners/inv> <${SH}inversePath> <${predicate}>`,
+            `<${SH}path> ?inv . ?inv <${SH}inversePath> <${predicate}> . FILTER(isBlank(?inv))`,
         ),
       ).toBe(true);
+      // SHACL §2.3.1.3: the inverse path node is the subject of exactly one triple.
+      expect(await count(`<${gen}/owners> <${SH}path> ?inv . ?inv ?p ?o`)).toBe(1);
+      expect(await count(`?s ?p ?o . FILTER(STRSTARTS(STR(?s), "${gen}/owners/"))`)).toBe(0);
       expect(await count(`<${gen}> <${SH}targetObjectsOf> ?p`)).toBe(1);
       expect(await has(`<${gen}> <${SH}targetClass> ?c`)).toBe(false);
       expect(await has(`?x <${SH}alternativePath> ?l . FILTER(STRSTARTS(STR(?x), "${gen}"))`)).toBe(false);
@@ -312,8 +325,13 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
     const before = [await genTriples(IMAGE()), await genTriples(ATTACHMENTS())];
     expect(before[0]).toBeGreaterThan(0);
     expect(before[1]).toBeGreaterThan(0);
+    const blanks = await blankTriples();
+    expect(blanks).toBeGreaterThan(0);
     await runSync();
     expect([await genTriples(IMAGE()), await genTriples(ATTACHMENTS())]).toEqual(before);
+    // Fresh blank nodes on every sync, but the old ones are deleted first: the count is stable.
+    expect(await blankTriples()).toBe(blanks);
+    expect(await orphanBlankNodes()).toBe(0);
   }, LIVE_FUSEKI_TIMEOUT);
 
   test('a removed accessor loses its constraint; the kept one survives', async () => {
@@ -331,6 +349,7 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
 
     expect(await genTriples(banner)).toBe(0);
     expect(await genTriples(icon)).toBe(iconTriples);
+    expect(await orphanBlankNodes()).toBe(0);
     expect(await has(`<${E2EOwnerLoss.shape.id}> <${RDF}type> <${SH}NodeShape>`)).toBe(true);
   }, LIVE_FUSEKI_TIMEOUT);
 
@@ -357,6 +376,8 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
     expect(await genTriples(IMAGE())).toBe(0);
     expect(await genTriples(ATTACHMENTS())).toBe(0);
     expect(await count(`?s ?p ?o . FILTER(STRSTARTS(STR(?s), "${E2EProject.shape.id}"))`)).toBe(0);
+    // …and the blank inverse-path nodes went with them.
+    expect(await orphanBlankNodes()).toBe(0);
     // The predicate IRI the constraint pointed at, and its own description, are untouched.
     expect(await has(`<${schemaImage.id}> <${RDFS}label> "image"`)).toBe(true);
     // E2ESubProject (a separate shape) still references the same predicate in its own paths.
@@ -394,8 +415,79 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
     expect(await generatedUnder(E2EProject.shape.id)).toBe(2);
   }, LIVE_FUSEKI_TIMEOUT);
 
-  // The test Fuseki (secoresearch/fuseki, datasets created through the admin API) exposes
-  // only query, update and graph-store services: no `fuseki:shacl` endpoint to validate a
-  // double-owned image against the persisted constraint. Skipped visibly, not returned early.
-  test.skip('SHACL endpoint reports a double-owned image (no SHACL service in the test Fuseki)', () => {});
+  // The persisted shapes, read back out of the store, validated by Jena SHACL. Before
+  // complex paths were blank nodes, `sh:path <…/owners/inv>` was read as a predicate path
+  // that matches nothing, and this report said `sh:conforms true`.
+  const IMG = 'https://example.org/e2e#img1';
+  const twoOwners =
+    `<${ex('p1').id}> <${schemaImage.id}> <${IMG}> .\n` +
+    `<${ex('p2').id}> <${schemaImage.id}> <${IMG}> .\n`;
+
+  test('Jena SHACL reports an image owned by two subjects against the synced shapes', async () => {
+    await runSync();
+    const shapes = await readDatasetAsTurtle();
+    const report = await validateWithJenaShacl(shapes, twoOwners);
+    expect(report).toMatch(/sh:conforms\s+false/);
+    expect(report).toContain('MaxCountConstraintComponent');
+    expect(report).toMatch(new RegExp(`sh:focusNode\\s+<${IMG.replace(/[.#]/g, '\\$&')}>`));
+    expect(report).toMatch(/sh:resultPath\s+\[\s*sh:inversePath\s+<https:\/\/schema\.org\/image>/);
+    expect(report).toContain(`<${IMAGE()}/owners>`);
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  test('Jena SHACL: one owner conforms', async () => {
+    await runSync();
+    const report = await validateWithJenaShacl(
+      await readDatasetAsTurtle(),
+      `<${ex('p1').id}> <${schemaImage.id}> <${IMG}> .\n`,
+    );
+    expect(report).toMatch(/sh:conforms\s+true/);
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  test('Jena SHACL misreads the IRI-named form earlier versions wrote (the bug this fixes)', async () => {
+    const legacy = `
+      @prefix sh: <${SH}> .
+      <urn:legacy:s> a sh:NodeShape ; sh:targetObjectsOf <${schemaImage.id}> ; sh:property <urn:legacy:s/owners> .
+      <urn:legacy:s/owners> sh:maxCount 1 ; sh:path <urn:legacy:s/owners/inv> .
+      <urn:legacy:s/owners/inv> a <${CORE}PathNode> ; sh:inversePath <${schemaImage.id}> .
+    `;
+    expect(await validateWithJenaShacl(legacy, twoOwners)).toMatch(/sh:conforms\s+true/);
+  }, LIVE_FUSEKI_TIMEOUT);
+});
+
+describeFuseki('complex paths stored by earlier versions (Fuseki)', () => {
+  // What a sync wrote before complex paths became blank nodes: IRI-named, typed nodes under
+  // the property shape's IRI.
+  const legacyPaths = (gen: string, person: string) => `
+    <${gen}/owners> <${SH}path> <${gen}/owners/inv> .
+    <${gen}/owners/inv> <${RDF}type> <${CORE}PathNode> ; <${SH}inversePath> <${schemaImage.id}> .
+    <${person}/region> <${SH}path> <${person}/region/seq/0> .
+    <${person}/region/seq/0> <${RDF}type> <${RDF}List> ; <${RDF}first> <${ex('worksAt').id}> ;
+      <${RDF}rest> <${person}/region/seq/1> .
+    <${person}/region/seq/1> <${RDF}type> <${RDF}List> ; <${RDF}first> <${ex('locatedIn').id}> ;
+      <${RDF}rest> <${RDF}nil> .
+  `;
+
+  test('the next sync deletes the IRI path nodes and writes blank nodes', async () => {
+    await runSync();
+    const gen = singleOwnerShapeIri(`${E2EProject.shape.id}/image`);
+    // Replace the blank paths with the legacy IRI form, as an upgraded store holds them.
+    await executeSparqlUpdate(
+      `DELETE { ?ps <${SH}path> ?b . ?n ?p ?o } WHERE { ` +
+        `VALUES ?ps { <${gen}/owners> <${P()}/region> } ?ps <${SH}path> ?b . ` +
+        `?b (<${RDF}first>|<${RDF}rest>|<${SH}inversePath>)* ?n . ?n ?p ?o . FILTER(isBlank(?n)) }`,
+    );
+    expect(await orphanBlankNodes()).toBe(0);
+    await executeSparqlUpdate(`INSERT DATA { ${legacyPaths(gen, P())} }`);
+    expect(await count(`?s ?p ?o . FILTER(STRSTARTS(STR(?s), "${gen}/owners/"))`)).toBe(2);
+
+    await runSync();
+
+    expect(await count(`?s ?p ?o . FILTER(STRSTARTS(STR(?s), "${gen}/owners/"))`)).toBe(0);
+    expect(await count(`?s ?p ?o . FILTER(STRSTARTS(STR(?s), "${P()}/region/"))`)).toBe(0);
+    expect(await count(`<${gen}/owners> <${SH}path> ?p`)).toBe(1);
+    expect(await has(`<${gen}/owners> <${SH}path> ?b . ?b <${SH}inversePath> <${schemaImage.id}> . FILTER(isBlank(?b))`)).toBe(true);
+    expect(await count(`<${P()}/region> <${SH}path> ?p`)).toBe(1);
+    expect(await has(`<${P()}/region> <${SH}path> ?l . ?l <${RDF}first> <${ex('worksAt').id}> . FILTER(isBlank(?l))`)).toBe(true);
+    expect(await orphanBlankNodes()).toBe(0);
+  }, LIVE_FUSEKI_TIMEOUT);
 });
