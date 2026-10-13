@@ -225,3 +225,37 @@ Dependencies: 1 → 2 → 3, sequential.
 
 Quick gate after each phase: `npx jest <touched test files>` (< 1 min). Full: `npm test`
 (jest + typecheck) and `npm run test:fuseki` at the end of phase 3 and in review.
+
+## Review
+
+Independent correctness review of the diff:
+
+1. **Medium — over-deletion.** The inner walk `?b0 (contains|rdf:first)* ?bn` only required its
+   end points to be blank. Through a blank list's `rdf:first` it could reach an IRI entity the list
+   merely lists and continue along that entity's `contains` edges, deleting its blank children
+   (reproduced on Fuseki). The comment claiming otherwise was wrong.
+2. Low — a subject delete whose shape reaches no dependent type emits no blank block; blank nodes
+   two levels below the subject would stay. Shape sync is unaffected (`sh:path` reaches every type).
+3. Low — `__blank` was accepted under a non-`contains` property, where nothing deletes it.
+4. Low — the DSL-JSON decoder accepted `__blank` with `__id` (id silently dropped) and ignored a
+   non-`true` `__blank`.
+5. Low — performance: the blank filters wrapped the whole block.
+
+## Iteration 1
+
+- Gap 1 (medium): the inner walk follows only the RDF-list and SHACL-path syntax predicates
+  (`rdf:first`, `rdf:rest`, `sh:inversePath`, `sh:alternativePath`, `sh:zeroOrMorePath`,
+  `sh:oneOrMorePath`, `sh:zeroOrOnePath`) — the only structures core writes blank. SPARQL property
+  paths cannot constrain intermediate nodes, so restricting the vocabulary is what keeps the walk
+  inside syntax. Live regression test in `blank-nested-nodes.test.ts`.
+- Gap 3: a blank nested node must be held by a `contains` property, or by a syntax predicate of a
+  blank parent (`rdf:first` of a blank cell). Checked in the lowering.
+- Gap 4: the lowering rejects `blank` with an `id` (any IR source); the decoder rejects a non-`true`
+  `__blank`.
+- Gap 5: the blank block is built as `filter(isBlank(bn), join(filter(isBlank(b0), …), …))`; the
+  rendered text places each FILTER after the triple that binds it.
+- Gap 2: deferred and documented — the blank block runs wherever the typed cascade runs; shapes
+  that own only non-dependent values get the depth-1 owned-child delete only.
+
+Validation: `npm test` exit 0 (jest 2204 passed, 120 skipped = unchanged baseline; typecheck
+clean). `npm run test:fuseki`: 285 live, 285 passed, 0 skipped.
