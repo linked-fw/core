@@ -14,7 +14,11 @@ rationale: [report 025](../reports/025-update-replace-contains-cascade.md) (repl
 - **`contains: true`** on an object property: the subject owns the value node. Code:
   `ObjectPropertyShapeConfig.contains` (`src/shapes/SHACL.ts`), persisted as `core:contains`.
 - **`dependent: true`** on a shape: its instances have no independent existence and are deleted
-  when a `contains` walk reaches them (list cells, path nodes, property shapes).
+  when a `contains` walk reaches them (list cells, property shapes, and the typed path nodes of
+  versions before 2.30).
+- **Blank nodes** need neither flag: the cascade deletes every blank node reached through
+  `contains` edges, and the blank structure below it (following `rdf:first` too, from a blank
+  node only). Complex `sh:path` values are written this way (`__blank` nested node-data).
 
 Both are read from the live shape registry (`collectContainment` in `src/sparql/irToAlgebra.ts`),
 so no vocabulary is hardcoded.
@@ -82,17 +86,21 @@ generated NodeShape (`src/shapes/singleOwnerConstraint.ts`):
     sh:property <…/Thing/image.singleOwner/owners> .
 <…/Thing/image.singleOwner/owners> a sh:PropertyShape ;
     rdfs:label "owners" ; sh:maxCount 1 ;
-    sh:path <…/Thing/image.singleOwner/owners/inv> .
-<…/Thing/image.singleOwner/owners/inv> a core:PathNode ; sh:inversePath schema:image .
+    sh:path [ sh:inversePath schema:image ] .
 ```
+
+The inverse path is an untyped blank node with exactly one triple. An IRI there would be read by
+every SHACL validator as a predicate path (SHACL §2.3.1), which is what versions before 2.30
+wrote (`sh:path <…/owners/inv>`, `<…/owners/inv> a core:PathNode`): Jena reported such a
+constraint as conforming whatever the data. The next sync replaces those nodes.
 
 - **IRI:** `${propertyShapeIri}.singleOwner` (`singleOwnerShapeIri`), derived from the stable
   shape IRI, so every runtime computes the same one. Subclasses inherit the property but write no
   constraint.
 - **Ownership:** `NodeShape.generatedShapes` (`core:generatedShape`) is a `contains` property with
   value shape `NodeShape`. Sync stays two requests per shape: the delete of the NodeShape removes
-  the generated shapes (owned-child block) and their property shapes and path nodes (dependent
-  cascade), never the predicate IRI; the create writes the current ones nested.
+  the generated shapes (owned-child block), their property shapes (dependent cascade) and their
+  blank path nodes (the cascade's blank-node block), never the predicate IRI; the create writes the current ones nested.
 - **Markers:** `core:generated true` and no `sh:targetClass`, so catalog readers can skip them.
   They are never registered in the in-memory registry.
 - **Pruning:** `syncShapes` adds every in-code generated IRI to the protected set, so `'all'` and

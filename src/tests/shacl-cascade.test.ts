@@ -330,7 +330,8 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     const sparql = updateSparqlOf(
       UpdateBuilder.from(TCard).for(`${C}card1`).set({holds: {id: `${C}newplain`}}),
     );
-    const filters = sparql.match(/FILTER\([^)]*\)\)/g) ?? [];
+    // The keep filters; the blank-node block's own `FILTER(isBlank(…))` are not keep filters.
+    const filters = [...(sparql.match(/FILTER\([^)]*\)\)/g) ?? [])].filter((f: string) => !f.startsWith('FILTER(isBlank('));
     expect(filters.length).toBeGreaterThan(0);
     // Only the new id is listed; an old value that differs is still deleted.
     for (const f of filters) expect(f).toBe('FILTER(?old_holds NOT IN (<http://example.org/c#newplain>))');
@@ -431,7 +432,7 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     // (the blank-node block) that what it deletes is a blank node — never a shared IRI.
     for (const b of branchesOf(sparql).filter((b) => /\?old_anyPath \S/.test(b) && /\?uc0_/.test(b))) {
       expect(b).toMatch(
-        /rdf:type (shacl:PropertyShape|rdf:List|core:PathNode|<http:\/\/example\.org\/c#TCell>)|FILTER\(isBlank\(\?uc0_bn0\) && isBlank\(\?uc0_bn\)\)/,
+        /rdf:type (shacl:PropertyShape|rdf:List|core:PathNode|<http:\/\/example\.org\/c#TCell>)|FILTER\(isBlank\(\?uc0_bn0\)\)[\s\S]*FILTER\(isBlank\(\?uc0_bn\)\)/,
       );
     }
     // The cascade still runs, so a dependent value (a PathNode) is cleaned up.

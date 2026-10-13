@@ -166,7 +166,10 @@ export function decodeNodeData(
   }
   const desc: NodeDescriptionValue = {shape: nodeShape, fields};
   if (typeof json.__id === 'string') desc.__id = json.__id;
-  if (json.__blank === true) desc.__blank = true;
+  if (json.__blank !== undefined) {
+    if (json.__blank !== true) throw new Error(`__blank must be true when given, got ${JSON.stringify(json.__blank)}`);
+    desc.__blank = true;
+  }
   return desc;
 }
 

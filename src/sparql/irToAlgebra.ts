@@ -1840,6 +1840,43 @@ function fieldValueToTerms(
 type BlankNodeMinter = {next: number};
 
 /**
+ * The RDF-collection and SHACL-path predicates the cascade's blank-node block walks inside a
+ * blank structure: the syntax core writes as blank nodes (`serializePathToNodeData`).
+ */
+const BLANK_SYNTAX_PREDICATES = [
+  rdf.first.id,
+  rdf.rest.id,
+  shacl.inversePath.id,
+  shacl.alternativePath.id,
+  shacl.zeroOrMorePath.id,
+  shacl.oneOrMorePath.id,
+  shacl.zeroOrOnePath.id,
+];
+
+/**
+ * A blank node is removed only by the cascade's blank-node block, which reaches it through a
+ * `contains` edge, or, inside a blank structure, through a list / path syntax predicate
+ * (`rdf:first` of a blank list cell). A blank node held any other way could never be deleted:
+ * refuse to write one.
+ */
+function assertBlankIsOwned(
+  data: IRNodeData,
+  propertyId: string,
+  propertyTerm: SparqlTerm,
+  parentIsBlank: boolean,
+): void {
+  if (!data.blank || findPropertyShapeById(propertyId)?.contains) return;
+  const syntaxEdge =
+    parentIsBlank && propertyTerm.kind === 'iri' && BLANK_SYNTAX_PREDICATES.includes(propertyTerm.value);
+  if (syntaxEdge) return;
+  throw new Error(
+    `A blank nested node (__blank) must be the value of a \`contains\` property, or of a list / ` +
+      `path syntax predicate inside a blank node; ${propertyId} is neither, so nothing would ` +
+      `ever delete it.`,
+  );
+}
+
+/**
  * Recursively generate triples for an IRNodeData (used in create and nested creates).
  * Returns the term used for this node and all generated triples.
  *
@@ -1856,6 +1893,9 @@ function generateNodeDataTriples(
   const triples: SparqlTriple[] = [];
   let subjectTerm: SparqlTerm;
   if (data.blank) {
+    if (data.id) {
+      throw new Error(`A blank nested node (__blank) cannot carry an id (${data.id}).`);
+    }
     if (!blanks) {
       throw new Error(
         'A blank nested node (__blank) can only be written by a create. An update writes its ' +
@@ -1885,6 +1925,7 @@ function generateNodeDataTriples(
       for (const item of field.value) {
         if (item && typeof item === 'object' && 'shape' in item && 'fields' in item) {
           // Nested create
+          assertBlankIsOwned(item as IRNodeData, field.property, propertyTerm, !!data.blank);
           const nested = generateNodeDataTriples(item as IRNodeData, options, blanks);
           triples.push(tripleOf(subjectTerm, propertyTerm, nested.term));
           triples.push(...nested.triples);
@@ -1900,6 +1941,7 @@ function generateNodeDataTriples(
 
     // Handle nested IRNodeData
     if (typeof field.value === 'object' && 'shape' in field.value && 'fields' in field.value) {
+      assertBlankIsOwned(field.value as IRNodeData, field.property, propertyTerm, !!data.blank);
       const nested = generateNodeDataTriples(field.value as IRNodeData, options, blanks);
       triples.push(tripleOf(subjectTerm, propertyTerm, nested.term));
       triples.push(...nested.triples);
@@ -2631,14 +2673,13 @@ export function buildOwnedCascade(
 
   // Blank nodes carry no type (a SHACL path operator must be the subject of exactly one
   // triple), so the typed blocks above cannot see them. Every blank node owned through
-  // `contains` edges (`?b0`) is deleted together with the blank structure below it (`?bn`).
-  // Inside a blank structure `rdf:first` is followed too: a sequence member that is itself a
-  // path operator is held by `rdf:first`, which is not a `contains` edge. Starting that
-  // closure only at a blank node keeps a list of IRIs from leading the cascade into the
-  // nodes it lists.
-  const insidePathExpr: PathExpr = {
-    zeroOrMore: {alt: [...containsPreds, rdf.first.id].map((id) => ({id}))},
-  };
+  // `contains` edges (`?b0`) is deleted, together with the RDF-list / SHACL-path syntax below it
+  // (`?bn`). That inner walk follows `rdf:first` too, because a sequence member that is itself a
+  // path operator is held by `rdf:first`, which is not a `contains` edge. It is restricted to the
+  // syntax predicates on purpose: SPARQL cannot require the nodes *between* `?b0` and `?bn` to be
+  // blank, so following every `contains` edge there would let a list's `rdf:first` lead into an
+  // entity it merely lists and delete that entity's blank children.
+  const insidePathExpr: PathExpr = {zeroOrMore: {alt: BLANK_SYNTAX_PREDICATES.map((id) => ({id}))}};
   const insidePathTerm: SparqlTerm = {
     kind: 'path',
     value: pathExprToSparql(insidePathExpr),
@@ -2648,25 +2689,32 @@ export function buildOwnedCascade(
   const blank = varTerm(`${varPrefix}bn`);
   const bp = varTerm(`${varPrefix}bnp`);
   const bo = varTerm(`${varPrefix}bno`);
-  const isBlank = (v: SparqlTerm): SparqlExpression => ({
+  const isBlank = (name: string): SparqlExpression => ({
     kind: 'function_expr',
     name: 'isBlank',
-    args: [{kind: 'variable_expr', name: (v as {name: string}).name}],
+    args: [{kind: 'variable_expr', name}],
   });
   deletePatterns.push(tripleOf(blank, bp, bo));
   whereOptionals.push(
     keepFilter(
       {
         type: 'filter',
-        expression: {kind: 'logical_expr', op: 'and', exprs: [isBlank(ownedBlank), isBlank(blank)]},
+        expression: isBlank(`${varPrefix}bn`),
         inner: {
-          type: 'bgp',
-          triples: [
-            ...(anchor ? [anchor] : []),
-            tripleOf(rootTerm, pathTerm, ownedBlank),
-            tripleOf(ownedBlank, insidePathTerm, blank),
-            tripleOf(blank, bp, bo),
-          ],
+          type: 'join',
+          // Filter the owned blank nodes before the inner walk runs from each of them.
+          left: {
+            type: 'filter',
+            expression: isBlank(`${varPrefix}bn0`),
+            inner: {
+              type: 'bgp',
+              triples: [...(anchor ? [anchor] : []), tripleOf(rootTerm, pathTerm, ownedBlank)],
+            },
+          },
+          right: {
+            type: 'bgp',
+            triples: [tripleOf(ownedBlank, insidePathTerm, blank), tripleOf(blank, bp, bo)],
+          },
         },
       },
       rootTerm,

@@ -16,12 +16,13 @@ import {lower} from '../queries/lower';
 const {linkedShape} = linkedPackage('path-translator-test');
 const B = 'https://example.org/ps';
 
-// Holder with a polymorphic (no valueShape) object property so any path node-data fits.
+// Holder with a polymorphic (no valueShape) owned property, like `PropertyShape.path`, so any
+// path node-data fits (a blank node must be held through `contains`).
 @linkedShape
 class PHolder extends Shape {
   static targetClass = {id: 'https://example.org/p#PHolder'} as any;
 
-  @objectProperty({path: {id: 'https://example.org/p#path'}, maxCount: 1})
+  @objectProperty({path: {id: 'https://example.org/p#path'}, maxCount: 1, contains: true})
   get p(): unknown {
     return null;
   }

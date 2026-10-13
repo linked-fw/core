@@ -355,11 +355,20 @@ constraint at `Thing`, not one per subclass. It is marked `core:generated true` 
     sh:path [ sh:inversePath schema:image ] .
 ```
 
-(The inverse path node is stored with a deterministic IRI, `…/owners/inv`, not as a blank node.)
+The inverse path is stored as an untyped blank node, as is every complex `sh:path` shape sync
+writes (inverse, alternative, sequence, `*`/`+`/`?`): an IRI in `sh:path` is a predicate path to a
+SHACL validator. Versions before 2.30 wrote IRI-named nodes (`…/owners/inv`); the next sync
+replaces them. Read a stored path's structure in the same query that finds it (`?ps sh:path ?p .
+?p sh:inversePath ?x`): a blank node's label is not stable across queries.
+
+Nested node-data in a `create` may carry `__blank: true` to be written that way: a fresh blank
+node with only its field triples and no `rdf:type`. It is meant for RDF syntax such as SHACL
+paths, has no id (combining it with `__id`/`id` throws), cannot be the created root, and is
+refused in `update`/`upsert`, whose INSERT runs once per WHERE solution.
 The declaring shape owns its generated shapes through `core:generatedShape`, a `contains` edge:
 `<…/Thing> core:generatedShape <…/Thing/image.singleOwner>`. Syncing a shape is still two
 requests: deleting the shape deletes the generated shapes with it (their own triples, property
-shapes and path nodes, never the predicate IRI), and the create writes the current ones nested in
+shapes and blank path nodes, never the predicate IRI), and the create writes the current ones nested in
 the same request. A removed or renamed accessor therefore loses its constraint, a pruned shape
 takes its constraints with it, and a NodeShape the shape does not own is never touched.
 `singleOwnerShapeIri`, `singleOwnerProperties` and `buildSingleOwnerConstraints` are exported if
