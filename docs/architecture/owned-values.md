@@ -53,13 +53,18 @@ asserts ownership. One UNION branch per path from the root.
   the walk, becomes explicit hops, each typed with the declaring shape's class or a registered
   sub-shape's (`?n a ?t FILTER(?t IN (…))`, one class: `?n a <C>`), so no node is walked through
   a predicate its own shape does not own. A path stops after `MAX_OWNED_RECURSION` (4) hops into
-  a shape already on it; deeper values are left (orphans, the safe direction).
-- **Sub-shapes.** For every registered descendant of a reached shape with a `targetClass` of its
-  own, its added `contains` properties are followed from nodes of that class only (`?n a
-  <SubClass> . ?n <c> ?m`); guarded edges never join a closure. Core writes the concrete class's
-  `rdf:type` on create, so no inference is needed. A sub-shape without a `targetClass`, or with one
-  that the shape or another of its descendants also holds, cannot be told apart: its added
-  properties are not followed (warned once per sub-shape).
+  a shape already on it; deeper values are left (orphans, the safe direction), as is anything
+  behind an untyped node on such a cycle.
+- **Sub-shapes.** For every registered descendant of a reached shape whose class tells its nodes
+  apart (`classGuard`: every registered shape targeting that class, registry-wide, is the
+  sub-shape or one of its descendants), its added `contains` properties are followed from nodes
+  of that class only (`?n a <SubClass> . ?n <c> ?m`); guarded edges never join a closure. Core
+  writes the concrete class's `rdf:type` on create, so no inference is needed. A sub-shape
+  without a `targetClass`, or sharing it with a shape that does not extend it (parent, sibling,
+  another hierarchy), is not followed (warned once with the cause); a same-class profile of a
+  guardable sub-shape that adds nothing is skipped silently. Recursion typing uses the same
+  classes. A sub-shape redeclaring an inherited `contains` property as plain does not remove the
+  inherited ownership (`getPropertyShapes` keeps both).
 - **`rdf:nil`** is never deleted: every walk node and the replaced-value self-delete carry
   `FILTER(!sameTerm(?n, rdf:nil))`.
 - **Branch count:** no cap; lowering warns once per root shape above `OWNED_BRANCH_WARNING` (64)

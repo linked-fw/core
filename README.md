@@ -320,16 +320,20 @@ replace or set-remove does the same below the old value. The walk follows the sh
 predicates: from the owner's shape it follows that shape's `contains` properties to their value
 shapes, then those shapes' `contains` properties. When a value is typed with a registered
 sub-shape of the declared value shape, the `contains` properties the sub-shape adds are followed
-too, but only from nodes of that sub-shape's class (`?img a ex:Photo . ?img ex:thumbnail ?t`). A
-sub-shape that shares its parent's `targetClass` cannot be told apart that way: its extra
-`contains` properties are not followed through the parent (core warns once).
+too, but only from nodes of that sub-shape's class (`?img a ex:Photo . ?img ex:thumbnail ?t`).
+That needs a class only that sub-shape (and shapes extending it) targets: a sub-shape without a
+`targetClass`, or sharing it with a shape that does not extend it (its parent, a sibling, a shape
+of another hierarchy), cannot be told apart, so its extra `contains` properties are not followed
+through the parent (core warns once). A same-class "profile" of a sub-shape that adds nothing of
+its own changes nothing. When a sub-shape redeclares an inherited `contains` property without
+`contains`, the inherited ownership still applies.
 
 Recursion has a limit. A shape that owns its own kind (a list cell owning the next cell through
 `rdf:rest`, a comment owning its replies) is followed to any depth (`rdf:rest*`). Any other cycle
 (A owns B owns A, or a sub-shape's property leading back into its own kind) is followed hop by
 hop, each hop checked against the class that declares it, for at most `MAX_OWNED_RECURSION` (4)
-re-entries per path; values deeper than that are left in place. `rdf:nil`, the end of every list,
-is never deleted.
+re-entries per path; values deeper than that are left in place, and so is anything behind an
+untyped node on such a cycle. `rdf:nil`, the end of every list, is never deleted.
 
 The bulk deletes (`.all()`, `.where(...)`) remove the same subtree for every matched subject; they
 do not delete incoming references to the subjects, which a delete by id does.

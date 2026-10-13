@@ -934,6 +934,15 @@ next replace. Verdict: the app can drop `withoutOwnership` once its instance wri
 rule for user-authored `contains` properties (or it keeps stripping `contains` only); the
 reviewer's "must keep" (from H2 / M3) no longer holds.
 
+Re-checked after iteration 2 (Review 2, M-C): M-B (a user sub-shape claiming a library class) is
+now skipped by the registry-wide `classGuard`, so it cannot widen library deletes; M-A (a same-class
+user profile switching off a library sub-shape's ownership) is fixed, and a profile that adds
+nothing is ignored. Remaining effect of user-authored shapes on library deletes: a user shape
+that takes a library class *and* adds `contains` makes nothing worse — it is skipped (warned), so
+library deletes behave as without it. The verdict stands: `withoutOwnership` is no longer needed
+for isolation; keep stripping `contains` only while user-authored `contains` properties accept
+client `{id}`s.
+
 Tasks: README, `owned-values.md`, changeset, `linked-core.ts:29`, golden rename, consumer verdict
 in this doc. Validation: stale-claim grep; gates as above.
 
@@ -1004,7 +1013,10 @@ gate green; `npm test` 2242 passed, 0 failed, `[fuseki] live tests: 300 total �
 Validation: M-A / M-B live + pure repros fail on `087dfaa`, pass after; quick gate, `npm test`
 (0 failed live), `npx linked build`.
 
-### Phase 10: docs and consumer verdict (Gap 3)
+### Phase 10: docs and consumer verdict (Gap 3) — DONE
+
+Result: README, `owned-values.md`, changeset state the guardable rule, the untyped-node stop (L-2)
+and "contains wins" (L-3); consumer verdict re-checked above.
 
 Validation: README / `owned-values.md` / changeset describe the guardable rule, L-2 and L-3;
 gates as above.
