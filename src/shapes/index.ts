@@ -10,4 +10,5 @@
 // SHACL metamodel cannot decorate itself. List.js loads it; SHACL.js alone does not.
 import './SHACL.js';
 import './List.js';
+import './PathList.js';
 import './PathNode.js';

@@ -17,7 +17,7 @@ export {List};
  */
 export type RdfListNodeData =
   | {id: string}
-  | {shape: typeof List; first: unknown; rest: RdfListNodeData; __id?: string; __blank?: true};
+  | {shape: typeof List; first: unknown; rest: RdfListNodeData; __id?: string};
 
 /**
  * Build the nested `List` node-data chain for an ordered `rdf:List`, terminating at `rdf:nil`.

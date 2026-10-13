@@ -5,7 +5,7 @@ summary: >
   The core metamodel declares the SHACL path slots blank-capable, so shape sync writes the same
   blank path structure as 2.30 with nothing on the wire. Blank-node cleanup on delete / replace
   follows the blank-capable properties instead of `contains`.
-status: Tasks
+status: Implementation
 packages: [core]
 ---
 
@@ -222,7 +222,7 @@ Where blank cleanup is emitted:
 | `src/shapes/validation.ts` | `__blank` no longer reserved |
 | `src/sparql/irToAlgebra.ts` | minting, blank cascade, 3A errors; remove the old blank code |
 | `src/queries/SelectQuery.ts` | comment |
-| `src/index.ts` | export `PathList` next to `rdfList` |
+| `src/shapes/index.ts` | load `PathList` (registration); like `PathNode` it is not a root export |
 | tests | see phases |
 | `README.md`, `docs/architecture/owned-values.md` | the rule |
 | `docs/backlog/055-blank-node-support-next-steps.md` (new) | follow-ups |
@@ -266,7 +266,7 @@ Sequential: every phase edits `src/sparql/irToAlgebra.ts`.
 
 Tasks:
 1. Add `PathList`; declare the metamodel node kinds (decision 4); `PathNode.alternativePath` →
-   `PathList`; export `PathList`.
+   `PathList`; load it from `shapes/index.ts`.
 2. `nestedNodeKind` + `generateNodeDataTriples(kind)`; remove `assertBlankIsOwned`, the
    blank-root check, `IRNodeData.blank`.
 3. Remove `__blank` from builders, IR, wire encode/decode, `RESERVED_KEYS`, `RdfListNodeData`,
@@ -349,3 +349,20 @@ Tasks:
 Validation: equivalence test green; the same script run against this branch's `lib/` prints an
 INSERT DATA identical to 2.30.0's (diff empty after label normalization); docs grep for
 `__blank` → only the changeset / report history.
+
+## Implementation log
+
+### Phase 1 — done
+
+- `PathList` (`src/shapes/PathList.ts`): `first` is blank-capable but **not** `contains`
+  (ownership is per predicate across the registry; `rdf:first` of every other list holds values
+  the list does not own). `rest` is `contains` like `List.rest`.
+- Minting: `nestedNodeKind` / `nestedCreateTriples` / `generateNodeDataTriples(kind)` in
+  `irToAlgebra.ts`. The update-path refusal (3A, first bullet) falls out of `nestedCreateTriples`
+  (no minter outside a create) and is tested here already.
+- `__blank` removed from builders, IR, wire, validation, serializer, `RdfListNodeData`. The
+  old `contains`-tied blank block still runs (its predicate list moved next to
+  `buildOwnedCascade`) until phase 2.
+- Validation: `npm test` exit 0 — 2210 passed, 120 skipped; `[fuseki] live tests: 285 total —
+  285 passed`; typecheck clean. Targeted: `blank-nested-nodes`, `mutation-decode-concrete-shape`,
+  `single-owner-constraint`, `shacl-path-translator` 44/44.

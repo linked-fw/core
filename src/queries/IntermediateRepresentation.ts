@@ -359,11 +359,6 @@ export type IRNodeData = {
   shape: string;
   fields: IRFieldUpdate[];
   id?: string;
-  /**
-   * A nested node written as a fresh blank node with only its field triples: no IRI, no
-   * `rdf:type` (see `NodeDescriptionValue.__blank`). Never set together with `id`.
-   */
-  blank?: true;
 };
 
 export type IRFieldUpdate = {

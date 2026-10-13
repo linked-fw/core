@@ -155,12 +155,6 @@ export type NodeDescriptionValue = {
    * Optional, if not provided a new id will be generated.
    */
   __id?: string;
-  /**
-   * Write this nested node as a fresh blank node carrying only its field triples (no
-   * `rdf:type`). For RDF syntax structures whose meaning comes from the triple that
-   * references them, like a SHACL property path. Create-only and never with `__id`.
-   */
-  __blank?: true;
 };
 export type UpdateNodePropertyValue = {
   prop: PropertyShapeData;

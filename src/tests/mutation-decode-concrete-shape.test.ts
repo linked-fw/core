@@ -20,18 +20,19 @@ import {lowerMutationJSON} from '../queries/lowerMutationJSON';
 import {fromJSON} from '../queries/fromJSON';
 import {lower} from '../queries/lower';
 import type {IRCreateMutation} from '../queries/IntermediateRepresentation';
+import {createToSparql} from '../sparql/irToAlgebra';
 import '../ontologies/rdf';
-import '../ontologies/shacl';
+import {shacl} from '../ontologies/shacl';
 
 const {linkedShape} = linkedPackage('mutation-decode-concrete-shape-test');
 const X = 'https://example.org/dcs#';
 
-// A polymorphic owned slot, like `PropertyShape.path`: no declared value shape.
+// A polymorphic owned slot, like `PropertyShape.path`: no declared value shape, blank-capable.
 @linkedShape
 class DHolder extends Shape {
   static targetClass = {id: `${X}Holder`};
 
-  @objectProperty({path: {id: `${X}slot`}, maxCount: 1, contains: true})
+  @objectProperty({path: {id: `${X}slot`}, maxCount: 1, contains: true, nodeKind: shacl.BlankNodeOrIRI})
   get slot(): unknown {
     return null;
   }
@@ -67,10 +68,14 @@ describe('decoding nested node data keeps its concrete shape', () => {
     } as never) as any).withId(`${X}h1`);
     const json = wire(builder.toJSON());
     expect(json.data.slot.__shape).toBe(PathNode.shape.id);
-    expect(json.data.slot.__blank).toBe(true);
+    // Nothing on the wire says "blank": the receiving side mints from the slot's sh:nodeKind.
+    expect(JSON.stringify(json)).not.toContain('__blank');
 
     expect(wire(lowerMutationJSON(json))).toEqual(wire(lower(builder)));
     expect(wire(lower(fromJSON(json) as any))).toEqual(wire(lower(builder)));
+    const sparql = createToSparql(lowerMutationJSON(json) as unknown as IRCreateMutation);
+    expect(sparql).toContain(`<${X}h1> <${X}slot> _:b0 .`);
+    expect(sparql).toContain(`_:b0 shacl:inversePath <${X}parent> .`);
   });
 
   test('a subclass-only field without __shape is still rejected', () => {

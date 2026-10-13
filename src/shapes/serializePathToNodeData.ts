@@ -6,36 +6,38 @@
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
 import {isPathRef} from '../paths/PropertyPathExpr.js';
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
-import {List, type RdfListNodeData} from './List.js';
+import {PathList} from './PathList.js';
 import {rdf} from '../ontologies/rdf.js';
 import {PathNode} from './PathNode.js';
 
 /**
  * Node-data the create pipeline accepts for a `sh:path` value: an IRI reference (simple path),
- * an `rdf:List` (sequence / alternative members), or a `PathNode` operator node.
+ * a `PathList` (sequence / alternative members), or a `PathNode` operator node.
  */
 export type PathNodeData =
   | NodeReferenceValue
-  | {shape: typeof List | typeof PathNode; __blank: true; [k: string]: unknown};
+  | {shape: typeof PathList | typeof PathNode; [k: string]: unknown};
 
 /**
  * Translate a `PathExpr` into create-pipeline node-data for `sh:path`.
  *
  * - simple `PathRef` → `{id}` (a shared predicate IRI; NOT owned)
- * - sequence → an `rdf:List` of segments
- * - inverse / alternative / cardinality → a `PathNode` operator node (alt's operand is an `rdf:List`)
+ * - sequence → a `PathList` (an `rdf:List`) of segments
+ * - inverse / alternative / cardinality → a `PathNode` operator node (alt's operand is a `PathList`)
  *
- * Every operator node and list cell is written as an untyped blank node (`__blank`), the only
- * form SHACL §2.3.1 defines: an IRI in `sh:path` is a predicate path, and an inverse,
- * alternative or cardinality path is a blank node that is the subject of exactly one triple.
+ * Operator nodes and list cells carry no id. `PropertyShape.path`, the `PathNode` slots and
+ * `PathList.first` / `.rest` are `sh:BlankNodeOrIRI`, so the create writes each of them as an
+ * untyped blank node, the only form SHACL §2.3.1 defines: an IRI in `sh:path` is a predicate path,
+ * and an inverse, alternative or cardinality path is a blank node that is the subject of exactly
+ * one triple.
  *
  * ```turtle
  * <ps> sh:path [ sh:inversePath schema:image ] .
  * <ps> sh:path ( schema:knows [ sh:zeroOrMorePath schema:parent ] ) .
  * ```
  *
- * The structure is owned through `contains` edges, so a re-sync's delete removes it (the
- * blank-node block of the containment cascade) before the create writes it again.
+ * A re-sync's delete removes the structure (the blank-node cascade follows the blank-capable
+ * properties) before the create writes it again.
  *
  * @param _base ignored. It seeded the IRIs of the nodes this used to mint (`{base}/inv`, …);
  *   blank nodes have none. Kept so existing two-argument calls still compile.
@@ -43,7 +45,6 @@ export type PathNodeData =
 export function serializePathToNodeData(path: PathExpr, _base?: string): PathNodeData {
   const operator = (key: string, operand: unknown): PathNodeData => ({
     shape: PathNode,
-    __blank: true,
     [key]: operand,
   });
   const serialize = (e: PathExpr): PathNodeData => {
@@ -59,7 +60,7 @@ export function serializePathToNodeData(path: PathExpr, _base?: string): PathNod
         throw new Error('Cannot serialize an empty sequence path to SHACL sh:path.');
       }
       if (e.seq.length === 1) return serialize(e.seq[0]);
-      return blankList(e.seq.map(serialize)) as PathNodeData;
+      return blankList(e.seq.map(serialize));
     }
     if ('inv' in e) return operator('inversePath', serialize(e.inv));
     if ('alt' in e) {
@@ -84,10 +85,10 @@ export function serializePathToNodeData(path: PathExpr, _base?: string): PathNod
   return serialize(path);
 }
 
-/** An `rdf:List` of blank cells (`rdf:first`/`rdf:rest` only), terminated by `rdf:nil`. */
-function blankList(items: PathNodeData[]): RdfListNodeData {
-  return items.reduceRight<RdfListNodeData>(
-    (rest, first) => ({shape: List, __blank: true, first, rest}),
+/** A `PathList` of cells without ids (blank once written), terminated by `rdf:nil`. */
+function blankList(items: PathNodeData[]): PathNodeData {
+  return items.reduceRight<PathNodeData>(
+    (rest, first) => ({shape: PathList, first, rest}),
     {id: rdf.nil.id},
   );
 }

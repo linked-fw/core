@@ -1839,70 +1839,108 @@ function fieldValueToTerms(
  */
 type BlankNodeMinter = {next: number};
 
-/**
- * The RDF-collection and SHACL-path predicates the cascade's blank-node block walks inside a
- * blank structure: the syntax core writes as blank nodes (`serializePathToNodeData`).
- */
-const BLANK_SYNTAX_PREDICATES = [
-  rdf.first.id,
-  rdf.rest.id,
-  shacl.inversePath.id,
-  shacl.alternativePath.id,
-  shacl.zeroOrMorePath.id,
-  shacl.oneOrMorePath.id,
-  shacl.zeroOrOnePath.id,
-];
+/** How a nested create is written: an IRI-named, typed node, or an untyped blank node. */
+type NestedNodeKind = 'iri' | 'blank';
 
 /**
- * A blank node is removed only by the cascade's blank-node block, which reaches it through a
- * `contains` edge, or, inside a blank structure, through a list / path syntax predicate
- * (`rdf:first` of a blank list cell). A blank node held any other way could never be deleted:
- * refuse to write one.
+ * True when the property's `sh:nodeKind` allows blank-node values (`sh:BlankNode`,
+ * `sh:BlankNodeOrIRI`, `sh:BlankNodeOrLiteral`). A nested create under such a property may be
+ * minted as a blank node, and a delete / replace through it removes its blank value.
  */
-function assertBlankIsOwned(
-  data: IRNodeData,
+function isBlankCapable(ps: {nodeKind?: {id?: string}} | undefined): boolean {
+  const nk = ps?.nodeKind?.id;
+  return nk === shacl.BlankNode.id || nk === shacl.BlankNodeOrIRI.id || nk === shacl.BlankNodeOrLiteral.id;
+}
+
+/** `label` (shape) of a property shape, for error messages. */
+function describeProperty(propertyId: string): string {
+  const ps = findPropertyShapeById(propertyId);
+  return ps?.label ? `'${ps.label}' (${propertyId})` : propertyId;
+}
+
+/**
+ * How a nested create under `propertyId` is written, from the property's `sh:nodeKind`:
+ *
+ * | nodeKind | without id | with id |
+ * |---|---|---|
+ * | unset, `sh:IRI`, `sh:IRIOrLiteral` | IRI (minted) | IRI |
+ * | `sh:BlankNode` | blank node | error: a blank node has no id |
+ * | `sh:BlankNodeOrIRI` | blank node | IRI |
+ * | `sh:BlankNodeOrLiteral` | blank node | error: an IRI is not allowed |
+ * | `sh:Literal` | error | error |
+ *
+ * The rule is read from the receiving side's registry, so nothing about it travels on the wire.
+ */
+function nestedNodeKind(propertyId: string, data: IRNodeData): NestedNodeKind {
+  const nk = findPropertyShapeById(propertyId)?.nodeKind?.id;
+  switch (nk) {
+    case shacl.BlankNodeOrIRI.id:
+      return data.id ? 'iri' : 'blank';
+    case shacl.BlankNode.id:
+    case shacl.BlankNodeOrLiteral.id:
+      if (data.id) {
+        throw new Error(
+          `Property ${describeProperty(propertyId)} is ${nk === shacl.BlankNode.id ? 'sh:BlankNode' : 'sh:BlankNodeOrLiteral'}: ` +
+            `its nested value is written as a blank node, which has no id, but the value carries ` +
+            `the id ${data.id}.`,
+        );
+      }
+      return 'blank';
+    case shacl.Literal.id:
+      throw new Error(
+        `Property ${describeProperty(propertyId)} is sh:Literal and cannot hold a nested node.`,
+      );
+    default:
+      return 'iri';
+  }
+}
+
+/**
+ * The triples of a nested create held by `subjectTerm` through `propertyId`: the edge, then the
+ * nested node's own triples. `blanks` is the create's label minter; without one (the update
+ * paths) a value that would be minted blank throws, see `generateNodeDataTriples`.
+ */
+function nestedCreateTriples(
+  subjectTerm: SparqlTerm,
   propertyId: string,
   propertyTerm: SparqlTerm,
-  parentIsBlank: boolean,
-): void {
-  if (!data.blank || findPropertyShapeById(propertyId)?.contains) return;
-  const syntaxEdge =
-    parentIsBlank && propertyTerm.kind === 'iri' && BLANK_SYNTAX_PREDICATES.includes(propertyTerm.value);
-  if (syntaxEdge) return;
-  throw new Error(
-    `A blank nested node (__blank) must be the value of a \`contains\` property, or of a list / ` +
-      `path syntax predicate inside a blank node; ${propertyId} is neither, so nothing would ` +
-      `ever delete it.`,
-  );
+  data: IRNodeData,
+  options?: SparqlOptions,
+  blanks?: BlankNodeMinter,
+): SparqlTriple[] {
+  const kind = nestedNodeKind(propertyId, data);
+  if (kind === 'blank' && !blanks) {
+    throw new Error(
+      `Cannot write a blank node in an update: property ${describeProperty(propertyId)} allows ` +
+        `blank nodes and its nested value has no id. An update writes its INSERT once per WHERE ` +
+        `solution, which would duplicate the blank node. Write the value with the create of its ` +
+        `parent${findPropertyShapeById(propertyId)?.nodeKind?.id === shacl.BlankNodeOrIRI.id ? ', or give it an id to write it as an IRI' : ''}.`,
+    );
+  }
+  const nested = generateNodeDataTriples(data, options, blanks, kind);
+  return [tripleOf(subjectTerm, propertyTerm, nested.term), ...nested.triples];
 }
 
 /**
  * Recursively generate triples for an IRNodeData (used in create and nested creates).
  * Returns the term used for this node and all generated triples.
  *
- * A node marked `blank` (nested only, see `NodeDescriptionValue.__blank`) becomes a fresh
- * blank node with its field triples and NO `rdf:type`: it is RDF syntax, like a SHACL path
- * operator, which the spec defines as a blank node that is the subject of exactly one triple.
- * Without a `blanks` minter (the update paths) a blank node throws.
+ * `kind` is decided by the caller from the property that holds the node (`nestedNodeKind`);
+ * the root of a create is always an IRI. A blank node gets a fresh label and only its field
+ * triples, no `rdf:type`: its shape is known from the property, and a SHACL path operator, the
+ * case blank nodes exist for here, must be the subject of exactly one triple.
  */
 function generateNodeDataTriples(
   data: IRNodeData,
   options?: SparqlOptions,
   blanks?: BlankNodeMinter,
+  kind: NestedNodeKind = 'iri',
 ): {term: SparqlTerm; triples: SparqlTriple[]} {
   const triples: SparqlTriple[] = [];
   let subjectTerm: SparqlTerm;
-  if (data.blank) {
-    if (data.id) {
-      throw new Error(`A blank nested node (__blank) cannot carry an id (${data.id}).`);
-    }
-    if (!blanks) {
-      throw new Error(
-        'A blank nested node (__blank) can only be written by a create. An update writes its ' +
-          'INSERT once per WHERE solution, which would duplicate the blank node.',
-      );
-    }
-    subjectTerm = {kind: 'blank', label: `b${blanks.next++}`};
+  if (kind === 'blank') {
+    // Callers only pass 'blank' with a minter (`nestedCreateTriples` checks).
+    subjectTerm = {kind: 'blank', label: `b${blanks!.next++}`};
   } else {
     subjectTerm = iriTerm(data.id || generateEntityUri(data.shape, options));
     // Type triple — resolve the SHACL NodeShapeData id in the IR to the ontology
@@ -1913,22 +1951,20 @@ function generateNodeDataTriples(
 
   // Field triples
   for (const field of data.fields) {
-    // Resolve the SHACL PropertyShapeData id to its declared `path` URI.
     const propertyTerm = resolvePropertyPredicateTerm(field.property);
 
-    if (field.value === null || field.value === undefined) {
+    // Skip undefined/null values in create
+    if (field.value === undefined || field.value === null) {
       continue;
     }
 
-    // Handle arrays (including mixed arrays of references and nested creates)
+    // Handle arrays (multi-value fields)
     if (Array.isArray(field.value)) {
       for (const item of field.value) {
         if (item && typeof item === 'object' && 'shape' in item && 'fields' in item) {
-          // Nested create
-          assertBlankIsOwned(item as IRNodeData, field.property, propertyTerm, !!data.blank);
-          const nested = generateNodeDataTriples(item as IRNodeData, options, blanks);
-          triples.push(tripleOf(subjectTerm, propertyTerm, nested.term));
-          triples.push(...nested.triples);
+          triples.push(
+            ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, item as IRNodeData, options, blanks),
+          );
         } else {
           const terms = fieldValueToTerms(item, options, resolvePropertyDatatype(field.property));
           for (const term of terms) {
@@ -1941,14 +1977,13 @@ function generateNodeDataTriples(
 
     // Handle nested IRNodeData
     if (typeof field.value === 'object' && 'shape' in field.value && 'fields' in field.value) {
-      assertBlankIsOwned(field.value as IRNodeData, field.property, propertyTerm, !!data.blank);
-      const nested = generateNodeDataTriples(field.value as IRNodeData, options, blanks);
-      triples.push(tripleOf(subjectTerm, propertyTerm, nested.term));
-      triples.push(...nested.triples);
+      triples.push(
+        ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, field.value as IRNodeData, options, blanks),
+      );
       continue;
     }
 
-    // Simple values
+    // Simple value
     const terms = fieldValueToTerms(field.value, options, resolvePropertyDatatype(field.property));
     for (const term of terms) {
       triples.push(tripleOf(subjectTerm, propertyTerm, term));
@@ -1965,9 +2000,6 @@ export function createToAlgebra(
   query: IRCreateMutation,
   options?: SparqlOptions,
 ): SparqlInsertDataPlan {
-  if (query.data.blank) {
-    throw new Error('The root node of a create cannot be blank (__blank): it must be addressable.');
-  }
   const {triples} = generateNodeDataTriples(query.data, options, {next: 0});
   return {
     type: 'insert_data',
@@ -2092,9 +2124,9 @@ function processUpdateFields(
       if (setMod.add) {
         for (const addItem of setMod.add) {
           if (addItem && typeof addItem === 'object' && 'shape' in addItem && 'fields' in addItem) {
-            const nested = generateNodeDataTriples(addItem as IRNodeData, options);
-            insertPatterns.push(tripleOf(subjectTerm, propertyTerm, nested.term));
-            insertPatterns.push(...nested.triples);
+            insertPatterns.push(
+              ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, addItem as IRNodeData, options),
+            );
           } else {
             const terms = fieldValueToTerms(addItem, options, resolvePropertyDatatype(field.property));
             for (const term of terms) {
@@ -2134,9 +2166,9 @@ function processUpdateFields(
 
       for (const item of field.value) {
         if (item && typeof item === 'object' && 'shape' in item && 'fields' in item) {
-          const nested = generateNodeDataTriples(item as IRNodeData, options);
-          insertPatterns.push(tripleOf(subjectTerm, propertyTerm, nested.term));
-          insertPatterns.push(...nested.triples);
+          insertPatterns.push(
+            ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, item as IRNodeData, options),
+          );
         } else {
           const terms = fieldValueToTerms(item, options, resolvePropertyDatatype(field.property));
           for (const term of terms) {
@@ -2153,9 +2185,9 @@ function processUpdateFields(
       deletePatterns.push(tripleOf(subjectTerm, propertyTerm, oldVar));
       oldValueTriples.push(tripleOf(subjectTerm, propertyTerm, oldVar));
 
-      const nested = generateNodeDataTriples(field.value as IRNodeData, options);
-      insertPatterns.push(tripleOf(subjectTerm, propertyTerm, nested.term));
-      insertPatterns.push(...nested.triples);
+      insertPatterns.push(
+        ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, field.value as IRNodeData, options),
+      );
       continue;
     }
 
@@ -2608,6 +2640,17 @@ function reachableDependentTypes(shapeId: string): string[] {
   reachableCache.set(shapeId, result);
   return result;
 }
+
+/** The RDF-collection and SHACL-path predicates the cascade's blank-node block walks. */
+const BLANK_SYNTAX_PREDICATES = [
+  rdf.first.id,
+  rdf.rest.id,
+  shacl.inversePath.id,
+  shacl.alternativePath.id,
+  shacl.zeroOrMorePath.id,
+  shacl.oneOrMorePath.id,
+  shacl.zeroOrOnePath.id,
+];
 
 /**
  * Build DELETE patterns + WHERE OPTIONAL blocks that cascade-delete the owned subtree

@@ -68,11 +68,12 @@ export type MutationValueJSON =
   | DslJsonValue; // computed expression (S-expr) / {@path}
 
 /**
- * A node description in **path-keyed** form: `label → value`, plus three reserved
- * keys — `__id` (a fixed/predefined id), `__blank` (`true`: a nested node written as
- * a blank node) and `__shape` (the concrete shape IRI, emitted only when it differs
- * from the shape inferred from context, e.g. a subclass instance under a
- * superclass-typed relation).
+ * A node description in **path-keyed** form: `label → value`, plus two reserved
+ * keys — `__id` (a fixed/predefined id) and `__shape` (the concrete shape IRI,
+ * emitted only when it differs from the shape inferred from context, e.g. a
+ * subclass instance under a superclass-typed relation). Whether a nested node is
+ * written as a blank node is not on the wire: the lowering decides it from the
+ * property's `sh:nodeKind`.
  */
 export type MutationNodeDataJSON = {
   [key: string]: MutationValueJSON | undefined;
@@ -81,8 +82,6 @@ export type MutationNodeDataJSON = {
 /** Reserved node-data keys (not property labels). */
 const NODE_ID_KEY = '__id';
 const NODE_SHAPE_KEY = '__shape';
-/** Marks a nested node written as a blank node (`NodeDescriptionValue.__blank`). */
-const NODE_BLANK_KEY = '__blank';
 
 export type CreateMutationJSON = {
   v?: string;
@@ -206,7 +205,6 @@ export function encodeNodeData(
 ): MutationNodeDataJSON {
   const json: MutationNodeDataJSON = {};
   if (desc.__id) json[NODE_ID_KEY] = desc.__id;
-  if (desc.__blank) json[NODE_BLANK_KEY] = true;
   if (!expectedShape || desc.shape.id !== expectedShape.id) {
     json[NODE_SHAPE_KEY] = desc.shape.id;
   }
@@ -338,10 +336,8 @@ export function decodeNodeDataToRaw(
       : shape;
   const obj: Record<string, unknown> = {};
   if (typeof json[NODE_ID_KEY] === 'string') obj.id = json[NODE_ID_KEY];
-  if (json[NODE_BLANK_KEY] === true) obj.__blank = true;
   for (const [key, val] of Object.entries(json)) {
-    if (key === NODE_ID_KEY || key === NODE_SHAPE_KEY || key === NODE_BLANK_KEY) continue;
-    if (val === undefined) continue;
+    if (key === NODE_ID_KEY || key === NODE_SHAPE_KEY || val === undefined) continue;
     // Skip prototype-polluting keys from untrusted DSL-JSON input.
     if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
     const prop = nodeShape ? getPropertyShape(nodeShape, key) : undefined;

@@ -179,7 +179,6 @@ const toNodeData = (
     shape: description.shape.id,
     fields: description.fields.map((f) => toFieldUpdate(f, collector)),
     ...(description.__id ? {id: description.__id} : {}),
-    ...(description.__blank ? {blank: true as const} : {}),
   };
 };
 

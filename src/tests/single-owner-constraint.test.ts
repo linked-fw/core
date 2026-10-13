@@ -172,9 +172,10 @@ describe('single-owner constraint data', () => {
     expect(ps.__id).toBe(`${image.iri}/owners`);
     expect(ps.label).toBe('owners');
     expect(ps.maxCount).toBe(1);
-    // An untyped blank node, not an IRI: an IRI in sh:path is a predicate path (SHACL §2.3.1).
-    expect(ps.path.__blank).toBe(true);
+    // No id: `PropertyShape.path` is sh:BlankNodeOrIRI, so the create writes an untyped blank
+    // node, not an IRI. An IRI in sh:path is a predicate path (SHACL §2.3.1).
     expect(ps.path.__id).toBeUndefined();
+    expect(ps.path.id).toBeUndefined();
     expect(ps.path.shape).toBe(PathNode);
     expect(ps.path.inversePath).toEqual({id: `${SCHEMA}image`});
     expect((attachments.data as any).targetObjectsOf).toEqual([{id: `${EX}attachments`}]);

@@ -679,12 +679,15 @@ createPropertyShape({
 //these values will be consequent properties that follow each other. Other property paths are not supported yet.
 createPropertyShape(
   {
-    // No fixed valueShape: sh:path is polymorphic (a predicate IRI, an rdf:List for a
+    // No fixed valueShape: sh:path is polymorphic (a predicate IRI, a PathList for a
     // sequence, or a PathNode for inverse/alt/cardinality). Omitting valueShape lets the
     // create pipeline use each value's own shape. Simple paths are passed as
-    // {id} node references, complex paths as List/PathNode node-data.
+    // {id} node references, complex paths as PathList/PathNode node-data.
     path: shacl.path,
-    contains: true, // a property shape owns its complex path structure (List/PathNode)
+    contains: true, // a property shape owns its complex path structure (PathList/PathNode)
+    // A predicate path is an `{id}` reference (an IRI); a complex path's operator node or
+    // sequence list is written without an id, so it becomes a blank node, as SHACL requires.
+    nodeKind: shacl.BlankNodeOrIRI,
   },
   'path',
   shacl.IRI,
