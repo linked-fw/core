@@ -14,7 +14,11 @@
 import {describe} from '@jest/globals';
 import {FUSEKI_BASE_URL, FUSEKI_LIVE_ENV} from './fuseki-test-store';
 
-/** Every live block's name starts with this; `npm run test:fuseki` selects on it. */
+/**
+ * Every live block's name starts with this; `npm run test:fuseki` selects on it and the
+ * live-test reporter counts by it. Call `describeFuseki` at file top level: the reporter reads
+ * only a test's outermost describe.
+ */
 export const FUSEKI_TEST_PREFIX = '[fuseki]';
 
 export const fusekiLive = process.env[FUSEKI_LIVE_ENV] === '1';
