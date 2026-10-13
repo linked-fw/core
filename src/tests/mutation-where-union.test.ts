@@ -276,9 +276,10 @@ describe('mutation WHERE — live Fuseki (solutions add up)', () => {
     const sparql = updateToSparql(
       lower(UpdateBuilder.from(UBox).for(`${U}b1`).set({owns: {id: `${U}newcell`}})) as IRUpdateMutation,
     );
-    // the old value (1) + cell0's own triples (type, next, OWN tags) + the cells below
-    // it (types and next edges) as reached by the cascade.
-    const additive = 1 + (OWN + 2) + (CELLS - 1) + (CELLS - 2);
+    // the old value (1) + cell0's own triples (type, next, OWN tags) + the cascade, whose
+    // zero-or-more path reaches cell0 itself (a dependent UCell: its own triples again)
+    // and the cells below it (types and next edges). The overlap is added, never multiplied.
+    const additive = 1 + (OWN + 2) + (OWN + 2) + (CELLS - 1) + (CELLS - 2);
     expect(await countSolutions(sparql)).toBe(additive);
 
     await executeSparqlUpdate(sparql);

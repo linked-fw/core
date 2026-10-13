@@ -39,6 +39,9 @@ objects, only **serialized data**. Two things cross that boundary (three, with l
   The client and backend independently register the same shapes and must arrive at the
   **same URI** — that is how a query forwarded from the browser
   (`/call/<pkg>/<Shape>/<method>`) resolves to the right provider on the backend.
+  IRIs derived from it, such as a generated single-owner shape at
+  `<shape URI>/<accessor>.singleOwner` ([owned-values](owned-values.md)), inherit that
+  stability; generated shapes are only written to the store and never registered.
 - **Change events.** A `ChangeEvent` — a mutation's DSL-JSON plus its result, or
   precomputed `MutationEffects` — is plain data. A server forwards it to clients through
   a dataset's `subscribeChanges` feed or the app's own transport (`publishChange`); each

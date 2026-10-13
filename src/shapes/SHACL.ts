@@ -202,8 +202,21 @@ export interface ObjectPropertyShapeConfig extends PropertyShapeConfig {
    */
   shape?: typeof Shape | [string, string];
   /**
-   * Marks this property as *containment* (composition): the value(s) are owned by the subject
-   * and the delete/update cascade removes the owned subtree.
+   * Marks this property as *containment* (composition): the value(s) are owned by the subject.
+   * For replace, set-remove and the class check, ownership is decided per predicate across the
+   * registry: another shape's property on this predicate owns its values too.
+   *
+   * - With a `shape`: replacing, unsetting or set-removing a value deletes the old node's own
+   *   triples; deleting the subject (by id or in bulk) deletes its immediate values; re-sent
+   *   `{id}`s are kept. Linking an existing node by `{id}` is class-checked: it is refused when
+   *   the node is typed and none of its types is the shape's class, a registered sub-shape's,
+   *   or `sh:class`.
+   * - Without a `shape` (a polymorphic slot): only `dependent`-typed values are deleted.
+   * - In both cases the cascade follows the edge to `dependent`-typed descendants.
+   *
+   * With a `shape`, shape sync also persists a generated SHACL shape for this property (at its
+   * property shape's IRI plus `.singleOwner`, written by the declaring class only) that limits
+   * each value of the predicate to one owner. It is not enforced on write.
    */
   contains?: boolean;
 }

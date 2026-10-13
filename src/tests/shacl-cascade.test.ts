@@ -13,18 +13,24 @@ import {
 } from '../test-helpers/fuseki-test-store';
 import {linkedPackage} from '../utils/Package';
 import {Shape} from '../shapes/Shape';
-import {objectProperty} from '../shapes/SHACL';
+import {literalProperty, NodeShape, objectProperty} from '../shapes/SHACL';
 import {DeleteBuilder} from '../queries/DeleteBuilder';
 import {UpdateBuilder} from '../queries/UpdateBuilder';
 import {
+  deleteAllToSparql,
   deleteToSparql,
+  deleteWhereToSparql,
   updateToSparql,
+  updateWhereToSparql,
   upsertToSparql,
   buildOwnedCascade,
   buildOwnedSelfDelete,
 } from '../sparql/irToAlgebra';
 import type {
+  IRDeleteAllMutation,
   IRDeleteMutation,
+  IRDeleteWhereMutation,
+  IRUpdateWhereMutation,
   IRUpdateMutation,
   IRUpsertMutation,
 } from '../queries/IntermediateRepresentation';
@@ -82,6 +88,10 @@ class TPlainCell extends Shape {
 @linkedShape
 class TCard extends Shape {
   static targetClass = ex('TCard');
+  @literalProperty({path: ex('title'), maxCount: 1})
+  get title(): string {
+    return null;
+  }
   @objectProperty({path: ex('holds'), shape: TPlainCell, maxCount: 1, contains: true})
   get holds(): TPlainCell {
     return null;
@@ -89,6 +99,17 @@ class TCard extends Shape {
   @objectProperty({path: ex('cells'), shape: TPlainCell, contains: true})
   get cells(): TPlainCell[] {
     return [];
+  }
+}
+
+// A `contains` property WITHOUT a value shape — a polymorphic slot like `PropertyShape.path`,
+// whose value may be a shared predicate IRI. It must never self-delete its old value.
+@linkedShape
+class TSlot extends Shape {
+  static targetClass = ex('TSlot');
+  @objectProperty({path: ex('anyPath'), maxCount: 1, contains: true})
+  get anyPath(): unknown {
+    return null;
   }
 }
 
@@ -100,7 +121,7 @@ describe('owned-subtree cascade', () => {
     // follows contains edges as a one-or-more property path
     expect(sparql).toContain('owns');
     expect(sparql).toContain('next');
-    expect(sparql).toMatch(/\)\+ /); // (…|…)+ property path
+    expect(sparql).toMatch(/\)\* /); // (…|…)* property path
     // only deletes reached nodes asserted to be a dependent type
     expect(sparql).toContain('http://example.org/c#TCell');
   });
@@ -165,7 +186,7 @@ describe('owned-subtree cascade', () => {
 
     // Cascade markers still present under upsert.
     expect(upsertSparql).toContain('http://example.org/c#oldcell');
-    expect(upsertSparql).toMatch(/\)\+ /);
+    expect(upsertSparql).toMatch(/\)\* /);
     expect(upsertSparql).toContain('http://example.org/c#TCell');
 
     // And the only difference from the update is the type triple. This particular update
@@ -192,7 +213,7 @@ describe('owned-subtree cascade', () => {
     );
     // the removed value is a cascade root, followed by the contains property path
     expect(sparql).toContain('http://example.org/c#oldcell');
-    expect(sparql).toMatch(/\)\+ /);
+    expect(sparql).toMatch(/\)\* /);
     expect(sparql).toContain('http://example.org/c#TCell');
   });
 
@@ -269,8 +290,251 @@ describe('owned-subtree cascade', () => {
     );
     // DELETE removes the old owns edge AND the old owned subtree (cascade path present)
     expect(sparql).toContain('owns');
-    expect(sparql).toMatch(/\)\+ /);
+    expect(sparql).toMatch(/\)\* /);
     expect(sparql).toContain('http://example.org/c#TCell');
+  });
+});
+
+const C = 'http://example.org/c#';
+const updateSparqlOf = (builder: any) =>
+  updateToSparql(lower(builder) as unknown as IRUpdateMutation);
+const deleteBlockOf = (sparql: string) => sparql.split('INSERT')[0].split('WHERE')[0];
+/** The `{ … }` UNION branches of the WHERE, as strings. */
+const branchesOf = (sparql: string) =>
+  sparql.slice(sparql.indexOf('WHERE')).split(/\n\s*UNION\n/);
+
+describe('owned values: keep list, value-shape rule and subject delete', () => {
+  test('replace with the current {id} filters the old value', () => {
+    const sparql = updateSparqlOf(
+      UpdateBuilder.from(TCard).for(`${C}card1`).set({holds: {id: `${C}plain1`}}),
+    );
+    const branches = branchesOf(sparql);
+    const self = branches.find((b) => /\?old_holds \?uc0_sp \?uc0_so/.test(b));
+    expect(self).toBeDefined();
+    // The filter sits inside the same group as the edge that binds ?old_holds.
+    expect(self).toMatch(/#holds> \?old_holds \.[\s\S]*FILTER\(\?old_holds NOT IN \(<http:\/\/example\.org\/c#plain1>\)\)/);
+    // The edge-only branch has no filter: the edge is deleted and re-inserted (a no-op).
+    const edgeOnly = branches.find((b) => /#holds> \?old_holds \.\s*\}/.test(b) && !/\?uc0_/.test(b));
+    expect(edgeOnly).toBeDefined();
+    expect(edgeOnly).not.toContain('FILTER');
+    // Every cascade branch is filtered too.
+    const cascade = branches.filter((b) => /\?uc0_own\d/.test(b));
+    expect(cascade.length).toBeGreaterThan(0);
+    for (const b of cascade) expect(b).toContain('FILTER(?old_holds NOT IN (<http://example.org/c#plain1>))');
+  });
+
+  test('replace with a different {id} keeps the filter harmless', () => {
+    const sparql = updateSparqlOf(
+      UpdateBuilder.from(TCard).for(`${C}card1`).set({holds: {id: `${C}newplain`}}),
+    );
+    const filters = sparql.match(/FILTER\([^)]*\)\)/g) ?? [];
+    expect(filters.length).toBeGreaterThan(0);
+    // Only the new id is listed; an old value that differs is still deleted.
+    for (const f of filters) expect(f).toBe('FILTER(?old_holds NOT IN (<http://example.org/c#newplain>))');
+  });
+
+  test('array overwrite keeps the retained ids', () => {
+    const sparql = updateSparqlOf(
+      UpdateBuilder.from(TCard).for(`${C}card1`).set({cells: [{id: `${C}a`}, {id: `${C}b`}]} as any),
+    );
+    const kept = 'FILTER(?old_cells NOT IN (<http://example.org/c#a>, <http://example.org/c#b>))';
+    const branches = branchesOf(sparql);
+    const self = branches.find((b) => /\?old_cells \?uc0_sp \?uc0_so/.test(b));
+    expect(self).toContain(kept);
+    const cascade = branches.filter((b) => /\?uc0_own\d/.test(b));
+    expect(cascade.length).toBeGreaterThan(0);
+    for (const b of cascade) expect(b).toContain(kept);
+  });
+
+  test('nested create with the current id is a full rewrite', () => {
+    const sparql = updateSparqlOf(
+      UpdateBuilder.from(TCard).for(`${C}card1`).set({holds: {id: `${C}plain1`, label: 'x'}} as any),
+    );
+    expect(sparql).not.toContain('NOT IN');
+    expect(deleteBlockOf(sparql)).toMatch(/\?old_holds \?\w+ \?\w+ \./);
+  });
+
+  test('set-mod add+remove of the same id emits no node delete', () => {
+    const sparql = updateSparqlOf(
+      UpdateBuilder.from(TCard)
+        .for(`${C}card1`)
+        .set({cells: {add: [{id: `${C}x`}], remove: [{id: `${C}x`}]}} as any),
+    );
+    const del = deleteBlockOf(sparql);
+    expect(del).not.toMatch(/<http:\/\/example\.org\/c#x> \?\w+ \?\w+ \./);
+    expect(del).not.toMatch(/\?ucr_/);
+    // The edge delete remains; the INSERT puts it back.
+    expect(del).toContain('<http://example.org/c#card1> <http://example.org/c#cells> <http://example.org/c#x> .');
+  });
+
+  test('set-remove cascade is anchored on the owning edge', () => {
+    const sparql = updateSparqlOf(
+      UpdateBuilder.from(TCard).for(`${C}card1`).set({cells: {remove: [{id: `${C}old`}]}} as any),
+    );
+    const cascade = branchesOf(sparql).filter((b) => /\?ucr_cells_0_own\d/.test(b));
+    expect(cascade.length).toBeGreaterThan(0);
+    for (const b of cascade) {
+      expect(b).toMatch(/<http:\/\/example\.org\/c#card1> <http:\/\/example\.org\/c#cells> <http:\/\/example\.org\/c#old> \./);
+    }
+  });
+
+  test('buildOwnedSelfDelete with keep wraps the block in a NOT IN filter', () => {
+    const subject = {kind: 'iri', value: `${C}card1`} as const;
+    const prop = {kind: 'iri', value: `${C}holds`} as const;
+    const old = {kind: 'variable', name: 'old_holds'} as const;
+    const keep = [{kind: 'iri', value: `${C}plain1`} as const];
+    const plain = buildOwnedSelfDelete(subject, prop, old, 'z_');
+    const kept = buildOwnedSelfDelete(subject, prop, old, 'z_', keep);
+    const block = kept.whereOptionals[0] as any;
+    expect(block.type).toBe('filter');
+    expect(block.expression.kind).toBe('in_expr');
+    expect(block.expression.negated).toBe(true);
+    expect(block.expression.value).toEqual({kind: 'variable_expr', name: 'old_holds'});
+    expect(block.expression.list).toEqual([{kind: 'iri_expr', value: `${C}plain1`}]);
+    expect(block.inner.triples).toEqual((plain.whereOptionals[0] as any).triples);
+    // An IRI old term (set-remove) ignores keep.
+    const iriOld = buildOwnedSelfDelete(subject, prop, {kind: 'iri', value: `${C}x`}, 'z_', keep);
+    expect(iriOld.whereOptionals[0].type).toBe('bgp');
+  });
+
+  test('buildOwnedCascade with keep filters every block', () => {
+    const old = {kind: 'variable', name: 'old_owns'} as const;
+    const keep = [{kind: 'iri', value: `${C}cell1`} as const];
+    const plain = buildOwnedCascade(old, 'k_');
+    const kept = buildOwnedCascade(old, 'k_', undefined, keep);
+    expect(kept.whereOptionals).toHaveLength(plain.whereOptionals.length);
+    kept.whereOptionals.forEach((block: any, i) => {
+      expect(block.type).toBe('filter');
+      expect(block.expression.negated).toBe(true);
+      expect(block.inner).toEqual(plain.whereOptionals[i]);
+    });
+  });
+
+  test('cascade path includes the root (zero-or-more)', () => {
+    const sparql = deleteToSparql(
+      lower(DeleteBuilder.from(TBox, {id: `${C}b1`})) as IRDeleteMutation,
+    );
+    expect(sparql).toMatch(/\)\* /);
+    expect(sparql).not.toMatch(/\)\+ /);
+  });
+
+  test('valueShape-less contains field: no self-delete', () => {
+    const sparql = updateSparqlOf(
+      UpdateBuilder.from(TSlot).for(`${C}s1`).set({anyPath: {id: `${C}p`}} as any),
+    );
+    // No wildcard delete of the old value's own triples...
+    expect(deleteBlockOf(sparql)).not.toMatch(/\?old_anyPath \?\w+ \?\w+ \./);
+    // ...and every block that reads ?old_anyPath beyond the edge requires a dependent type.
+    for (const b of branchesOf(sparql).filter((b) => /\?old_anyPath \S/.test(b) && /\?uc0_/.test(b))) {
+      expect(b).toMatch(/rdf:type (shacl:PropertyShape|rdf:List|core:PathNode|<http:\/\/example\.org\/c#TCell>)/);
+    }
+    // The cascade still runs, so a dependent value (a PathNode) is cleaned up.
+    expect(sparql).toMatch(/\?old_anyPath \([^)]*\)\* \?uc0_own\d/);
+  });
+
+  test('subject delete removes immediately-owned non-dependent children', () => {
+    const sparql = deleteToSparql(
+      lower(DeleteBuilder.from(TCard, {id: `${C}card1`})) as IRDeleteMutation,
+    );
+    const where = sparql.slice(sparql.indexOf('WHERE'));
+    expect(where).toMatch(/\{\s*<http:\/\/example\.org\/c#card1> <http:\/\/example\.org\/c#holds> \?d0 \.\s*\?d0 \?d0_p \?d0_o \.\s*\}/);
+    expect(where).toMatch(/\{\s*<http:\/\/example\.org\/c#card1> <http:\/\/example\.org\/c#cells> \?d1 \.\s*\?d1 \?d1_p \?d1_o \.\s*\}/);
+    expect(where).not.toContain('OPTIONAL');
+    expect(deleteBlockOf(sparql)).toContain('?d0 ?d0_p ?d0_o .');
+    expect(deleteBlockOf(sparql)).toContain('?d1 ?d1_p ?d1_o .');
+  });
+
+  test('subject delete skips valueShape-less contains properties', () => {
+    const sparql = deleteToSparql(
+      lower(DeleteBuilder.from(TSlot, {id: `${C}s1`})) as IRDeleteMutation,
+    );
+    expect(sparql).not.toMatch(/\?d\d/);
+    expect(sparql).not.toMatch(/#anyPath> \?d/);
+  });
+
+  test('multi-id delete suffixes child vars', () => {
+    const sparql = deleteToSparql(
+      lower(DeleteBuilder.from(TCard, [{id: `${C}card1`}, {id: `${C}card2`}])) as IRDeleteMutation,
+    );
+    expect(sparql).toContain('<http://example.org/c#card2> <http://example.org/c#holds> ?d0_1 .');
+    expect(sparql).toContain('?d0_1 ?d0_1_p ?d0_1_o .');
+    expect(sparql).toContain('?d1_0 ?d1_0_p ?d1_0_o .');
+  });
+
+  const CARD_TYPE = '\\?a0 rdf:type <http:\\/\\/example\\.org\\/c#TCard> \\.';
+
+  test('deleteAll removes immediately-owned children, each block led by the type triple', () => {
+    const sparql = deleteAllToSparql(lower(DeleteBuilder.from(TCard).all()) as IRDeleteAllMutation);
+    const where = sparql.slice(sparql.indexOf('WHERE'));
+    expect(where).toMatch(
+      new RegExp(`\\{\\s*${CARD_TYPE}\\s*\\?a0 <http:\\/\\/example\\.org\\/c#holds> \\?d0 \\.\\s*\\?d0 \\?d0_p \\?d0_o \\.\\s*\\}`),
+    );
+    expect(where).toMatch(
+      new RegExp(`\\{\\s*${CARD_TYPE}\\s*\\?a0 <http:\\/\\/example\\.org\\/c#cells> \\?d1 \\.\\s*\\?d1 \\?d1_p \\?d1_o \\.\\s*\\}`),
+    );
+    // TPlainCell is not dependent and owns nothing: no cascade closure at all.
+    expect(where).not.toMatch(/\?c_own\d/);
+    expect(where).not.toContain('OPTIONAL');
+    const del = deleteBlockOf(sparql);
+    expect(del).toContain('?a0 ?p ?o .');
+    expect(del).toContain('?d0 ?d0_p ?d0_o .');
+    expect(del).toContain('?d1 ?d1_p ?d1_o .');
+  });
+
+  test('deleteAll of a dependent-owning shape cascades; a shape-less contains property adds no child block', () => {
+    const box = deleteAllToSparql(lower(DeleteBuilder.from(TBox).all()) as IRDeleteAllMutation);
+    expect(box).toContain('?a0 <http://example.org/c#owns> ?d0 .');
+    expect(box).toMatch(/\?a0 \([^)]*<http:\/\/example\.org\/c#next>[^)]*\)\* \?c_own\d/);
+    // The cascade block is led by the type triple, so it never runs with ?a0 unbound.
+    for (const b of branchesOf(box).filter((b) => /\?c_own\d/.test(b))) {
+      expect(b).toMatch(/\?a0 rdf:type <http:\/\/example\.org\/c#TBox> \.\s*\?a0 \([^)]*\)\* \?c_own\d/);
+    }
+    expect(box).not.toContain('#ref> ?d');
+    const slot = deleteAllToSparql(lower(DeleteBuilder.from(TSlot).all()) as IRDeleteAllMutation);
+    expect(slot).not.toMatch(/\?d\d/);
+    expect(slot).toMatch(/\?c_own\d/);
+  });
+
+  test('delete().where() carries the same owned blocks, joined with the filtered match', () => {
+    const sparql = deleteWhereToSparql(
+      lower(DeleteBuilder.from(TCard).where((c: any) => c.title.equals('x'))) as IRDeleteWhereMutation,
+    );
+    const where = sparql.slice(sparql.indexOf('WHERE'));
+    expect(where).toContain('FILTER');
+    expect(where).toContain('?a0 <http://example.org/c#holds> ?d0 .');
+    expect(where).toContain('?a0 <http://example.org/c#cells> ?d1 .');
+    expect(where).not.toMatch(/\?c_own\d/);
+    expect(where).not.toContain('OPTIONAL');
+    const box = deleteWhereToSparql(
+      lower(DeleteBuilder.from(TBox).where((b: any) => b.ref.equals({id: `${C}x`}))) as IRDeleteWhereMutation,
+    );
+    expect(box).toMatch(/\?c_own0 rdf:type <http:\/\/example\.org\/c#TCell>/);
+  });
+
+  // The subject deletes emit a cascade block only per dependent type the shape can reach.
+  const cascadeTypesOf = (sparql: string) =>
+    [...sparql.matchAll(/\?c\w*_own\d+ rdf:type (\S+) \./g)].map((m) => m[1]);
+
+  test('subject-delete cascade: only reachable dependent types', () => {
+    const byId = (shape: any) =>
+      deleteToSparql(lower(DeleteBuilder.from(shape, {id: `${C}s1`})) as IRDeleteMutation);
+    const all = (shape: any) =>
+      deleteAllToSparql(lower(DeleteBuilder.from(shape).all()) as IRDeleteAllMutation);
+    const TCELL = `<${C}TCell>`;
+    // Owns only a non-dependent value: none.
+    expect(cascadeTypesOf(byId(TCard))).toEqual([]);
+    expect(cascadeTypesOf(all(TCard))).toEqual([]);
+    // Owns a dependent TCell (which owns TCell): exactly TCell.
+    expect(cascadeTypesOf(byId(TBox))).toEqual([TCELL]);
+    expect(cascadeTypesOf(all(TBag))).toEqual([TCELL]);
+    // A dependent shape that owns its own kind cascades into it.
+    expect(cascadeTypesOf(byId(TCell))).toEqual([TCELL]);
+    // A shape-less contains slot may reach anything: every dependent type.
+    const every = cascadeTypesOf(byId(TSlot));
+    expect(every).toEqual(expect.arrayContaining([TCELL, 'shacl:PropertyShape', 'rdf:List', 'core:PathNode']));
+    expect(cascadeTypesOf(all(TSlot))).toEqual(every);
+    // The shape-sync delete of a NodeShape reaches PropertyShape.path (shape-less): unchanged.
+    expect(cascadeTypesOf(byId(NodeShape))).toEqual(every);
   });
 });
 
@@ -346,6 +610,274 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
     );
     expect(Number(orphans.results.bindings[0]?.c?.value ?? 0)).toBe(0);
   });
+
+  const hasEdge = async (s: string, p: string, o: string): Promise<boolean> => {
+    const res = await executeSparqlQuery(`ASK { ${iri(s)} ${iri(p)} ${iri(o)} }`);
+    return res.boolean === true;
+  };
+
+  test('re-sending the current id keeps the owned node', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} . }`,
+    );
+    await executeSparqlUpdate(materializeCell('plain1', 'a'));
+
+    await executeSparqlUpdate(replaceHolds('plain1'));
+
+    expect(await countTriples('plain1')).toBe(2);
+    expect(await hasEdge('card1', 'holds', 'plain1')).toBe(true);
+  });
+
+  test('array overwrite keeps retained, deletes dropped', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ` +
+        `${iri('cells')} ${iri('a')}, ${iri('b')}, ${iri('c')} . }`,
+    );
+    for (const id of ['a', 'b', 'c']) await executeSparqlUpdate(materializeCell(id, id));
+
+    await executeSparqlUpdate(
+      updateToSparql(
+        lower(
+          UpdateBuilder.from(TCard)
+            .for(`${C}card1`)
+            .set({cells: [{id: `${C}a`}, {id: `${C}b`}]} as any),
+        ) as IRUpdateMutation,
+      ),
+    );
+
+    expect(await countTriples('a')).toBe(2);
+    expect(await countTriples('b')).toBe(2);
+    expect(await countTriples('c')).toBe(0);
+    expect(await hasEdge('card1', 'cells', 'a')).toBe(true);
+    expect(await hasEdge('card1', 'cells', 'b')).toBe(true);
+    expect(await hasEdge('card1', 'cells', 'c')).toBe(false);
+  });
+
+  test('subject delete removes owned child, keeps referenced-only nodes', async () => {
+    if (!fusekiAvailable) return;
+    // card1 owns plain1. box1 only refers to plain2 (not owned by anyone) and, as a
+    // non-owning reference, to plain1, which will dangle after card1 is deleted (A5).
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} .
+        ${iri('box1')} rdf:type ${iri('TBox')} ; ${iri('ref')} ${iri('plain2')} ; ${iri('tag')} ${iri('plain1')} . }`,
+    );
+    await executeSparqlUpdate(materializeCell('plain1', 'a'));
+    await executeSparqlUpdate(materializeCell('plain2', 'b'));
+
+    await executeSparqlUpdate(
+      deleteToSparql(lower(DeleteBuilder.from(TCard, {id: `${C}card1`})) as IRDeleteMutation),
+    );
+
+    expect(await countTriples('card1')).toBe(0);
+    expect(await countTriples('plain1')).toBe(0);
+    expect(await countTriples('plain2')).toBe(2);
+    // The referencing subject is untouched, including its now-dangling reference.
+    expect(await countTriples('box1')).toBe(3);
+    expect(await hasEdge('box1', 'tag', 'plain1')).toBe(true);
+  });
+
+  test('replacing a valueShape-less contains value keeps a plain predicate IRI', async () => {
+    if (!fusekiAvailable) return;
+    const RDFS = 'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n';
+    await executeSparqlUpdate(
+      `${RDF}${RDFS}INSERT DATA { ${iri('pred')} rdfs:label "x" .
+        ${iri('slot1')} rdf:type ${iri('TSlot')} ; ${iri('anyPath')} ${iri('pred')} . }`,
+    );
+
+    await executeSparqlUpdate(
+      updateToSparql(
+        lower(
+          UpdateBuilder.from(TSlot).for(`${C}slot1`).set({anyPath: {id: `${C}pred2`}} as any),
+        ) as IRUpdateMutation,
+      ),
+    );
+
+    expect(await countTriples('pred')).toBe(1);
+    expect(await hasEdge('slot1', 'anyPath', 'pred2')).toBe(true);
+    expect(await hasEdge('slot1', 'anyPath', 'pred')).toBe(false);
+  });
+
+  test('set-remove of an id the subject does not own deletes nothing of it', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('cells')} ${iri('a')} .
+        ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('cells')} ${iri('x')} . }`,
+    );
+    await executeSparqlUpdate(materializeCell('a', 'a'));
+    await executeSparqlUpdate(materializeCell('x', 'x'));
+
+    await executeSparqlUpdate(
+      updateToSparql(
+        lower(
+          UpdateBuilder.from(TCard).for(`${C}card1`).set({cells: {remove: [{id: `${C}x`}]}} as any),
+        ) as IRUpdateMutation,
+      ),
+    );
+
+    expect(await countTriples('x')).toBe(2);
+    expect(await hasEdge('card2', 'cells', 'x')).toBe(true);
+    expect(await countTriples('a')).toBe(2);
+    expect(await hasEdge('card1', 'cells', 'a')).toBe(true);
+  });
+
+  test('a kept id keeps its dependent subtree', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('b1')} rdf:type ${iri('TBox')} ; ${iri('owns')} ${iri('cell0')} .
+        ${iri('cell0')} rdf:type ${iri('TCell')} ; ${iri('next')} ${iri('cell1')} .
+        ${iri('cell1')} rdf:type ${iri('TCell')} ; ${iri('next')} ${iri('cell2')} .
+        ${iri('cell2')} rdf:type ${iri('TCell')} . }`,
+    );
+
+    await executeSparqlUpdate(
+      updateToSparql(
+        lower(UpdateBuilder.from(TBox).for(`${C}b1`).set({owns: {id: `${C}cell0`}})) as IRUpdateMutation,
+      ),
+    );
+
+    expect(await hasEdge('b1', 'owns', 'cell0')).toBe(true);
+    expect(await countTriples('cell0')).toBe(2);
+    expect(await countTriples('cell1')).toBe(2);
+    expect(await countTriples('cell2')).toBe(1);
+  });
+
+  test('upsert with the current id keeps the owned node', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} . }`,
+    );
+    await executeSparqlUpdate(materializeCell('plain1', 'a'));
+
+    await executeSparqlUpdate(
+      upsertToSparql(
+        lower(
+          UpdateBuilder.upsertFrom(TCard).for(`${C}card1`).set({holds: {id: `${C}plain1`}}),
+        ) as IRUpsertMutation,
+      ),
+    );
+
+    expect(await countTriples('plain1')).toBe(2);
+    expect(await hasEdge('card1', 'holds', 'plain1')).toBe(true);
+  });
+
+  test('forAll() and where() with the current id keep it, and replace the others', async () => {
+    if (!fusekiAvailable) return;
+    const seed = async () => {
+      await clearAllData();
+      await executeSparqlUpdate(
+        `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('title')} "x" ; ${iri('holds')} ${iri('plain1')} .
+          ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('title')} "y" ; ${iri('holds')} ${iri('plain2')} . }`,
+      );
+      await executeSparqlUpdate(materializeCell('plain1', 'a'));
+      await executeSparqlUpdate(materializeCell('plain2', 'b'));
+    };
+
+    // forAll: every card now holds plain1; plain1 is kept, card2's old plain2 is deleted.
+    await seed();
+    await executeSparqlUpdate(
+      updateWhereToSparql(
+        lower(UpdateBuilder.from(TCard).forAll().set({holds: {id: `${C}plain1`}})) as IRUpdateWhereMutation,
+      ),
+    );
+    expect(await countTriples('plain1')).toBe(2);
+    expect(await countTriples('plain2')).toBe(0);
+    expect(await hasEdge('card1', 'holds', 'plain1')).toBe(true);
+    expect(await hasEdge('card2', 'holds', 'plain1')).toBe(true);
+
+    // where(): only the matched card is touched; its kept value survives.
+    await seed();
+    await executeSparqlUpdate(
+      updateWhereToSparql(
+        lower(
+          UpdateBuilder.from(TCard)
+            .where((c: any) => c.title.equals('x'))
+            .set({holds: {id: `${C}plain1`}}),
+        ) as IRUpdateWhereMutation,
+      ),
+    );
+    expect(await countTriples('plain1')).toBe(2);
+    expect(await countTriples('plain2')).toBe(2);
+    expect(await hasEdge('card1', 'holds', 'plain1')).toBe(true);
+    expect(await hasEdge('card2', 'holds', 'plain2')).toBe(true);
+  });
+
+  test('two owners of one node: deleting one deletes the node, the other edge dangles', async () => {
+    if (!fusekiAvailable) return;
+    // card2 links plain1 by {id} although card1 already owns it, which breaks the
+    // single-owner rule. Nothing refuses that on write (the rule is SHACL only).
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} .
+        ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} . }`,
+    );
+    await executeSparqlUpdate(materializeCell('plain1', 'a'));
+
+    await executeSparqlUpdate(
+      deleteToSparql(lower(DeleteBuilder.from(TCard, {id: `${C}card1`})) as IRDeleteMutation),
+    );
+
+    expect(await countTriples('card1')).toBe(0);
+    expect(await countTriples('plain1')).toBe(0);
+    // The other owner keeps its edge, which now points at a node with no triples.
+    expect(await countTriples('card2')).toBe(2);
+    expect(await hasEdge('card2', 'holds', 'plain1')).toBe(true);
+  });
+
+  test('deleteAll deletes every subject\'s owned children, keeps unowned nodes', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} ; ${iri('cells')} ${iri('a')} .
+        ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain2')} . }`,
+    );
+    for (const id of ['plain1', 'plain2', 'a', 'free']) await executeSparqlUpdate(materializeCell(id, id));
+
+    await executeSparqlUpdate(
+      deleteAllToSparql(lower(DeleteBuilder.from(TCard).all()) as IRDeleteAllMutation),
+    );
+
+    for (const id of ['card1', 'card2', 'plain1', 'plain2', 'a']) expect(await countTriples(id)).toBe(0);
+    expect(await countTriples('free')).toBe(2);
+  });
+
+  test('deleteAll cascades into a dependent owned chain', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('b1')} rdf:type ${iri('TBox')} ; ${iri('owns')} ${iri('cell0')} ; ${iri('ref')} ${iri('free')} .
+        ${iri('cell0')} rdf:type ${iri('TCell')} ; ${iri('next')} ${iri('cell1')} .
+        ${iri('cell1')} rdf:type ${iri('TCell')} ; ${iri('next')} ${iri('cell2')} .
+        ${iri('cell2')} rdf:type ${iri('TCell')} .
+        ${iri('free')} rdf:type ${iri('TCell')} . }`,
+    );
+
+    await executeSparqlUpdate(
+      deleteAllToSparql(lower(DeleteBuilder.from(TBox).all()) as IRDeleteAllMutation),
+    );
+
+    for (const id of ['b1', 'cell0', 'cell1', 'cell2']) expect(await countTriples(id)).toBe(0);
+    expect(await countTriples('free')).toBe(1);
+  });
+
+  test('delete().where() deletes only the matched subject\'s owned children', async () => {
+    if (!fusekiAvailable) return;
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('title')} "x" ; ${iri('holds')} ${iri('plain1')} .
+        ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('title')} "y" ; ${iri('holds')} ${iri('plain2')} . }`,
+    );
+    await executeSparqlUpdate(materializeCell('plain1', 'a'));
+    await executeSparqlUpdate(materializeCell('plain2', 'b'));
+
+    await executeSparqlUpdate(
+      deleteWhereToSparql(
+        lower(DeleteBuilder.from(TCard).where((c: any) => c.title.equals('x'))) as IRDeleteWhereMutation,
+      ),
+    );
+
+    expect(await countTriples('card1')).toBe(0);
+    expect(await countTriples('plain1')).toBe(0);
+    expect(await countTriples('card2')).toBe(3);
+    expect(await countTriples('plain2')).toBe(2);
+  });
 });
 
 // The shape sync deletes every shape description through this path on every boot.
@@ -394,8 +926,9 @@ describe('owned-subtree cascade — live Fuseki (delete WHERE size)', () => {
     const solutions = Number(res.results.bindings[0]?.n?.value ?? 0);
 
     // b1's own triples: type + OWN tags + owns + ref = OWN + 3; incoming: REFS;
+    // the immediately-owned cell0's own triples (type + next) = 2;
     // owned cells: CELLS types + (CELLS - 1) next edges.
-    const additive = OWN + 3 + REFS + CELLS + (CELLS - 1);
+    const additive = OWN + 3 + REFS + 2 + CELLS + (CELLS - 1);
     expect(solutions).toBe(additive);
 
     await executeSparqlUpdate(sparql);

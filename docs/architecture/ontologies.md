@@ -23,6 +23,12 @@ They are not a smaller version of the real thing and should not grow into one. I
 itself wanting a term it does not have, the question is whether core should be reaching for
 that term at all.
 
+`linked-core` is core's own vocabulary: the terms of its SHACL meta-model extensions, such as
+`core:contains`, `core:dependent`, `core:displayHidden`, and `core:generated` /
+`core:generatedShape` (the marker and ownership edge of the shapes shape sync generates, see
+[owned-values](owned-values.md)). The `shacl` shortcut likewise grows only by the terms core
+writes, e.g. `sh:targetObjectsOf` for those generated shapes.
+
 ## A package's ontology is the full thing
 
 Everywhere else — `@_linked/xsd`, `@_linked/schema`, `@_linked/sioc` and the rest — an

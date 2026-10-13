@@ -8,6 +8,11 @@ import './shapes/index.js';
 // Registers the live-query store so `query.live()` works (side effects only).
 import './live.js';
 export {syncShapes, syncShape} from './shapes/syncShapes.js';
+export {
+  singleOwnerShapeIri,
+  singleOwnerProperties,
+  buildSingleOwnerConstraints,
+} from './shapes/singleOwnerConstraint.js';
 export {rdfList} from './shapes/List.js';
 export {serializePathToNodeData} from './shapes/serializePathToNodeData.js';
 // Core public API surface (documented as root imports in the README).

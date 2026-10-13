@@ -8,6 +8,10 @@ import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
 import type {
   IRSelectQuery,
   IRCountQuery,
+  IRCreateMutation,
+  IRUpdateMutation,
+  IRUpdateWhereMutation,
+  IRUpsertMutation,
   SelectResult,
   CreateResult,
   UpdateResult,
@@ -35,6 +39,12 @@ import {
 } from './resultMapping.js';
 import {generateEntityUri, type SparqlOptions} from './sparqlUtils.js';
 import {lower} from '../queries/lower.js';
+import {
+  assertOwnedLinkTypes,
+  collectOwnedLinks,
+  ownedLinkTypesFromResults,
+  ownedLinkTypesQuery,
+} from './ownedLinkCheck.js';
 
 /**
  * Abstract base class for SPARQL-backed datasets.
@@ -160,6 +170,7 @@ export abstract class SparqlDataset implements IDataset {
     const ir = lower(query);
     const uri = ir.data.id || generateEntityUri(ir.data.shape, this.options);
     ir.data.id = uri;
+    await this.checkOwnedLinks(ir);
     const sparql = createToSparql(ir, this.options);
     await this.executeSparqlUpdate(sparql);
     return mapSparqlCreateResult(uri, ir);
@@ -167,6 +178,7 @@ export abstract class SparqlDataset implements IDataset {
 
   async updateQuery(query: UpdateQuery): Promise<UpdateResult> {
     const ir = lower(query);
+    await this.checkOwnedLinks(ir);
     if (ir.kind === 'update_where') {
       const sparql = updateWhereToSparql(ir, this.options);
       await this.executeSparqlUpdate(sparql);
@@ -178,6 +190,24 @@ export abstract class SparqlDataset implements IDataset {
         : updateToSparql(ir, this.options);
     await this.executeSparqlUpdate(sparql);
     return mapSparqlUpdateResult(ir);
+  }
+
+  /**
+   * Refuse a mutation that links a node of the wrong class into a `contains` property
+   * (see `ownedLinkCheck.ts`). An owner deletes what it contains, so a Person linked into
+   * an ImageObject slot would be deleted with its owner. Runs before the update is sent, so
+   * a refused mutation writes nothing. With no such link no query is sent; otherwise one
+   * SELECT covers every linked id.
+   */
+  protected async checkOwnedLinks(
+    ir: IRCreateMutation | IRUpdateMutation | IRUpsertMutation | IRUpdateWhereMutation,
+  ): Promise<void> {
+    const links = collectOwnedLinks(ir);
+    if (links.length === 0) return;
+    const json = await this.executeSparqlSelect(
+      ownedLinkTypesQuery(links.map((link) => link.id)),
+    );
+    assertOwnedLinkTypes(links, ownedLinkTypesFromResults(json));
   }
 
   async deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {

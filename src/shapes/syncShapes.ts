@@ -15,6 +15,7 @@ import {DeleteBuilder} from '../queries/DeleteBuilder.js';
 import type {IDataset} from '../interfaces/IDataset.js';
 import {rdfList} from './List.js';
 import {serializePathToNodeData} from './serializePathToNodeData.js';
+import {buildSingleOwnerConstraints} from './singleOwnerConstraint.js';
 
 /**
  * The npm scope of framework shapes (NodeShape/PropertyShape/List/PathNode/Shape) that
@@ -90,29 +91,59 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
   d.properties = getUniquePropertyShapes(nodeShape).map((ps) =>
     buildPropertyShapeData(ps, shapeIri),
   );
+  // The single-owner constraints of the shape's own `contains` properties, owned through
+  // `core:generatedShape` and written nested in the same create with their fixed IRIs.
+  const generated = buildSingleOwnerConstraints(nodeShape, shapeIri);
+  if (generated.length > 0) {
+    d.generatedShapes = generated.map(({iri, data}) => ({__id: iri, ...data}));
+  }
   return d;
 }
 
 /**
- * The per-shape `delete → create` thunk shared by `syncShapes()` and `syncShape()`. The delete
- * cascade-cleans the shape's old property-shape / list / path subtrees; the create rebuilds them.
+ * The per-shape `delete → create` thunk shared by `syncShapes()` and `syncShape()`: exactly two
+ * requests. The delete cascade-cleans the shape's old property-shape / list / path subtrees; the
+ * create rebuilds them.
  *
- * `ds` (optional) targets an explicit dataset — both the delete and the create run against it
- * instead of the global router. Omitted → today's global behavior.
+ * The single-owner constraints generated from the shape's own `contains` properties
+ * (`${iri}/${label}.singleOwner`, see `singleOwnerConstraint.ts`) are owned by the shape through
+ * `core:generatedShape` (a `contains` property with value shape NodeShape). The delete removes
+ * each one's own triples (the immediate owned-child block) and their property shapes and path
+ * nodes (the dependent cascade); the create writes the current ones nested, in the same request
+ * as the shape. A removed or renamed accessor therefore loses its constraint on the next sync,
+ * and a NodeShape the shape does not own is never touched.
+ *
+ * `ds` (optional) targets an explicit dataset — both requests run against it instead of the
+ * global router. Omitted → today's global behavior.
  */
 function buildSyncThunk(nodeShape: NodeShapeData, iri: string, ds?: IDataset): () => Promise<void> {
-  return () => {
+  return async () => {
     // Build the data fresh on each invocation, so every run writes from the current
     // shape metadata.
     const data = buildNodeShapeData(nodeShape, iri);
-    return (DeleteBuilder.from(NodeShape, {id: iri}).exec(ds) as Promise<unknown>)
-      .then(() =>
-        (NodeShape.create(data as never).withId(iri) as unknown as {
-          exec: (target?: IDataset) => Promise<unknown>;
-        }).exec(ds),
-      )
-      .then(() => undefined);
+    await DeleteBuilder.from(NodeShape, {id: iri}).exec(ds);
+    await (NodeShape.create(data as never).withId(iri) as unknown as {
+      exec: (target?: IDataset) => Promise<unknown>;
+    }).exec(ds);
   };
+}
+
+/** The generated single-owner shape IRIs a code shape writes. */
+function generatedIrisOf(nodeShape: NodeShapeData, iri: string): string[] {
+  return buildSingleOwnerConstraints(nodeShape, iri).map((c) => c.iri);
+}
+
+/** Throw when a registered shape IRI equals one of a shape's generated single-owner IRIs. */
+function assertNoGeneratedIriCollision(
+  nodeShape: NodeShapeData,
+  iri: string,
+  isRegistered: (iri: string) => boolean,
+): void {
+  for (const generated of generatedIrisOf(nodeShape, iri)) {
+    if (isRegistered(generated)) {
+      throw new Error(`Shape IRI ${generated} collides with a generated single-owner shape`);
+    }
+  }
 }
 
 /** Options controlling how {@link syncShapes} treats store shapes that are not in code. */
@@ -190,6 +221,16 @@ export async function syncShapes(
     userShapes.push({iri, nodeShape: shapeClass.shape});
   }
   const localShapeIris = new Set(userShapes.map((s) => s.iri));
+  for (const {iri, nodeShape} of userShapes) {
+    assertNoGeneratedIriCollision(nodeShape, iri, (id) => localShapeIris.has(id));
+  }
+  // The generated single-owner shapes of in-code shapes are written by the same thunks, so they
+  // are never orphans. Derived in memory from the same function that builds them; a stale
+  // generated shape (removed accessor or shape) is not protected and goes with its owner's
+  // delete, through the `core:generatedShape` cascade.
+  for (const {iri, nodeShape} of userShapes) {
+    for (const generated of generatedIrisOf(nodeShape, iri)) localShapeIris.add(generated);
+  }
   // Namespaces this process actually writes — the ownership scope for `'ownedNamespaces'` pruning.
   const ownedNamespaces = new Set(userShapes.map((s) => shapeNamespace(s.iri)));
 
@@ -266,5 +307,6 @@ export function syncShape(target: typeof Shape | string, ds?: IDataset): () => P
     throw new Error(`syncShape: refusing to sync framework/meta shape ${iri}`);
   }
 
+  assertNoGeneratedIriCollision(nodeShape, iri, (id) => !!getShapeClass(id));
   return buildSyncThunk(nodeShape, iri, ds);
 }

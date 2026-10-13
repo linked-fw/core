@@ -189,7 +189,8 @@ describe('syncShapes with a partial registry (deep imports)', () => {
     for (const run of plan) await run();
     const deletes = storeCalls.filter((c) => c.kind === 'delete').map((c) => c.id);
     const creates = storeCalls.filter((c) => c.kind === 'create').map((c) => c.id);
-    // only the registered shapes are touched (delete→recreate)
+    // only the registered shapes are touched (delete→recreate); neither has a `contains`
+    // property or a stored generated shape, so no single-owner shape is deleted or created
     expect(deletes.sort()).toEqual([TOther.shape.id, TUser.shape.id].sort());
     expect(creates.sort()).toEqual([TOther.shape.id, TUser.shape.id].sort());
   });
@@ -219,7 +220,8 @@ describe('syncShape (single)', () => {
   test('materializes only the target shape — no other shape, no orphan sweep', async () => {
     await syncShape(TUser)();
     const ids = (k: string) => calls.filter((c) => c.kind === k).map((c) => c.id);
-    // exactly delete + create for the target
+    // exactly delete + create for the target (TUser has no `contains` property and no stored
+    // generated shape under its IRI, so nothing else is deleted)
     expect(ids('delete')).toEqual([userIri()]);
     expect(ids('create')).toEqual([userIri()]);
     // the other shape is untouched (no collateral delete/create)

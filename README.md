@@ -246,7 +246,8 @@ removing the link leaves the referenced node untouched. Two optional flags let y
 **`contains: true` on an object property** — the edge asserts *exclusive ownership* of the
 value. Whenever that edge goes away, the owned node is deleted with it:
 
-- `parent.delete()` deletes the owned child (and its owned sub-tree).
+- `parent.delete()` deletes the owned child (and its owned sub-tree). So do the bulk deletes,
+  `DeleteBuilder.from(Parent).all()` and `.where(...)`.
 - `update({ownedProp: newValue})` **replaces** the owned node — the old one is deleted, not
   orphaned.
 - `update({ownedProp: {remove: [x]}})` deletes `x` itself, not just the link.
@@ -262,6 +263,117 @@ export class Person extends Shape {
   declare avatar: ImageObject;
 }
 ```
+
+**Replace versus patch in place.** A plain nested object on a `contains` property is a
+*replace*: a new node is created and the old one is deleted. To change the owned node itself,
+update it directly:
+
+```typescript
+// Replace: creates a new ImageObject, deletes the old one.
+await Person.update({avatar: {contentUrl: 'https://cdn.example.org/b.png'}}).for(personId);
+
+// Patch in place: the same ImageObject keeps its id and its other fields.
+await ImageObject.update({contentUrl: 'https://cdn.example.org/b.png'}).for(avatarId);
+
+// Re-sending the current id is a no-op: the edge and the node are left as they are.
+await Person.update({avatar: {id: avatarId}}).for(personId);
+```
+
+The same holds for an array overwrite of a `contains` set: ids you send again are kept, ids you
+leave out are deleted. `{id: current, ...fields}` is a nested create with a predefined id, not a
+patch: it deletes all of that node's triples and writes the new ones.
+
+**Linking an existing node by `{id}`** is allowed, e.g. upload an image first, then attach it with
+`{avatar: {id: uploadedId}}`. The link transfers ownership: the linked node is deleted when it is
+replaced, removed, or when the owner is deleted.
+
+Because of that, core checks the class of every id linked into a property that owns its value and
+declares a `shape`. Ownership is decided per predicate: a property owns its value when any
+registered shape declares its predicate `contains`, so a plain property that shares such a
+predicate is checked too (a replace through it deletes the old value just the same). A link is
+refused, and nothing is written, when the store already types the node and none of its types is
+the shape's `targetClass`, a registered sub-shape's `targetClass`, or the property's `sh:class`:
+
+```
+Cannot link <https://my.app/alice> into the contains property "avatar" of <…/shape/my-pkg/Person>:
+it is typed <https://example.org/Person>, but "avatar" only owns instances of <https://schema.org/ImageObject>. …
+```
+
+Ids that do not exist yet, or have no `rdf:type`, are allowed, so upload-then-attach works in
+either write order. The check runs in `SparqlDataset` (one `SELECT` per mutation that links owned
+ids, none otherwise). Plain references on predicates no shape owns are never checked. A node
+whose type comes from a subclass that has no registered shape is refused unless the store also
+holds the expected type (an RDFS-inferring store adds it); register a shape for that class, or
+declare `sh:class`, to accept it.
+
+Two limits: an id linked while it is untyped, and typed as something else later, is not caught.
+Nor is a node typed by another request between the check's `SELECT` and the `UPDATE` that
+follows it: the two are separate requests, not one transaction. Raw SPARQL updates bypass the
+check altogether. SHACL validation of `sh:class` is the backstop for all three.
+
+**What a delete removes.** `parent.delete()` deletes the immediately-owned children of every
+`contains` property that declares a `shape`; `dependent` extends the cascade further down. The bulk
+deletes (`.all()`, `.where(...)`) remove the same owned children and cascade for every matched
+subject (they do not delete incoming references to the subjects, which a delete by id does). A
+`contains` property *without* a `shape` (a polymorphic slot such as `sh:path`, whose value may be a
+shared predicate IRI) only ever deletes `dependent`-typed values; a non-dependent old value is
+left in place.
+
+Subject deletes and replaces decide ownership differently. A subject delete (by id or in bulk)
+uses the deleted shape's *own* `contains` properties. Replace, set-remove and the class check use
+the registry-wide predicate rule above. So a plain property on a predicate that another shape
+declares `contains` deletes its old value on replace, but not when its subject is deleted.
+Whether ownership should be decided per property everywhere is an open design question. The
+cascade into `dependent` descendants only emits blocks for the dependent shapes the deleted
+shape can reach through its owned properties, so deleting a shape that owns only non-dependent
+values costs one extra block per owned property. The walk follows only the `contains` properties
+the reached shapes declare: an owned edge that none of those shapes declares is not followed,
+and the node behind it is left in place rather than deleted.
+
+Non-owning references to an owned node, through other properties or from other subjects, are
+allowed. They are not cleaned up: after the owner is deleted they dangle. The same holds when two
+subjects own one node (an `{id}` linked into a second owner, which breaks the single-owner rule
+below): deleting either owner deletes the node, and the other owner's edge dangles.
+
+**The single-owner constraint.** An owned node has at most one owner. Shape sync persists this as
+one generated SHACL NodeShape per `contains` property that declares a `shape` (simple paths only;
+a shape-less slot may hold a shared IRI, so it is left out). It is written only by the class that
+declares the property, at the property shape's IRI plus `.singleOwner`: `Thing.image` gets one
+constraint at `Thing`, not one per subclass. It is marked `core:generated true` and has no
+`sh:targetClass`, so catalog readers can skip it, and it is never registered in memory. For
+`Thing.image`:
+
+```turtle
+<…/shape/my-pkg/Thing/image.singleOwner> a sh:NodeShape ;
+    core:generated true ;
+    sh:targetObjectsOf schema:image ;
+    sh:property <…/Thing/image.singleOwner/owners> .
+
+<…/Thing/image.singleOwner/owners> a sh:PropertyShape ;
+    rdfs:label "owners" ;
+    sh:maxCount 1 ;
+    sh:path [ sh:inversePath schema:image ] .
+```
+
+(The inverse path node is stored with a deterministic IRI, `…/owners/inv`, not as a blank node.)
+The declaring shape owns its generated shapes through `core:generatedShape`, a `contains` edge:
+`<…/Thing> core:generatedShape <…/Thing/image.singleOwner>`. Syncing a shape is still two
+requests: deleting the shape deletes the generated shapes with it (their own triples, property
+shapes and path nodes, never the predicate IRI), and the create writes the current ones nested in
+the same request. A removed or renamed accessor therefore loses its constraint, a pruned shape
+takes its constraints with it, and a NodeShape the shape does not own is never touched.
+`singleOwnerShapeIri`, `singleOwnerProperties` and `buildSingleOwnerConstraints` are exported if
+you need to recompute them.
+
+Each constraint counts owners through its own predicate only. A node owned through two different
+`contains` predicates (`schema:image` from one subject, `ex:attachments` from another) is not
+reported. That needs overlapping value shapes, and the class check already refuses a wrongly
+typed link.
+
+> **Not enforced on write.** Core does not check the single-owner rule, or `sh:class` on
+> non-owning references, when it writes. The default Fuseki setup does not validate SHACL on
+> write either: a dataset exposes only query, update and graph-store services. Run a SHACL
+> validator (Jena SHACL, pySHACL, …) against the persisted shapes to enforce them.
 
 **`dependent: true` on a shape** — marks the shape's *instances* as having no independent
 existence, so they are cascade-deleted when reached through a `contains` edge from a parent

@@ -33,6 +33,7 @@ const prefix = ns('prefix');
 const PropertyShape = ns('PropertyShape');
 const targetClass = ns('targetClass');
 const targetNode = ns('targetNode');
+const targetObjectsOf = ns('targetObjectsOf');
 const node = ns('node');
 const nodeKind = ns('nodeKind');
 const Shape = ns('Shape');
@@ -128,6 +129,7 @@ export const shacl = {
   Shape,
   targetClass,
   targetNode,
+  targetObjectsOf,
   BlankNode,
   IRI,
   Literal,

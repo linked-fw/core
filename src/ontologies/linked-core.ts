@@ -45,6 +45,16 @@ const PathNode = ns('PathNode');
 const displayRank = ns('displayRank');
 const displayHidden = ns('displayHidden');
 
+// Provenance marker: a NodeShape core generates at sync time from another shape's code
+// (today the `<propertyShape>.singleOwner` constraint derived from `contains`), rather than one a
+// developer declared. Catalog readers skip shapes with `core:generated true`.
+const generated = ns('generated');
+
+// Ownership edge from a NodeShape to the shapes core generated from it at sync time (the
+// single-owner constraint of each `contains` property). It is `contains`, so deleting the
+// shape deletes them, and sync writes them nested in the shape's own create.
+const generatedShape = ns('generatedShape');
+
 export const coreOntology = {
   Package,
   ShapeClass,
@@ -58,4 +68,6 @@ export const coreOntology = {
   PathNode,
   displayRank,
   displayHidden,
+  generated,
+  generatedShape,
 };
