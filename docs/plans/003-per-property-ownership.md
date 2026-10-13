@@ -4,7 +4,7 @@ summary: >
   array overwrite, the linked-id class check, subject and bulk deletes), replacing the
   registry-wide predicate rule with a shape-directed cascade computed at lowering time, and
   narrowing the generated single-owner constraint to owners of the declaring class.
-status: Ideation
+status: Plan
 packages: [core]
 source_backlog: docs/backlog/053-per-property-ownership.md
 ---
@@ -232,6 +232,131 @@ The abstract walk (hops, guards, closures, blank properties) is cached like
 
 1A + 2A (shape-directed walk, Decisions 7, 9, 11, 14) + 4A/13A + 5A + 6B/10A, removal per 8A,
 minor release per 12.
+
+## Plan
+
+### Architecture decisions (chosen route)
+
+1. **Ownership is a property's own `contains`** (1A). `processUpdateFields` reads
+   `findPropertyShapeById(field.property)` once per field; `isContainsField = !!ps?.contains &&
+   !!ps.valueShape` (a shape-less `contains` owns nothing, 13A). `ownedLinkCheck.buildRule` uses
+   the same test; `sharedPredicate` and its message go.
+2. **One shape-directed walk** (2A, 5A, 7A, 9A, 14A) replaces `collectContainment`,
+   `reachableDependentTypes`, `buildOwnedCascade`, `ownedValueShapePredicates`,
+   `ownedChildBlankCascade` and `shapeHasContainsProperty`. It is used by the subject delete (root
+   = subject shape, root term = subject IRI), the bulk deletes (root term `?a0`, anchor = type
+   triple), the `contains` replace / unset / overwrite (root = value shape, root term `?old`,
+   anchor = owning edge, `keep` filter) and set-remove (root term = removed IRI, anchor = edge).
+   The caller keeps deleting the root itself (subject wildcard / `buildOwnedSelfDelete` + the
+   root's blank cascade), so the walk emits blocks strictly below the root.
+3. **Single-owner constraint qualified by owner classes** (6B, 10A).
+4. **`contains` requires `shape`** (4A, 13A); core metamodel drops `contains` on
+   `PropertyShape.path` and the four shape-less `PathNode` slots, and `dependent` everywhere.
+5. **`dependent` deprecated** (7A): accepted, persisted, no effect.
+
+### Contracts
+
+```ts
+// src/sparql/irToAlgebra.ts (module-internal)
+/** One hop of the walk: from the current position, optionally type-guarded, along `predicate`,
+ *  then `closure*` inside the target group. */
+type OwnedHop = {guard?: string; predicate: string; closure: string[]};
+/** A group of nodes the walk deletes: the hops from the root position, and the blank-capable
+ *  properties of the group's shapes (sub-shapes included). */
+type OwnedTarget = {hops: OwnedHop[]; blankProps: PropertyShapeData[]};
+type OwnedWalk = {
+  /** Internal predicates of the root's own group: `root (c…)* ?pos` before every hop, and one
+   *  extra block `root (c…)+ ?n` for the root group's other nodes. */
+  rootClosure: string[];
+  rootBlankProps: PropertyShapeData[];
+  targets: OwnedTarget[];
+};
+function ownedWalk(rootShapeId: string): OwnedWalk;            // memoized per registry version
+function ownedSubtreeBlocks(
+  rootShapeId: string, rootTerm: SparqlTerm, anchor: SparqlTriple[], varPrefix: string,
+  keep?: SparqlTerm[],
+): {deletePatterns: SparqlTriple[]; whereBlocks: SparqlAlgebraNode[]};
+```
+
+Emitted per target (each a UNION branch, `keepFilter`ed on `?old` when given):
+
+```sparql
+# root group with internal predicates r…:  <root> (r…)* ?w_p .
+?w_p  a <SubClass> .            # only when the hop is a sub-shape's (5A)
+?w_p  <c1> ?w1_e . ?w1_e (s…)* ?w1 .   # closure only when the target group has internal preds
+?w1 ?w1_p ?w1_o .               # the node's own triples
+# + buildBlankCascade(owner ?w1, blankProps)
+```
+
+Edges of a shape `S` (`ownedEdges`): every flattened property of `S` with `contains`, a
+`valueShape` and a simple path (unguarded); for every registered descendant `U` of `S` with a
+`targetClass`, each flattened `contains` property of `U` not in `S`'s flattened set, guarded by
+`U.targetClass`. Deduplicated by (guard, predicate, target).
+
+Single-owner data (`buildSingleOwnerConstraints`):
+
+```ts
+properties: [{
+  __id: `${iri}/owners`, label: 'owners', qualifiedMaxCount: 1,
+  path: serializePathToNodeData({inv: {id: predicate}}),
+  qualifiedValueShape: classes.length === 1
+    ? {shape: NodeShape, class: {id: classes[0]}}
+    : {shape: NodeShape, or: blankList(classes.map((c) => ({shape: NodeShape, class: {id: c}})))},
+}]
+```
+`classes` = declaring `targetClass` + every `getSubShapes(nodeShape)` `targetClass`, deduped,
+sorted. No `targetClass` → no constraint, `console.warn` once per shape id.
+
+### Files expected to change
+
+- `src/sparql/irToAlgebra.ts` — walk, `processUpdateFields`, `deleteToAlgebra`,
+  `bulkDeleteUnion`; remove the replaced helpers and the `Containment` type; comment block.
+- `src/sparql/ownedLinkCheck.ts` — per-property rule.
+- `src/shapes/SHACL.ts` — throw in `createPropertyShape`; `contains` docstring.
+- `src/utils/Package.ts` — `PropertyShape.path` loses `contains`; `dependent` removed from
+  `PropertyShape` / `List`; new accessors (`qualifiedValueShape`, `qualifiedMaxCount`,
+  `NodeShape.class`, `NodeShape.or`); `dependent` option docstring (deprecated).
+- `src/shapes/PathNode.ts`, `src/shapes/PathList.ts`, `src/shapes/List.class.ts` — drop
+  `dependent`, shape-less `contains`; docs.
+- `src/shapes/nodeShapeData.ts` — `dependent` doc (deprecated).
+- `src/ontologies/shacl.ts` — `qualifiedValueShape`, `qualifiedMaxCount`, `or`.
+- `src/shapes/singleOwnerConstraint.ts` — qualified constraint.
+- Tests: `shacl-cascade`, `blank-nested-nodes`, `owned-link-check`, `single-owner-constraint`,
+  `sparql-mutation-golden`, `shape-sync-output-equivalence`, `sparql-fuseki-shape-sync` (Jena),
+  plus any suite declaring shape-less `contains`.
+- Docs: `docs/architecture/owned-values.md`, `README.md` "Owned properties", `.changeset/*.md`.
+
+### Pitfalls
+
+- Every block must bind its root through the anchor (or an IRI root): an unanchored `?old`
+  chain matches every node.
+- Shape-sync delete must stay exact: NodeShape → `generatedShapes*` → `sh:property` →
+  PropertyShape (own triples + blank `sh:path` / `sh:qualifiedValueShape`) → `sh:in` → `List`
+  (`rdf:rest*`). Covered by `sparql-fuseki-shape-sync` and the golden fixture.
+- `getSubShapes(Shape)` may be the whole registry: guard blocks only for descendants that add
+  `contains` properties.
+- Removing `dependent` from `PropertyShape` must not change sync output for user shapes (core
+  shapes are not in the golden fixture).
+- `NodeShape.class` / `NodeShape.or` add blank-capable properties to `NodeShape`: a NodeShape
+  delete gains one blank-cascade branch.
+
+### Architecture compliance
+
+`npx semantu-agents docs architecture` lists `ontologies.md`, `owned-values.md`,
+`publishing.md`, `runtime-instances.md`. `owned-values.md` is the contract this work changes; it
+is rewritten in Phase 5 (ownership rule column, cascade invariants, shape-less `contains`, class
+check, generated shapes). `ontologies.md`: new `sh:` terms go into core's own `shacl` copy, as the
+rule there requires for metamodel terms. `publishing.md`: minor changeset, no publish here.
+`runtime-instances.md`: no new module state beyond registry-version caches.
+
+### Test strategy
+
+- Package: `@_linked/core` only. Consumer (`create_now`) is not changed (report only).
+- Quick gate (≈40 s): `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs
+  src/tests/{shacl-cascade,owned-link-check,single-owner-constraint,blank-nested-nodes,sparql-mutation-golden,shape-sync-output-equivalence}.test.ts`
+  (starts Fuseki on :3939 via global setup; summary line `[fuseki] live tests: … 0 failed`).
+- Full per phase (lead request): `npm test` (jest + typecheck) and `npx linked build`.
+- Command source: `package.json` scripts, `jest.config.cjs`, report 033 live conventions.
 
 ## Open-item map
 
