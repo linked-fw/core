@@ -4,7 +4,7 @@ summary: >
   array overwrite, the linked-id class check, subject and bulk deletes), replacing the
   registry-wide predicate rule with a shape-directed cascade computed at lowering time, and
   narrowing the generated single-owner constraint to owners of the declaring class.
-status: Tasks
+status: Implementation
 packages: [core]
 source_backlog: docs/backlog/053-per-property-ownership.md
 ---
@@ -365,7 +365,16 @@ Dependency graph: Phase 1 → Phase 2 → Phase 3; Phase 4 is independent of 1�
 touches `Package.ts` like Phase 3, so it runs after it. Phase 5 (docs, changeset) last. Every
 phase: quick gate, then `npm test` (0 failed in `[fuseki] live tests`) and `npx linked build`.
 
-### Phase 1 — shape-directed walk and per-property replace
+### Phase 1 — shape-directed walk and per-property replace — DONE (with Phase 2)
+
+Result: `ownedEdges` / `ownedWalk` / `ownedSubtreeBlocks` in `irToAlgebra.ts`; the six old
+helpers and `Containment` removed. Deviation: Phase 2 was folded in, because removing
+`collectContainment` forced the `ownedLinkCheck` change and its tests into the same green commit.
+Also removed: the live test "complex paths stored by earlier versions" (legacy IRI path cleanup,
+Decision 4). Updated counts: `shacl-cascade` delete-size (fewer solutions: the immediate child is
+no longer matched twice), `mutation-where-union` replace-size (18, was 28).
+Validation: quick gate 137/137 (25 live); `npm test` 2223 passed, 0 failed,
+`[fuseki] live tests: 292 total — 292 passed`; `npx linked build` OK.
 
 Tasks:
 1. In `irToAlgebra.ts` add `ownedEdges`, `ownedWalk` (Tarjan groups, memoized per registry
@@ -407,7 +416,7 @@ Validation (tests in `src/tests/shacl-cascade.test.ts` unless noted):
   property shapes, list cells or path blank nodes.
 - Quick gate, `npm test`, `npx linked build` pass.
 
-### Phase 2 — class check per property
+### Phase 2 — class check per property — DONE (in the Phase 1 commit)
 
 Tasks: `ownedLinkCheck.ts` — rule only for `ps.contains && ps.valueShape`; drop `sharedPredicate`
 from `OwnedLink` and the message; update file docstring.

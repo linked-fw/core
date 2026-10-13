@@ -294,22 +294,22 @@ describe('blank-node cascade', () => {
 
   test('a NodeShape delete removes the blank paths of the property shapes it deletes', () => {
     const sparql = nodeShapeDelete();
-    // The owner: a property shape the typed cascade reaches and deletes…
-    const owner = sparql.match(/\?(c_bo\d+) rdf:type shacl:PropertyShape \./)![1];
+    // The owner: a property shape the owned walk reaches through `sh:property` and deletes…
+    const owner = sparql.match(/\?c_w shacl:property \?(c_\d+_0) \./)![1];
     // …its blank value through the blank-capable `sh:path`…
-    const bn0 = sparql.match(new RegExp(`\\?${owner} shacl:path \\?(c_b\\d+_bn0) \\.`))![1];
+    const bn0 = sparql.match(new RegExp(`\\?${owner} shacl:path \\?(c_\\d+_b_bn0) \\.`))![1];
     expect(sparql).toContain(`FILTER(isBlank(?${bn0}))`);
     // …then the blank nodes below it, through the path slots and the list predicates.
-    const inner = sparql.match(new RegExp(`\\?${bn0} \\(([^)]*)\\)\\* \\?c_b\\d+_bn \\.`))![1];
+    const inner = sparql.match(new RegExp(`\\?${bn0} \\(([^)]*)\\)\\* \\?c_\\d+_b_bn \\.`))![1];
     for (const predicate of ['shacl:inversePath', 'shacl:alternativePath', 'shacl:zeroOrMorePath', 'rdf:first', 'rdf:rest']) {
       expect(inner).toContain(predicate);
     }
-    expect(sparql).toMatch(/FILTER\(isBlank\(\?c_b\d+_bn\) && NOT EXISTS/);
-    expect(sparql.slice(0, sparql.indexOf('WHERE'))).toMatch(/\?c_b\d+_bn \?c_b\d+_bnp \?c_b\d+_bno \./);
+    expect(sparql).toMatch(/FILTER\(isBlank\(\?c_\d+_b_bn\) && NOT EXISTS/);
+    expect(sparql.slice(0, sparql.indexOf('WHERE'))).toMatch(/\?c_\d+_b_bn \?c_\d+_b_bnp \?c_\d+_b_bno \./);
   });
 
   test('blank values are reached through blank-capable properties, never through `contains` edges', () => {
-    expect(nodeShapeDelete()).not.toMatch(/\)\* \?c_b\d+_bn0/);
+    expect(nodeShapeDelete()).not.toMatch(/\)\* \?c_\d+_b_bn0/);
   });
 
   test('a delete by id removes the subject\'s own blank values', () => {
@@ -318,7 +318,7 @@ describe('blank-node cascade', () => {
     expect(sparql).toContain('FILTER(isBlank(?b_bn0))');
   });
 
-  test('a shape without blank-capable properties or dependent values gets no blank-node block', () => {
+  test('a shape without blank-capable properties or owned values gets no blank-node block', () => {
     @linkedShape
     class BPlain extends Shape {
       static targetClass = {id: `${X}Plain`};

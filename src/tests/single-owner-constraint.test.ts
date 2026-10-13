@@ -225,7 +225,7 @@ describe('single-owner constraint sync', () => {
     const EDGE = String.raw`(?:core:generatedShape|<https://linked\.cm/ont/core/generatedShape>)`;
     const esc = (iri: string) => iri.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     // The delete removes the generated shapes as owned children of the main shape …
-    expect(del).toMatch(new RegExp(`<${esc(iriOf(Project))}> ${EDGE} \\?d\\d+ \\.`));
+    expect(del).toMatch(new RegExp(`<${esc(iriOf(Project))}> ${EDGE}\\+ \\?c_r \\.`));
     // … and the create writes them nested, with their fixed IRIs.
     for (const label of ['image', 'attachments']) {
       const gen = genOf(Project, label);
