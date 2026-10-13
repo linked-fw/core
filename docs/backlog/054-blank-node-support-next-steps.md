@@ -3,8 +3,9 @@ summary: >
   Blank-node support in core — next steps after `sh:nodeKind`-driven minting (report 035): update
   and upsert of blank values through their parent, a read model that returns blank values as
   nested objects without an id, a node-level `sh:nodeKind`, consumers reading path structure
-  through the DSL again, and smaller gaps found on the way (undetectable blank labels from a
-  select, blank values of non-dependent owned children, the concrete shape of a blank value).
+  through the DSL again, folding `PathList` back into `List`, and smaller gaps found on the way
+  (undetectable blank labels from a select, blank values of non-dependent owned children, the
+  concrete shape of a blank value).
 packages: [core]
 ---
 
@@ -68,6 +69,15 @@ as blank nodes, `__blank`) and [report 035](../reports/035-nodekind-driven-blank
 10. **Duplicate branch on a dependent subject.** Deleting by id a dependent shape with
    blank-capable properties (a `PropertyShape`) emits both the subject's blank-node branch and
    the cascade's zero-hop branch for the same node. Correct, but double work.
-11. **Mixed versions.** A client on this version sending DSL-JSON to a lowering side on 2.30.x
+11. **Replace `PathList` with `List` once blank nodes are fully supported.** `PathList`
+   (`src/shapes/PathList.ts`, report 035) exists only because `List.rest` could not be made
+   blank-capable without turning the tail cells of every user list (e.g. `sh:in`) into blank
+   nodes, and `List.first` holds literals. It is a second `rdf:List` shape whose only difference
+   is the `sh:nodeKind` of `first`/`rest`. Once items 1–3 give core a complete blank-node model
+   (minting decided per value rather than per property, a read model for blank values), decide
+   whether one `List` shape can serve both: user lists keep IRI cells, SHACL alternative-path
+   lists get blank cells. Then retire `PathList` (sync output must stay unchanged, or migrate
+   stored shapes once).
+12. **Mixed versions.** A client on this version sending DSL-JSON to a lowering side on 2.30.x
    gets IRI-named path nodes (2.30.x read `__blank`, which is no longer sent). The DSL-JSON
    version was not bumped; upgrade the lowering side first.
