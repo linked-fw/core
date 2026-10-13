@@ -4,7 +4,7 @@ summary: >
   array overwrite, the linked-id class check, subject and bulk deletes), replacing the
   registry-wide predicate rule with a shape-directed cascade computed at lowering time, and
   narrowing the generated single-owner constraint to owners of the declaring class.
-status: Implementation
+status: Review
 packages: [core]
 source_backlog: docs/backlog/053-per-property-ownership.md
 ---
@@ -674,3 +674,18 @@ consumers — public-API question.
 21. A qualified constraint written for a class without `rdfs:subClassOf` triples reports nothing
     for sub-shape owners (blocker 3) — false conformance, the same failure mode report 034 fixed
     for IRI paths.
+
+## Review
+
+Evidence: `npm test` 2226 passed, 0 failed, `[fuseki] live tests: 293 total — 293 passed`;
+`npx linked build` OK. Benchmark (20k owners, Fuseki :3939, base 1c3a7f3 vs branch): `deleteAll`
+of owners with a two-cell owned chain ≈0.9 s → ≈0.5 s; `deleteAll` of owners of a plain child
+≈0.33 s both; 20 re-syncs of a wide shape ≈0.26 s both. Architecture: `owned-values.md` rewritten;
+`ontologies.md` rule kept (the `shacl` shortcut grows only by terms core writes).
+
+Remaining gaps (all low; the independent review subagent's findings were not received before handback):
+- L1: no committed test for a two-shape ownership cycle (probed by hand: `(toA|toB)*` closure, terminates).
+- L2: inside a recursive group, sub-shape guards are not applied (union of the group's predicates).
+- L3: a sub-shape with the same `targetClass` as its parent cannot be told apart by its guard.
+- L4: DAG path enumeration in the walk has no cap (one branch per path).
+- L5: golden constant still named `GOLDEN_2_30_0`; README heading keeps "/ `dependent`" for the anchor.
