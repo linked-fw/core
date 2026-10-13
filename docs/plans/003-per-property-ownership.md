@@ -912,7 +912,27 @@ and after replacing an `sh:in` list (live, fails on `83e9a51`); branch-count tes
 PropertyShape / List / PathNode / PathList and a schema-like `Thing`/`ImageObject` fixture, and the
 warning fires once above 64 for a synthetic wide DAG. Gates as above.
 
-### Phase 8: docs and names (Gap 5)
+### Phase 8: docs and names (Gap 5) — DONE
+
+Result: README (walk, sub-shape class rule, recursion limit, `rdf:nil`), `owned-values.md`
+(self-loop closures, unrolled recursion, sub-shapes, `rdf:nil`, branch count, backlog 055),
+changeset, `linked-core.ts` vocabulary comment, `SHACL.ts` / `Package.ts` depth claims;
+`GOLDEN_2_30_0` → `GOLDEN_SYNC_OUTPUT`.
+
+**Consumer verdict (M7, `withoutOwnership` in the app's `runtimeShapeRegistry.ts`).** After this
+iteration a user-authored shape's `contains` can no longer widen deletes of nodes it does not
+type: from a library shape's walk, a user sub-shape's added `contains` is followed only from nodes
+of the sub-shape's own class (and not at all when it shares the library class), recursion is
+typed per hop, and a plain property never owns. So stripping is **no longer needed for
+isolation**, and stripping `dependent` is pointless (no effect). What `contains` on a user shape
+still does is what it declares: deleting or replacing that shape's own nodes deletes their owned
+values, links into it are class-checked, and sync writes its single-owner constraint. The one
+reason left to keep stripping `contains` is the app's own rule that owned values are minted
+server-side and never accepted as client references (`ownedProperties.ts`): a user-authored
+`contains` property that accepts a client `{id}` of the right class would delete that node on the
+next replace. Verdict: the app can drop `withoutOwnership` once its instance writes enforce that
+rule for user-authored `contains` properties (or it keeps stripping `contains` only); the
+reviewer's "must keep" (from H2 / M3) no longer holds.
 
 Tasks: README, `owned-values.md`, changeset, `linked-core.ts:29`, golden rename, consumer verdict
 in this doc. Validation: stale-claim grep; gates as above.

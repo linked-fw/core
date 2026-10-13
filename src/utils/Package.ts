@@ -64,7 +64,7 @@ export type ShapeConfig = {
   description?: string;
   /**
    * @deprecated No effect on deletes. Ownership is per property: every node a `contains`
-   * property reaches, at any depth, is deleted with its owner, whether or not its shape is
+   * property reaches is deleted with its owner, whether or not its shape is
    * `dependent`. Still accepted and persisted (`core:dependent`) by shape sync.
    */
   dependent?: boolean;

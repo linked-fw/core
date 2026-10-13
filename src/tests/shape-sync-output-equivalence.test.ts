@@ -88,7 +88,7 @@ class Capture extends SparqlDataset {
   }
 }
 
-const GOLDEN_2_30_0 = `INSERT DATA {
+const GOLDEN_SYNC_OUTPUT = `INSERT DATA {
   <https://linked.cm/shape/sync-fixture/Fixture> rdf:type shacl:NodeShape .
   <https://linked.cm/shape/sync-fixture/Fixture> shacl:targetClass <https://example.org/fx#Fixture> .
   <https://linked.cm/shape/sync-fixture/Fixture> shacl:property <https://linked.cm/shape/sync-fixture/Fixture/name> .
@@ -206,8 +206,8 @@ describe('shape sync output equals the 2.30.0 release, but for the qualified sin
     await syncShape(Fixture, ds)();
     expect(ds.updates).toHaveLength(2);
     const actual = insertDataOf(ds.updates);
-    expect(normalizeLabels(actual)).toBe(normalizeLabels(GOLDEN_2_30_0));
+    expect(normalizeLabels(actual)).toBe(normalizeLabels(GOLDEN_SYNC_OUTPUT));
     // Not needed for equivalence, but true today: the labels match too.
-    expect(actual).toBe(GOLDEN_2_30_0);
+    expect(actual).toBe(GOLDEN_SYNC_OUTPUT);
   });
 });

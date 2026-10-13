@@ -42,17 +42,29 @@ shape-directed. From the root's shape (the deleted subject's shape, or the repla
 value shape) it follows that shape's own and inherited `contains` properties with a simple path
 to their value shapes, then those shapes' `contains` properties, and so on. Every node it reaches
 loses its own triples and its blank values (through its shapes' blank-capable properties). Each
-hop is an explicit triple; there is no type guard on owned nodes, the edge asserts ownership.
+hop is an explicit triple; outside recursion there is no type guard on owned nodes, the edge
+asserts ownership. One UNION branch per path from the root.
 
-- **Recursion.** The reachable shapes are grouped into strongly connected components. Entering
-  a group follows its internal owned predicates with `*` (`List` → `rdf:rest*`,
-  `NodeShape.generatedShapes` → `core:generatedShape*`); the root's own group adds one branch
-  `<root> (r…)+ ?n` for its other nodes. A group of several shapes follows all of its owned
-  predicates without per-member distinction.
-- **Sub-shapes.** For every registered descendant of a reached shape that has a `targetClass`
-  and adds `contains` properties, the added properties are followed from nodes of that class
-  only (`?n a <SubClass> . ?n <c> ?m`). Core writes the concrete class's `rdf:type` on create, so
-  no inference is needed. A sub-shape without `targetClass` adds nothing.
+- **Self-loops are closures.** A shape `S` that owns itself through its own (unguarded) `contains`
+  edge is followed with `*` (`List` → `rdf:rest*`, `NodeShape.generatedShapes` →
+  `core:generatedShape*`): every such edge from an `S` node is `S`'s own. The root's self-loop
+  adds one branch `<root> (r…)+ ?n` for its other nodes.
+- **Other recursion is unrolled.** A cycle through several shapes, or a sub-shape edge back into
+  the walk, becomes explicit hops, each typed with the declaring shape's class or a registered
+  sub-shape's (`?n a ?t FILTER(?t IN (…))`, one class: `?n a <C>`), so no node is walked through
+  a predicate its own shape does not own. A path stops after `MAX_OWNED_RECURSION` (4) hops into
+  a shape already on it; deeper values are left (orphans, the safe direction).
+- **Sub-shapes.** For every registered descendant of a reached shape with a `targetClass` of its
+  own, its added `contains` properties are followed from nodes of that class only (`?n a
+  <SubClass> . ?n <c> ?m`); guarded edges never join a closure. Core writes the concrete class's
+  `rdf:type` on create, so no inference is needed. A sub-shape without a `targetClass`, or with one
+  that the shape or another of its descendants also holds, cannot be told apart: its added
+  properties are not followed (warned once per sub-shape).
+- **`rdf:nil`** is never deleted: every walk node and the replaced-value self-delete carry
+  `FILTER(!sameTerm(?n, rdf:nil))`.
+- **Branch count:** no cap; lowering warns once per root shape above `OWNED_BRANCH_WARNING` (64)
+  branches. The core metamodel and `@_linked/schema` stay at ≤ 8; reducing wide DAGs is
+  [backlog 055](../backlog/055-owned-walk-branch-count.md).
 - **Memoized** per (root shape, registry version); lowering only instantiates variables.
 
 Invariants:

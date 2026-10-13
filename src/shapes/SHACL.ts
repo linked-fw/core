@@ -208,7 +208,8 @@ export interface ObjectPropertyShapeConfig extends PropertyShapeConfig {
    *
    * - Replacing, unsetting or set-removing a value deletes the old node's own triples and blank
    *   values, and its owned subtree; re-sent `{id}`s are kept.
-   * - Deleting the subject (by id or in bulk) deletes its owned subtree at any depth: the values
+   * - Deleting the subject (by id or in bulk) deletes its owned subtree (recursion other than a
+   *   shape owning its own kind stops after `MAX_OWNED_RECURSION` re-entries): the values
    *   of its `contains` properties, the values their shapes own in turn, and the extra `contains`
    *   values of registered sub-shapes (followed only from nodes of the sub-shape's class).
    * - Linking an existing node by `{id}` is class-checked: it is refused when the node is typed

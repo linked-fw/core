@@ -3204,7 +3204,7 @@ export function deleteToAlgebra(
       blocks.push(blank.whereBlock);
     }
 
-    // The owned subtree: every node the subject's `contains` properties reach, at any depth.
+    // The owned subtree: every node the subject's `contains` properties reach (`ownedWalk`).
     const owned = ownedSubtreeBlocks(query.shape, subjectTerm, [], `c${idx}_`);
     deletePatterns.push(...owned.deletePatterns);
     blocks.push(...owned.whereBlocks);

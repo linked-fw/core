@@ -314,14 +314,23 @@ Nor is a node typed by another request between the check's `SELECT` and the `UPD
 follows it: the two are separate requests, not one transaction. Raw SPARQL updates bypass the
 check altogether. SHACL validation of `sh:class` is the backstop for all three.
 
-**What a delete removes.** Deleting an owner deletes everything it owns, at any depth: the values
+**What a delete removes.** Deleting an owner deletes everything it owns (see the recursion limit below): the values
 of its `contains` properties (own and inherited), the values *their* shapes own, and so on. A
-replace or set-remove does the same below the old value. The walk follows the shapes, never the
+replace or set-remove does the same below the old value. The walk follows the shapes, not the
 predicates: from the owner's shape it follows that shape's `contains` properties to their value
-shapes, then those shapes' `contains` properties. A recursive shape (a list cell owning the next
-cell through `rdf:rest`) is followed with `rdf:rest*`. When a value is typed with a registered
+shapes, then those shapes' `contains` properties. When a value is typed with a registered
 sub-shape of the declared value shape, the `contains` properties the sub-shape adds are followed
-too, but only from nodes of that sub-shape's class (`?img a ex:Photo . ?img ex:thumbnail ?t`).
+too, but only from nodes of that sub-shape's class (`?img a ex:Photo . ?img ex:thumbnail ?t`). A
+sub-shape that shares its parent's `targetClass` cannot be told apart that way: its extra
+`contains` properties are not followed through the parent (core warns once).
+
+Recursion has a limit. A shape that owns its own kind (a list cell owning the next cell through
+`rdf:rest`, a comment owning its replies) is followed to any depth (`rdf:rest*`). Any other cycle
+(A owns B owns A, or a sub-shape's property leading back into its own kind) is followed hop by
+hop, each hop checked against the class that declares it, for at most `MAX_OWNED_RECURSION` (4)
+re-entries per path; values deeper than that are left in place. `rdf:nil`, the end of every list,
+is never deleted.
+
 The bulk deletes (`.all()`, `.where(...)`) remove the same subtree for every matched subject; they
 do not delete incoming references to the subjects, which a delete by id does.
 

@@ -25,8 +25,9 @@ const editInline = ns('editInline');
 const isExtending = ns('isExtending');
 
 // Containment / lifecycle vocabulary.
-//   contains  — property characteristic: the cascade follows this edge (composition).
-//   dependent — shape characteristic: instances may be deleted when reached via a `contains` edge.
+//   contains  — property characteristic: the subject owns the value through this property
+//               (composition); the owned walk follows it.
+//   dependent — shape characteristic, deprecated: no effect (persisted for older shapes).
 //   PathNode  — class for SHACL property-path operator nodes (sh:inversePath/alternativePath/…).
 const contains = ns('contains');
 const dependent = ns('dependent');
