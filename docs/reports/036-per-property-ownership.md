@@ -18,7 +18,7 @@ History: [report 025](025-update-replace-contains-cascade.md) (replace cascade),
 [report 032](032-owned-replace-noop-and-single-owner-shacl.md) (owned values, single-owner shapes,
 `reachableDependentTypes`), [report 034](034-shacl-complex-paths-as-blank-nodes.md) and
 [report 035](035-nodekind-driven-blank-nodes.md) (blank-node values and their cascade).
-PR: see the end of this report.
+PR: [#338](https://github.com/linked-fw/core/pull/338).
 
 ## Problem
 
