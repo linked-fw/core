@@ -17,7 +17,7 @@ import type {
   IRTraversePattern,
 } from '../queries/IntermediateRepresentation.js';
 import {findPropertyShapeById, getPropertyShapes} from '../shapes/nodeShapeData.js';
-import type {PropertyShapeData} from '../shapes/nodeShapeData.js';
+import type {NodeShapeData, PropertyShapeData} from '../shapes/nodeShapeData.js';
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
 import {pathExprToSparql, collectPathUris} from '../paths/pathExprToSparql.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
@@ -56,6 +56,7 @@ import {
   getShapeClass,
   getSubShapes,
   getTargetClassId,
+  isSubShapeOf,
 } from '../utils/ShapeClass.js';
 import {UnresolvedContextError} from '../queries/QueryContext.js';
 
@@ -2787,14 +2788,45 @@ function ownedPredicate(ps: PropertyShapeData): string | null {
   return getSimplePathId(ps.path) ?? null;
 }
 
+let classHoldersCache = new Map<string, string[]>();
+let classHoldersVersion = -1;
+
+/** Every registered shape id per `targetClass` (memoized per registry version). */
+function classHolders(classId: string): string[] {
+  const version = getRegistryVersion();
+  if (version !== classHoldersVersion) {
+    classHoldersCache = new Map();
+    for (const nodeShape of getAllNodeShapes().values()) {
+      const cls = nodeShape?.targetClass?.id;
+      if (!cls) continue;
+      classHoldersCache.set(cls, [...(classHoldersCache.get(cls) ?? []), nodeShape.id]);
+    }
+    classHoldersVersion = version;
+  }
+  return classHoldersCache.get(classId) ?? [];
+}
+
+/**
+ * Whether a node's `rdf:type` tells it is a `shape` node: true when every registered shape that
+ * targets the shape's class is the shape itself or one of its descendants (which inherit its
+ * properties). Otherwise the id of a shape that shares the class, or `null` without a class.
+ */
+function classGuard(shape: NodeShapeData): {cls: string} | {sharedWith: string | null} {
+  const cls = shape.targetClass?.id;
+  if (!cls) return {sharedWith: null};
+  const other = classHolders(cls).find((id) => id !== shape.id && !isSubShapeOf(id, shape.id));
+  return other ? {sharedWith: other} : {cls};
+}
+
 const warnedUnguardable = new Set<string>();
 
 /**
  * The owned edges of a shape: its own and inherited `contains` properties, then, per registered
  * sub-shape, the `contains` properties it adds, guarded by its `targetClass` (a node carries only
  * its concrete class's `rdf:type`, so each sub-shape lists its full extra set). A sub-shape whose
- * `targetClass` is missing, or also held by the shape or another of its sub-shapes, cannot be told
- * apart by type: its extra edges are not followed (warned once).
+ * class does not tell its nodes apart (`classGuard`) is not followed: a same-class descendant of a
+ * guardable sub-shape (a profile) is that sub-shape's node by type and adds nothing; any other is
+ * warned once.
  */
 function ownedEdges(shapeId: string): OwnedEdge[] {
   const nodeShape = shapeById(shapeId);
@@ -2809,38 +2841,47 @@ function ownedEdges(shapeId: string): OwnedEdge[] {
   const own = getPropertyShapes(nodeShape, true);
   own.forEach((ps) => add(ps));
   const ownIds = new Set(own.map((ps) => ps.id));
-  const subs = getSubShapes(shapeId);
-  const holders = new Map<string, number>();
-  for (const shape of [nodeShape, ...subs]) {
-    const cls = shape.targetClass?.id;
-    if (cls) holders.set(cls, (holders.get(cls) ?? 0) + 1);
-  }
-  for (const sub of subs) {
+  for (const sub of getSubShapes(shapeId)) {
     const extra = getPropertyShapes(sub, true).filter((ps) => !ownIds.has(ps.id) && ownedPredicate(ps));
     if (extra.length === 0) continue;
-    const guard = sub.targetClass?.id;
-    if (!guard || holders.get(guard)! > 1) {
-      if (!warnedUnguardable.has(sub.id)) {
-        warnedUnguardable.add(sub.id);
-        console.warn(
-          `[linked] Shape '${sub.id}' adds contains properties to '${shapeId}' but has no ` +
-            'targetClass of its own, so its nodes cannot be told apart by rdf:type: deleting through ' +
-            `'${shapeId}' does not follow them. Give it a targetClass of its own.`,
-        );
-      }
+    const guard = classGuard(sub);
+    if ('cls' in guard) {
+      extra.forEach((ps) => add(ps, guard.cls));
       continue;
     }
-    extra.forEach((ps) => add(ps, guard));
+    // A same-class profile of a sub-shape that adds nothing of its own is that sub-shape's node
+    // by type: nothing is lost, nothing to warn about.
+    const sharer = guard.sharedWith ? shapeById(guard.sharedWith) : undefined;
+    if (sharer && isSubShapeOf(sub.id, sharer.id)) {
+      const inherited = new Set(getPropertyShapes(sharer, true).map((ps) => ps.id));
+      if (extra.every((ps) => inherited.has(ps.id))) continue;
+    }
+    if (warnedUnguardable.has(sub.id)) continue;
+    warnedUnguardable.add(sub.id);
+    console.warn(
+      `[linked] Shape '${sub.id}' adds contains properties to '${shapeId}', but ` +
+        (guard.sharedWith
+          ? `shares its targetClass with '${guard.sharedWith}', which does not extend it`
+          : 'has no targetClass') +
+        `, so its nodes cannot be told apart by rdf:type: deleting through '${shapeId}' does not ` +
+        'follow them. Give it a targetClass of its own.',
+    );
   }
   return [...edges.values()];
 }
 
-/** The classes a node of `shapeId` may carry: its targetClass and every registered sub-shape's. */
+/**
+ * The classes a node of `shapeId` may carry: its targetClass and the class of every registered
+ * sub-shape whose class tells its nodes apart (`classGuard`).
+ */
 function shapeClasses(shapeId: string): string[] {
   const nodeShape = shapeById(shapeId);
+  if (!nodeShape) return [];
   const classes = new Set<string>();
-  for (const shape of nodeShape ? [nodeShape, ...getSubShapes(shapeId)] : []) {
-    if (shape.targetClass?.id) classes.add(shape.targetClass.id);
+  if (nodeShape.targetClass?.id) classes.add(nodeShape.targetClass.id);
+  for (const sub of getSubShapes(shapeId)) {
+    const guard = classGuard(sub);
+    if ('cls' in guard) classes.add(guard.cls);
   }
   return [...classes];
 }
@@ -3029,7 +3070,7 @@ function ownedSubtreeBlocks(
     );
     if (!blank) return;
     deletePatterns.push(...blank.deletePatterns);
-    whereBlocks.push(keepFilter(filtered(blank.whereBlock, filters), rootTerm, keep));
+    whereBlocks.push(keepFilter(filtered(blank.whereBlock, all), rootTerm, keep));
   };
 
   let base = rootTerm;

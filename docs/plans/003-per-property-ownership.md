@@ -992,7 +992,14 @@ re-state the consumer verdict. L-4 is pre-existing and recorded as a remaining l
 
 ## Iteration 2 — Phases
 
-### Phase 9: guardable sub-shapes and the blank `rdf:nil` filter (Gaps 1, 2)
+### Phase 9: guardable sub-shapes and the blank `rdf:nil` filter (Gaps 1, 2) — DONE
+
+Result: `classHolders` / `classGuard` (registry-wide); `ownedEdges` and `shapeClasses` use them; a
+same-class profile that adds nothing is skipped silently, any other unguardable sub-shape warns
+with its cause; the walk node's blank branch carries the `rdf:nil` filter. Tests: 4 new (2 pure,
+2 live) in `owned-walk-recursion.test.ts`, all failing on `087dfaa` (checked). Validation: quick
+gate green; `npm test` 2242 passed, 0 failed, `[fuseki] live tests: 300 total — 300 passed`;
+`npx linked build` OK.
 
 Validation: M-A / M-B live + pure repros fail on `087dfaa`, pass after; quick gate, `npm test`
 (0 failed live), `npx linked build`.

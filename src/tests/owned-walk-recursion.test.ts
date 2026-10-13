@@ -118,6 +118,68 @@ class HO extends Shape {
   }
 }
 
+// M-A: a library sub-shape (PP) with ownership of its own, and a same-class profile (UP) of it.
+@linkedShape
+class PT extends Shape {
+  static targetClass = ex('PT');
+}
+
+@linkedShape
+class PP extends PT {
+  static targetClass = ex('PP');
+  @objectProperty({path: ex('att'), shape: HPlain, maxCount: 1, contains: true})
+  get att(): HPlain {
+    return null;
+  }
+}
+
+@linkedShape
+class UP extends PP {
+  static targetClass = ex('PP');
+}
+
+@linkedShape
+class POwner extends Shape {
+  static targetClass = ex('POwner');
+  @objectProperty({path: ex('thing'), shape: PT, maxCount: 1, contains: true})
+  get thing(): PT {
+    return null;
+  }
+}
+
+// M-B: a sub-shape (US) whose class is also another hierarchy's (Lib, with a plain `ref`).
+@linkedShape
+class Lib extends Shape {
+  static targetClass = ex('Lib');
+  @objectProperty({path: ex('ref'), shape: HPlain, maxCount: 1})
+  get ref(): HPlain {
+    return null;
+  }
+}
+
+@linkedShape
+class UBase extends Shape {
+  static targetClass = ex('UBase');
+}
+
+@linkedShape
+class US extends UBase {
+  static targetClass = ex('Lib');
+  @objectProperty({path: ex('ref'), shape: HPlain, maxCount: 1, contains: true})
+  get ref(): HPlain {
+    return null;
+  }
+}
+
+@linkedShape
+class O2 extends Shape {
+  static targetClass = ex('O2');
+  @objectProperty({path: ex('item'), shape: UBase, maxCount: 1, contains: true})
+  get item(): UBase {
+    return null;
+  }
+}
+
 // rdf:nil: an owner of a list.
 @linkedShape
 class LHolder extends Shape {
@@ -206,6 +268,34 @@ describe('owned walk: recursion', () => {
     }
     // Deleting through the sub-shape itself still owns `extra`.
     expect(deleteOf(HBSame, `${W}hb1`)).toContain(`<${W}hb1> <${W}extra> ?c_0_0 .`);
+  });
+
+  test('a same-class profile does not switch off its parent sub-shape\'s guard', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const sparql = deleteOf(POwner, `${W}o1`);
+      expect(sparql).toMatch(/rdf:type <http:\/\/example\.org\/w#PP> \.\s*\?c_\w+ <http:\/\/example\.org\/w#att>/);
+      // The profile adds nothing of its own: no warning for it, none for PP.
+      const mine = warn.mock.calls.filter((c) =>
+        [UP.shape.id, PP.shape.id].some((id) => String(c[0]).includes(`'${id}' adds`)),
+      );
+      expect(mine).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('a sub-shape sharing its class with another hierarchy is not followed, and the warning names it', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const sparql = deleteOf(O2, `${W}o2`);
+      expect(sparql).not.toContain(`<${W}ref>`);
+      const mine = warn.mock.calls.filter((c) => String(c[0]).includes(US.shape.id));
+      expect(mine).toHaveLength(1);
+      expect(String(mine[0][0])).toContain(`shares its targetClass with '${Lib.shape.id}'`);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('every deleted node is filtered against rdf:nil', () => {
@@ -361,6 +451,31 @@ describeFuseki('owned walk: recursion — live Fuseki', () => {
       await run(deleteOf(HO, `${W}o1`));
       expect(await count('hb1')).toBe(0);
       expect(await count('x1')).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('a library sub-shape keeps its ownership when a same-class profile is registered', async () => {
+    await insert(`
+      ${iri('o1')} ${T} ${iri('POwner')} ; ${iri('thing')} ${iri('p1')} .
+      ${iri('p1')} ${T} ${iri('PP')} ; ${iri('att')} ${iri('img1')} .
+      ${iri('img1')} ${T} ${iri('HPlain')} ; ${iri('label')} "owned" .`);
+    await run(deleteOf(POwner, `${W}o1`));
+    expect(await count('p1')).toBe(0);
+    expect(await count('img1')).toBe(0);
+  });
+
+  test('a class shared with another hierarchy does not delete through its plain property', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await insert(`
+        ${iri('o2')} ${T} ${iri('O2')} ; ${iri('item')} ${iri('n1')} .
+        ${iri('n1')} ${T} ${iri('Lib')} ; ${iri('ref')} ${iri('l2')} .
+        ${iri('l2')} ${T} ${iri('HPlain')} ; ${iri('label')} "referenced" .`);
+      await run(deleteOf(O2, `${W}o2`));
+      expect(await count('n1')).toBe(0);
+      expect(await count('l2')).toBe(2);
     } finally {
       warn.mockRestore();
     }
