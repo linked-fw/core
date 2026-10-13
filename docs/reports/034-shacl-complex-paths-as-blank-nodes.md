@@ -4,8 +4,8 @@ summary: >
   untyped blank nodes, so SHACL validators read them as the paths they are; before, every one was
   an IRI and was read as a predicate path that never matched. Nested create node-data gains
   `__blank: true`; the containment cascade gains a blank-node block; the next sync replaces stored
-  IRI path nodes. Verified with Jena SHACL on the test Fuseki. Minor release. Not pushed: a
-  consuming application's shape-catalog reader joins on path node ids and must change first.
+  IRI path nodes. Verified with Jena SHACL on the test Fuseki. Minor release. Consumers that
+  joined on path node ids across queries must key path structure by the property shape instead.
 packages: [core]
 ---
 
