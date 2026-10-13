@@ -78,13 +78,65 @@ sh:property [
   legitimate references. **C, drop the constraint** — loses the only store-side check of the
   single-owner rule.
 
+### Decision 4 = A — `contains` requires a value shape
+
+Context: `PropertyShape.path` and the four `PathNode` slots are `contains` without a value shape;
+they make the cascade fall back to "every dependent type" (`irToAlgebra.ts:2736-2738`). Since
+report 035 their blank values (operator nodes, `PathList` cells) are removed by the blank-capable
+walk driven by `sh:nodeKind`, so `contains` on them no longer does anything a shape-directed walk
+needs.
+
+Chosen: declaring `contains: true` without a value shape is an error. `contains` is removed from
+`PropertyShape.path` and the `PathNode` slots; their blank structure stays covered by the
+blank-capable walk. `sh:in` (`List`) and `alternativePath` (`PathList`) keep `contains` — they have
+value shapes. **No legacy cleanup:** there are no stored IRI path nodes from before 2.30 (the only
+installation is a local development store that can be wiped), so nothing has to keep deleting them.
+
+Rejected: B keep the "every dependent type" fallback for shape-less hops (the exception per-property
+ownership removes); C polymorphic value shape (`sh:or (PathNode PathList)`) — needs `sh:or` in the
+walk and metamodel for structures the blank walk already handles.
+
+### Decision 5 = A — follow sub-shapes' `contains` properties, type-guarded
+
+Context: value shape `ImageObject`, stored node typed with a registered sub-shape (`Photo`) that
+declares an extra `contains` property (`thumbnail`). Becomes routine once shape forms offer
+sub-shape choice.
+
+Chosen: the walk emits, per registered sub-shape that adds `contains` properties, a block guarded
+by the sub-shape's concrete class (`?img a ex:Photo . ?img ex:thumbnail ?t …`). Core writes the
+concrete class's `rdf:type` on create, so no inference is needed. No block when no sub-shape adds
+ownership (the common case).
+
+Rejected: B declared value shape only (orphans sub-shape-owned values); C unguarded union of
+sub-shapes' predicates (per-predicate ownership again).
+
+### Decision 6 = B — single-owner owners enumerated by class at sync time
+
+Context: owners usually own through an inherited property (a `Project` owns `image` through
+`Thing.image`). Datasets without inference or `rdfs:subClassOf` triples would not match
+`sh:class schema:Thing` against a node typed only `ex:Project`.
+
+Chosen (refines Decision 3):
+```turtle
+sh:property [ sh:path [ sh:inversePath p ] ;
+  sh:qualifiedValueShape [ sh:or ( [ sh:class <DeclaringClass> ] [ sh:class <SubClass1> ] … ) ] ;
+  sh:qualifiedMaxCount 1 ] .
+```
+The class list is the declaring shape's `targetClass` plus every registered sub-shape's, computed
+at sync time (sync rewrites it each run). A declaring shape without `targetClass` gets no
+constraint; sync logs it once. Limitation: sub-shapes registered only in another process are
+missing until a process that knows them syncs.
+
+Rejected: A `sh:class` on the declaring class only (misses subclass owners without inference);
+C `sh:node <declaring shape>` (nearly every node conforms to an all-optional shape).
+
 ## Open-item map
 
 `BLOCKER` = must be decided before planning. Line numbers are on `main` at `18b0dd5`.
 
 ### Blockers
 
-1. **BLOCKER — shape-less `contains` properties under a shape-directed walk.** `PropertyShape.path`
+1. **RESOLVED (Decision 4)** — shape-less `contains` properties under a shape-directed walk.** `PropertyShape.path`
    (`src/utils/Package.ts:680-690`, `contains: true`, no value shape) and the `PathNode` slots
    `inversePath` / `zeroOrMorePath` / `oneOrMorePath` / `zeroOrOnePath` (`src/shapes/PathNode.ts:36,52,57,62`)
    have no value shape. Today they make `reachableDependentTypes` return every dependent type
@@ -97,7 +149,7 @@ sh:property [
    Correction to the brief: `sh:in` is *not* shape-less — `PropertyShape.in` declares
    `shape: List` (`Package.ts:790-792`); `PathNode.alternativePath` declares `PathList`
    (`PathNode.ts:41-45`).
-2. **BLOCKER (likely) — sub-shape polymorphism.** The value shape is `ImageObject`, but the node
+2. **RESOLVED (Decision 5)** — sub-shape polymorphism. The value shape is `ImageObject`, but the node
    is typed with a registered sub-shape that declares extra `contains` properties. Today the walk
    already visits sub-shapes (`getSubShapes`, `irToAlgebra.ts:2721`; `src/utils/ShapeClass.ts:338`,
    indexed by `extends`, not by `targetClass`). Under 2A, following a sub-shape's extra properties
@@ -105,7 +157,7 @@ sh:property [
    sub-shapes' `contains` properties (deletes through properties the actual node's shape may not
    declare when two sub-shapes reuse a predicate). Decide which, and whether the type guard needs
    `rdfs:subClassOf` (project datasets have no inference).
-3. **BLOCKER — single-owner constraint needs the declaring `targetClass` (3A).**
+3. **RESOLVED (Decision 6)** — single-owner constraint needs the declaring `targetClass` (3A).**
    `buildSingleOwnerConstraints` (`src/shapes/singleOwnerConstraint.ts:71-96`) uses no
    `targetClass` today and no `qualifiedValueShape` exists anywhere in `src/`. Open: a declaring
    shape without `targetClass` (sync writes it, `src/shapes/syncShapes.ts:82`; delete-by-shape
@@ -193,9 +245,8 @@ consumers — public-API question.
     shape replaces the old one on the next sync, with no migration script. Golden fixture
     `src/tests/shape-sync-output-equivalence.test.ts` pins 2.30.0 output and must be updated
     deliberately.
-13. **Typed IRI path nodes written before 2.30** (`PathNode`, typed `PathList` cells) are deleted
-    today by the dependent cascade through the shape-less `sh:path` hop. Whatever resolves
-    blocker 1 must keep deleting them. Not blocking on its own.
+13. **Typed IRI path nodes written before 2.30:** none exist (the only installation is a local
+    development store that can be wiped), so no cleanup is kept (Decision 4).
 14. Existing data where a plain property linked a node through an owned predicate keeps its
     node after 1A (nothing deletes it). No data migration; document.
 
