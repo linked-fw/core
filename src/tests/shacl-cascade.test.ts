@@ -309,9 +309,13 @@ describe('owned-subtree walk', () => {
     // Exactly one delete pattern: the old node's own triples.
     expect(deletePatterns).toHaveLength(1);
     expect(deletePatterns[0].subject).toEqual(old);
-    // Exactly one WHERE group holding BOTH the owning edge (binds ?old) and the wildcard.
+    // Exactly one WHERE group holding BOTH the owning edge (binds ?old) and the wildcard,
+    // filtered so `rdf:nil` (the empty list) is never deleted.
     expect(whereOptionals).toHaveLength(1);
-    const triples = (whereOptionals[0] as any).triples;
+    const group = whereOptionals[0] as any;
+    expect(group.type).toBe('filter');
+    expect(group.expression.kind).toBe('not_expr');
+    const triples = group.inner.triples;
     expect(triples).toHaveLength(2);
     // First triple is the edge <subject> <prop> ?old — required to bind ?old in-group.
     expect(triples[0].subject).toEqual(subject);
@@ -374,7 +378,7 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
       UpdateBuilder.from(TCard).for(`${C}card1`).set({holds: {id: `${C}newplain`}}),
     );
     // The keep filters; the blank-node blocks' own `isBlank` filters are not keep filters.
-    const filters = [...(sparql.match(/FILTER\([^)]*\)\)/g) ?? [])].filter((f: string) => !/isBlank\(/.test(f));
+    const filters = [...(sparql.match(/FILTER\([^)]*\)\)/g) ?? [])].filter((f: string) => !/isBlank\(|sameTerm\(/.test(f));
     expect(filters.length).toBeGreaterThan(0);
     // Only the new id is listed; an old value that differs is still deleted.
     for (const f of filters) expect(f).toBe('FILTER(?old_holds NOT IN (<http://example.org/c#newplain>))');
@@ -438,7 +442,7 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     expect(block.expression.negated).toBe(true);
     expect(block.expression.value).toEqual({kind: 'variable_expr', name: 'old_holds'});
     expect(block.expression.list).toEqual([{kind: 'iri_expr', value: `${C}plain1`}]);
-    expect(block.inner.triples).toEqual((plain.whereOptionals[0] as any).triples);
+    expect(block.inner).toEqual(plain.whereOptionals[0]);
     // An IRI old term (set-remove) ignores keep.
     const iriOld = buildOwnedSelfDelete(subject, prop, {kind: 'iri', value: `${C}x`}, 'z_', keep);
     expect(iriOld.whereOptionals[0].type).toBe('bgp');
@@ -449,8 +453,8 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
       lower(DeleteBuilder.from(TCard, {id: `${C}card1`})) as IRDeleteMutation,
     );
     const where = sparql.slice(sparql.indexOf('WHERE'));
-    expect(where).toMatch(/\{\s*<http:\/\/example\.org\/c#card1> <http:\/\/example\.org\/c#holds> \?c_0_0 \.\s*\?c_0_0 \?c_0_p \?c_0_o \.\s*\}/);
-    expect(where).toMatch(/\{\s*<http:\/\/example\.org\/c#card1> <http:\/\/example\.org\/c#cells> \?c_1_0 \.\s*\?c_1_0 \?c_1_p \?c_1_o \.\s*\}/);
+    expect(where).toMatch(/\{\s*<http:\/\/example\.org\/c#card1> <http:\/\/example\.org\/c#holds> \?c_0_0 \.\s*\?c_0_0 \?c_0_p \?c_0_o \.\s*FILTER\(!\(sameTerm\(\?c_0_0, rdf:nil\)\)\)\s*\}/);
+    expect(where).toMatch(/\{\s*<http:\/\/example\.org\/c#card1> <http:\/\/example\.org\/c#cells> \?c_1_0 \.\s*\?c_1_0 \?c_1_p \?c_1_o \.\s*FILTER\(!\(sameTerm\(\?c_1_0, rdf:nil\)\)\)\s*\}/);
     expect(where).not.toContain('OPTIONAL');
     expect(deleteBlockOf(sparql)).toContain('?c_0_0 ?c_0_p ?c_0_o .');
     expect(deleteBlockOf(sparql)).toContain('?c_1_0 ?c_1_p ?c_1_o .');
@@ -471,10 +475,10 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
     const sparql = deleteAllToSparql(lower(DeleteBuilder.from(TCard).all()) as IRDeleteAllMutation);
     const where = sparql.slice(sparql.indexOf('WHERE'));
     expect(where).toMatch(
-      new RegExp(`\\{\\s*${CARD_TYPE}\\s*\\?a0 <http:\\/\\/example\\.org\\/c#holds> \\?c_0_0 \\.\\s*\\?c_0_0 \\?c_0_p \\?c_0_o \\.\\s*\\}`),
+      new RegExp(`\\{\\s*${CARD_TYPE}\\s*\\?a0 <http:\\/\\/example\\.org\\/c#holds> \\?c_0_0 \\.\\s*\\?c_0_0 \\?c_0_p \\?c_0_o \\.\\s*FILTER\\(!\\(sameTerm\\(\\?c_0_0, rdf:nil\\)\\)\\)\\s*\\}`),
     );
     expect(where).toMatch(
-      new RegExp(`\\{\\s*${CARD_TYPE}\\s*\\?a0 <http:\\/\\/example\\.org\\/c#cells> \\?c_1_0 \\.\\s*\\?c_1_0 \\?c_1_p \\?c_1_o \\.\\s*\\}`),
+      new RegExp(`\\{\\s*${CARD_TYPE}\\s*\\?a0 <http:\\/\\/example\\.org\\/c#cells> \\?c_1_0 \\.\\s*\\?c_1_0 \\?c_1_p \\?c_1_o \\.\\s*FILTER\\(!\\(sameTerm\\(\\?c_1_0, rdf:nil\\)\\)\\)\\s*\\}`),
     );
     expect(where).not.toContain('OPTIONAL');
     const del = deleteBlockOf(sparql);

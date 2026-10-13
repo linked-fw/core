@@ -64,6 +64,7 @@ import {UnresolvedContextError} from '../queries/QueryContext.js';
 // ---------------------------------------------------------------------------
 
 const RDF_TYPE = rdf.type.id;
+const RDF_NIL = rdf.nil.id;
 const XSD_DATETIME = xsd.dateTime.id;
 const XSD_DATE = xsd.date.id;
 const XSD_TIME = xsd.time.id;
@@ -2743,24 +2744,39 @@ function subjectBlankCascade(
 // declares `contains` is never followed. A registered sub-shape that adds `contains`
 // properties contributes hops guarded by its concrete class (`?n a <SubClass>`). Every node
 // the walk reaches loses its own triples and its blank values; `dependent` plays no part.
+//
+// Recursion: a shape that owns itself through an unguarded edge (`List.rest`) is followed with
+// a closure (`rdf:rest*`), since every such edge from one of its nodes is its own. Any other
+// recursion (a cycle through several shapes, a sub-shape's edge back into the walk) is unrolled
+// into typed hops, up to `MAX_OWNED_RECURSION` repeated shapes per path; deeper values are left.
 // ---------------------------------------------------------------------------
+
+/**
+ * How many times one walk path may re-enter a shape it already passed through (a cycle through
+ * several shapes, or a sub-shape's edge back into its own kind). Values below are not deleted.
+ */
+export const MAX_OWNED_RECURSION = 4;
+
+/** Above this many branches for one root shape, lowering warns once (see backlog 055). */
+export const OWNED_BRANCH_WARNING = 64;
 
 /** One owned edge of the shape graph: a `contains` property and its value shape. */
 type OwnedEdge = {guard?: string; predicate: string; target: string};
 
 /**
- * One hop of the walk from the current position: type-guarded when it is a sub-shape's, along
- * `predicate`, then `closure*` inside the target's recursive group.
+ * One hop of the walk from the current position: when `typeClasses` is set the position must
+ * have one of them as its `rdf:type`; then along `predicate`, then `closure*` when the target
+ * shape owns itself.
  */
-type OwnedHop = {guard?: string; predicate: string; closure: string[]};
+type OwnedHop = {typeClasses?: string[]; predicate: string; closure: string[]};
 
-/** A group of nodes the walk deletes: the hops leading to it and its blank-capable properties. */
+/** A node the walk deletes: the hops leading to it and its shape's blank-capable properties. */
 type OwnedTarget = {hops: OwnedHop[]; blankProps: PropertyShapeData[]};
 
 type OwnedWalk = {
-  /** The owned predicates inside the root's own recursive group (`List.rest`). */
+  /** The root shape's self-loop predicates (`List.rest`). */
   rootClosure: string[];
-  /** The blank-capable properties of the root group's shapes. */
+  /** The blank-capable properties of the root shape. */
   rootBlankProps: PropertyShapeData[];
   targets: OwnedTarget[];
 };
@@ -2771,10 +2787,14 @@ function ownedPredicate(ps: PropertyShapeData): string | null {
   return getSimplePathId(ps.path) ?? null;
 }
 
+const warnedUnguardable = new Set<string>();
+
 /**
  * The owned edges of a shape: its own and inherited `contains` properties, then, per registered
- * sub-shape with a `targetClass`, the `contains` properties it adds, guarded by that class (a
- * node carries only its concrete class's `rdf:type`, so each sub-shape lists its full extra set).
+ * sub-shape, the `contains` properties it adds, guarded by its `targetClass` (a node carries only
+ * its concrete class's `rdf:type`, so each sub-shape lists its full extra set). A sub-shape whose
+ * `targetClass` is missing, or also held by the shape or another of its sub-shapes, cannot be told
+ * apart by type: its extra edges are not followed (warned once).
  */
 function ownedEdges(shapeId: string): OwnedEdge[] {
   const nodeShape = shapeById(shapeId);
@@ -2789,26 +2809,54 @@ function ownedEdges(shapeId: string): OwnedEdge[] {
   const own = getPropertyShapes(nodeShape, true);
   own.forEach((ps) => add(ps));
   const ownIds = new Set(own.map((ps) => ps.id));
-  for (const sub of getSubShapes(shapeId)) {
+  const subs = getSubShapes(shapeId);
+  const holders = new Map<string, number>();
+  for (const shape of [nodeShape, ...subs]) {
+    const cls = shape.targetClass?.id;
+    if (cls) holders.set(cls, (holders.get(cls) ?? 0) + 1);
+  }
+  for (const sub of subs) {
+    const extra = getPropertyShapes(sub, true).filter((ps) => !ownIds.has(ps.id) && ownedPredicate(ps));
+    if (extra.length === 0) continue;
     const guard = sub.targetClass?.id;
-    if (!guard) continue;
-    for (const ps of getPropertyShapes(sub, true)) {
-      if (!ownIds.has(ps.id)) add(ps, guard);
+    if (!guard || holders.get(guard)! > 1) {
+      if (!warnedUnguardable.has(sub.id)) {
+        warnedUnguardable.add(sub.id);
+        console.warn(
+          `[linked] Shape '${sub.id}' adds contains properties to '${shapeId}' but has no ` +
+            'targetClass of its own, so its nodes cannot be told apart by rdf:type: deleting through ' +
+            `'${shapeId}' does not follow them. Give it a targetClass of its own.`,
+        );
+      }
+      continue;
     }
+    extra.forEach((ps) => add(ps, guard));
   }
   return [...edges.values()];
 }
 
+/** The classes a node of `shapeId` may carry: its targetClass and every registered sub-shape's. */
+function shapeClasses(shapeId: string): string[] {
+  const nodeShape = shapeById(shapeId);
+  const classes = new Set<string>();
+  for (const shape of nodeShape ? [nodeShape, ...getSubShapes(shapeId)] : []) {
+    if (shape.targetClass?.id) classes.add(shape.targetClass.id);
+  }
+  return [...classes];
+}
+
 let ownedWalkCache = new Map<string, OwnedWalk>();
 let ownedWalkCacheVersion = -1;
+const warnedBranches = new Set<string>();
 
 /**
  * The owned subtree of a root shape, as hops (memoized per registry version; read-only).
  *
- * The reachable shapes are grouped into strongly connected components. Entering a group
- * follows its internal owned predicates with `*` (exact for a self-loop such as `List.rest`;
- * a group of several shapes follows all of its own owned predicates). Every other edge is an
- * explicit hop, and every path through the condensed graph is one target.
+ * One target per path from the root. A self-loop (`S` owns `S` through an unguarded edge) is a
+ * closure, exact because every such edge from an `S` node is `S`'s own. Every other edge is an
+ * explicit hop. A hop is typed when it is a sub-shape's (its class) or when it stays inside a
+ * cycle of several shapes (the declaring shape's classes), and a path stops after
+ * `MAX_OWNED_RECURSION` hops into a shape already on it.
  */
 function ownedWalk(rootShapeId: string): OwnedWalk {
   const version = getRegistryVersion();
@@ -2828,20 +2876,26 @@ function ownedWalk(rootShapeId: string): OwnedWalk {
     edgesOf.set(id, edges);
     for (const edge of edges) if (!edgesOf.has(edge.target)) pending.push(edge.target);
   }
+  const isSelfLoop = (from: string, e: OwnedEdge) => !e.guard && e.target === from;
+  const closureOf = (id: string) => [
+    ...new Set(edgesOf.get(id)!.filter((e) => isSelfLoop(id, e)).map((e) => e.predicate)),
+  ];
 
-  // Tarjan's strongly connected components.
+  // Tarjan's strongly connected components, over the edges that are not closures.
   const index = new Map<string, number>();
   const low = new Map<string, number>();
   const onStack = new Set<string>();
   const stack: string[] = [];
   const groupOf = new Map<string, number>();
-  const groups: string[][] = [];
+  const groupSize: number[] = [];
   const strong = (v: string) => {
     index.set(v, index.size);
     low.set(v, index.get(v)!);
     stack.push(v);
     onStack.add(v);
-    for (const {target: w} of edgesOf.get(v)!) {
+    for (const e of edgesOf.get(v)!) {
+      if (isSelfLoop(v, e)) continue;
+      const w = e.target;
       if (!index.has(w)) {
         strong(w);
         low.set(v, Math.min(low.get(v)!, low.get(w)!));
@@ -2850,68 +2904,93 @@ function ownedWalk(rootShapeId: string): OwnedWalk {
       }
     }
     if (low.get(v) !== index.get(v)) return;
-    const group: string[] = [];
     let w: string;
+    let size = 0;
     do {
       w = stack.pop()!;
       onStack.delete(w);
-      groupOf.set(w, groups.length);
-      group.push(w);
+      groupOf.set(w, groupSize.length);
+      size++;
     } while (w !== v);
-    groups.push(group);
+    groupSize.push(size);
   };
   strong(rootShapeId);
-
-  const closureOf = (g: number) => [
-    ...new Set(
-      groups[g].flatMap((m) =>
-        edgesOf.get(m)!.filter((e) => groupOf.get(e.target) === g).map((e) => e.predicate),
-      ),
-    ),
-  ];
-  const blankPropsOf = (g: number) => {
-    const props = new Map<string, PropertyShapeData>();
-    for (const m of groups[g]) for (const ps of blankCapableProperties(m)) props.set(ps.id, ps);
-    return [...props.values()];
-  };
+  // A shape with a guarded edge to itself is a cycle too.
+  const inCycle = (from: string, e: OwnedEdge) =>
+    e.target === from || (groupOf.get(from) === groupOf.get(e.target) && groupSize[groupOf.get(from)!] > 1);
 
   const targets: OwnedTarget[] = [];
-  const visit = (g: number, hops: OwnedHop[]) => {
-    const seen = new Set<string>();
-    for (const m of groups[g]) {
-      for (const edge of edgesOf.get(m)!) {
-        const tg = groupOf.get(edge.target)!;
-        const key = `${edge.guard ?? ''} ${edge.predicate} ${tg}`;
-        if (tg === g || seen.has(key)) continue;
-        seen.add(key);
-        const path = [...hops, {guard: edge.guard, predicate: edge.predicate, closure: closureOf(tg)}];
-        targets.push({hops: path, blankProps: blankPropsOf(tg)});
-        visit(tg, path);
-      }
+  const visit = (shape: string, hops: OwnedHop[], path: string[], repeats: number) => {
+    for (const edge of edgesOf.get(shape)!) {
+      if (isSelfLoop(shape, edge)) continue;
+      const repeat = path.includes(edge.target) ? 1 : 0;
+      if (repeats + repeat > MAX_OWNED_RECURSION) continue;
+      const typeClasses = edge.guard
+        ? [edge.guard]
+        : inCycle(shape, edge)
+          ? shapeClasses(shape)
+          : undefined;
+      const hop: OwnedHop = {
+        ...(typeClasses?.length ? {typeClasses} : {}),
+        predicate: edge.predicate,
+        closure: closureOf(edge.target),
+      };
+      const next = [...hops, hop];
+      targets.push({hops: next, blankProps: blankCapableProperties(edge.target)});
+      visit(edge.target, next, [...path, edge.target], repeats + repeat);
     }
   };
-  const rootGroup = groupOf.get(rootShapeId)!;
-  visit(rootGroup, []);
+  visit(rootShapeId, [], [rootShapeId], 0);
+  if (targets.length > OWNED_BRANCH_WARNING && !warnedBranches.has(rootShapeId)) {
+    warnedBranches.add(rootShapeId);
+    console.warn(
+      `[linked] Deleting a '${rootShapeId}' walks ${targets.length} owned paths (more than ` +
+        `${OWNED_BRANCH_WARNING}); each is one UNION branch of the delete.`,
+    );
+  }
   const walk: OwnedWalk = {
-    rootClosure: closureOf(rootGroup),
-    rootBlankProps: blankPropsOf(rootGroup),
+    rootClosure: closureOf(rootShapeId),
+    rootBlankProps: blankCapableProperties(rootShapeId),
     targets,
   };
   ownedWalkCache.set(rootShapeId, walk);
   return walk;
 }
 
+/** `FILTER(!sameTerm(?n, rdf:nil))`: the walk never deletes `rdf:nil`, which every list ends in. */
+function notNil(term: SparqlTerm): SparqlExpression | null {
+  if (term.kind !== 'variable') return null;
+  return {
+    kind: 'not_expr',
+    inner: {
+      kind: 'function_expr',
+      name: 'sameTerm',
+      args: [{kind: 'variable_expr', name: term.name}, {kind: 'iri_expr', value: RDF_NIL}],
+    },
+  };
+}
+
+/** `inner` filtered by every expression in `filters` (unchanged when there are none). */
+function filtered(inner: SparqlAlgebraNode, filters: SparqlExpression[]): SparqlAlgebraNode {
+  if (filters.length === 0) return inner;
+  return {
+    type: 'filter',
+    expression: filters.length === 1 ? filters[0] : {kind: 'logical_expr', op: 'and', exprs: filters},
+    inner,
+  };
+}
+
 /**
  * DELETE patterns and UNION branches that delete the owned subtree below `rootTerm`, a node of
  * `rootShapeId` (see `ownedWalk`). The root itself is the caller's: the subject wildcard of a
- * delete, or `buildOwnedSelfDelete` for a replaced value. Each branch deletes one group of
- * nodes, their own triples and their blank values:
+ * delete, or `buildOwnedSelfDelete` for a replaced value. Each branch deletes one node per
+ * solution, its own triples and its blank values:
  *
  * ```sparql
- * …anchor…  <root> (r…)* ?w .                  # the root's own group, when recursive
- * ?w a <SubClass> .                             # a sub-shape's hop only
- * ?w <c1> ?x0e . ?x0e (s…)* ?x0 .               # closure only for a recursive target group
- * ?x0 ?x0p ?x0o .
+ * …anchor…  <root> (r…)* ?w .                  # the root shape's self-loop, if any
+ * ?w a <SubClass> .                             # a typed hop only
+ * ?w <c1> ?x0e . ?x0e (s…)* ?x0 .               # closure only for a self-owning target shape
+ * ?x0 ?x0p ?x0o .  FILTER(!sameTerm(?x0, rdf:nil))
  * ```
  *
  * `anchor` leads every branch: the owning edge that binds a variable root (`<s> <p> ?old`), or a
@@ -2928,10 +3007,18 @@ function ownedSubtreeBlocks(
   const walk = ownedWalk(rootShapeId);
   const deletePatterns: SparqlTriple[] = [];
   const whereBlocks: SparqlAlgebraNode[] = [];
-  const emit = (reach: SparqlTriple[], node: SparqlTerm, blankProps: PropertyShapeData[], prefix: string) => {
+  const emit = (
+    reach: SparqlTriple[],
+    filters: SparqlExpression[],
+    node: SparqlTerm,
+    blankProps: PropertyShapeData[],
+    prefix: string,
+  ) => {
+    const nil = notNil(node);
+    const all = nil ? [...filters, nil] : filters;
     const own = tripleOf(node, varTerm(`${prefix}p`), varTerm(`${prefix}o`));
     deletePatterns.push(own);
-    whereBlocks.push(keepFilter({type: 'bgp', triples: [...anchor, ...reach, own]}, rootTerm, keep));
+    whereBlocks.push(keepFilter(filtered({type: 'bgp', triples: [...anchor, ...reach, own]}, all), rootTerm, keep));
     if (blankProps.length === 0) return;
     const blank = buildBlankCascade(
       [...anchor, ...reach],
@@ -2942,16 +3029,17 @@ function ownedSubtreeBlocks(
     );
     if (!blank) return;
     deletePatterns.push(...blank.deletePatterns);
-    whereBlocks.push(keepFilter(blank.whereBlock, rootTerm, keep));
+    whereBlocks.push(keepFilter(filtered(blank.whereBlock, filters), rootTerm, keep));
   };
 
   let base = rootTerm;
   const baseReach: SparqlTriple[] = [];
   if (walk.rootClosure.length > 0) {
-    // The other nodes of the root's own group (the tail cells of a list).
+    // The other nodes of the root's own kind (the tail cells of a list).
     const others = varTerm(`${varPrefix}r`);
     emit(
       [tripleOf(rootTerm, predicatePathTerm(walk.rootClosure, 'oneOrMore'), others)],
+      [],
       others,
       walk.rootBlankProps,
       `${varPrefix}r`,
@@ -2963,10 +3051,21 @@ function ownedSubtreeBlocks(
   }
   walk.targets.forEach((target, t) => {
     const reach = [...baseReach];
+    const filters: SparqlExpression[] = [];
     let at = base;
     target.hops.forEach((hop, h) => {
       const name = `${varPrefix}${t}_${h}`;
-      if (hop.guard) reach.push(tripleOf(at, iriTerm(RDF_TYPE), iriTerm(hop.guard)));
+      if (hop.typeClasses?.length === 1) {
+        reach.push(tripleOf(at, iriTerm(RDF_TYPE), iriTerm(hop.typeClasses[0])));
+      } else if (hop.typeClasses) {
+        reach.push(tripleOf(at, iriTerm(RDF_TYPE), varTerm(`${name}t`)));
+        filters.push({
+          kind: 'in_expr',
+          negated: false,
+          value: {kind: 'variable_expr', name: `${name}t`},
+          list: hop.typeClasses.map((value) => ({kind: 'iri_expr' as const, value})),
+        });
+      }
       const end = varTerm(hop.closure.length > 0 ? `${name}e` : name);
       reach.push(tripleOf(at, iriTerm(hop.predicate), end));
       if (hop.closure.length > 0) {
@@ -2974,7 +3073,7 @@ function ownedSubtreeBlocks(
       }
       at = varTerm(name);
     });
-    emit(reach, at, target.blankProps, `${varPrefix}${t}_`);
+    emit(reach, filters, at, target.blankProps, `${varPrefix}${t}_`);
   });
   return {deletePatterns, whereBlocks};
 }
@@ -3034,14 +3133,15 @@ export function buildOwnedSelfDelete(
   const p = varTerm(`${varPrefix}sp`);
   const o = varTerm(`${varPrefix}so`);
   const wildcard = tripleOf(oldTerm, p, o);
+  const nil = notNil(oldTerm);
   return {
     deletePatterns: [wildcard],
     whereOptionals: [
       keepFilter(
-        {
-          type: 'bgp',
-          triples: [tripleOf(subjectTerm, propertyTerm, oldTerm), wildcard],
-        },
+        filtered(
+          {type: 'bgp', triples: [tripleOf(subjectTerm, propertyTerm, oldTerm), wildcard]},
+          nil ? [nil] : [],
+        ),
         oldTerm,
         keep,
       ),

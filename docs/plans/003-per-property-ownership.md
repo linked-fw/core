@@ -868,7 +868,7 @@ The consumer note (M7, `withoutOwnership`) is re-evaluated after the fix, below.
 
 ## Iteration 1 — Phases
 
-### Phase 6: precise recursion and same-class sub-shapes (Gaps 1, 2)
+### Phase 6: precise recursion and same-class sub-shapes (Gaps 1, 2) — DONE (with Phase 7)
 
 Tasks: `ownedEdges` / `ownedWalk` / `ownedSubtreeBlocks` per the plan; measure `K`.
 Validation (`src/tests/owned-walk-recursion.test.ts`):
@@ -884,7 +884,26 @@ Validation (`src/tests/owned-walk-recursion.test.ts`):
 - Each repro fails with `src/sparql/irToAlgebra.ts` reverted to `83e9a51`.
 - Quick gate, `npm test` (0 failed live), `npx linked build`.
 
-### Phase 7: `rdf:nil` and branch counts (Gaps 3, 4)
+### Phase 7: `rdf:nil` and branch counts (Gaps 3, 4) — DONE (in the Phase 6 commit)
+
+Result (Phases 6 + 7, one commit: the rewritten emitter carries the typing and the `rdf:nil`
+filter together): self-loop closures only; other recursion unrolled into typed hops
+(`MAX_OWNED_RECURSION` K = 4); a sub-shape whose class is shared is skipped with one warning;
+`FILTER(!sameTerm(?n, rdf:nil))` on every walk node and on the replaced-value self-delete;
+`OWNED_BRANCH_WARNING` = 64; backlog 055. Typing refinement: an unguarded recursive hop accepts the
+declaring shape's class or a registered sub-shape's (`?t IN (…)`).
+
+K choice: branch counts grow linearly with K for a single cycle (RA/RB: 2 + 1 + K) and as about
+2^(K+1) for a shape with two recursive sub-shape edges (K = 3 → 14, 4 → 30, 5 → 62 owned
+branches); K = 4 is the largest value that keeps that case under the 64-branch warning. Real
+models are unaffected (only self-loops): core metamodel + `@_linked/schema`, 41 shapes, max 8
+branches (NodeShape 8, PathList / PathNode 5, PropertyShape 4, List 3, Thing / CreativeWork 6,
+every other schema shape 2–3); synthetic width-3 depth-4 DAG 120 (warns).
+
+Tests: `src/tests/owned-walk-recursion.test.ts` (7 pure, 5 live): all 12 fail with
+`irToAlgebra.ts` from `83e9a51` (checked). `shacl-cascade` expectations gained the `rdf:nil`
+filter. Validation: quick gate green; `npm test` 2238 passed, 0 failed,
+`[fuseki] live tests: 298 total — 298 passed`; `npx linked build` OK.
 
 Tasks: nil filter; branch warning; backlog doc.
 Validation: `rdf:nil a rdf:List ; rdfs:label "nil"` keeps its triples after deleting a list holder
