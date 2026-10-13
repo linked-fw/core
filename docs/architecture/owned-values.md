@@ -1,37 +1,59 @@
 ---
-summary: The contract of owned (`contains`) values — when an owned node is deleted (replace, set-remove, subject delete, bulk delete), how ownership is decided (per predicate vs per shape), blank-node values (written and deleted through blank-capable `sh:nodeKind` properties), the class check on linked ids, and the generated single-owner SHACL shapes that shape sync persists and owns through `core:generatedShape`.
+summary: The contract of owned (`contains`) values — when an owned node is deleted (replace, set-remove, subject delete, bulk delete), how ownership is decided (per property, by a shape-directed walk), blank-node values (written and deleted through blank-capable `sh:nodeKind` properties), the class check on linked ids, and the generated single-owner SHACL shapes that shape sync persists and owns through `core:generatedShape`.
 packages: [core]
 ---
 
 # Owned values and generated shapes
 
 User-facing description: README "Owned properties (`contains` / `dependent`)". History and
-rationale: [report 025](../reports/025-update-replace-contains-cascade.md) (replace cascade) and
-[report 032](../reports/032-owned-replace-noop-and-single-owner-shacl.md) (this contract).
+rationale: [report 025](../reports/025-update-replace-contains-cascade.md) (replace cascade),
+[report 032](../reports/032-owned-replace-noop-and-single-owner-shacl.md) (this contract) and plan
+003 (per-property ownership; its report replaces this pointer at wrapup).
 
-## The two flags
+## Ownership
 
-- **`contains: true`** on an object property: the subject owns the value node. Code:
-  `ObjectPropertyShapeConfig.contains` (`src/shapes/SHACL.ts`), persisted as `core:contains`.
-- **`dependent: true`** on a shape: its instances have no independent existence and are deleted
-  when a `contains` walk reaches them (list cells, property shapes, and the typed path nodes of
-  versions before 2.30).
-- **Blank nodes** need neither flag. A nested create is written as a blank node when the
-  property that holds it is blank-capable (`sh:BlankNode`, `sh:BlankNodeOrIRI` without an id,
+- **`contains: true`** on an object property: the subject owns the value node through *this
+  property*, own or inherited through `extends`. Code: `ObjectPropertyShapeConfig.contains`
+  (`src/shapes/SHACL.ts`), persisted as `core:contains`. A plain property of another shape on
+  the same predicate is a reference: it never deletes and is never class-checked.
+- **A `contains` property needs a `shape`** (`createPropertyShape` throws otherwise): the walk
+  below follows the value shape. Shapes registered from data (`PropertyShapeData` built
+  directly) are not validated; a shape-less `contains` there owns nothing.
+- **`dependent: true`** on a shape is deprecated and has no effect. It is accepted and persisted
+  (`core:dependent`).
+- **Blank nodes** need neither. A nested create is written as a blank node when the property
+  that holds it is blank-capable (`sh:BlankNode`, `sh:BlankNodeOrIRI` without an id,
   `sh:BlankNodeOrLiteral`), and it is deleted through that property; see
   [Blank-node values](#blank-node-values). Complex `sh:path` values are written this way.
 
-Both are read from the live shape registry (`collectContainment` in `src/sparql/irToAlgebra.ts`),
-so no vocabulary is hardcoded.
+Everything is read from the live shape registry, so no vocabulary is hardcoded.
 
 ## When an owned node is deleted
 
-| Mutation | What goes | Ownership rule |
-|---|---|---|
-| Replace / unset / array overwrite | the old value's own triples (if the property declares a `shape`) and its dependent subtree | per predicate (registry-wide) |
-| Set-remove `{remove: [x]}` | `x`'s own triples (with a `shape`) and its dependent subtree, unless `x` is also in `add` | per predicate |
-| Delete by id | the subject, incoming references, each immediately-owned child, the reachable dependent subtree | the deleted shape's own + inherited `contains` properties with a `shape` |
-| Bulk delete (`.all()`, `.where()`) | as delete by id, minus incoming references | as delete by id |
+| Mutation | What goes |
+|---|---|
+| Replace / unset / array overwrite of a `contains` property | the old value's own triples and blank values, and its owned subtree |
+| Set-remove `{remove: [x]}` of a `contains` property | `x`'s own triples and blank values, and its owned subtree, unless `x` is also in `add` |
+| Delete by id | the subject, incoming references, the subject's blank values, its owned subtree |
+| Bulk delete (`.all()`, `.where()`) | as delete by id, minus incoming references |
+
+**The owned subtree** (`ownedWalk` / `ownedSubtreeBlocks` in `src/sparql/irToAlgebra.ts`) is
+shape-directed. From the root's shape (the deleted subject's shape, or the replaced property's
+value shape) it follows that shape's own and inherited `contains` properties with a simple path
+to their value shapes, then those shapes' `contains` properties, and so on. Every node it reaches
+loses its own triples and its blank values (through its shapes' blank-capable properties). Each
+hop is an explicit triple; there is no type guard on owned nodes, the edge asserts ownership.
+
+- **Recursion.** The reachable shapes are grouped into strongly connected components. Entering
+  a group follows its internal owned predicates with `*` (`List` → `rdf:rest*`,
+  `NodeShape.generatedShapes` → `core:generatedShape*`); the root's own group adds one branch
+  `<root> (r…)+ ?n` for its other nodes. A group of several shapes follows all of its owned
+  predicates without per-member distinction.
+- **Sub-shapes.** For every registered descendant of a reached shape that has a `targetClass`
+  and adds `contains` properties, the added properties are followed from nodes of that class
+  only (`?n a <SubClass> . ?n <c> ?m`). Core writes the concrete class's `rdf:type` on create, so
+  no inference is needed. A sub-shape without `targetClass` adds nothing.
+- **Memoized** per (root shape, registry version); lowering only instantiates variables.
 
 Invariants:
 
@@ -40,23 +62,12 @@ Invariants:
   `FILTER(?old NOT IN (<kept>…))`, inside the UNION branch that binds `?old`. The edge is deleted
   and re-inserted. A nested create carrying an id (`{id, ...fields}`) is not a reference: it
   rewrites that node.
-- **A `contains` property without a `shape`** (a polymorphic slot such as `PropertyShape.path`)
-  never deletes its value's own triples. Its value goes only when it is `dependent`-typed: the
-  cascade path is `(c1|c2|…)*`, so the root itself is matched when it is dependent.
 - **Every owned block binds its root through the owning edge** (or, for bulk deletes, the
   subject's type triple), so an absent value matches nothing rather than every node.
 - **Blocks are UNION branches, never an OPTIONAL chain**, so their solutions add, not multiply.
-- **The subject-delete cascade is narrowed** to the dependent shapes the deleted shape can reach
-  (`reachableDependentTypes`): walk the shape and its sub-shapes through properties on `contains`
-  predicates to their value shapes and sub-shapes. A shape-less slot reaches everything (keeps the
-  shape-sync delete exact). Edges no reached shape declares are not followed.
+  One branch per path through the condensed shape graph: a node reachable two ways is deleted
+  by two branches (harmless).
 - Non-owning references to an owned node are allowed and are left dangling when the owner goes.
-
-Blank values are a separate rule, below; they are deleted whether or not the property is
-`contains`.
-
-The replace and the subject delete decide ownership differently (per predicate vs per shape).
-Whether to unify them is open: [backlog 053](../backlog/053-per-property-ownership.md).
 
 ## Blank-node values
 
@@ -96,9 +107,9 @@ FILTER(isBlank(?bn) && NOT EXISTS { ?bn0 (q…)* ?mid . ?mid (q…)+ ?bn . FILTE
 | Mutation | Owner | `p…` |
 |---|---|---|
 | Delete by id, bulk delete | the subject (bulk: led by its type triple) | the subject shape's blank-capable predicates, sub-shapes included |
-| Any cascade (`buildOwnedCascade`: subject delete, `contains` replace / set-remove) | each dependent-typed node it deletes (`<root> (c…)* ?bo . ?bo a <T>`) | the blank-capable predicates of the shapes targeting `T` |
+| The owned subtree (subject delete, `contains` replace / set-remove) | each node a walk branch deletes | the blank-capable predicates of that branch's shapes (sub-shapes included) |
 | Replace / unset / overwrite of a blank-capable property | the old value itself (`<s> <p> ?old`, `?old` is `?bn0`) | — |
-| Delete by id / bulk delete, `contains` replace / set-remove of a property with a `shape` | the immediately-owned child whose own triples are deleted | the value shape's blank-capable predicates |
+| `contains` replace / set-remove | the old value whose own triples are deleted | the value shape's blank-capable predicates |
 
 - `q…` (`blankWalkPredicates`): the blank-capable predicates of the shapes the values can have
   (value shape and sub-shapes, transitively). A blank-capable property without a value shape is
@@ -107,11 +118,9 @@ FILTER(isBlank(?bn) && NOT EXISTS { ?bn0 (q…)* ?mid . ?mid (q…)+ ?bn . FILTE
   reached through an IRI (a property path cannot constrain intermediate nodes): a blank list's
   `rdf:first` must not lead into a listed entity and delete that entity's blank values. Blank
   structures core writes are trees, so the guard removes nothing they own.
-- A dependent type's predicates are followed only when every shape targeting that class agrees
-  they are blank-capable: `PathList.first` / `.rest` are, `List.first` / `.rest` are not (both
-  target `rdf:List`), so a typed list cell's blank `rdf:first` member is content and is kept.
-- Not covered: the blank values of nodes deeper than the immediately-owned child that are not
-  dependent-typed.
+- The owner's blank-capable predicates come from the shapes the walk reached it through, so a
+  `List` cell (whose `first` / `rest` are not blank-capable) keeps a blank `rdf:first` member:
+  it is content. `PathList` cells (blank-capable) are reached only through blank values.
 
 ## The class check on linked ids
 
@@ -120,8 +129,8 @@ the wrong class would later be deleted with its owner. `SparqlDataset.createQuer
 `updateQuery` call `checkOwnedLinks(ir)` (`src/sparql/ownedLinkCheck.ts`) after lowering and
 before the update:
 
-- A field is checked when its simple-path predicate is a `contains` predicate anywhere in the
-  registry and the property declares a `shape` whose `targetClass` resolves.
+- A field is checked when its property is `contains`, has a simple path and declares a `shape`
+  whose `targetClass` resolves. A plain property on the same predicate is not checked.
 - Accepted classes: the value shape's `targetClass`, every registered sub-shape's, and the
   property's `sh:class`. The store's `rdfs:subClassOf` is not consulted.
 - A node is refused only when it has at least one `rdf:type` and none is accepted. Untyped and
@@ -134,8 +143,8 @@ before the update:
 
 ## Generated single-owner shapes
 
-For each **own** `contains` property with a `shape` and a simple path, shape sync persists one
-generated NodeShape (`src/shapes/singleOwnerConstraint.ts`):
+For each **own** `contains` property with a simple path of a shape with a `targetClass`, shape
+sync persists one generated NodeShape (`src/shapes/singleOwnerConstraint.ts`):
 
 ```turtle
 <…/Thing> core:generatedShape <…/Thing/image.singleOwner> .
@@ -144,23 +153,37 @@ generated NodeShape (`src/shapes/singleOwnerConstraint.ts`):
     sh:targetObjectsOf schema:image ;
     sh:property <…/Thing/image.singleOwner/owners> .
 <…/Thing/image.singleOwner/owners> a sh:PropertyShape ;
-    rdfs:label "owners" ; sh:maxCount 1 ;
-    sh:path [ sh:inversePath schema:image ] .
+    rdfs:label "owners" ;
+    sh:path [ sh:inversePath schema:image ] ;
+    sh:qualifiedValueShape [ sh:or ( [ sh:class schema:Thing ] [ sh:class ex:Project ] ) ] ;
+    sh:qualifiedMaxCount 1 .
 ```
+
+- **Owners counted:** subjects of the declaring `targetClass` and of every registered
+  sub-shape's, enumerated at sync time (sorted) because `sh:class` matches a subclass instance
+  only through `rdfs:subClassOf`, which datasets without inference lack. One class →
+  `[ sh:class C ]`, no `sh:or`. A plain reference from another class conforms. Sub-shapes
+  registered only in another process are missing until a process that knows them syncs. A
+  declaring shape without `targetClass` gets no constraint; sync warns once per shape.
+- **Metamodel:** `PropertyShape.qualifiedValueShape` (value shape `NodeShape`),
+  `PropertyShape.qualifiedMaxCount`, `NodeShape.class`, `NodeShape.orShapes` (`sh:or`; `or` is
+  a reserved label; no value shape, like `sh:path`, its cells are `PathList`s), all in
+  `src/utils/Package.ts`. The qualified shape, the list and its members are blank nodes.
 
 The inverse path is an untyped blank node with exactly one triple. An IRI there would be read by
 every SHACL validator as a predicate path (SHACL §2.3.1), which is what versions before 2.30
 wrote (`sh:path <…/owners/inv>`, `<…/owners/inv> a core:PathNode`): Jena reported such a
-constraint as conforming whatever the data. The next sync replaces those nodes.
+constraint as conforming whatever the data. Versions before this one wrote `sh:maxCount 1`
+(every subject counted); the next sync rewrites the constraint.
 
 - **IRI:** `${propertyShapeIri}.singleOwner` (`singleOwnerShapeIri`), derived from the stable
   shape IRI, so every runtime computes the same one. Subclasses inherit the property but write no
   constraint.
 - **Ownership:** `NodeShape.generatedShapes` (`core:generatedShape`) is a `contains` property with
   value shape `NodeShape`. Sync stays two requests per shape: the delete of the NodeShape removes
-  the generated shapes (owned-child block), their property shapes (dependent cascade) and their
-  blank path nodes (the blank-node cascade of each deleted property shape), never the predicate
-  IRI; the create writes the current ones nested.
+  the generated shapes and their property shapes (the owned walk: `core:generatedShape*` then
+  `sh:property`) and their blank path and qualified-shape nodes (the blank-node cascade of each
+  deleted property shape), never the predicate IRI; the create writes the current ones nested.
 - **Markers:** `core:generated true` and no `sh:targetClass`, so catalog readers can skip them.
   They are never registered in the in-memory registry.
 - **Pruning:** `syncShapes` adds every in-code generated IRI to the protected set, so `'all'` and
@@ -169,6 +192,6 @@ constraint as conforming whatever the data. The next sync replaces those nodes.
 - **Not enforced on write.** Neither core nor the default Fuseki setup validates SHACL on update.
   Enforcement is the store's responsibility; core adds no validation queries for it.
 
-Meta-model terms: `sh:targetObjectsOf` (`src/ontologies/shacl.ts`), `core:generated` and
+Meta-model terms: `sh:targetObjectsOf`, `sh:qualifiedValueShape`, `sh:qualifiedMaxCount`, `sh:or` (`src/ontologies/shacl.ts`), `core:generated` and
 `core:generatedShape` (`src/ontologies/linked-core.ts`), NodeShape accessors in
 `src/utils/Package.ts`.

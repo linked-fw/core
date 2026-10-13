@@ -492,7 +492,14 @@ Validation:
   equals after one).
 - Quick gate, `npm test`, `npx linked build`.
 
-### Phase 5 — docs and changeset
+### Phase 5 — docs and changeset — DONE
+
+Result: `owned-values.md` (Ownership, deletion table, owned-subtree walk, invariants, blank-node
+owners, class check, generated shapes), README "Owned properties" (per-property rule, delete
+walk, single-owner Turtle, `dependent` deprecated, legacy path-node note), `SHACL.ts` `contains`
+docstring, `syncShapes.ts` thunk doc, `.changeset/per-property-ownership.md` (minor).
+Validation: stale-term grep clean; quick gate 138/138 (24 live); `npm test` 2226 passed, 0
+failed, 293 live passed; `npx linked build` OK.
 
 Tasks: rewrite `docs/architecture/owned-values.md` sections (ownership rule column, invariants,
 shape-less `contains`, class check, generated shapes, backlog pointer); README "Owned

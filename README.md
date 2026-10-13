@@ -252,6 +252,11 @@ value. Whenever that edge goes away, the owned node is deleted with it:
   orphaned.
 - `update({ownedProp: {remove: [x]}})` deletes `x` itself, not just the link.
 
+Ownership belongs to the property, not to its predicate. A plain property of another shape on
+the same predicate (say `ex:avatar` without `contains`) is a reference: replacing it or deleting
+its subject never deletes the value, and it is not class-checked. A `contains` property needs a
+`shape`; declaring one without it throws when the class is decorated.
+
 ```typescript
 @linkedShape
 export class Person extends Shape {
@@ -287,12 +292,10 @@ patch: it deletes all of that node's triples and writes the new ones.
 `{avatar: {id: uploadedId}}`. The link transfers ownership: the linked node is deleted when it is
 replaced, removed, or when the owner is deleted.
 
-Because of that, core checks the class of every id linked into a property that owns its value and
-declares a `shape`. Ownership is decided per predicate: a property owns its value when any
-registered shape declares its predicate `contains`, so a plain property that shares such a
-predicate is checked too (a replace through it deletes the old value just the same). A link is
-refused, and nothing is written, when the store already types the node and none of its types is
-the shape's `targetClass`, a registered sub-shape's `targetClass`, or the property's `sh:class`:
+Because of that, core checks the class of every id linked into a `contains` property that
+declares a `shape`. A link is refused, and nothing is written, when the store already types the
+node and none of its types is the shape's `targetClass`, a registered sub-shape's `targetClass`, or
+the property's `sh:class`:
 
 ```
 Cannot link <https://my.app/alice> into the contains property "avatar" of <…/shape/my-pkg/Person>:
@@ -301,7 +304,7 @@ it is typed <https://example.org/Person>, but "avatar" only owns instances of <h
 
 Ids that do not exist yet, or have no `rdf:type`, are allowed, so upload-then-attach works in
 either write order. The check runs in `SparqlDataset` (one `SELECT` per mutation that links owned
-ids, none otherwise). Plain references on predicates no shape owns are never checked. A node
+ids, none otherwise). Plain references are never checked. A node
 whose type comes from a subclass that has no registered shape is refused unless the store also
 holds the expected type (an RDFS-inferring store adds it); register a shape for that class, or
 declare `sh:class`, to accept it.
@@ -311,24 +314,16 @@ Nor is a node typed by another request between the check's `SELECT` and the `UPD
 follows it: the two are separate requests, not one transaction. Raw SPARQL updates bypass the
 check altogether. SHACL validation of `sh:class` is the backstop for all three.
 
-**What a delete removes.** `parent.delete()` deletes the immediately-owned children of every
-`contains` property that declares a `shape`; `dependent` extends the cascade further down. The bulk
-deletes (`.all()`, `.where(...)`) remove the same owned children and cascade for every matched
-subject (they do not delete incoming references to the subjects, which a delete by id does). A
-`contains` property *without* a `shape` (a polymorphic slot such as `sh:path`, whose value may be a
-shared predicate IRI) only ever deletes `dependent`-typed values; a non-dependent old value is
-left in place.
-
-Subject deletes and replaces decide ownership differently. A subject delete (by id or in bulk)
-uses the deleted shape's *own* `contains` properties. Replace, set-remove and the class check use
-the registry-wide predicate rule above. So a plain property on a predicate that another shape
-declares `contains` deletes its old value on replace, but not when its subject is deleted.
-Whether ownership should be decided per property everywhere is an open design question. The
-cascade into `dependent` descendants only emits blocks for the dependent shapes the deleted
-shape can reach through its owned properties, so deleting a shape that owns only non-dependent
-values costs one extra block per owned property. The walk follows only the `contains` properties
-the reached shapes declare: an owned edge that none of those shapes declares is not followed,
-and the node behind it is left in place rather than deleted.
+**What a delete removes.** Deleting an owner deletes everything it owns, at any depth: the values
+of its `contains` properties (own and inherited), the values *their* shapes own, and so on. A
+replace or set-remove does the same below the old value. The walk follows the shapes, never the
+predicates: from the owner's shape it follows that shape's `contains` properties to their value
+shapes, then those shapes' `contains` properties. A recursive shape (a list cell owning the next
+cell through `rdf:rest`) is followed with `rdf:rest*`. When a value is typed with a registered
+sub-shape of the declared value shape, the `contains` properties the sub-shape adds are followed
+too, but only from nodes of that sub-shape's class (`?img a ex:Photo . ?img ex:thumbnail ?t`).
+The bulk deletes (`.all()`, `.where(...)`) remove the same subtree for every matched subject; they
+do not delete incoming references to the subjects, which a delete by id does.
 
 Non-owning references to an owned node, through other properties or from other subjects, are
 allowed. They are not cleaned up: after the owner is deleted they dangle. The same holds when two
@@ -336,12 +331,13 @@ subjects own one node (an `{id}` linked into a second owner, which breaks the si
 below): deleting either owner deletes the node, and the other owner's edge dangles.
 
 **The single-owner constraint.** An owned node has at most one owner. Shape sync persists this as
-one generated SHACL NodeShape per `contains` property that declares a `shape` (simple paths only;
-a shape-less slot may hold a shared IRI, so it is left out). It is written only by the class that
-declares the property, at the property shape's IRI plus `.singleOwner`: `Thing.image` gets one
-constraint at `Thing`, not one per subclass. It is marked `core:generated true` and has no
-`sh:targetClass`, so catalog readers can skip it, and it is never registered in memory. For
-`Thing.image`:
+one generated SHACL NodeShape per `contains` property (simple paths only). It is written only by
+the class that declares the property, at the property shape's IRI plus `.singleOwner`:
+`Thing.image` gets one constraint at `Thing`, not one per subclass. It is marked `core:generated
+true` and has no `sh:targetClass`, so catalog readers can skip it, and it is never registered in
+memory. It counts only subjects of the declaring class and of every registered sub-shape's class,
+so a plain reference through the same predicate from another class is allowed. For `Thing.image`,
+with a registered `Project extends Thing`:
 
 ```turtle
 <…/shape/my-pkg/Thing/image.singleOwner> a sh:NodeShape ;
@@ -351,23 +347,24 @@ constraint at `Thing`, not one per subclass. It is marked `core:generated true` 
 
 <…/Thing/image.singleOwner/owners> a sh:PropertyShape ;
     rdfs:label "owners" ;
-    sh:maxCount 1 ;
-    sh:path [ sh:inversePath schema:image ] .
+    sh:path [ sh:inversePath schema:image ] ;
+    sh:qualifiedValueShape [ sh:or ( [ sh:class schema:Thing ] [ sh:class ex:Project ] ) ] ;
+    sh:qualifiedMaxCount 1 .
 ```
+
+The classes are listed because `sh:class` matches a subclass instance only through
+`rdfs:subClassOf` triples, which a dataset without inference lacks. With one class the qualified
+shape is `[ sh:class C ]`. Sub-shapes registered only in another process are missing until a
+process that knows them syncs; a declaring shape without `targetClass` gets no constraint (sync
+logs it once). Versions before this one wrote `sh:maxCount 1` (every subject counted); the next
+sync rewrites the constraint.
 
 The inverse path is stored as an untyped blank node, as is every complex `sh:path` shape sync
 writes (inverse, alternative, sequence, `*`/`+`/`?`): an IRI in `sh:path` is a predicate path to a
 SHACL validator. Nothing marks them: `PropertyShape.path` and the path operator slots are
-declared `sh:BlankNodeOrIRI`, see [Blank-node values](#blank-node-values-nodekind). Versions before 2.30 wrote IRI-named nodes (`…/owners/inv`); the next sync
-replaces them, except an operator node inside a sequence (`…/seq/0/inv`), which is left
-unreferenced. To remove those:
-
-```sparql
-DELETE { ?n ?p ?o } WHERE {
-  ?n a <https://linked.cm/ont/core/PathNode> ; ?p ?o .
-  FILTER(isIRI(?n)) FILTER NOT EXISTS { ?x ?y ?n }
-}
-```
+declared `sh:BlankNodeOrIRI`, see [Blank-node values](#blank-node-values-nodekind). Versions before 2.30 wrote IRI-named, typed path nodes (`…/owners/inv`, `…/region/seq/0`). The
+next sync writes blank nodes and leaves those behind, unreferenced; re-create the dataset, or
+delete them by IRI prefix (`…/owners/inv`, `…/seq/…`), to remove them.
 
 Read a stored path's structure in the same query that finds it (`?ps sh:path ?p .
 ?p sh:inversePath ?x`): a blank node's label is not stable across queries.
@@ -375,7 +372,7 @@ Read a stored path's structure in the same query that finds it (`?ps sh:path ?p 
 The declaring shape owns its generated shapes through `core:generatedShape`, a `contains` edge:
 `<…/Thing> core:generatedShape <…/Thing/image.singleOwner>`. Syncing a shape is still two
 requests: deleting the shape deletes the generated shapes with it (their own triples, property
-shapes and blank path nodes, never the predicate IRI), and the create writes the current ones nested in
+shapes and their blank path and qualified-shape nodes, never the predicate IRI), and the create writes the current ones nested in
 the same request. A removed or renamed accessor therefore loses its constraint, a pruned shape
 takes its constraints with it, and a NodeShape the shape does not own is never touched.
 `singleOwnerShapeIri`, `singleOwnerProperties` and `buildSingleOwnerConstraints` are exported if
@@ -391,21 +388,9 @@ typed link.
 > write either: a dataset exposes only query, update and graph-store services. Run a SHACL
 > validator (Jena SHACL, pySHACL, …) against the persisted shapes to enforce them.
 
-**`dependent: true` on a shape** — marks the shape's *instances* as having no independent
-existence, so they are cascade-deleted when reached through a `contains` edge from a parent
-being deleted. Use it for structural nodes that are only ever owned (e.g. list cells, path
-nodes). It is **not** required for the replace/remove cleanup above — a `contains` edge alone
-is sufficient for the immediately-owned node; `dependent` extends the cascade to owned
-*descendants* several hops deep.
-
-```typescript
-@linkedShape({dependent: true})
-export class ListCell extends Shape { /* ... */ }
-```
-
-> Rule of thumb: put `contains` on the **property** that owns the value; put `dependent` on the
-> **shape** whose instances never stand alone. They are separate mechanisms — `contains` decides
-> *what to follow*, `dependent` decides *what may be deleted when reached*.
+**`dependent: true` on a shape** is deprecated and has no effect: every node a `contains` property
+reaches is deleted with its owner, whether or not its shape is `dependent`. It is still accepted,
+and shape sync still persists it (`core:dependent`).
 
 ### Blank-node values (`nodeKind`)
 
@@ -440,8 +425,8 @@ from its own copy of the shape. Core uses this for SHACL paths: `PropertyShape.p
 `{id}`) stays an IRI and every operator node and list cell becomes a blank node.
 
 A blank value goes with what holds it. Deleting the subject (by id, `.all()`, `.where()`),
-replacing or unsetting the property, deleting or replacing an owned (`contains`) child, and the
-containment cascade (a dependent node it deletes) delete the blank value and the blank nodes below it, following only blank-capable properties.
+replacing or unsetting the property, and deleting or replacing an owned (`contains`) value at any
+depth delete the blank value and the blank nodes below it, following only blank-capable properties.
 Only blank nodes are deleted: an IRI the structure refers to (`schema:image` in
 `[ sh:inversePath schema:image ]`, an entity a list lists) is never touched, nor is a blank node
 reached through one. `contains` is not needed for this.

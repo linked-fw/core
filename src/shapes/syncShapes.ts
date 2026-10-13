@@ -108,8 +108,8 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
  * The single-owner constraints generated from the shape's own `contains` properties
  * (`${iri}/${label}.singleOwner`, see `singleOwnerConstraint.ts`) are owned by the shape through
  * `core:generatedShape` (a `contains` property with value shape NodeShape). The delete removes
- * each one's own triples (the immediate owned-child block) and their property shapes and path
- * nodes (the dependent cascade); the create writes the current ones nested, in the same request
+ * them and their property shapes through the owned walk, and their blank path and qualified-shape
+ * nodes through the blank-node cascade; the create writes the current ones nested, in the same request
  * as the shape. A removed or renamed accessor therefore loses its constraint on the next sync,
  * and a NodeShape the shape does not own is never touched.
  *
