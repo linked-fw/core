@@ -949,7 +949,7 @@ skipped (M-B).
 Corrected after Review 4 (M-α): a user sub-shape of a library value shape that **takes a library
 class** (for example `UClaim extends Media` with `targetClass Photo`) and adds `contains x` is
 followed from every node of that class, so it *can* widen library deletes through `x`. Harm needs
-a reference on `x` that no registered shape of that class declares plainly (a plainly declared one
+a reference on `x` that no registered shape of that class declares plainly through a simple path (a plainly declared one
 blocks the guard). Final verdict: `withoutOwnership` keeps one job — stopping user shapes that
 reuse a library class from adding ownership to library-class nodes. The app can drop it once its
 catalog refuses (or strips `contains` from) user shapes whose `targetClass` is a class a library

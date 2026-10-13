@@ -243,6 +243,54 @@ class LOwner extends Shape {
   }
 }
 
+// A grandchild with a class of its own (QL), shared with a shape (QSharer) holding the predicate
+// its parent (QM) owns as a plain property; beside it a class-less copy (QC) and a same-class copy
+// (QS) of QM, which add nothing.
+@linkedShape
+class QV extends Shape {
+  static targetClass = ex('QV');
+}
+
+@linkedShape
+class QM extends QV {
+  static targetClass = ex('QM');
+  @objectProperty({path: ex('qp'), shape: HPlain, maxCount: 1, contains: true})
+  get qp(): HPlain {
+    return null;
+  }
+}
+
+@linkedShape
+class QL extends QM {
+  static targetClass = ex('QL');
+}
+
+@linkedShape
+class QSharer extends Shape {
+  static targetClass = ex('QL');
+  @objectProperty({path: ex('qp'), shape: HPlain, maxCount: 1})
+  get qp(): HPlain {
+    return null;
+  }
+}
+
+@linkedShape
+class QC extends QM {}
+
+@linkedShape
+class QS extends QM {
+  static targetClass = ex('QM');
+}
+
+@linkedShape
+class QR extends Shape {
+  static targetClass = ex('QR');
+  @objectProperty({path: ex('qv'), shape: QV, maxCount: 1, contains: true})
+  get qv(): QV {
+    return null;
+  }
+}
+
 // rdf:nil: an owner of a list.
 @linkedShape
 class LHolder extends Shape {
@@ -356,6 +404,25 @@ describe('owned walk: recursion', () => {
       const mine = warn.mock.calls.filter((c) => String(c[0]).includes(US.shape.id));
       expect(mine).toHaveLength(1);
       expect(String(mine[0][0])).toContain(`shares its targetClass with '${Lib.shape.id}'`);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('a grandchild with a class of its own that cannot be guarded is warned; copies of its parent are not', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const sparql = deleteOf(QR, `${W}r1`);
+      // `qp` is followed only from QM nodes, never under the shared class QL.
+      expect(sparql).toMatch(/\?c_\w+ rdf:type <http:\/\/example\.org\/w#QM> \.\s*\?c_\w+ <http:\/\/example\.org\/w#qp>/);
+      expect(sparql).not.toContain(`<${W}QL>`);
+      deleteOf(QR, `${W}r2`);
+      const adds = (shape: {shape: {id: string}}) =>
+        warn.mock.calls.filter((c) => String(c[0]).includes(`'${shape.shape.id}' adds`));
+      expect(adds(QL)).toHaveLength(1);
+      expect(String(adds(QL)[0][0])).toContain(`shares its targetClass with '${QSharer.shape.id}'`);
+      expect(adds(QC)).toEqual([]);
+      expect(adds(QS)).toEqual([]);
     } finally {
       warn.mockRestore();
     }

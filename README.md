@@ -314,8 +314,8 @@ Nor is a node typed by another request between the check's `SELECT` and the `UPD
 follows it: the two are separate requests, not one transaction. Raw SPARQL updates bypass the
 check altogether. SHACL validation of `sh:class` is the backstop for all three.
 
-**What a delete removes.** Deleting an owner deletes everything it owns (see the recursion limit below): the values
-of its `contains` properties (own and inherited), the values *their* shapes own, and so on. A
+**What a delete removes.** Deleting an owner deletes everything it owns (see the recursion
+limit below): the values of its `contains` properties (own and inherited), the values *their* shapes own, and so on. A
 replace or set-remove does the same below the old value. The walk follows the shapes, not the
 predicates: from the owner's shape it follows that shape's `contains` properties to their value
 shapes, then those shapes' `contains` properties. When a value is typed with a registered
@@ -323,10 +323,12 @@ sub-shape of the declared value shape, the `contains` properties the sub-shape a
 too, but only from nodes of that sub-shape's class (`?img a ex:Photo . ?img ex:thumbnail ?t`).
 The class must tell those nodes apart: an added property is not followed through the parent
 (core warns once) when the sub-shape has no `targetClass`, shares it with one of its
-super-shapes, or shares it with another shape that holds the same predicate as a plain property.
-Another shape that merely shares the class, without that predicate, changes nothing; nor does a
-same-class "profile" of a sub-shape that adds nothing of its own. When a sub-shape redeclares an inherited `contains` property without
-`contains`, the inherited ownership still applies.
+super-shapes, or shares it with another shape that holds the same predicate as a plain property
+(through a simple path). Another shape that merely shares the class, without that predicate,
+changes nothing. A copy of a sub-shape that adds nothing of its own, with the same class (a
+"profile") or with no `targetClass` at all, is skipped silently: its parent's entry covers it.
+When a sub-shape redeclares an inherited `contains` property without `contains`, the inherited
+ownership still applies.
 
 Recursion has a limit. A shape that owns its own kind (a list cell owning the next cell through
 `rdf:rest`, a comment owning its replies) is followed to any depth (`rdf:rest*`). Any other cycle
