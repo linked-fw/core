@@ -61,7 +61,7 @@ Whether to unify them is open: [backlog 053](../backlog/053-per-property-ownersh
 ## Blank-node values
 
 History and rationale: [report 034](../reports/034-shacl-complex-paths-as-blank-nodes.md) (blank
-SHACL paths) and the report of the `nodeKind` change that replaced its `__blank` node-data key.
+SHACL paths) and [report 035](../reports/035-nodekind-driven-blank-nodes.md) (the `nodeKind` rule that replaced its `__blank` node-data key).
 
 **Writing.** The lowering (`nestedNodeKind` in `src/sparql/irToAlgebra.ts`) decides from the
 `sh:nodeKind` of the property that holds a nested create, read from the registry of the side that
