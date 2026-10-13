@@ -106,8 +106,8 @@ constraint as conforming whatever the data. The next sync replaces those nodes.
 - **Pruning:** `syncShapes` adds every in-code generated IRI to the protected set, so `'all'` and
   `'ownedNamespaces'` keep them. A stale one goes with its owner's delete.
 - **Collisions:** sync throws when a registered shape IRI equals a generated IRI.
-- **Not enforced on write.** Neither core nor the default Fuseki setup validates SHACL on update
-  ([backlog 054](../backlog/054-shacl-validation-on-write.md)).
+- **Not enforced on write.** Neither core nor the default Fuseki setup validates SHACL on update.
+  Enforcement is the store's responsibility; core adds no validation queries for it.
 
 Meta-model terms: `sh:targetObjectsOf` (`src/ontologies/shacl.ts`), `core:generated` and
 `core:generatedShape` (`src/ontologies/linked-core.ts`), NodeShape accessors in

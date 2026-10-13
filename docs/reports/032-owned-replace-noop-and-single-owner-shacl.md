@@ -231,7 +231,7 @@ live tests were each proven to run by a temporary failing assertion during imple
 ## Known limitations
 
 - **Not enforced on write.** The single-owner constraint and `sh:class` on plain references are
-  persisted only ([backlog 054](../backlog/054-shacl-validation-on-write.md)).
+  persisted only; enforcing them is left to the store.
 - The class check misses ids typed after linking, ids typed between its SELECT and the UPDATE
   (separate requests), raw SPARQL, and non-SPARQL `IDataset`s.
 - Each constraint counts owners through its own predicate only; ownership through two different
@@ -250,7 +250,6 @@ live tests were each proven to run by a temporary failing assertion during imple
 - [052](../backlog/052-generated-shape-lifecycle-edge-cases.md) — store-only NodeShape at a
   generated IRI; ownerless generated shapes under `'ownedNamespaces'`.
 - [053](../backlog/053-per-property-ownership.md) — per-property versus per-predicate ownership.
-- [054](../backlog/054-shacl-validation-on-write.md) — SHACL validation of writes.
 - [009](../backlog/009-ci-test-integrity-fuseki.md) — live suites silent without Fuseki.
 - [018](../backlog/018-transactions.md) — a batch/raw-update entry point on `IDataset` would let
   sync and multi-step writes go in one request.
