@@ -2807,15 +2807,27 @@ function classHolders(classId: string): string[] {
 }
 
 /**
- * Whether a node's `rdf:type` tells it is a `shape` node: true when every registered shape that
- * targets the shape's class is the shape itself or one of its descendants (which inherit its
- * properties). Otherwise the id of a shape that shares the class, or `null` without a class.
+ * Why the added `contains` property `ps` of the sub-shape `sub` cannot be followed from nodes of
+ * the sub-shape's class, or null when it can. The guard `?n a <C>` also matches the nodes of
+ * every other shape targeting `C`, so it is refused when one of them is a super-shape of `sub`
+ * (its own nodes would match) or declares the same predicate as a plain property (following it
+ * would delete that shape's references). A holder that does not declare the predicate, or owns
+ * it too, does not block it.
  */
-function classGuard(shape: NodeShapeData): {cls: string} | {sharedWith: string | null} {
-  const cls = shape.targetClass?.id;
-  if (!cls) return {sharedWith: null};
-  const other = classHolders(cls).find((id) => id !== shape.id && !isSubShapeOf(id, shape.id));
-  return other ? {sharedWith: other} : {cls};
+function blockedGuard(sub: NodeShapeData, ps: PropertyShapeData): string | null {
+  const cls = sub.targetClass?.id;
+  if (!cls) return 'has no targetClass';
+  const predicate = getSimplePathId(ps.path);
+  for (const id of classHolders(cls)) {
+    if (id === sub.id || isSubShapeOf(id, sub.id)) continue;
+    if (isSubShapeOf(sub.id, id)) return `shares its targetClass with its super-shape '${id}'`;
+    const holder = shapeById(id);
+    const plain = holder && getPropertyShapes(holder, true).some(
+      (q) => !q.contains && getSimplePathId(q.path) === predicate,
+    );
+    if (plain) return `shares its targetClass with '${id}', which holds <${predicate}> as a plain property`;
+  }
+  return null;
 }
 
 const warnedUnguardable = new Set<string>();
@@ -2823,10 +2835,10 @@ const warnedUnguardable = new Set<string>();
 /**
  * The owned edges of a shape: its own and inherited `contains` properties, then, per registered
  * sub-shape, the `contains` properties it adds, guarded by its `targetClass` (a node carries only
- * its concrete class's `rdf:type`, so each sub-shape lists its full extra set). A sub-shape whose
- * class does not tell its nodes apart (`classGuard`) is not followed: a same-class descendant of a
- * guardable sub-shape (a profile) is that sub-shape's node by type and adds nothing; any other is
- * warned once.
+ * its concrete class's `rdf:type`, so each sub-shape lists its full extra set). An added property
+ * whose guard cannot tell the sub-shape's nodes apart (`blockedGuard`) is not followed and is
+ * warned once, unless the sub-shape adds nothing beyond its direct super-shape (a profile, or a
+ * data-only copy), which is skipped silently: that super-shape's own entry covers it.
  */
 function ownedEdges(shapeId: string): OwnedEdge[] {
   const nodeShape = shapeById(shapeId);
@@ -2844,44 +2856,34 @@ function ownedEdges(shapeId: string): OwnedEdge[] {
   for (const sub of getSubShapes(shapeId)) {
     const extra = getPropertyShapes(sub, true).filter((ps) => !ownIds.has(ps.id) && ownedPredicate(ps));
     if (extra.length === 0) continue;
-    const guard = classGuard(sub);
-    if ('cls' in guard) {
-      extra.forEach((ps) => add(ps, guard.cls));
-      continue;
+    const parent = sub.extends?.id ? shapeById(sub.extends.id) : undefined;
+    const inherited = new Set(parent ? getPropertyShapes(parent, true).map((ps) => ps.id) : []);
+    for (const ps of extra) {
+      const reason = blockedGuard(sub, ps);
+      if (!reason) {
+        add(ps, sub.targetClass!.id);
+        continue;
+      }
+      if (inherited.has(ps.id) && parent?.id !== shapeId) continue;
+      const key = `${sub.id} ${ps.id}`;
+      if (warnedUnguardable.has(key)) continue;
+      warnedUnguardable.add(key);
+      console.warn(
+        `[linked] Shape '${sub.id}' adds the contains property "${ps.label}" to '${shapeId}', but ` +
+          `${reason}, so its nodes cannot be told apart by rdf:type: deleting through ` +
+          `'${shapeId}' does not follow it. Give the shape a targetClass of its own.`,
+      );
     }
-    // A same-class profile of a sub-shape that adds nothing of its own is that sub-shape's node
-    // by type: nothing is lost, nothing to warn about.
-    const sharer = guard.sharedWith ? shapeById(guard.sharedWith) : undefined;
-    if (sharer && isSubShapeOf(sub.id, sharer.id)) {
-      const inherited = new Set(getPropertyShapes(sharer, true).map((ps) => ps.id));
-      if (extra.every((ps) => inherited.has(ps.id))) continue;
-    }
-    if (warnedUnguardable.has(sub.id)) continue;
-    warnedUnguardable.add(sub.id);
-    console.warn(
-      `[linked] Shape '${sub.id}' adds contains properties to '${shapeId}', but ` +
-        (guard.sharedWith
-          ? `shares its targetClass with '${guard.sharedWith}', which does not extend it`
-          : 'has no targetClass') +
-        `, so its nodes cannot be told apart by rdf:type: deleting through '${shapeId}' does not ` +
-        'follow them. Give it a targetClass of its own.',
-    );
   }
   return [...edges.values()];
 }
 
-/**
- * The classes a node of `shapeId` may carry: its targetClass and the class of every registered
- * sub-shape whose class tells its nodes apart (`classGuard`).
- */
+/** The classes a node of `shapeId` may carry: its targetClass and every registered sub-shape's. */
 function shapeClasses(shapeId: string): string[] {
   const nodeShape = shapeById(shapeId);
-  if (!nodeShape) return [];
   const classes = new Set<string>();
-  if (nodeShape.targetClass?.id) classes.add(nodeShape.targetClass.id);
-  for (const sub of getSubShapes(shapeId)) {
-    const guard = classGuard(sub);
-    if ('cls' in guard) classes.add(guard.cls);
+  for (const shape of nodeShape ? [nodeShape, ...getSubShapes(shapeId)] : []) {
+    if (shape.targetClass?.id) classes.add(shape.targetClass.id);
   }
   return [...classes];
 }

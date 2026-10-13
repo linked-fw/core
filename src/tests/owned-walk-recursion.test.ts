@@ -180,6 +180,69 @@ class O2 extends Shape {
   }
 }
 
+// M-1: a cycle CA ⇄ CB, a sub-shape CU of CA whose class an unrelated shape CX also holds.
+@linkedShape
+class CA extends Shape {
+  static targetClass = ex('CA');
+  @objectProperty({path: ex('cToB'), shape: [PKG, 'CB'], maxCount: 1, contains: true})
+  get toB(): unknown {
+    return null;
+  }
+}
+
+@linkedShape
+class CB extends Shape {
+  static targetClass = ex('CB');
+  @objectProperty({path: ex('cToA'), shape: CA, maxCount: 1, contains: true})
+  get toA(): CA {
+    return null;
+  }
+}
+
+@linkedShape
+class CU extends CA {
+  static targetClass = ex('CU');
+}
+
+@linkedShape
+class CX extends Shape {
+  static targetClass = ex('CU');
+}
+
+// M-2: a library sub-shape (LPhoto) owning `thumb`, and an unrelated shape taking its class
+// without declaring `thumb`.
+@linkedShape
+class LMedia extends Shape {
+  static targetClass = ex('LMedia');
+}
+
+@linkedShape
+class LPhoto extends LMedia {
+  static targetClass = ex('LPhoto');
+  @objectProperty({path: ex('thumb'), shape: HPlain, maxCount: 1, contains: true})
+  get thumb(): HPlain {
+    return null;
+  }
+}
+
+@linkedShape
+class UserPhoto extends Shape {
+  static targetClass = ex('LPhoto');
+  @literalProperty({path: ex('caption'), maxCount: 1})
+  get caption(): string {
+    return null;
+  }
+}
+
+@linkedShape
+class LOwner extends Shape {
+  static targetClass = ex('LOwner');
+  @objectProperty({path: ex('media'), shape: LMedia, maxCount: 1, contains: true})
+  get media(): LMedia {
+    return null;
+  }
+}
+
 // rdf:nil: an owner of a list.
 @linkedShape
 class LHolder extends Shape {
@@ -479,6 +542,28 @@ describeFuseki('owned walk: recursion — live Fuseki', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  test('a cycle through a sub-shape node whose class another shape shares keeps going', async () => {
+    await insert(`
+      ${iri('ca0')} ${T} ${iri('CA')} ; ${iri('cToB')} ${iri('cb0')} .
+      ${iri('cb0')} ${T} ${iri('CB')} ; ${iri('cToA')} ${iri('cu1')} .
+      ${iri('cu1')} ${T} ${iri('CU')} ; ${iri('cToB')} ${iri('cb1')} .
+      ${iri('cb1')} ${T} ${iri('CB')} .`);
+    await run(deleteOf(CA, `${W}ca0`));
+    expect(await count('cu1')).toBe(0);
+    expect(await count('cb1')).toBe(0);
+  });
+
+  test('a shape taking a sub-shape\'s class without its predicate leaves the sub-shape\'s ownership on', async () => {
+    await insert(`
+      ${iri('lo1')} ${T} ${iri('LOwner')} ; ${iri('media')} ${iri('ph1')} .
+      ${iri('ph1')} ${T} ${iri('LPhoto')} ; ${iri('thumb')} ${iri('t1')} .
+      ${iri('t1')} ${T} ${iri('HPlain')} ; ${iri('label')} "thumb" .`);
+    expect(UserPhoto.shape.targetClass?.id).toBe(`${W}LPhoto`);
+    await run(deleteOf(LOwner, `${W}lo1`));
+    expect(await count('ph1')).toBe(0);
+    expect(await count('t1')).toBe(0);
   });
 
   test('rdf:nil keeps its triples when a list is deleted or replaced', async () => {

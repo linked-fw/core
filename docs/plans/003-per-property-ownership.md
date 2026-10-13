@@ -1063,7 +1063,14 @@ M-1 and M-2 live repros (fail on `c02348e`), M-B and M3 still pass. Docs: README
 
 ## Iteration 3 — Phases
 
-### Phase 11: per-edge class guard and full recursion typing (Gaps 1, 2)
+### Phase 11: per-edge class guard and full recursion typing (Gaps 1, 2) — DONE
+
+Result: `blockedGuard(sub, ps)` per added edge (super-shape holder, or a holder declaring the
+predicate plainly, blocks; warnings per edge with the cause; a sub-shape adding nothing beyond
+its direct super-shape is skipped silently); `shapeClasses` keeps every descendant class. Tests:
+2 live repros (M-1, M-2) failing on `c02348e` (checked); M-A, M-B, M3 repros still pass.
+Validation: quick gate green; `npm test` 2244 passed, 0 failed,
+`[fuseki] live tests: 302 total — 302 passed`; `npx linked build` OK.
 
 Validation: M-1 / M-2 repros fail on `c02348e` and pass after; all of `owned-walk-recursion`
 passes; quick gate, `npm test` (0 failed live), `npx linked build`.
