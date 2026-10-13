@@ -15,10 +15,9 @@
  * A field is checked when it owns its value by the same rule the replace delete applies: the
  * property itself is `contains`, declares a value shape and has a simple path. A plain property
  * on a predicate another shape declares `contains` owns nothing and is not checked. A node is
- * refused only
- * when the store holds at least one `rdf:type` for it and none of them is accepted; an id that
- * does not exist yet, or has no type, is allowed (`rdf:nil`, a node another request creates,
- * an untyped IRI). Collecting the links is a pure walk over the lowered IR; the dataset sends
+ * refused only when the store holds at least one `rdf:type` for it and none of them is accepted;
+ * an id that does not exist yet, or has no type, is allowed (`rdf:nil`, a node another request
+ * creates, an untyped IRI). Collecting the links is a pure walk over the lowered IR; the dataset sends
  * one SELECT for all distinct ids, and none when there is nothing to check.
  */
 import type {

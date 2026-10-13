@@ -60,8 +60,8 @@ export function singleOwnerShapeIri(propertyShapeIri: string): string {
 }
 
 /**
- * The shape's OWN `contains` properties that get a single-owner constraint: those that declare
- * a value shape and have a simple path, in declaration order.
+ * The shape's OWN `contains` properties that get a single-owner constraint: those with a simple
+ * path (every decorated `contains` property has a value shape), in declaration order.
  *
  * Inherited properties are not included; their declaring shape writes their constraint.
  * Complex paths are skipped, as the owned walk skips them.
@@ -81,8 +81,6 @@ function ownerClasses(nodeShape: NodeShapeData): string[] {
   return [...classes].sort();
 }
 
-const warnedWithoutTargetClass = new Set<string>();
-
 /** `[ sh:class C ]`, or `[ sh:or ( [ sh:class A ] … ) ]` for several classes. Blank once written. */
 function ownerShapeData(classes: string[]): Record<string, unknown> {
   const classShape = (id: string) => ({shape: NodeShape, class: {id}});
@@ -93,6 +91,8 @@ function ownerShapeData(classes: string[]): Record<string, unknown> {
   );
   return {shape: NodeShape, orShapes: list};
 }
+
+const warnedWithoutTargetClass = new Set<string>();
 
 /**
  * Create-pipeline data for the generated single-owner NodeShapes of `nodeShape`, one per

@@ -3,15 +3,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  *
- * Shape sync persists what the 2.30.0 release persisted, with one deliberate change. 2.30.0 wrote
+ * Shape sync persists what the 2.30.0 release persisted, with two deliberate changes. 2.30.0 wrote
  * complex sh:path values as blank nodes through `__blank` node-data; this version mints them from
  * the sh:nodeKind of the metamodel's path properties instead. The golden below is the INSERT DATA
  * 2.30.0 (`npm i @_linked/core@2.30.0`) sends for this fixture, captured from its published
  * build: every complex path form, a `contains` property (its generated single-owner shape) and an
  * `sh:in` list (IRI cells). Blank labels are compared normalized.
  *
- * The deliberate change (per-property ownership): the single-owner `owners` property shape counts
- * only owners of the declaring class. 2.30.0 wrote `sh:maxCount 1`; it is now
+ * The second change (per-property ownership): the single-owner `owners` property shape counts
+ * only owners of the declaring class or of a registered sub-shape's class. 2.30.0 wrote `sh:maxCount 1`; it is now
  * `sh:qualifiedValueShape [ sh:class fx:Fixture ] ; sh:qualifiedMaxCount 1`, and its blank labels
  * follow on from the path's.
  */

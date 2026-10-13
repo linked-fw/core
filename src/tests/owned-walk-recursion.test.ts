@@ -39,7 +39,10 @@ const W = 'http://example.org/w#';
 const ex = (n: string) => ({id: `${W}${n}`});
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 
-// H1: a cycle through two shapes; RA also holds a plain reference on the predicate RB owns.
+// Some fixture classes are never referenced by name: decorating them registers them, which is
+// what the walk (sub-shapes, class holders, cycles) must see.
+
+// A cycle through two shapes; RA also holds a plain reference on the predicate RB owns.
 @linkedShape
 class RA extends Shape {
   static targetClass = ex('RA');
@@ -62,7 +65,7 @@ class RB extends Shape {
   }
 }
 
-// H2: a shape owning itself (replies), with a plain `fork` that only a sub-shape owns.
+// A shape owning itself (replies), with a plain `fork` that only a sub-shape owns.
 @linkedShape
 class SC extends Shape {
   static targetClass = ex('SC');
@@ -85,7 +88,7 @@ class SCSub extends SC {
   }
 }
 
-// M3: a sub-shape that shares its parent's class cannot be told apart by rdf:type.
+// A sub-shape that shares its parent's class cannot be told apart by rdf:type.
 @linkedShape
 class HPlain extends Shape {
   static targetClass = ex('HPlain');
@@ -118,7 +121,7 @@ class HO extends Shape {
   }
 }
 
-// M-A: a library sub-shape (PP) with ownership of its own, and a same-class profile (UP) of it.
+// A library sub-shape (PP) with ownership of its own, and a same-class profile (UP) of it.
 @linkedShape
 class PT extends Shape {
   static targetClass = ex('PT');
@@ -147,7 +150,7 @@ class POwner extends Shape {
   }
 }
 
-// M-B: a sub-shape (US) whose class is also another hierarchy's (Lib, with a plain `ref`).
+// A sub-shape (US) whose class is also another hierarchy's (Lib, with a plain `ref`).
 @linkedShape
 class Lib extends Shape {
   static targetClass = ex('Lib');
@@ -180,7 +183,7 @@ class O2 extends Shape {
   }
 }
 
-// M-1: a cycle CA ⇄ CB, a sub-shape CU of CA whose class an unrelated shape CX also holds.
+// A cycle CA ⇄ CB, a sub-shape CU of CA whose class an unrelated shape CX also holds.
 @linkedShape
 class CA extends Shape {
   static targetClass = ex('CA');
@@ -209,7 +212,7 @@ class CX extends Shape {
   static targetClass = ex('CU');
 }
 
-// M-2: a library sub-shape (LPhoto) owning `thumb`, and an unrelated shape taking its class
+// A library sub-shape (LPhoto) owning `thumb`, and an unrelated shape taking its class
 // without declaring `thumb`.
 @linkedShape
 class LMedia extends Shape {

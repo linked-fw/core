@@ -46,6 +46,7 @@ class TPhoto extends Shape {
   }
 }
 
+// TPanorama and TPerson are registered for effect (a registered sub-shape class, a foreign class).
 @linkedShape
 class TPanorama extends TPhoto {
   static targetClass = ex('Panorama');

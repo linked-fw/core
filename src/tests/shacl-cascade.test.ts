@@ -134,6 +134,7 @@ class TImg extends Shape {
   }
 }
 
+// Registered for effect: a sub-shape of TImg the walk must see.
 @linkedShape
 class TPhoto extends TImg {
   static targetClass = ex('TPhoto');
@@ -276,8 +277,8 @@ describe('owned-subtree walk', () => {
     expect(upsertSparql).toContain('rdf:type <http://example.org/c#TBag>');
   });
 
-  // --- backlog 032: replace/remove of a `contains` edge deletes the old node itself,
-  // even when the owned child shape is NOT `dependent` (contains = exclusive ownership). ---
+  // --- backlog 032: replace/remove of a `contains` edge deletes the old node itself
+  // (contains = exclusive ownership; `dependent` has no effect). ---
 
   test('replace of a contains child deletes the old node\'s own triples', () => {
     const sparql = updateToSparql(
@@ -518,8 +519,8 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
   });
 });
 
-// Live end-to-end reproduction of backlog 032: replacing a `contains`-owned node whose
-// shape is NOT `dependent` must leave no orphan behind. Skips gracefully if Fuseki is down.
+// Live end-to-end reproduction of backlog 032: replacing a `contains`-owned node must leave no
+// orphan behind (`dependent` has no effect). Skips gracefully if Fuseki is down.
 describeFuseki('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () => {
   const C = 'http://example.org/c#';
   const iri = (n: string) => `<${C}${n}>`;

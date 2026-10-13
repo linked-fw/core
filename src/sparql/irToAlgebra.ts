@@ -2086,7 +2086,8 @@ function processUpdateFields(
     const suffix = propertySuffix(field.property);
     const fieldShape = findPropertyShapeById(field.property);
     // Ownership is the property's own: a `contains` property with a value shape and a simple
-    // path. A plain property on a predicate another shape declares `contains` owns nothing.
+    // path (an IRI predicate term). A plain property on a predicate another shape declares
+    // `contains` owns nothing.
     const valueShapeId =
       propertyTerm.kind === 'iri' && fieldShape?.contains ? fieldShape.valueShape?.id : undefined;
 
@@ -2838,7 +2839,8 @@ const warnedUnguardable = new Set<string>();
  * its concrete class's `rdf:type`, so each sub-shape lists its full extra set). An added property
  * whose guard cannot tell the sub-shape's nodes apart (`blockedGuard`) is not followed and is
  * warned once, unless the sub-shape is a profile or data-only copy of its direct super-shape (same
- * class or none, nothing added), which is skipped silently: that super-shape's entry covers it.
+ * class or none, the property inherited from that super-shape), which is skipped silently: that
+ * super-shape's entry covers it.
  */
 function ownedEdges(shapeId: string): OwnedEdge[] {
   const nodeShape = shapeById(shapeId);
@@ -2865,7 +2867,8 @@ function ownedEdges(shapeId: string): OwnedEdge[] {
         continue;
       }
       // A profile or data-only copy of its direct super-shape (same class, or none) is that
-      // super-shape's node by type: the super-shape's own entry covers the property.
+      // super-shape's node by type: the super-shape's own entry covers the property, unless
+      // that super-shape is this walk's shape itself (no other entry covers it, so warn).
       const sameKind = !sub.targetClass?.id || sub.targetClass.id === parent?.targetClass?.id;
       if (sameKind && inherited.has(ps.id) && parent?.id !== shapeId) continue;
       const key = `${sub.id} ${ps.id}`;
@@ -2961,7 +2964,7 @@ function ownedWalk(rootShapeId: string): OwnedWalk {
     groupSize.push(size);
   };
   strong(rootShapeId);
-  // A shape with a guarded edge to itself is a cycle too.
+  // A non-closure edge back to its own shape (a sub-shape's guarded edge) counts as a cycle too.
   const inCycle = (from: string, e: OwnedEdge) =>
     e.target === from || (groupOf.get(from) === groupOf.get(e.target) && groupSize[groupOf.get(from)!] > 1);
 
@@ -3030,7 +3033,7 @@ function filtered(inner: SparqlAlgebraNode, filters: SparqlExpression[]): Sparql
  * DELETE patterns and UNION branches that delete the owned subtree below `rootTerm`, a node of
  * `rootShapeId` (see `ownedWalk`). The root itself is the caller's: the subject wildcard of a
  * delete, or `buildOwnedSelfDelete` for a replaced value. Each branch deletes one node per
- * solution, its own triples and its blank values:
+ * solution, its own triples and its blank values. Schematically (variable names simplified):
  *
  * ```sparql
  * …anchor…  <root> (r…)* ?w .                  # the root shape's self-loop, if any
@@ -3199,8 +3202,8 @@ export function buildOwnedSelfDelete(
  * Converts an IRDeleteMutation to a SparqlDeleteInsertPlan (DELETE + WHERE).
  *
  * The WHERE is the type guard of every id, joined with ONE UNION of independent
- * blocks: per id its own triples, its incoming references, its blank values and one block
- * per group of nodes its owned subtree holds (`ownedSubtreeBlocks`: the shape's own and
+ * blocks: per id its own triples, its incoming references, its blank values and one branch
+ * per owned path, plus that node's blank values (`ownedSubtreeBlocks`: the shape's own and
  * inherited `contains` properties, their value shapes' in turn, and the extra ones of
  * registered sub-shapes behind a type guard; none for a shape that owns nothing). The
  * bulk deletes (`deleteAllToAlgebra`, `deleteWhereToAlgebra`) add the same owned blocks,
@@ -3208,9 +3211,9 @@ export function buildOwnedSelfDelete(
  *
  * The blocks must not be chained as OPTIONALs. A chain of OPTIONALs is a join, so
  * the solutions multiply: own triples x incoming references x owned triples of each
- * owned group. Deleting one shape description with the shape sync's cascade
+ * owned path. Deleting one shape description with the shape sync's cascade
  * produced ~27,000 solutions for ~130 triples and took over 30 seconds on Fuseki,
- * which re-evaluates the cascade property path for every left-hand row. A UNION
+ * which re-evaluated the former registry-wide cascade path for every left-hand row. A UNION
  * yields each block's matches once, so the solutions add up instead, and it deletes
  * exactly the same triples: a DELETE template triple whose variables a solution
  * leaves unbound is skipped, as it was for an OPTIONAL that did not match.

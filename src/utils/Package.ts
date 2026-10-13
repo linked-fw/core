@@ -875,7 +875,7 @@ createPropertyShape(
   PropertyShape,
 );
 
-// NodeShape.closed / ignoredProperties / dependent
+// NodeShape.closed / ignoredProperties / dependent (deprecated, persisted only)
 createPropertyShape(
   {path: shacl.closed, datatype: xsd.boolean, maxCount: 1},
   'closed',
@@ -924,7 +924,7 @@ createPropertyShape(
 // `sh:qualifiedMaxCount`. The qualified shape and the `sh:or` list are written without ids, so
 // they are blank nodes, deleted with their property shape by the blank-node cascade. The list
 // cells are `PathList`s (blank-capable `rdf:List` cells); like `sh:path`, `orShapes` declares no
-// value shape (`PathList.ts` imports this module), so the create uses each value's own shape.
+// value shape (`PathList.ts` imports `package.js`, which loads this module), so the create uses each value's own shape.
 createPropertyShape(
   {path: shacl.qualifiedValueShape, shape: NodeShape, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI},
   'qualifiedValueShape',
