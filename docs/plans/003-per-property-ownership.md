@@ -33,7 +33,7 @@ Ownership is decided two ways today:
 
 ## Accepted decisions
 
-### Decision 1 = A — ownership per property everywhere
+### Decision 1 of 14 = A — ownership per property everywhere
 
 `contains` means "this accessor owns its value", and only that accessor. Replace, unset,
 set-remove, array overwrite, the linked-id class check and subject delete (by id and bulk) all
@@ -48,7 +48,7 @@ predicate that another shape declares `contains` never deletes and is never clas
   cross-package interference. **C, keep the split** — two rules to document and explain; the
   replace path stays registry-sensitive.
 
-### Decision 2 = A — shape-directed cascade walk computed at lowering time
+### Decision 2 of 14 = A — shape-directed cascade walk computed at lowering time
 
 From the deleted / replaced value's shape, follow its own `contains` properties to their value
 shapes, then those shapes' `contains` properties, and so on. Each hop is an explicit path
@@ -63,7 +63,7 @@ becomes `*` on that predicate. Builds on the reachable-dependent-type walk (repo
   edges in the data** — needs a data migration and extra triples per edge; data written by
   other tools would carry no markers.
 
-### Decision 3 = A — the single-owner constraint counts owners of the declaring class only
+### Decision 3 of 14 = A — the single-owner constraint counts owners of the declaring class only
 
 ```turtle
 sh:property [
@@ -78,7 +78,7 @@ sh:property [
   legitimate references. **C, drop the constraint** — loses the only store-side check of the
   single-owner rule.
 
-### Decision 4 = A — `contains` requires a value shape
+### Decision 4 of 14 = A — `contains` requires a value shape
 
 Context: `PropertyShape.path` and the four `PathNode` slots are `contains` without a value shape;
 they make the cascade fall back to "every dependent type" (`irToAlgebra.ts:2736-2738`). Since
@@ -96,7 +96,7 @@ Rejected: B keep the "every dependent type" fallback for shape-less hops (the ex
 ownership removes); C polymorphic value shape (`sh:or (PathNode PathList)`) — needs `sh:or` in the
 walk and metamodel for structures the blank walk already handles.
 
-### Decision 5 = A — follow sub-shapes' `contains` properties, type-guarded
+### Decision 5 of 14 = A — follow sub-shapes' `contains` properties, type-guarded
 
 Context: value shape `ImageObject`, stored node typed with a registered sub-shape (`Photo`) that
 declares an extra `contains` property (`thumbnail`). Becomes routine once shape forms offer
@@ -110,7 +110,7 @@ ownership (the common case).
 Rejected: B declared value shape only (orphans sub-shape-owned values); C unguarded union of
 sub-shapes' predicates (per-predicate ownership again).
 
-### Decision 6 = B — single-owner owners enumerated by class at sync time
+### Decision 6 of 14 = B — single-owner owners enumerated by class at sync time
 
 Context: owners usually own through an inherited property (a `Project` owns `image` through
 `Thing.image`). Datasets without inference or `rdfs:subClassOf` triples would not match
@@ -129,6 +129,109 @@ missing until a process that knows them syncs.
 
 Rejected: A `sh:class` on the declaring class only (misses subclass owners without inference);
 C `sh:node <declaring shape>` (nearly every node conforms to an all-optional shape).
+
+### Decision 7 of 14 = A — every node the walk reaches is deleted; `dependent` has no effect
+
+Context: today the immediate child of a `contains` property goes on the edge alone, while deeper
+nodes go only when they are `dependent`-typed, and the set of dependent classes is registry-wide
+(`collectContainment().dependentTypes`, narrowed per delete by `reachableDependentTypes`). Under
+2A the walk already knows each hop's shape, so the type no longer selects anything.
+
+Chosen: every node reached through an owned edge (at any depth) has its own triples and blank
+values deleted, the rule the immediate child already follows. No registry-wide dependent set
+remains, so no registered shape can widen the deletes of another. `dependent` is **deprecated**:
+still accepted by `@linkedShape`, still persisted as `core:dependent` by sync, no effect on deletes,
+documented as such. Core's own shapes (`PropertyShape`, `List`, `PathNode`, `PathList`) drop it.
+Behaviour change (named in the changeset): an owned value of an owned value that is not
+`dependent` (e.g. a `contains` property on `ImageObject`) is now deleted with the owner instead of
+orphaned.
+
+Rejected: B keep `dependent` as the gate for depth ≥ 2 — two rules for one edge kind; C keep the
+registry-wide typed guard — the cross-shape widening this work removes.
+
+### Decision 8 of 14 = A — remove `collectContainment` and `buildOwnedCascade`
+
+Context: both are exported from `src/sparql/irToAlgebra.ts` (reachable through the `./*` subpath
+export, not from the `sparql` barrel). Nothing outside core imports them: checked
+`create_now/src`, `create_now/packages/*` and every `packages-local/*` checkout. The app's
+`containsPredicateIris()` (`src/utils/ownedProperties.ts`) is its own copy of the predicate rule.
+
+Chosen: remove both (and `reachableDependentTypes`, `ownedValueShapePredicates`,
+`ownedChildBlankCascade`, `shapeHasContainsProperty`); the shape-directed walk replaces them.
+`buildOwnedSelfDelete` stays. The changeset names the removals.
+
+Rejected: B keep `collectContainment` deprecated, still returning `containsPreds` — keeps a
+registry scan alive whose only meaning is the rule 1A removes, with no known caller.
+
+### Decision 9 of 14 = A — recursion via strongly connected groups of the shape graph
+
+Context: the walk graph has shapes as nodes and owned edges (`contains` property → value shape).
+Self-loops are common (`List.rest`, `NodeShape.generatedShapes`, a comment owning replies);
+longer cycles (A owns B owns A) are possible in runtime shapes.
+
+Chosen: group the reachable shapes into strongly connected components (Tarjan). Entering a group
+appends `(e1|…|ek)*` over the group's internal owned predicates (one predicate for a self-loop:
+exact). Edges between groups are explicit hops. A multi-shape group follows its own owned
+predicates without per-member distinction — still only predicates the group's shapes declare
+`contains`. Blocks are one per path through the condensed graph, so a value reached two ways is
+deleted by two blocks (harmless).
+
+Rejected: B unroll cycles to a fixed depth — silently incomplete; C refuse cycles — legitimate
+models have them.
+
+### Decision 10 of 14 = A — `sh:or` written as blank `PathList` cells; new metamodel terms
+
+Context: 6B needs `sh:qualifiedValueShape`, `sh:qualifiedMaxCount` and `sh:or` written through
+the create pipeline nested in the NodeShape create, so that the next sync's delete removes them.
+`List` cells are IRIs (`List.rest` stays `sh:IRI`), which the blank cascade does not enter.
+
+Chosen: add `sh:qualifiedValueShape`, `sh:qualifiedMaxCount`, `sh:or` to `src/ontologies/shacl.ts`;
+metamodel accessors `PropertyShape.qualifiedValueShape` (value shape `NodeShape`, `sh:BlankNodeOrIRI`),
+`PropertyShape.qualifiedMaxCount` (integer), `NodeShape.class` and `NodeShape.or` (value shape
+`PathList`, `sh:BlankNodeOrIRI`). The qualified shape and the list are blank nodes, removed by the
+blank cascade of the `owners` property shape. One owner class → `[ sh:class C ]` (no `sh:or`);
+several → `[ sh:or ( [ sh:class A ] [ sh:class B ] … ) ]`, classes sorted for stable output.
+`sh:maxCount 1` is dropped (it would count every subject). `PathList`'s doc widens to "a blank
+`rdf:List` cell of generated SHACL structure".
+
+Rejected: B a separate list shape for `sh:or` — a third shape targeting `rdf:List`; C raw triples
+outside the create pipeline — sync would no longer own and delete them.
+
+### Decision 11 of 14 — smaller open items
+
+- Item 6: the per-class blank agreement rule (`dependentBlankProps`) goes; each hop's blank
+  values come from the hop's own shapes (`blankCapableProperties`, sub-shapes included).
+- Item 7: `PathList.first` stays non-`contains` (the blank walk covers it; nothing to own).
+- Item 8: a value shape without `targetClass` is followed by edge (base hops need no type); a
+  sub-shape without `targetClass` cannot be guarded and adds no block (documented).
+- Sub-shape guards (5A) are emitted for every registered descendant that adds `contains`
+  properties, each with its full extra set (a node is typed only with its concrete class).
+
+### Decision 12 of 14 — release: minor changeset (lead decision)
+
+Hand-written, user-facing. Names: a plain property on a predicate another shape declares
+`contains` no longer deletes or class-checks (declare `contains` on the property to keep the old
+behaviour); deeper owned values now go with their owner; `contains` without a `shape` throws (add
+a `shape`, or drop `contains` and rely on `sh:nodeKind` for blank structure); `dependent` is
+deprecated; the single-owner constraint is now qualified by owner class (re-sync to rewrite);
+`collectContainment` / `buildOwnedCascade` removed.
+
+### Decision 13 of 14 = A — where `contains` without a value shape is refused
+
+Chosen: `createPropertyShape` (`src/shapes/SHACL.ts`) throws when `contains` is set without
+`shape`, so decorators and core's `createPropertyShape` calls fail at load. Shapes registered from
+data (`PropertyShapeData` built directly, e.g. a catalog) are not validated; the walk, the class
+check and the single-owner constraint skip a shape-less `contains` (it owns nothing).
+
+### Decision 14 of 14 = A — memoize the walk per (root shape, registry version)
+
+The abstract walk (hops, guards, closures, blank properties) is cached like
+`reachableDependentTypes` was; lowering only instantiates variables.
+
+## Selected route
+
+1A + 2A (shape-directed walk, Decisions 7, 9, 11, 14) + 4A/13A + 5A + 6B/10A, removal per 8A,
+minor release per 12.
 
 ## Open-item map
 
