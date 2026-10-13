@@ -1,7 +1,7 @@
 ---
 summary: Make the live-Fuseki suites honest — one availability decision in Jest globalSetup, visible skips locally, a hard failure under CI/REQUIRE_FUSEKI, per-file datasets, a reporter line that counts live tests, and a test:fuseki script that selects every live suite.
 packages: [core]
-status: Implementation
+status: Review
 source_backlog: docs/backlog/009-ci-test-integrity-fuseki.md
 related_backlog: [docs/backlog/037-fuseki-suites-share-one-dataset.md, docs/backlog/047-sparql-fuseki-shape-sync-is-flaky.md]
 ---
@@ -93,7 +93,7 @@ top `describe` starts with `[fuseki]`. Prints only; failing is `globalSetup`'s j
 
 `src/test-helpers/fuseki-live.ts` (new, test-only): `FUSEKI_LIVE_ENV`, `fusekiLive`,
 `describeFuseki(name, fn)`, `fusekiRequired()`. `globalSetup` sets the env and throws when required.
-Every live block in the 11 files becomes `describeFuseki`, with its hooks inside it and no
+Every live block in the 10 files becomes `describeFuseki`, with its hooks inside it and no
 `if (!fusekiAvailable) return`. `sparql-prefixed-names` live parse check uses the shared store.
 
 ## Plan
@@ -118,7 +118,7 @@ Every live block in the 11 files becomes `describeFuseki`, with its hooks inside
 | `src/tests/fuseki-live-reporter.cjs` | new — live-test count line |
 | `jest.config.cjs` | `reporters: ['default', <reporter>]` |
 | `package.json` | `test:fuseki` |
-| 11 test files | `describeFuseki`, hooks moved in, guards removed |
+| 10 test files | `describeFuseki`, hooks moved in, guards removed |
 
 ### Pitfalls
 
@@ -145,3 +145,27 @@ URL) the live blocks show as skipped; with `CI=1` and Fuseki stopped the run fai
 Run `sparql-fuseki-shape-sync` 20× against live Fuseki and record the result.
 
 Dependencies: 1 → 2 → 3, sequential.
+
+## Implementation log
+
+**Phase 1 — done.** `fuseki-live.ts`, `fusekiRequired()`/`FUSEKI_LIVE_ENV`/per-file `DATASET_NAME`
+in the store, globalSetup, reporter, `test:fuseki`. `npm run typecheck` clean. A probe test
+confirmed `DATASET_NAME === 'nashville-test-zz-probe'` inside a file named `zz-probe.test.ts`.
+
+**Phase 2 — done.** 10 files converted (9 that guarded with `return` + `sparql-prefixed-names`).
+- `npm test` with Fuseki: `Tests: 121 skipped, 2183 passed, 2304 total` (identical to the last CI
+  run) and `[fuseki] live tests: 281 total — 280 passed, 0 failed, 1 skipped` (the 1 is the
+  pre-existing `test.skip` for the SHACL endpoint). ~30 s wall.
+- `npm run test:fuseki`: `Test Suites: 90 skipped, 10 passed`; `280 passed` live — every live file,
+  up from 3 matched by the old `sparql-fuseki` path pattern.
+- No Docker (fake `docker` on PATH), `CI=1`: exit 1 —
+  `[globalSetup] Fuseki is required (CI or REQUIRE_FUSEKI is set) but is not reachable at http://localhost:3939 …`.
+- No Docker, no CI: exit 0, warning, `[fuseki] live tests: 281 total — 0 passed, 0 failed, 281 skipped`,
+  `Tests: 401 skipped, 1903 passed` — skips are counted, not passes.
+- `CI=1 REQUIRE_FUSEKI=0`, no Docker: exit 0, live tests skipped (explicit opt-out works).
+- Guard grep (`if (!fusekiAvailable) return`, `if (!available) return`, `FUSEKI_TEST_ENDPOINT`): empty.
+
+**Phase 3 — done.** `sparql-fuseki-shape-sync` 20× in a loop against live Fuseki: 20/20 passed
+(11 passed, 1 skipped each). Full parallel suite 5× with `REQUIRE_FUSEKI=1`: 5/5 identical
+(2183 passed, 280 live). No failure to capture; the two structural explanations 047 recorded
+(per-worker dataset reuse, silent pass on absence) are both removed.

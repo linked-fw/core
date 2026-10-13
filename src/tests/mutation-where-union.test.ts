@@ -15,12 +15,12 @@
  */
 import {describe, expect, test, beforeAll, afterAll, beforeEach} from '@jest/globals';
 import {
-  ensureFuseki,
   createTestDataset,
   executeSparqlQuery,
   executeSparqlUpdate,
   clearAllData,
 } from '../test-helpers/fuseki-test-store';
+import {describeFuseki} from '../test-helpers/fuseki-live';
 import {linkedPackage} from '../utils/Package';
 import {Shape} from '../shapes/Shape';
 import {literalProperty, objectProperty} from '../shapes/SHACL';
@@ -207,22 +207,19 @@ describe('mutation WHERE — algebra', () => {
 // Live Fuseki
 // ---------------------------------------------------------------------------
 
-describe('mutation WHERE — live Fuseki (solutions add up)', () => {
-  let fusekiAvailable = false;
+describeFuseki('mutation WHERE — live Fuseki (solutions add up)', () => {
 
   beforeAll(async () => {
-    fusekiAvailable = await ensureFuseki();
-    if (fusekiAvailable) await createTestDataset();
+    await createTestDataset();
   });
   afterAll(async () => {
-    if (fusekiAvailable) await clearAllData();
+    await clearAllData();
   });
   beforeEach(async () => {
-    if (fusekiAvailable) await clearAllData();
+    await clearAllData();
   });
 
   test('update of two multi-valued properties', async () => {
-    if (!fusekiAvailable) return;
     const TAGS = 6;
     const REFS = 5;
     const triples = [`${iri('b1')} rdf:type ${iri('UBox')} .`];
@@ -244,7 +241,6 @@ describe('mutation WHERE — live Fuseki (solutions add up)', () => {
   });
 
   test('update with no old values still inserts', async () => {
-    if (!fusekiAvailable) return;
     await insert([`${iri('b1')} rdf:type ${iri('UBox')} .`]);
     const sparql = updateToSparql(
       lower(
@@ -259,7 +255,6 @@ describe('mutation WHERE — live Fuseki (solutions add up)', () => {
   });
 
   test('replacing a contains property: the old node and its owned subtree add up', async () => {
-    if (!fusekiAvailable) return;
     const OWN = 8; // extra own triples on the old owned node
     const CELLS = 5; // cell0 (owned directly) -next-> cell1 -> … cell4
     const triples = [
@@ -289,7 +284,6 @@ describe('mutation WHERE — live Fuseki (solutions add up)', () => {
   });
 
   test('replacing a contains property that has no old value leaves other owners\' subtrees alone', async () => {
-    if (!fusekiAvailable) return;
     const other = [
       `${iri('b2')} rdf:type ${iri('UBox')} .`,
       `${iri('b2')} ${iri('owns')} ${iri('x0')} .`,
@@ -317,7 +311,6 @@ describe('mutation WHERE — live Fuseki (solutions add up)', () => {
   });
 
   test('update-where over several nodes adds up per node', async () => {
-    if (!fusekiAvailable) return;
     const TAGS = 4;
     const REFS = 3;
     const triples: string[] = [];
@@ -356,7 +349,6 @@ describe('mutation WHERE — live Fuseki (solutions add up)', () => {
   };
 
   test('deleteAll: the root and each blank-node subtree add up', async () => {
-    if (!fusekiAvailable) return;
     const NAMES = 5;
     const LINES = 4;
     await insert([...holderTriples('h1', NAMES, LINES), `${iri('keep')} ${iri('name')} "k" .`]);
@@ -371,7 +363,6 @@ describe('mutation WHERE — live Fuseki (solutions add up)', () => {
   });
 
   test('deleteWhere: the root and each blank-node subtree add up, only for matches', async () => {
-    if (!fusekiAvailable) return;
     const NAMES = 5;
     const LINES = 4;
     await insert([...holderTriples('h1', NAMES, LINES), ...holderTriples('h2', NAMES, LINES)]);

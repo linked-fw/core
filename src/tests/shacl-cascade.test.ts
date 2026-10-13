@@ -5,12 +5,12 @@
  */
 import {describe, expect, test, beforeAll, afterAll, beforeEach} from '@jest/globals';
 import {
-  ensureFuseki,
   createTestDataset,
   executeSparqlQuery,
   executeSparqlUpdate,
   clearAllData,
 } from '../test-helpers/fuseki-test-store';
+import {describeFuseki} from '../test-helpers/fuseki-live';
 import {linkedPackage} from '../utils/Package';
 import {Shape} from '../shapes/Shape';
 import {literalProperty, NodeShape, objectProperty} from '../shapes/SHACL';
@@ -540,11 +540,10 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
 
 // Live end-to-end reproduction of backlog 032: replacing a `contains`-owned node whose
 // shape is NOT `dependent` must leave no orphan behind. Skips gracefully if Fuseki is down.
-describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () => {
+describeFuseki('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () => {
   const C = 'http://example.org/c#';
   const iri = (n: string) => `<${C}${n}>`;
   const RDF = 'PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n';
-  let fusekiAvailable = false;
 
   const countTriples = async (subject: string): Promise<number> => {
     const res = await executeSparqlQuery(
@@ -562,18 +561,16 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
     );
 
   beforeAll(async () => {
-    fusekiAvailable = await ensureFuseki();
-    if (fusekiAvailable) await createTestDataset();
+    await createTestDataset();
   });
   afterAll(async () => {
-    if (fusekiAvailable) await clearAllData();
+    await clearAllData();
   });
   beforeEach(async () => {
-    if (fusekiAvailable) await clearAllData();
+    await clearAllData();
   });
 
   test('replacing a contains-owned node twice accumulates zero orphans', async () => {
-    if (!fusekiAvailable) return;
 
     // Initial: card1 --holds--> plain1 (2 own triples: type + label).
     await executeSparqlUpdate(
@@ -617,7 +614,6 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
   };
 
   test('re-sending the current id keeps the owned node', async () => {
-    if (!fusekiAvailable) return;
     await executeSparqlUpdate(
       `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} . }`,
     );
@@ -630,7 +626,6 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
   });
 
   test('array overwrite keeps retained, deletes dropped', async () => {
-    if (!fusekiAvailable) return;
     await executeSparqlUpdate(
       `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ` +
         `${iri('cells')} ${iri('a')}, ${iri('b')}, ${iri('c')} . }`,
@@ -656,7 +651,6 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
   });
 
   test('subject delete removes owned child, keeps referenced-only nodes', async () => {
-    if (!fusekiAvailable) return;
     // card1 owns plain1. box1 only refers to plain2 (not owned by anyone) and, as a
     // non-owning reference, to plain1, which will dangle after card1 is deleted (A5).
     await executeSparqlUpdate(
@@ -679,7 +673,6 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
   });
 
   test('replacing a valueShape-less contains value keeps a plain predicate IRI', async () => {
-    if (!fusekiAvailable) return;
     const RDFS = 'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n';
     await executeSparqlUpdate(
       `${RDF}${RDFS}INSERT DATA { ${iri('pred')} rdfs:label "x" .
@@ -700,7 +693,6 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
   });
 
   test('set-remove of an id the subject does not own deletes nothing of it', async () => {
-    if (!fusekiAvailable) return;
     await executeSparqlUpdate(
       `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('cells')} ${iri('a')} .
         ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('cells')} ${iri('x')} . }`,
@@ -723,7 +715,6 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
   });
 
   test('a kept id keeps its dependent subtree', async () => {
-    if (!fusekiAvailable) return;
     await executeSparqlUpdate(
       `${RDF}INSERT DATA { ${iri('b1')} rdf:type ${iri('TBox')} ; ${iri('owns')} ${iri('cell0')} .
         ${iri('cell0')} rdf:type ${iri('TCell')} ; ${iri('next')} ${iri('cell1')} .
@@ -744,7 +735,6 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
   });
 
   test('upsert with the current id keeps the owned node', async () => {
-    if (!fusekiAvailable) return;
     await executeSparqlUpdate(
       `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} . }`,
     );
@@ -763,7 +753,6 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
   });
 
   test('forAll() and where() with the current id keep it, and replace the others', async () => {
-    if (!fusekiAvailable) return;
     const seed = async () => {
       await clearAllData();
       await executeSparqlUpdate(
@@ -804,7 +793,6 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
   });
 
   test('two owners of one node: deleting one deletes the node, the other edge dangles', async () => {
-    if (!fusekiAvailable) return;
     // card2 links plain1 by {id} although card1 already owns it, which breaks the
     // single-owner rule. Nothing refuses that on write (the rule is SHACL only).
     await executeSparqlUpdate(
@@ -825,7 +813,6 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
   });
 
   test('deleteAll deletes every subject\'s owned children, keeps unowned nodes', async () => {
-    if (!fusekiAvailable) return;
     await executeSparqlUpdate(
       `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain1')} ; ${iri('cells')} ${iri('a')} .
         ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('holds')} ${iri('plain2')} . }`,
@@ -841,7 +828,6 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
   });
 
   test('deleteAll cascades into a dependent owned chain', async () => {
-    if (!fusekiAvailable) return;
     await executeSparqlUpdate(
       `${RDF}INSERT DATA { ${iri('b1')} rdf:type ${iri('TBox')} ; ${iri('owns')} ${iri('cell0')} ; ${iri('ref')} ${iri('free')} .
         ${iri('cell0')} rdf:type ${iri('TCell')} ; ${iri('next')} ${iri('cell1')} .
@@ -859,7 +845,6 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
   });
 
   test('delete().where() deletes only the matched subject\'s owned children', async () => {
-    if (!fusekiAvailable) return;
     await executeSparqlUpdate(
       `${RDF}INSERT DATA { ${iri('card1')} rdf:type ${iri('TCard')} ; ${iri('title')} "x" ; ${iri('holds')} ${iri('plain1')} .
         ${iri('card2')} rdf:type ${iri('TCard')} ; ${iri('title')} "y" ; ${iri('holds')} ${iri('plain2')} . }`,
@@ -884,25 +869,22 @@ describe('owned-subtree cascade — live Fuseki (backlog 032 orphan repro)', () 
 // Its WHERE once chained the cascade blocks as OPTIONALs, so the solutions were the
 // product of all of them: ~27,000 rows and 30+ seconds per shape on Fuseki, which made
 // a server's second boot take minutes. Counted here as solutions of the generated WHERE.
-describe('owned-subtree cascade — live Fuseki (delete WHERE size)', () => {
+describeFuseki('owned-subtree cascade — live Fuseki (delete WHERE size)', () => {
   const C = 'http://example.org/c#';
   const iri = (n: string) => `<${C}${n}>`;
   const RDF = 'PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n';
-  let fusekiAvailable = false;
 
   beforeAll(async () => {
-    fusekiAvailable = await ensureFuseki();
-    if (fusekiAvailable) await createTestDataset();
+    await createTestDataset();
   });
   afterAll(async () => {
-    if (fusekiAvailable) await clearAllData();
+    await clearAllData();
   });
   beforeEach(async () => {
-    if (fusekiAvailable) await clearAllData();
+    await clearAllData();
   });
 
   test('solutions add up across blocks instead of multiplying, and the delete is complete', async () => {
-    if (!fusekiAvailable) return;
     const OWN = 8; // extra own triples on the box
     const REFS = 8; // incoming references to the box
     const CELLS = 4; // owned chain b1 -owns-> cell0 -next-> cell1 ...

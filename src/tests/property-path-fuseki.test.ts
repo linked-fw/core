@@ -3,7 +3,8 @@
  *
  * Tests the full pipeline: shape definition with complex paths → IR → SPARQL → Fuseki → results
  *
- * Skipped gracefully if Fuseki is not available on localhost:3030.
+ * Live blocks run through `describeFuseki`: skipped visibly without Fuseki, and a failure under CI
+ * or REQUIRE_FUSEKI (see test-helpers/fuseki-live.ts).
  *
  * Coverage:
  * - Sequence paths (ex:friend/ex:name)
@@ -14,12 +15,12 @@
  */
 import {describe, expect, test, beforeAll, afterAll} from '@jest/globals';
 import {
-  ensureFuseki,
   createTestDataset,
   loadTestData,
   executeSparqlQuery,
   clearAllData,
 } from '../test-helpers/fuseki-test-store';
+import {describeFuseki, fusekiLive} from '../test-helpers/fuseki-live';
 import {pathExprToSparql} from '../paths/pathExprToSparql';
 import {normalizePropertyPath} from '../paths/normalizePropertyPath';
 import type {PathExpr} from '../paths/PropertyPathExpr';
@@ -105,23 +106,16 @@ const TEST_DATA = `
 // Fuseki availability and lifecycle
 // ---------------------------------------------------------------------------
 
-let fusekiAvailable = false;
 
 beforeAll(async () => {
-  fusekiAvailable = await ensureFuseki();
-  if (!fusekiAvailable) {
-    console.log(
-      'Fuseki not available — skipping property path integration tests',
-    );
-    return;
-  }
+  if (!fusekiLive) return;
   await createTestDataset();
   await clearAllData();
   await loadTestData(TEST_DATA);
 }, 30000);
 
 afterAll(async () => {
-  if (!fusekiAvailable) return;
+  if (!fusekiLive) return;
   await clearAllData();
 });
 
@@ -158,9 +152,8 @@ async function selectPathValues(
 // SEQUENCE PATHS
 // =========================================================================
 
-describe('Property path E2E — sequence paths', () => {
+describeFuseki('Property path E2E — sequence paths', () => {
   test('two-step sequence: knows/name (friend of Alice → name)', async () => {
-    if (!fusekiAvailable) return;
 
     // Alice --knows--> Bob, Bob has name "Bob"
     const path: PathExpr = {seq: [{id: `${EX}knows`}, {id: `${EX}name`}]};
@@ -169,7 +162,6 @@ describe('Property path E2E — sequence paths', () => {
   });
 
   test('three-step sequence: knows/knows/name (friend-of-friend name)', async () => {
-    if (!fusekiAvailable) return;
 
     // Alice → Bob → Carol → name = "Carol"
     const path: PathExpr = {
@@ -180,7 +172,6 @@ describe('Property path E2E — sequence paths', () => {
   });
 
   test('sequence to company: knows/worksAt/companyName', async () => {
-    if (!fusekiAvailable) return;
 
     // Alice → Bob → AcmeCo → "Acme Corp"
     const path: PathExpr = {
@@ -199,9 +190,8 @@ describe('Property path E2E — sequence paths', () => {
 // ALTERNATIVE PATHS
 // =========================================================================
 
-describe('Property path E2E — alternative paths', () => {
+describeFuseki('Property path E2E — alternative paths', () => {
   test('alternative: knows|likes (Alice knows Bob, Alice likes Bob)', async () => {
-    if (!fusekiAvailable) return;
 
     const path: PathExpr = {alt: [{id: `${EX}knows`}, {id: `${EX}likes`}]};
     const values = await selectPathValues(`${EX}alice`, path);
@@ -210,7 +200,6 @@ describe('Property path E2E — alternative paths', () => {
   });
 
   test('alternative: name|petName (works on different types)', async () => {
-    if (!fusekiAvailable) return;
 
     // Fluffy has petName "Fluffy", not name
     const path: PathExpr = {alt: [{id: `${EX}name`}, {id: `${EX}petName`}]};
@@ -219,7 +208,6 @@ describe('Property path E2E — alternative paths', () => {
   });
 
   test('alternative in sequence: (knows|likes)/name', async () => {
-    if (!fusekiAvailable) return;
 
     // Alice knows Bob and likes Bob → name = "Bob" (possibly duplicated)
     const path: PathExpr = {
@@ -238,9 +226,8 @@ describe('Property path E2E — alternative paths', () => {
 // INVERSE PATHS
 // =========================================================================
 
-describe('Property path E2E — inverse paths', () => {
+describeFuseki('Property path E2E — inverse paths', () => {
   test('inverse: ^knows (who knows Bob?)', async () => {
-    if (!fusekiAvailable) return;
 
     // Alice --knows--> Bob, so ^knows from Bob returns Alice
     const path: PathExpr = {inv: {id: `${EX}knows`}};
@@ -249,7 +236,6 @@ describe('Property path E2E — inverse paths', () => {
   });
 
   test('inverse sequence: ^knows/name (name of who knows Bob)', async () => {
-    if (!fusekiAvailable) return;
 
     const path: PathExpr = {
       seq: [{inv: {id: `${EX}knows`}}, {id: `${EX}name`}],
@@ -259,7 +245,6 @@ describe('Property path E2E — inverse paths', () => {
   });
 
   test('inverse then forward: ^knows/hasPet/petName (pet of person who knows Bob)', async () => {
-    if (!fusekiAvailable) return;
 
     // ^knows from Bob → Alice, Alice hasPet Fluffy, Fluffy petName "Fluffy"
     const path: PathExpr = {
@@ -278,9 +263,8 @@ describe('Property path E2E — inverse paths', () => {
 // REPETITION PATHS
 // =========================================================================
 
-describe('Property path E2E — repetition paths', () => {
+describeFuseki('Property path E2E — repetition paths', () => {
   test('oneOrMore: knows+ (transitive closure of knows from Alice)', async () => {
-    if (!fusekiAvailable) return;
 
     // Alice →+ Bob, Carol, Dave
     const path: PathExpr = {oneOrMore: {id: `${EX}knows`}};
@@ -292,7 +276,6 @@ describe('Property path E2E — repetition paths', () => {
   });
 
   test('zeroOrMore: knows* (transitive closure including self)', async () => {
-    if (!fusekiAvailable) return;
 
     // Alice →* Alice, Bob, Carol, Dave
     const path: PathExpr = {zeroOrMore: {id: `${EX}knows`}};
@@ -304,7 +287,6 @@ describe('Property path E2E — repetition paths', () => {
   });
 
   test('zeroOrOne: knows? from Alice', async () => {
-    if (!fusekiAvailable) return;
 
     // Alice →? Alice (zero steps) or Bob (one step)
     const path: PathExpr = {zeroOrOne: {id: `${EX}knows`}};
@@ -315,7 +297,6 @@ describe('Property path E2E — repetition paths', () => {
   });
 
   test('oneOrMore with sequence: manages+/name (transitive reports)', async () => {
-    if (!fusekiAvailable) return;
 
     // Alice manages Bob, Bob manages Carol
     // manages+/name from Alice → "Bob", "Carol"
@@ -332,9 +313,8 @@ describe('Property path E2E — repetition paths', () => {
 // COMBINED / COMPLEX PATHS
 // =========================================================================
 
-describe('Property path E2E — complex combinations', () => {
+describeFuseki('Property path E2E — complex combinations', () => {
   test('inverse + oneOrMore: ^manages+ (all managers above Carol)', async () => {
-    if (!fusekiAvailable) return;
 
     // Carol ← Bob ← Alice
     const path: PathExpr = {oneOrMore: {inv: {id: `${EX}manages`}}};
@@ -344,7 +324,6 @@ describe('Property path E2E — complex combinations', () => {
   });
 
   test('alternative + sequence: (knows|manages)/worksAt/companyName', async () => {
-    if (!fusekiAvailable) return;
 
     // Alice knows Bob (worksAt Acme) and manages Bob (worksAt Acme)
     const path: PathExpr = {
@@ -359,7 +338,6 @@ describe('Property path E2E — complex combinations', () => {
   });
 
   test('sequence with inverse and forward: ^knows/knows (co-known with)', async () => {
-    if (!fusekiAvailable) return;
 
     // From Carol: ^knows → Bob, Bob knows → Carol again
     // So ^knows/knows from Carol → Carol
@@ -417,7 +395,7 @@ describe('Property path E2E — SPARQL rendering', () => {
 // STRING INPUT — full pipeline: string → normalize → SPARQL → Fuseki
 // =========================================================================
 
-describe('Property path E2E — string decorator input', () => {
+describeFuseki('Property path E2E — string decorator input', () => {
   /**
    * Helper: takes a raw string (as you'd write in a decorator),
    * normalizes it, renders to SPARQL, and executes against Fuseki.
@@ -434,7 +412,6 @@ describe('Property path E2E — string decorator input', () => {
   }
 
   test('string sequence: <IRI>/<IRI> parses and executes', async () => {
-    if (!fusekiAvailable) return;
 
     // Same as the {seq} object test but starting from a raw string
     const values = await selectWithStringPath(
@@ -445,7 +422,6 @@ describe('Property path E2E — string decorator input', () => {
   });
 
   test('string three-step sequence: <knows>/<knows>/<name>', async () => {
-    if (!fusekiAvailable) return;
 
     const values = await selectWithStringPath(
       `${EX}alice`,
@@ -455,7 +431,6 @@ describe('Property path E2E — string decorator input', () => {
   });
 
   test('string inverse: ^<IRI>', async () => {
-    if (!fusekiAvailable) return;
 
     const values = await selectWithStringPath(
       `${EX}bob`,
@@ -465,7 +440,6 @@ describe('Property path E2E — string decorator input', () => {
   });
 
   test('string inverse + sequence: ^<knows>/<hasPet>/<petName>', async () => {
-    if (!fusekiAvailable) return;
 
     const values = await selectWithStringPath(
       `${EX}bob`,
@@ -475,7 +449,6 @@ describe('Property path E2E — string decorator input', () => {
   });
 
   test('string oneOrMore: <knows>+', async () => {
-    if (!fusekiAvailable) return;
 
     const values = await selectWithStringPath(
       `${EX}alice`,
@@ -487,7 +460,6 @@ describe('Property path E2E — string decorator input', () => {
   });
 
   test('string alternative: <knows>|<likes>', async () => {
-    if (!fusekiAvailable) return;
 
     const values = await selectWithStringPath(
       `${EX}alice`,
@@ -497,7 +469,6 @@ describe('Property path E2E — string decorator input', () => {
   });
 
   test('string complex: (<knows>|<manages>)/<worksAt>/<companyName>', async () => {
-    if (!fusekiAvailable) return;
 
     const values = await selectWithStringPath(
       `${EX}alice`,
@@ -507,7 +478,6 @@ describe('Property path E2E — string decorator input', () => {
   });
 
   test('string transitive + sequence: <manages>+/<name>', async () => {
-    if (!fusekiAvailable) return;
 
     const values = await selectWithStringPath(
       `${EX}alice`,

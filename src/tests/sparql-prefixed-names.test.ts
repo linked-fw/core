@@ -18,6 +18,8 @@ import {Shape} from '../shapes/Shape';
 import {createNameSpace} from '../utils/NameSpace';
 import {captureQuery} from '../test-helpers/query-capture-store';
 import {selectToSparql} from '../sparql/irToAlgebra';
+import {createTestDataset, executeSparqlQuery} from '../test-helpers/fuseki-test-store';
+import {describeFuseki} from '../test-helpers/fuseki-live';
 
 import '../ontologies/rdf';
 import '../ontologies/xsd';
@@ -124,29 +126,21 @@ WHERE {
   FILTER(?a0_assignee = <https://webid.email/id/51f68968>)
 }`);
   });
+});
 
-  /**
-   * The assertion that would have caught this originally: no golden string can
-   * tell you a query PARSES. Only a SPARQL parser can, so ask one.
-   */
+/**
+ * The assertion that would have caught this originally: no golden string can tell you a query
+ * PARSES. Only a SPARQL parser can, so ask one — the test Fuseki, through the shared store.
+ */
+describeFuseki('policy repository queries parse on a real SPARQL endpoint', () => {
+  beforeAll(async () => {
+    await createTestDataset();
+  });
+
   test.each([
     ['readVersion', readVersion],
     ['grantsForActor', grantsForActor],
-  ])('%s is accepted by a real SPARQL endpoint', async (_label, factory) => {
-    const endpoint = process.env.FUSEKI_TEST_ENDPOINT;
-    if (!endpoint) {
-      console.warn('FUSEKI_TEST_ENDPOINT unset — skipping the live parse check');
-      return;
-    }
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/sparql-query',
-        Accept: 'application/sparql-results+json',
-        ...(process.env.FUSEKI_TEST_AUTH ? {Authorization: process.env.FUSEKI_TEST_AUTH} : {}),
-      },
-      body: await golden(factory),
-    });
-    expect(`${res.status} ${res.ok ? '' : await res.text()}`.trim()).toBe('200');
+  ])('%s is accepted by Fuseki', async (_label, factory) => {
+    await expect(executeSparqlQuery(await golden(factory))).resolves.toHaveProperty('results');
   }, 30000);
 });

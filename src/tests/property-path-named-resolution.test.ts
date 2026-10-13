@@ -22,12 +22,12 @@ import {selectToSparql} from '../sparql/irToAlgebra';
 import {setQueryContext} from '../queries/QueryContext';
 import {NodeReferenceValue} from '../queries/QueryFactory';
 import {
-  ensureFuseki,
   createTestDataset,
   loadTestData,
   executeSparqlQuery,
   clearAllData,
 } from '../test-helpers/fuseki-test-store';
+import {describeFuseki} from '../test-helpers/fuseki-live';
 
 // Ensure prefixes are registered
 import '../ontologies/rdf';
@@ -217,48 +217,36 @@ function allLiteralValues(result: {results: {bindings: Record<string, {type: str
   return out;
 }
 
-describe('named structured-path resolution — execution (Fuseki)', () => {
-  let fusekiAvailable = false;
-
+describeFuseki('named structured-path resolution — execution (Fuseki)', () => {
   beforeAll(async () => {
-    fusekiAvailable = await ensureFuseki();
-    if (!fusekiAvailable) {
-      console.log('Fuseki not available — skipping named-path execution tests');
-      return;
-    }
     await createTestDataset();
     await clearAllData();
     await loadTestData(TEST_DATA);
   }, 60000);
 
   afterAll(async () => {
-    if (!fusekiAvailable) return;
     await clearAllData();
   });
 
   test('(a) inverse single-step returns the inverse-related rows', async () => {
-    if (!fusekiAvailable) return;
     const sparql = await fallbackSelect(() => ParentShape.select((p) => p.children.name));
     const values = allLiteralValues(await executeSparqlQuery(sparql));
     expect(values).toContain('Kiddo');
   });
 
   test('(b) sequence returns the two-hop rows', async () => {
-    if (!fusekiAvailable) return;
     const sparql = await fallbackSelect(() => OrgShape.select((p) => p.memberRoles.label));
     const values = allLiteralValues(await executeSparqlQuery(sparql));
     expect(values).toContain('Admin');
   });
 
   test('(c) sequence + inverse returns the combined-path rows', async () => {
-    if (!fusekiAvailable) return;
     const sparql = await fallbackSelect(() => AnchorShape.select((p) => p.linked.name));
     const values = allLiteralValues(await executeSparqlQuery(sparql));
     expect(values).toContain('Zed');
   });
 
   test('(d) regression — simple named property returns its rows', async () => {
-    if (!fusekiAvailable) return;
     const sparql = await fallbackSelect(() => OrgShape.select((p) => p.members.name));
     const values = allLiteralValues(await executeSparqlQuery(sparql));
     expect(values).toContain('Alice');
