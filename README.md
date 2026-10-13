@@ -358,7 +358,16 @@ constraint at `Thing`, not one per subclass. It is marked `core:generated true` 
 The inverse path is stored as an untyped blank node, as is every complex `sh:path` shape sync
 writes (inverse, alternative, sequence, `*`/`+`/`?`): an IRI in `sh:path` is a predicate path to a
 SHACL validator. Versions before 2.30 wrote IRI-named nodes (`…/owners/inv`); the next sync
-replaces them. Read a stored path's structure in the same query that finds it (`?ps sh:path ?p .
+replaces them, except an operator node inside a sequence (`…/seq/0/inv`), which is left
+unreferenced. To remove those:
+
+```sparql
+DELETE { ?n ?p ?o } WHERE {
+  ?n a <https://linked.cm/ont/core/PathNode> ; ?p ?o .
+  FILTER(isIRI(?n)) FILTER NOT EXISTS { ?x ?y ?n }
+}
+```
+ Read a stored path's structure in the same query that finds it (`?ps sh:path ?p .
 ?p sh:inversePath ?x`): a blank node's label is not stable across queries.
 
 Nested node-data in a `create` may carry `__blank: true` to be written that way: a fresh blank
