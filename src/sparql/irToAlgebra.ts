@@ -17,6 +17,7 @@ import type {
   IRTraversePattern,
 } from '../queries/IntermediateRepresentation.js';
 import {findPropertyShapeById, getPropertyShapes} from '../shapes/nodeShapeData.js';
+import type {PropertyShapeData} from '../shapes/nodeShapeData.js';
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
 import {pathExprToSparql, collectPathUris} from '../paths/pathExprToSparql.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
@@ -2139,6 +2140,23 @@ function processUpdateFields(
       continue;
     }
 
+    // Replace / unset / overwrite of a blank-capable property: its old blank value and the
+    // blank nodes below it go (the branch binds `old_${suffix}` through the edge itself).
+    const fieldShape = findPropertyShapeById(field.property);
+    if (isBlankCapable(fieldShape)) {
+      const blank = buildBlankCascade(
+        [tripleOf(subjectTerm, propertyTerm, varTerm(`old_${suffix}`))],
+        varTerm(`old_${suffix}`),
+        null,
+        blankWalkPredicates([fieldShape!]),
+        `ub_${suffix}_`,
+      );
+      if (blank) {
+        deletePatterns.push(...blank.deletePatterns);
+        cascadeOptionals.push(blank.whereBlock);
+      }
+    }
+
     // Non-set-modification replace of a `contains` property: cascade the old value's
     // subtree (every branch below binds `old_${suffix}` in the WHERE).
     if (isContainsField) {
@@ -2543,21 +2561,33 @@ function shapeHasContainsProperty(shapeId: string): boolean {
 // Memoized registry scan for cascade lowering — called once per update/delete and
 // again per owned-cascade item inside loops. Guarded by registry size (same rationale
 // as predicateTermCache). Callers treat the result as read-only.
-let containmentCache: {containsPreds: string[]; dependentTypes: string[]} | null = null;
+type Containment = {
+  containsPreds: string[];
+  dependentTypes: string[];
+  /** Per dependent targetClass: the blank-capable properties of the shapes targeting it. */
+  dependentBlankProps: Map<string, PropertyShapeData[]>;
+};
+let containmentCache: Containment | null = null;
 let containmentCacheSize = -1;
 
 /** Gather contains-predicate IRIs and dependent targetClass IRIs from the registry. */
-export function collectContainment(): {containsPreds: string[]; dependentTypes: string[]} {
+export function collectContainment(): Containment {
   const version = getRegistryVersion();
   if (containmentCache && version === containmentCacheSize) {
     return containmentCache;
   }
   const containsPreds = new Set<string>();
   const dependentTypes = new Set<string>();
+  const dependentBlankProps = new Map<string, PropertyShapeData[]>();
   for (const nodeShape of getAllNodeShapes().values()) {
     if (!nodeShape) continue;
     if ((nodeShape as {dependent?: boolean}).dependent && nodeShape.targetClass?.id) {
-      dependentTypes.add(nodeShape.targetClass.id);
+      const typeId = nodeShape.targetClass.id;
+      dependentTypes.add(typeId);
+      const blank = getPropertyShapes(nodeShape, true).filter(isBlankCapable);
+      if (blank.length > 0) {
+        dependentBlankProps.set(typeId, [...(dependentBlankProps.get(typeId) ?? []), ...blank]);
+      }
     }
     const propertyShapes = getPropertyShapes(nodeShape, false);
     for (const ps of propertyShapes) {
@@ -2567,7 +2597,7 @@ export function collectContainment(): {containsPreds: string[]; dependentTypes: 
       }
     }
   }
-  containmentCache = {containsPreds: [...containsPreds], dependentTypes: [...dependentTypes]};
+  containmentCache = {containsPreds: [...containsPreds], dependentTypes: [...dependentTypes], dependentBlankProps};
   containmentCacheSize = version;
   return containmentCache;
 }
@@ -2641,16 +2671,213 @@ function reachableDependentTypes(shapeId: string): string[] {
   return result;
 }
 
-/** The RDF-collection and SHACL-path predicates the cascade's blank-node block walks. */
-const BLANK_SYNTAX_PREDICATES = [
-  rdf.first.id,
-  rdf.rest.id,
-  shacl.inversePath.id,
-  shacl.alternativePath.id,
-  shacl.zeroOrMorePath.id,
-  shacl.oneOrMorePath.id,
-  shacl.zeroOrOnePath.id,
-];
+// ---------------------------------------------------------------------------
+// Blank-node cascade: blank values are deleted through the blank-capable properties
+// (`isBlankCapable`) that hold them, never through `contains`.
+// ---------------------------------------------------------------------------
+
+const shapeById = (id: string) => getShapeClass(id)?.shape ?? getNodeShape(id);
+
+/** The blank-capable property shapes of a shape (own and inherited) and of its sub-shapes. */
+function blankCapableProperties(shapeId: string): PropertyShapeData[] {
+  const out: PropertyShapeData[] = [];
+  for (const sid of [shapeId, ...getSubShapes(shapeId).map((sub) => sub.id)]) {
+    const nodeShape = shapeById(sid);
+    if (!nodeShape) continue;
+    for (const ps of getPropertyShapes(nodeShape, true)) {
+      if (isBlankCapable(ps)) out.push(ps);
+    }
+  }
+  return out;
+}
+
+/** The simple-path predicates of property shapes, deduplicated in order. */
+function simplePredicates(props: PropertyShapeData[]): string[] {
+  const predicates = new Set<string>();
+  for (const ps of props) {
+    const predicate = getSimplePathId(ps.path);
+    if (predicate) predicates.add(predicate);
+  }
+  return [...predicates];
+}
+
+let blankWalkCache = new Map<string, string[]>();
+let blankWalkCacheVersion = -1;
+
+/**
+ * The predicates the blank-node cascade follows *below* a blank value held by one of `start`:
+ * the blank-capable properties of every shape the value (and, transitively, its blank values)
+ * can have — a property's value shape and its sub-shapes. A blank-capable property without a
+ * value shape is polymorphic (`sh:path`, the `PathNode` slots, `PathList.first`) and may hold
+ * any shape, so it yields every blank-capable predicate in the registry, the same rule
+ * `reachableDependentTypes` applies to `contains`. Precision is not what keeps the walk safe:
+ * `buildBlankCascade` refuses any node reached through an IRI.
+ */
+function blankWalkPredicates(start: PropertyShapeData[]): string[] {
+  const version = getRegistryVersion();
+  if (version !== blankWalkCacheVersion) {
+    blankWalkCache = new Map();
+    blankWalkCacheVersion = version;
+  }
+  const key = start.map((ps) => ps.id).join('|');
+  const cached = blankWalkCache.get(key);
+  if (cached) return cached;
+
+  let everything = false;
+  const predicates: PropertyShapeData[] = [];
+  const seen = new Set<string>();
+  const queue: string[] = [];
+  const follow = (ps: PropertyShapeData) => {
+    if (!ps.valueShape?.id) {
+      everything = true;
+      return;
+    }
+    if (!seen.has(ps.valueShape.id)) {
+      seen.add(ps.valueShape.id);
+      queue.push(ps.valueShape.id);
+    }
+  };
+  start.forEach(follow);
+  while (queue.length > 0 && !everything) {
+    for (const ps of blankCapableProperties(queue.shift()!)) {
+      predicates.push(ps);
+      follow(ps);
+    }
+  }
+  if (everything) {
+    predicates.length = 0;
+    for (const nodeShape of getAllNodeShapes().values()) {
+      if (!nodeShape) continue;
+      for (const ps of getPropertyShapes(nodeShape, false)) {
+        if (isBlankCapable(ps)) predicates.push(ps);
+      }
+    }
+  }
+  const result = simplePredicates(predicates);
+  blankWalkCache.set(key, result);
+  return result;
+}
+
+/** A SPARQL property-path term over `predicates`: `(p1|…|pn)`, then `*` / `+` when given. */
+function predicatePathTerm(predicates: string[], repeat?: 'zeroOrMore' | 'oneOrMore'): SparqlTerm {
+  const step: PathExpr =
+    predicates.length === 1 ? {id: predicates[0]} : {alt: predicates.map((id) => ({id}))};
+  const expr: PathExpr = repeat === 'zeroOrMore' ? {zeroOrMore: step} : repeat === 'oneOrMore' ? {oneOrMore: step} : step;
+  return {kind: 'path', value: pathExprToSparql(expr), uris: collectPathUris(expr)};
+}
+
+const isBlankExpr = (name: string): SparqlExpression => ({
+  kind: 'function_expr',
+  name: 'isBlank',
+  args: [{kind: 'variable_expr', name}],
+});
+
+/**
+ * One UNION branch that deletes the blank values `owner` holds through `first`, and every blank
+ * node below them through `inner`:
+ *
+ * ```sparql
+ * DELETE { ?bn ?bnp ?bno }
+ * WHERE {
+ *   …ownerTriples…  <owner> (first…) ?bn0 . FILTER(isBlank(?bn0))
+ *   ?bn0 (inner…)* ?bn . ?bn ?bnp ?bno . FILTER(isBlank(?bn))
+ *   FILTER NOT EXISTS { ?bn0 (inner…)* ?mid . ?mid (inner…)+ ?bn . FILTER(!isBlank(?mid)) }
+ * }
+ * ```
+ *
+ * `first: null` means the owner term *is* the blank value (the old value of a replaced
+ * blank-capable property, bound by `ownerTriples`). Every deleted node is a blank node, so no IRI
+ * — a predicate such as `schema:image`, an entity a list merely lists — is ever deleted. The
+ * `NOT EXISTS` refuses a blank node reached *through* an IRI: a property path cannot constrain
+ * the nodes between its ends, and the walk may include every blank-capable predicate
+ * (`blankWalkPredicates`), so without it a blank list's `rdf:first` could lead into a listed
+ * entity and delete that entity's blank values. Blank structures core writes are trees, so the
+ * guard removes nothing they own. Returns null when there is nothing to follow.
+ */
+function buildBlankCascade(
+  ownerTriples: SparqlTriple[],
+  ownerTerm: SparqlTerm,
+  first: string[] | null,
+  inner: string[],
+  varPrefix: string,
+): {deletePatterns: SparqlTriple[]; whereBlock: SparqlAlgebraNode} | null {
+  if (first !== null && first.length === 0) return null;
+  let bn0Name: string;
+  const reach: SparqlTriple[] = [...ownerTriples];
+  if (first === null) {
+    if (ownerTerm.kind !== 'variable') return null;
+    bn0Name = ownerTerm.name;
+  } else {
+    bn0Name = `${varPrefix}bn0`;
+    reach.push(tripleOf(ownerTerm, predicatePathTerm(first), varTerm(bn0Name)));
+  }
+  const bn0 = varTerm(bn0Name);
+  const reached: SparqlAlgebraNode = {
+    type: 'filter',
+    expression: isBlankExpr(bn0Name),
+    inner: {type: 'bgp', triples: reach},
+  };
+  const bp = varTerm(`${varPrefix}bnp`);
+  const bo = varTerm(`${varPrefix}bno`);
+  if (inner.length === 0) {
+    const own = tripleOf(bn0, bp, bo);
+    return {
+      deletePatterns: [own],
+      whereBlock: {type: 'join', left: reached, right: {type: 'bgp', triples: [own]}},
+    };
+  }
+  const bnName = `${varPrefix}bn`;
+  const bn = varTerm(bnName);
+  const mid = varTerm(`${varPrefix}bnm`);
+  const own = tripleOf(bn, bp, bo);
+  const throughIri: SparqlExpression = {
+    kind: 'exists_expr',
+    negated: true,
+    pattern: {
+      type: 'filter',
+      expression: {kind: 'not_expr', inner: isBlankExpr(`${varPrefix}bnm`)},
+      inner: {
+        type: 'bgp',
+        triples: [
+          tripleOf(bn0, predicatePathTerm(inner, 'zeroOrMore'), mid),
+          tripleOf(mid, predicatePathTerm(inner, 'oneOrMore'), bn),
+        ],
+      },
+    },
+  };
+  return {
+    deletePatterns: [own],
+    whereBlock: {
+      type: 'filter',
+      expression: {kind: 'logical_expr', op: 'and', exprs: [isBlankExpr(bnName), throughIri]},
+      inner: {
+        type: 'join',
+        // Filter the blank values before the inner walk runs from each of them.
+        left: reached,
+        right: {
+          type: 'bgp',
+          triples: [tripleOf(bn0, predicatePathTerm(inner, 'zeroOrMore'), bn), own],
+        },
+      },
+    },
+  };
+}
+
+/**
+ * The blank-node cascade of a subject: its blank values through the blank-capable properties of
+ * its shape, and their blank descendants. `ownerTriples` anchors a variable subject (the bulk
+ * deletes pass its type triple).
+ */
+function subjectBlankCascade(
+  shapeId: string,
+  subjectTerm: SparqlTerm,
+  ownerTriples: SparqlTriple[],
+  varPrefix: string,
+): {deletePatterns: SparqlTriple[]; whereBlock: SparqlAlgebraNode} | null {
+  const props = blankCapableProperties(shapeId);
+  if (props.length === 0) return null;
+  return buildBlankCascade(ownerTriples, subjectTerm, simplePredicates(props), blankWalkPredicates(props), varPrefix);
+}
 
 /**
  * Build DELETE patterns + WHERE OPTIONAL blocks that cascade-delete the owned subtree
@@ -2714,56 +2941,28 @@ export function buildOwnedCascade(
     );
   });
 
-  // Blank nodes carry no type (a SHACL path operator must be the subject of exactly one
-  // triple), so the typed blocks above cannot see them. Every blank node owned through
-  // `contains` edges (`?b0`) is deleted, together with the RDF-list / SHACL-path syntax below it
-  // (`?bn`). That inner walk follows `rdf:first` too, because a sequence member that is itself a
-  // path operator is held by `rdf:first`, which is not a `contains` edge. It is restricted to the
-  // syntax predicates on purpose: SPARQL cannot require the nodes *between* `?b0` and `?bn` to be
-  // blank, so following every `contains` edge there would let a list's `rdf:first` lead into an
-  // entity it merely lists and delete that entity's blank children.
-  const insidePathExpr: PathExpr = {zeroOrMore: {alt: BLANK_SYNTAX_PREDICATES.map((id) => ({id}))}};
-  const insidePathTerm: SparqlTerm = {
-    kind: 'path',
-    value: pathExprToSparql(insidePathExpr),
-    uris: collectPathUris(insidePathExpr),
-  };
-  const ownedBlank = varTerm(`${varPrefix}bn0`);
-  const blank = varTerm(`${varPrefix}bn`);
-  const bp = varTerm(`${varPrefix}bnp`);
-  const bo = varTerm(`${varPrefix}bno`);
-  const isBlank = (name: string): SparqlExpression => ({
-    kind: 'function_expr',
-    name: 'isBlank',
-    args: [{kind: 'variable_expr', name}],
+  // The blank values of every dependent node deleted above, through the blank-capable
+  // properties of its type's shapes (a property shape's `sh:path`). Blank nodes carry no type,
+  // so the typed blocks cannot see them; see `buildBlankCascade`.
+  dependentTypes.forEach((typeId, i) => {
+    const props = containment.dependentBlankProps.get(typeId);
+    if (!props) return;
+    const owner = varTerm(`${varPrefix}bo${i}`);
+    const cascade = buildBlankCascade(
+      [
+        ...(anchor ? [anchor] : []),
+        tripleOf(rootTerm, pathTerm, owner),
+        tripleOf(owner, iriTerm(RDF_TYPE), iriTerm(typeId)),
+      ],
+      owner,
+      simplePredicates(props),
+      blankWalkPredicates(props),
+      `${varPrefix}b${i}_`,
+    );
+    if (!cascade) return;
+    deletePatterns.push(...cascade.deletePatterns);
+    whereOptionals.push(keepFilter(cascade.whereBlock, rootTerm, keep));
   });
-  deletePatterns.push(tripleOf(blank, bp, bo));
-  whereOptionals.push(
-    keepFilter(
-      {
-        type: 'filter',
-        expression: isBlank(`${varPrefix}bn`),
-        inner: {
-          type: 'join',
-          // Filter the owned blank nodes before the inner walk runs from each of them.
-          left: {
-            type: 'filter',
-            expression: isBlank(`${varPrefix}bn0`),
-            inner: {
-              type: 'bgp',
-              triples: [...(anchor ? [anchor] : []), tripleOf(rootTerm, pathTerm, ownedBlank)],
-            },
-          },
-          right: {
-            type: 'bgp',
-            triples: [tripleOf(ownedBlank, insidePathTerm, blank), tripleOf(blank, bp, bo)],
-          },
-        },
-      },
-      rootTerm,
-      keep,
-    ),
-  );
   return {deletePatterns, whereOptionals};
 }
 
@@ -2906,6 +3105,14 @@ export function deleteToAlgebra(
       });
     });
 
+    // The subject's own blank values (through its blank-capable properties) and the blank
+    // nodes below them.
+    const blank = subjectBlankCascade(query.shape, subjectTerm, [], `b${idx}_`);
+    if (blank) {
+      deletePatterns.push(...blank.deletePatterns);
+      blocks.push(blank.whereBlock);
+    }
+
     // Cascade-delete the owned subtree — only for shapes that actually own something
     // (have a `contains` property); a plain entity delete is left untouched.
     if (hasContains && cascadeTypes.length > 0) {
@@ -2935,83 +3142,12 @@ export function deleteToAlgebra(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Blank node tree walking for schema-aware delete cleanup
-// ---------------------------------------------------------------------------
-
-/**
- * Checks whether a PropertyShapeData points to blank nodes (sh:BlankNode or
- * sh:BlankNodeOrIRI). Returns true when the property's range *may* include
- * blank node values that should be cleaned up on delete.
- */
-function isBlankNodeProperty(prop: {nodeKind?: {id?: string}}): boolean {
-  const nk = prop.nodeKind?.id;
-  if (!nk) return false;
-  return nk === shacl.BlankNode.id || nk === shacl.BlankNodeOrIRI.id;
-}
-
-/**
- * Builds DELETE patterns + one WHERE block per blank node reachable from `parentVar`
- * through blank-node-typed properties, recursing into each property's valueShape for
- * nested blank nodes (e.g. Person → Address (blank) → GeoPoint (blank)).
- *
- * - DELETE: `?bnN ?pN ?oN .` (wildcard all triples on the blank node)
- * - WHERE block: the path of edges from the root down to `?bnN`, `?bnN ?pN ?oN`, and
- *   `FILTER(isBlank(…))` for every blank node on that path.
- *
- * Each block carries its own path from the root, so the blocks are independent of one
- * another and are joined with a UNION by the caller. Nested as OPTIONALs, a node's
- * triples multiplied with every blank node below and beside it.
- */
-function blankNodeBlocks(
-  shapeId: string,
-  parentVar: string,
-  path: {triples: SparqlTriple[]; bnVars: string[]},
-  counter: {next: number},
-  deletePatterns: SparqlTriple[],
-  blocks: SparqlAlgebraNode[],
-): void {
-  const nodeShape = getShapeClass(shapeId)?.shape ?? getNodeShape(shapeId);
-  if (!nodeShape) return;
-
-  const props = getPropertyShapes(nodeShape, true);
-  for (const prop of props) {
-    if (!isBlankNodeProperty(prop)) continue;
-
-    const n = counter.next++;
-    const bnVar = `bn${n}`;
-    const wildcardTriple = tripleOf(varTerm(bnVar), varTerm(`p${n}`), varTerm(`o${n}`));
-    deletePatterns.push(wildcardTriple);
-
-    const here = {
-      triples: [
-        ...path.triples,
-        tripleOf(varTerm(parentVar), resolvePropertyPredicateTerm(prop.id), varTerm(bnVar)),
-      ],
-      bnVars: [...path.bnVars, bnVar],
-    };
-    let block: SparqlAlgebraNode = {type: 'bgp', triples: [...here.triples, wildcardTriple]};
-    for (const v of here.bnVars) {
-      block = {
-        type: 'filter',
-        expression: {kind: 'function_expr', name: 'isBlank', args: [{kind: 'variable_expr', name: v}]},
-        inner: block,
-      };
-    }
-    blocks.push(block);
-
-    if (prop.valueShape?.id) {
-      blankNodeBlocks(prop.valueShape.id, bnVar, here, counter, deletePatterns, blocks);
-    }
-  }
-}
-
 /**
  * The cleanup blocks of a bulk delete, already joined with the root's own triples as ONE
  * UNION so their matches add up instead of multiplying; `null` when there is nothing to
  * clean up (the root wildcard then stays in the required BGP).
  *
- * - The blank-node blocks of the shape's blank-node properties.
+ * - The blank-node cascade of the shape's blank-capable properties (`subjectBlankCascade`).
  * - For a shape that owns something (a `contains` property), the same owned cleanup as a
  *   delete by id: the immediately-owned children of every `contains` property with a value
  *   shape, and the dependent cascade, rooted at the subject variable. Each owned block is led
@@ -3027,7 +3163,11 @@ function bulkDeleteUnion(
   deletePatterns: SparqlTriple[],
 ): SparqlAlgebraNode | null {
   const blocks: SparqlAlgebraNode[] = [];
-  blankNodeBlocks(shapeId, subjectVar, {triples: [], bnVars: []}, {next: 1}, deletePatterns, blocks);
+  const blank = subjectBlankCascade(shapeId, varTerm(subjectVar), [typeTriple], 'b_');
+  if (blank) {
+    deletePatterns.push(...blank.deletePatterns);
+    blocks.push(blank.whereBlock);
+  }
   if (shapeHasContainsProperty(shapeId)) {
     const subject = varTerm(subjectVar);
     ownedValueShapePredicates(shapeId).forEach((predicate, n) => {

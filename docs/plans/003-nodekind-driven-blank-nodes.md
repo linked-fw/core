@@ -366,3 +366,20 @@ INSERT DATA identical to 2.30.0's (diff empty after label normalization); docs g
 - Validation: `npm test` exit 0 — 2210 passed, 120 skipped; `[fuseki] live tests: 285 total —
   285 passed`; typecheck clean. Targeted: `blank-nested-nodes`, `mutation-decode-concrete-shape`,
   `single-owner-constraint`, `shacl-path-translator` 44/44.
+
+### Phase 2 — done
+
+- `buildBlankCascade` / `subjectBlankCascade` / `blankCapableProperties` / `blankWalkPredicates`
+  in `irToAlgebra.ts`; `collectContainment` also returns the blank-capable properties per
+  dependent type. The `contains`-tied blank block and the bulk deletes' recursive
+  `blankNodeBlocks` are gone.
+- The `NOT EXISTS` guard is folded into the block's final filter
+  (`FILTER(isBlank(?bn) && NOT EXISTS {…})`); Fuseki accepts it.
+- A non-repeated alternative serializes without parentheses (`?a0 <p>|<q> ?bn0`), valid SPARQL.
+- Tests: `blank-nested-nodes.test.ts` cascade section rewritten (text: NodeShape delete reaches
+  `sh:path` of the deleted property shapes, no `(contains)* ?bn0`, subject block, replace/unset
+  block; live: the #332 list regression, delete by id removes a 5-node blank alternative and no
+  IRI, replace with an IRI link and unset remove the old structure and keep IRIs);
+  `shacl-cascade.test.ts` and `mutation-where-union.test.ts` pins updated.
+- Validation: `npm test` exit 0 — 2215 passed, 120 skipped; `[fuseki] live tests: 288 total —
+  288 passed` (shape-sync migration, idempotent re-sync, orphan checks and Jena SHACL included).

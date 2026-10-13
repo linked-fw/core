@@ -186,7 +186,7 @@ describe('mutation WHERE — algebra', () => {
     }
   });
 
-  test('deleteAll: the type guard, then a UNION of the root wildcard and each blank-node block', () => {
+  test('deleteAll: the type guard, then a UNION of the root wildcard and the blank-node cascade', () => {
     const plan = deleteAllToAlgebra(
       lower(DeleteBuilder.from(UHolder).all()) as IRDeleteAllMutation,
     );
@@ -198,8 +198,10 @@ describe('mutation WHERE — algebra', () => {
     const sparql = deleteAllToSparql(lower(DeleteBuilder.from(UHolder).all()) as IRDeleteAllMutation);
     const whereText = sparql.slice(sparql.indexOf('WHERE'));
     expect(whereText).not.toContain('OPTIONAL');
-    // root, addr, addr/geo, alt, alt/geo
-    expect(whereText.match(/UNION/g)).toHaveLength(4);
+    // The root wildcard and one blank-node branch: addr | alt, then geo below them.
+    expect(whereText.match(/UNION/g)).toHaveLength(1);
+    expect(whereText).toMatch(/\?a0 <http:\/\/example\.org\/u#addr>\|<http:\/\/example\.org\/u#alt> \?b_bn0 \./);
+    expect(whereText).toMatch(/\?b_bn0 <http:\/\/example\.org\/u#geo>\* \?b_bn \./);
   });
 });
 

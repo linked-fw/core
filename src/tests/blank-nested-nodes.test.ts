@@ -8,7 +8,7 @@
  * DSL-JSON wire, clear errors where a blank node cannot be written, and removed by the
  * blank-node cascade.
  */
-import {beforeAll, describe, expect, test} from '@jest/globals';
+import {beforeAll, beforeEach, describe, expect, test} from '@jest/globals';
 import {
   createTestDataset,
   clearAllData,
@@ -43,7 +43,7 @@ const X = 'https://example.org/bn#';
 class BHolder extends Shape {
   static targetClass = {id: `${X}Holder`};
 
-  @objectProperty({path: {id: `${X}slot`}, maxCount: 1, contains: true, nodeKind: shacl.BlankNodeOrIRI})
+  @objectProperty({path: {id: `${X}slot`}, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI})
   get slot(): unknown {
     return null;
   }
@@ -192,32 +192,37 @@ describe('nested creates minted from the property sh:nodeKind', () => {
   });
 });
 
-describe('blank-node block of the containment cascade', () => {
-  const sparqlOf = () =>
+describe('blank-node cascade', () => {
+  const nodeShapeDelete = () =>
     deleteToSparql(lower(DeleteBuilder.from(NodeShape, {id: `${X}Shape`})) as unknown as IRDeleteMutation);
 
-  test('a NodeShape delete removes the blank path structure it owns', () => {
-    const sparql = sparqlOf();
-    // Reached through `contains` edges from the shape…
-    expect(sparql).toMatch(/<https:\/\/example\.org\/bn#Shape> \([^)]*shacl:path[^)]*\)\* \?c_bn0 \./);
-    // …then inside the blank structure, through the list / path syntax only (rdf:first too: a
-    // sequence member).
-    expect(sparql).toContain(
-      '?c_bn0 (rdf:first|rdf:rest|shacl:inversePath|shacl:alternativePath|shacl:zeroOrMorePath|' +
-        'shacl:oneOrMorePath|shacl:zeroOrOnePath)* ?c_bn .',
-    );
-    expect(sparql).toContain('FILTER(isBlank(?c_bn0))');
-    expect(sparql).toContain('FILTER(isBlank(?c_bn))');
-    // The wildcard delete of each reached blank node.
-    expect(sparql.slice(0, sparql.indexOf('WHERE'))).toContain('?c_bn ?c_bnp ?c_bno .');
+  test('a NodeShape delete removes the blank paths of the property shapes it deletes', () => {
+    const sparql = nodeShapeDelete();
+    // The owner: a property shape the typed cascade reaches and deletes…
+    const owner = sparql.match(/\?(c_bo\d+) rdf:type shacl:PropertyShape \./)![1];
+    // …its blank value through the blank-capable `sh:path`…
+    const bn0 = sparql.match(new RegExp(`\\?${owner} shacl:path \\?(c_b\\d+_bn0) \\.`))![1];
+    expect(sparql).toContain(`FILTER(isBlank(?${bn0}))`);
+    // …then the blank nodes below it, through the path slots and the list predicates.
+    const inner = sparql.match(new RegExp(`\\?${bn0} \\(([^)]*)\\)\\* \\?c_b\\d+_bn \\.`))![1];
+    for (const predicate of ['shacl:inversePath', 'shacl:alternativePath', 'shacl:zeroOrMorePath', 'rdf:first', 'rdf:rest']) {
+      expect(inner).toContain(predicate);
+    }
+    expect(sparql).toMatch(/FILTER\(isBlank\(\?c_b\d+_bn\) && NOT EXISTS/);
+    expect(sparql.slice(0, sparql.indexOf('WHERE'))).toMatch(/\?c_b\d+_bn \?c_b\d+_bnp \?c_b\d+_bno \./);
   });
 
-  test('rdf:first is not followed before a blank node is reached', () => {
-    const first = sparqlOf().match(/<https:\/\/example\.org\/bn#Shape> \(([^)]*)\)\* \?c_bn0/)![1];
-    expect(first).not.toContain('rdf:first');
+  test('blank values are reached through blank-capable properties, never through `contains` edges', () => {
+    expect(nodeShapeDelete()).not.toMatch(/\)\* \?c_b\d+_bn0/);
   });
 
-  test('a shape that reaches no dependent type gets no blank-node block either', () => {
+  test('a delete by id removes the subject\'s own blank values', () => {
+    const sparql = deleteToSparql(lower(DeleteBuilder.from(BHolder, {id: `${X}h1`})) as unknown as IRDeleteMutation);
+    expect(sparql).toContain(`<${X}h1> <${X}slot> ?b_bn0 .`);
+    expect(sparql).toContain('FILTER(isBlank(?b_bn0))');
+  });
+
+  test('a shape without blank-capable properties or dependent values gets no blank-node block', () => {
     @linkedShape
     class BPlain extends Shape {
       static targetClass = {id: `${X}Plain`};
@@ -225,19 +230,51 @@ describe('blank-node block of the containment cascade', () => {
     const sparql = deleteToSparql(lower(DeleteBuilder.from(BPlain, {id: `${X}p1`})) as unknown as IRDeleteMutation);
     expect(sparql).not.toContain('isBlank');
   });
+
+  test('replacing or unsetting a blank-capable property removes its old blank value', () => {
+    for (const value of [{id: `${X}e1`}, undefined]) {
+      const sparql = updateToSparql(
+        lower(UpdateBuilder.from(BHolder).for(`${X}h1`).set({slot: value} as never) as any) as unknown as IRUpdateMutation,
+      );
+      expect(sparql).toContain(`<${X}h1> <${X}slot> ?old_slot .`);
+      expect(sparql).toContain('FILTER(isBlank(?old_slot))');
+      expect(sparql.slice(0, sparql.indexOf('WHERE'))).toMatch(/\?ub_\w+_bn \?ub_\w+_bnp \?ub_\w+_bno \./);
+    }
+  });
 });
 
-describeFuseki('blank-node block on a live store', () => {
+describeFuseki('blank-node cascade on a live store', () => {
   beforeAll(async () => {
     await createTestDataset();
+  });
+  beforeEach(async () => {
     await clearAllData();
   });
   const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
   const ask = async (where: string) =>
     (await executeSparqlQuery(`SELECT (COUNT(*) AS ?c) WHERE { ${where} }`)).results.bindings[0].c.value !== '0';
+  const blankSubjects = async () =>
+    Number((await executeSparqlQuery('SELECT (COUNT(DISTINCT ?b) AS ?c) WHERE { ?b ?p ?o FILTER(isBlank(?b)) }')).results.bindings[0].c.value);
+  const createHolder = (slot: unknown) =>
+    executeSparqlUpdate(createToSparql(lower(createOf({slot})) as unknown as IRCreateMutation));
+  const update = (slot: unknown) =>
+    executeSparqlUpdate(
+      updateToSparql(lower(UpdateBuilder.from(BHolder).for(`${X}h1`).set({slot} as never) as any) as unknown as IRUpdateMutation),
+    );
+  // A predicate IRI the path refers to, described by triples of its own: never deleted.
+  const describePredicates = () =>
+    executeSparqlUpdate(`INSERT DATA {
+      <${X}image> <${X}label> "image" .
+      <${X}b> <${X}label> "b" .
+    }`);
+  const predicatesIntact = async () =>
+    (await ask(`<${X}image> <${X}label> "image"`)) && (await ask(`<${X}b> <${X}label> "b"`));
+  const altWithNestedOperator = () =>
+    serializePathToNodeData({alt: [{inv: {id: `${X}image`}}, {zeroOrMore: {id: `${X}b`}}]});
 
   test("a blank list's rdf:first does not lead the cascade into the entity it lists", async () => {
-    // h1 owns a blank list cell that lists the entity e1; e1 owns a blank child of its own.
+    // h1 holds a blank list cell that lists the entity e1; e1 holds a blank value of its own
+    // through the same blank-capable predicate.
     await executeSparqlUpdate(`INSERT DATA {
       <${X}h1> a <${X}Holder> ; <${X}slot> _:cell .
       _:cell <${RDF}first> <${X}e1> ; <${RDF}rest> <${RDF}nil> .
@@ -250,5 +287,39 @@ describeFuseki('blank-node block on a live store', () => {
     expect(await ask(`<${X}h1> ?p ?o`)).toBe(false);
     expect(await ask(`?cell <${RDF}first> <${X}e1>`)).toBe(false);
     expect(await ask(`<${X}e1> <${X}slot> ?c . ?c <${X}v> "owned by e1"`)).toBe(true);
+  });
+
+  test('a delete by id removes the blank path structure and no IRI', async () => {
+    await describePredicates();
+    await createHolder(altWithNestedOperator());
+    expect(await blankSubjects()).toBe(5); // operator, 2 cells, 2 nested operators
+    await executeSparqlUpdate(
+      deleteToSparql(lower(DeleteBuilder.from(BHolder, {id: `${X}h1`})) as unknown as IRDeleteMutation),
+    );
+    expect(await blankSubjects()).toBe(0);
+    expect(await predicatesIntact()).toBe(true);
+  });
+
+  test('replace and unset remove the old blank structure and no IRI', async () => {
+    await describePredicates();
+    await createHolder(altWithNestedOperator());
+    // Replace with a link to an IRI entity: the old blank structure goes.
+    await executeSparqlUpdate(`INSERT DATA { <${X}e1> <${X}label> "e1" . }`);
+    await update({id: `${X}e1`});
+    expect(await blankSubjects()).toBe(0);
+    expect(await ask(`<${X}h1> <${X}slot> <${X}e1>`)).toBe(true);
+    // Unset: the old value is an IRI, which stays with its triples.
+    await update(undefined);
+    expect(await ask(`<${X}h1> <${X}slot> ?v`)).toBe(false);
+    expect(await ask(`<${X}e1> <${X}label> "e1"`)).toBe(true);
+    expect(await predicatesIntact()).toBe(true);
+  });
+
+  test('unsetting a blank value removes it', async () => {
+    await createHolder(serializePathToNodeData({inv: {id: `${X}image`}}));
+    expect(await blankSubjects()).toBe(1);
+    await update(undefined);
+    expect(await blankSubjects()).toBe(0);
+    expect(await ask(`<${X}h1> ?p ?o`)).toBe(true);
   });
 });
