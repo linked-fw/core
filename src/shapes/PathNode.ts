@@ -10,6 +10,8 @@ import {shacl} from '../ontologies/shacl.js';
 import {coreOntology} from '../ontologies/linked-core.js';
 import {PathList} from './PathList.js';
 
+const BLANK_OR_IRI = shacl.BlankNodeOrIRI;
+
 /**
  * Operator node for SHACL property paths that are NOT a simple predicate or a sequence:
  * inverse (`sh:inversePath`), alternative (`sh:alternativePath` → an `rdf:List`), and the
@@ -24,8 +26,6 @@ import {PathList} from './PathList.js';
  * Operands are polymorphic (a predicate IRI, a nested `PathNode`, or a `PathList`), so no fixed
  * `valueShape` is declared except for `alternativePath`, which is always a `PathList`.
  */
-const BLANK_OR_IRI = shacl.BlankNodeOrIRI;
-
 // Named explicitly: the class shares its name with the ontology term coreOntology.PathNode,
 // and a bundler resolving that collision renames the class (PathNode2), which would change
 // the shape's IRI.

@@ -154,9 +154,10 @@ describe('owned-subtree cascade', () => {
     expect(deletePatterns.length).toBeGreaterThan(0);
     // one OPTIONAL per dependent type; the path term carries the contains predicates
     // The typed blocks are plain BGPs; the blank-node blocks (FILTERs, one per dependent type
-    // with blank-capable properties: PropertyShape, rdf:List, PathNode) are checked separately.
+    // with blank-capable properties: PropertyShape and PathNode; not rdf:List, whose `List`
+    // shape declares `first` / `rest` not blank-capable) are checked separately.
     const typed = whereOptionals.filter((o: any) => o.type === 'bgp');
-    expect(whereOptionals.length - typed.length).toBe(3);
+    expect(whereOptionals.length - typed.length).toBe(2);
     const paths = typed
       .flatMap((o: any) => o.triples)
       .filter((t: any) => t.predicate.kind === 'path')

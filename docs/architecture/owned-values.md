@@ -77,8 +77,9 @@ runs the mutation. Nothing travels in the IR or on the DSL-JSON wire.
 A blank node gets a label fresh to its INSERT DATA (`_:bN`) and its field triples only, no
 `rdf:type`. Only a create writes one; an update / upsert / update-where whose value would be blank
 throws (a `DELETE/INSERT … WHERE` template mints its blank nodes once per WHERE solution). An id
-of the form `_:…` is refused wherever the lowering writes an IRI (link, `update().for()`, delete
-by id): a blank node is not addressable.
+of the form `_:…` is refused wherever the lowering writes an IRI term into a triple (link,
+`update().for()`, delete by id, a select's `.for()`): a blank node is not addressable. Filter
+expressions (`where(x.equals({id}))`) are not checked.
 
 The metamodel declares `PropertyShape.path`, the `PathNode` slots and `PathList.first` / `.rest`
 `sh:BlankNodeOrIRI`. `PathList` is a separate shape from `List` (both target `rdf:List`) because
@@ -97,6 +98,7 @@ FILTER(isBlank(?bn) && NOT EXISTS { ?bn0 (q…)* ?mid . ?mid (q…)+ ?bn . FILTE
 | Delete by id, bulk delete | the subject (bulk: led by its type triple) | the subject shape's blank-capable predicates, sub-shapes included |
 | Any cascade (`buildOwnedCascade`: subject delete, `contains` replace / set-remove) | each dependent-typed node it deletes (`<root> (c…)* ?bo . ?bo a <T>`) | the blank-capable predicates of the shapes targeting `T` |
 | Replace / unset / overwrite of a blank-capable property | the old value itself (`<s> <p> ?old`, `?old` is `?bn0`) | — |
+| Delete by id / bulk delete, `contains` replace / set-remove of a property with a `shape` | the immediately-owned child whose own triples are deleted | the value shape's blank-capable predicates |
 
 - `q…` (`blankWalkPredicates`): the blank-capable predicates of the shapes the values can have
   (value shape and sub-shapes, transitively). A blank-capable property without a value shape is
@@ -105,8 +107,11 @@ FILTER(isBlank(?bn) && NOT EXISTS { ?bn0 (q…)* ?mid . ?mid (q…)+ ?bn . FILTE
   reached through an IRI (a property path cannot constrain intermediate nodes): a blank list's
   `rdf:first` must not lead into a listed entity and delete that entity's blank values. Blank
   structures core writes are trees, so the guard removes nothing they own.
-- Not covered: the blank values of an immediately-owned child that is not dependent-typed (the
-  child's own triples go, its blank values stay).
+- A dependent type's predicates are followed only when every shape targeting that class agrees
+  they are blank-capable: `PathList.first` / `.rest` are, `List.first` / `.rest` are not (both
+  target `rdf:List`), so a typed list cell's blank `rdf:first` member is content and is kept.
+- Not covered: the blank values of nodes deeper than the immediately-owned child that are not
+  dependent-typed.
 
 ## The class check on linked ids
 

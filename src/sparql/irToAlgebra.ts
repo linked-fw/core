@@ -76,9 +76,10 @@ const XSD_DOUBLE = xsd.double.id;
 // ---------------------------------------------------------------------------
 
 /**
- * Every IRI the lowering writes goes through here, so this is where a blank-node label used as
- * an id is refused: `_:b0` is SPARQL / N-Triples blank-node syntax, never an IRI (an IRI scheme
- * starts with a letter).
+ * The IRI terms of triples (subjects, objects, ids of mutations and `.for()` targets) are built
+ * here, so this is where a blank-node label used as an id is refused: `_:b0` is SPARQL /
+ * N-Triples blank-node syntax, never an IRI (an IRI scheme starts with a letter). Filter
+ * expressions build their IRIs separately (`iri_expr`) and are not checked.
  */
 function iriTerm(value: string): SparqlTerm {
   if (typeof value === 'string' && value.startsWith('_:')) {
@@ -2076,6 +2077,7 @@ function processUpdateFields(
     propertyTerm: SparqlTerm;
     keep: SparqlTerm[];
     hasValueShape: boolean;
+    valueShapeId?: string;
   }> = [];
   const cascadeOptionals: SparqlAlgebraNode[] = [];
 
@@ -2087,7 +2089,8 @@ function processUpdateFields(
     // Only a `contains` property that declares a value shape deletes the old value's own
     // triples. Without one (a polymorphic slot like `sh:path`) the value may be a shared
     // IRI, so it is left to the cascade, which deletes it only when it is dependent-typed.
-    const hasValueShape = isContainsField && !!findPropertyShapeById(field.property)?.valueShape;
+    const valueShapeId = isContainsField ? findPropertyShapeById(field.property)?.valueShape?.id : undefined;
+    const hasValueShape = !!valueShapeId;
 
     // Check for set modification ({add, remove})
     if (
@@ -2125,6 +2128,13 @@ function processUpdateFields(
               );
               deletePatterns.push(...self.deletePatterns);
               cascadeOptionals.push(...self.whereOptionals);
+              const blank = valueShapeId
+                ? subjectBlankCascade(valueShapeId, removeTerm, [edge], `ucr_${suffix}_${ri}_vb_`)
+                : null;
+              if (blank) {
+                deletePatterns.push(...blank.deletePatterns);
+                cascadeOptionals.push(blank.whereBlock);
+              }
             }
             // The edge leads the cascade too: with a zero-or-more path the removed node is
             // itself a match, and it may only be deleted while it is still owned here.
@@ -2178,6 +2188,7 @@ function processUpdateFields(
         propertyTerm,
         keep: keptReferences(field.value),
         hasValueShape,
+        valueShapeId,
       });
     }
 
@@ -2280,12 +2291,20 @@ function processUpdateFields(
   // (exclusive ownership via the edge — backlog 032) then cascade any owned descendants.
   // Values re-sent as a bare `{id}` are kept: their blocks are filtered, so re-sending the
   // current value is a no-op (the edge is deleted and re-inserted).
-  containsOldVars.forEach(({oldVar, propertyTerm, keep, hasValueShape}, n) => {
+  containsOldVars.forEach(({oldVar, propertyTerm, keep, hasValueShape, valueShapeId}, n) => {
     const oldTerm = varTerm(oldVar);
     if (hasValueShape) {
       const self = buildOwnedSelfDelete(subjectTerm, propertyTerm, oldTerm, `uc${n}_`, keep);
       deletePatterns.push(...self.deletePatterns);
       cascadeOptionals.push(...self.whereOptionals);
+      // The old value's own blank values go with it.
+      const blank = valueShapeId
+        ? subjectBlankCascade(valueShapeId, oldTerm, [tripleOf(subjectTerm, propertyTerm, oldTerm)], `uc${n}_vb_`)
+        : null;
+      if (blank) {
+        deletePatterns.push(...blank.deletePatterns);
+        cascadeOptionals.push(keepFilter(blank.whereBlock, oldTerm, keep));
+      }
     }
     // Every cascade block binds `?old` itself through the owning edge, like the
     // self-delete block does. Without it an absent old value leaves `?old` unbound and
@@ -2563,6 +2582,32 @@ function ownedValueShapePredicates(shapeId: string): string[] {
   return [...predicates];
 }
 
+/**
+ * The blank-node cascade of the immediately-owned children of `shapeId` on `predicate` (see
+ * `ownedValueShapePredicates`): the blank values of every value shape its `contains` properties
+ * on that predicate declare. `ownerTriples` bind the child.
+ */
+function ownedChildBlankCascade(
+  shapeId: string,
+  predicate: string,
+  childTerm: SparqlTerm,
+  ownerTriples: SparqlTriple[],
+  varPrefix: string,
+): {deletePatterns: SparqlTriple[]; whereBlock: SparqlAlgebraNode}[] {
+  const nodeShape = getShapeClass(shapeId)?.shape ?? getNodeShape(shapeId);
+  if (!nodeShape) return [];
+  const valueShapes = new Set<string>();
+  for (const ps of getPropertyShapes(nodeShape, true)) {
+    if (ps.contains && ps.valueShape?.id && getSimplePathId(ps.path) === predicate) {
+      valueShapes.add(ps.valueShape.id);
+    }
+  }
+  return [...valueShapes].flatMap((valueShapeId, i) => {
+    const cascade = subjectBlankCascade(valueShapeId, childTerm, ownerTriples, `${varPrefix}${i}_`);
+    return cascade ? [cascade] : [];
+  });
+}
+
 /** True when the shape (or an ancestor) declares at least one `contains` property. */
 function shapeHasContainsProperty(shapeId: string): boolean {
   const nodeShape = getShapeClass(shapeId)?.shape ?? getNodeShape(shapeId);
@@ -2592,8 +2637,19 @@ export function collectContainment(): Containment {
   const containsPreds = new Set<string>();
   const dependentTypes = new Set<string>();
   const dependentBlankProps = new Map<string, PropertyShapeData[]>();
+  // Per targetClass, the predicates some shape targeting it declares NOT blank-capable.
+  const plainPredsByType = new Map<string, Set<string>>();
   for (const nodeShape of getAllNodeShapes().values()) {
     if (!nodeShape) continue;
+    if (nodeShape.targetClass?.id) {
+      const typeId = nodeShape.targetClass.id;
+      for (const ps of getPropertyShapes(nodeShape, true)) {
+        const predicate = getSimplePathId(ps.path);
+        if (!predicate || isBlankCapable(ps)) continue;
+        if (!plainPredsByType.has(typeId)) plainPredsByType.set(typeId, new Set());
+        plainPredsByType.get(typeId)!.add(predicate);
+      }
+    }
     if ((nodeShape as {dependent?: boolean}).dependent && nodeShape.targetClass?.id) {
       const typeId = nodeShape.targetClass.id;
       dependentTypes.add(typeId);
@@ -2609,6 +2665,20 @@ export function collectContainment(): Containment {
         if (predId) containsPreds.add(predId);
       }
     }
+  }
+  // A typed node only says its class, not which of the shapes targeting it wrote it. When the
+  // shapes disagree on a predicate (`PathList.first` is blank-capable, `List.first` is not, both
+  // target `rdf:List`), the cascade does not follow it: a user list's blank `rdf:first` member
+  // is content the list does not own.
+  for (const [typeId, props] of dependentBlankProps) {
+    const plain = plainPredsByType.get(typeId);
+    if (!plain) continue;
+    const kept = props.filter((ps) => {
+      const predicate = getSimplePathId(ps.path);
+      return !!predicate && !plain.has(predicate);
+    });
+    if (kept.length > 0) dependentBlankProps.set(typeId, kept);
+    else dependentBlankProps.delete(typeId);
   }
   containmentCache = {containsPreds: [...containsPreds], dependentTypes: [...dependentTypes], dependentBlankProps};
   containmentCacheSize = version;
@@ -3116,6 +3186,17 @@ export function deleteToAlgebra(
         type: 'bgp',
         triples: [tripleOf(subjectTerm, iriTerm(predicate), child), childOwn],
       });
+      // …and the child's own blank values.
+      for (const blank of ownedChildBlankCascade(
+        query.shape,
+        predicate,
+        child,
+        [tripleOf(subjectTerm, iriTerm(predicate), child)],
+        `d${n}${idx}_b`,
+      )) {
+        deletePatterns.push(...blank.deletePatterns);
+        blocks.push(blank.whereBlock);
+      }
     });
 
     // The subject's own blank values (through its blank-capable properties) and the blank
@@ -3191,6 +3272,16 @@ function bulkDeleteUnion(
         type: 'bgp',
         triples: [typeTriple, tripleOf(subject, iriTerm(predicate), child), childOwn],
       });
+      for (const blank of ownedChildBlankCascade(
+        shapeId,
+        predicate,
+        child,
+        [typeTriple, tripleOf(subject, iriTerm(predicate), child)],
+        `d${n}_b`,
+      )) {
+        deletePatterns.push(...blank.deletePatterns);
+        blocks.push(blank.whereBlock);
+      }
     });
     const cascadeTypes = reachableDependentTypes(shapeId);
     if (cascadeTypes.length > 0) {

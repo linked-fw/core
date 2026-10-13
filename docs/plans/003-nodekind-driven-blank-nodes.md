@@ -5,7 +5,7 @@ summary: >
   The core metamodel declares the SHACL path slots blank-capable, so shape sync writes the same
   blank path structure as 2.30 with nothing on the wire. Blank-node cleanup on delete / replace
   follows the blank-capable properties instead of `contains`.
-status: Implementation
+status: Review
 packages: [core]
 ---
 
@@ -406,3 +406,40 @@ INSERT DATA identical to 2.30.0's (diff empty after label normalization); docs g
   shape-sync paragraph no longer mentions `__blank`; `owned-values.md` gains "Blank-node values"
   (writing table, deleting branches, guards, not covered).
 - Backlog `docs/backlog/054-blank-node-support-next-steps.md` (next free number).
+
+## Review
+
+Full gates: `npm test` exit 0; `npm run test:fuseki` — `[fuseki] live tests: 288 total — 288
+passed, 0 skipped`; `npx linked build` green. Architecture: `owned-values.md` is the only doc that
+applies; updated in phase 4, no violations. Consumers: no `__blank` in the consuming application's
+`src`, `packages/*` or any other `packages-local/*` checkout. Review findings (subagent):
+
+- Gap 1 of 4 (medium): the per-type blank props were keyed by targetClass, so `PathList`'s
+  blank-capable `first` / `rest` applied to every typed `rdf:List` cell, deleting a user list's
+  blank `rdf:first` member. → iterate.
+- Gap 2 of 4 (medium): a non-dependent owned child (`contains` + value shape) lost its own
+  triples but kept its blank values on delete / replace / set-remove. → iterate.
+- Gap 3 of 4 (medium): a new client with a 2.30.x lowering side writes IRI path nodes silently.
+  → document (changeset, backlog 054 item 11); bumping the DSL-JSON version would be a contract
+  change beyond the accepted decisions.
+- Gap 4 of 4 (low, several): `_:` not checked in filter expressions, bare `{id}` under
+  `sh:BlankNode`, unknown properties mint IRIs silently, duplicate branch for a dependent subject,
+  misplaced JSDoc, comment wording. → JSDoc and wording fixed; the rest deferred to backlog 054.
+
+## Iteration 1
+
+### Gap 1 of 2: shapes sharing a targetClass
+Chosen: `collectContainment` follows a dependent type's predicate only when no shape targeting
+that class declares it not blank-capable (`List.first`/`.rest` vs `PathList`). The `rdf:List`
+branch disappears; `PathNode` and `PropertyShape` keep theirs. Rejected: limit owners to
+`PropertyShape` (hardcodes the metamodel).
+
+### Gap 2 of 2: owned children's blank values
+Chosen: `ownedChildBlankCascade` per `contains` predicate with a value shape (delete by id, bulk),
+and `subjectBlankCascade(valueShape, old)` next to every `buildOwnedSelfDelete` (replace with keep
+filter, set-remove).
+
+### Phase 5 — done
+Tests: typed list cell's blank `rdf:first` member kept (live); owner delete and child replace
+remove the child's blank values (live); `shacl-cascade` expects 2 blank owner branches.
+`npm test` exit 0 — 2223 passed, 120 skipped; `[fuseki] live tests: 291 total — 291 passed`.

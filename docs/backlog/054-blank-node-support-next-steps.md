@@ -50,10 +50,24 @@ as blank nodes, `__blank`) and [report 035](../reports/035-nodekind-driven-blank
    nested objects instead of a hand-written SPARQL query keyed by the property-shape IRI. Needs
    the `byShape` polymorphic projection ([backlog 031](031-byshape-polymorphic-projection.md)),
    since `sh:path` values are a predicate IRI, a `PathNode` or a `PathList`.
-5. **Blank values of non-dependent owned children.** A subject delete removes an
-   immediately-owned child's own triples (the `contains` + value-shape block) but not that child's
-   blank values unless the child is dependent-typed. Add a blank-node cascade per owned child
-   shape with blank-capable properties.
+5. **Blank values deeper than the immediately-owned child.** A delete or replace removes the
+   blank values of the subject, of each immediately-owned child (a `contains` property with a
+   value shape) and of every dependent-typed node the cascade reaches. A non-dependent node two
+   `contains` hops down keeps its blank values.
 6. **Legacy sequence-member operator nodes.** The IRI-named operator nodes of versions before 2.30
    that sat under a sequence cell's `rdf:first` are still left as unreferenced orphans (report 034
    "Migration"; query to remove them in the README).
+7. **A bare `{id}` link under `sh:BlankNode` / `sh:BlankNodeOrLiteral`** is written as an IRI
+   without complaint (only nested creates with an id are refused); validation accepts IRI
+   references for `sh:BlankNode` too.
+8. **A property the lowering side does not know** (missing from its registry) mints IRIs
+   silently, so a client and a server with different shapes can disagree. A warning, or a
+   refusal for nested creates, would surface it.
+9. **`_:` ids in filter expressions** (`where(x.equals({id: '_:b0'}))`) are not refused: they are
+   built as `iri_expr`, not through the triple IRI constructor.
+10. **Duplicate branch on a dependent subject.** Deleting by id a dependent shape with
+   blank-capable properties (a `PropertyShape`) emits both the subject's blank-node branch and
+   the cascade's zero-hop branch for the same node. Correct, but double work.
+11. **Mixed versions.** A client on this version sending DSL-JSON to a lowering side on 2.30.x
+   gets IRI-named path nodes (2.30.x read `__blank`, which is no longer sent). The DSL-JSON
+   version was not bumped; upgrade the lowering side first.

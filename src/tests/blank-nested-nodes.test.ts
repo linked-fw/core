@@ -20,6 +20,7 @@ import {linkedPackage} from '../utils/Package';
 import {Shape} from '../shapes/Shape';
 import {objectProperty, linkedProperty, NodeShape} from '../shapes/SHACL';
 import {PathNode} from '../shapes/PathNode';
+import {List} from '../shapes/List';
 import {serializePathToNodeData} from '../shapes/serializePathToNodeData';
 import {
   createToSparql,
@@ -66,6 +67,42 @@ class BTyped extends Shape {
 
   @objectProperty({path: {id: `${X}op`}, maxCount: 1, shape: PathNode, nodeKind: shacl.BlankNodeOrIRI})
   get op(): PathNode {
+    return null;
+  }
+}
+
+@linkedShape
+class BGeo extends Shape {
+  static targetClass = {id: `${X}Geo`};
+
+  @linkedProperty({path: {id: `${X}lat`}, maxCount: 1})
+  get lat(): string {
+    return null;
+  }
+}
+
+// An entity value with a blank value of its own, owned through `contains`.
+@linkedShape
+class BAddr extends Shape {
+  static targetClass = {id: `${X}Addr`};
+
+  @objectProperty({path: {id: `${X}geo`}, maxCount: 1, shape: BGeo, nodeKind: shacl.BlankNode})
+  get geo(): BGeo {
+    return null;
+  }
+}
+
+@linkedShape
+class BOwner extends Shape {
+  static targetClass = {id: `${X}Owner`};
+
+  @objectProperty({path: {id: `${X}addr`}, maxCount: 1, shape: BAddr, contains: true})
+  get addr(): BAddr {
+    return null;
+  }
+
+  @objectProperty({path: {id: `${X}list`}, maxCount: 1, shape: List, contains: true})
+  get list(): List {
     return null;
   }
 }
@@ -372,6 +409,48 @@ describeFuseki('blank-node cascade on a live store', () => {
     expect(await ask(`<${X}h1> <${X}slot> ?v`)).toBe(false);
     expect(await ask(`<${X}e1> <${X}label> "e1"`)).toBe(true);
     expect(await predicatesIntact()).toBe(true);
+  });
+
+  const geoBlank = (addr: string) => ask(`<${X}${addr}> <${X}geo> ?g . ?g <${X}lat> "1" . FILTER(isBlank(?g))`);
+  const createOwner = (addr: string) =>
+    executeSparqlUpdate(
+      createToSparql(
+        lower((BOwner.create({addr: {id: `${X}${addr}`, geo: {lat: '1'}}} as never) as any).withId(`${X}o1`)) as unknown as IRCreateMutation,
+      ),
+    );
+
+  test("deleting the owner removes an owned child's blank values too", async () => {
+    await createOwner('a1');
+    expect(await geoBlank('a1')).toBe(true);
+    await executeSparqlUpdate(
+      deleteToSparql(lower(DeleteBuilder.from(BOwner, {id: `${X}o1`})) as unknown as IRDeleteMutation),
+    );
+    expect(await blankSubjects()).toBe(0);
+    expect(await ask(`<${X}a1> ?p ?o`)).toBe(false);
+  });
+
+  test("replacing an owned child removes the old child's blank values", async () => {
+    await createOwner('a1');
+    await executeSparqlUpdate(
+      updateToSparql(
+        lower(UpdateBuilder.from(BOwner).for(`${X}o1`).set({addr: {id: `${X}a2`}} as never) as any) as unknown as IRUpdateMutation,
+      ),
+    );
+    expect(await ask(`<${X}a1> ?p ?o`)).toBe(false);
+    expect(await blankSubjects()).toBe(0);
+  });
+
+  test("a typed list cell's blank rdf:first member is content: kept when the cell goes", async () => {
+    await executeSparqlUpdate(`INSERT DATA {
+      <${X}o1> a <${X}Owner> ; <${X}list> <${X}cell> .
+      <${X}cell> a <${RDF}List> ; <${RDF}first> _:m ; <${RDF}rest> <${RDF}nil> .
+      _:m <${X}v> "member" .
+    }`);
+    await executeSparqlUpdate(
+      deleteToSparql(lower(DeleteBuilder.from(BOwner, {id: `${X}o1`})) as unknown as IRDeleteMutation),
+    );
+    expect(await ask(`<${X}cell> ?p ?o`)).toBe(false);
+    expect(await ask(`?m <${X}v> "member"`)).toBe(true);
   });
 
   test('unsetting a blank value removes it', async () => {

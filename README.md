@@ -440,8 +440,8 @@ from its own copy of the shape. Core uses this for SHACL paths: `PropertyShape.p
 `{id}`) stays an IRI and every operator node and list cell becomes a blank node.
 
 A blank value goes with what holds it. Deleting the subject (by id, `.all()`, `.where()`),
-replacing or unsetting the property, and the containment cascade (a dependent node it deletes)
-delete the blank value and the blank nodes below it, following only blank-capable properties.
+replacing or unsetting the property, deleting or replacing an owned (`contains`) child, and the
+containment cascade (a dependent node it deletes) delete the blank value and the blank nodes below it, following only blank-capable properties.
 Only blank nodes are deleted: an IRI the structure refers to (`schema:image` in
 `[ sh:inversePath schema:image ]`, an entity a list lists) is never touched, nor is a blank node
 reached through one. `contains` is not needed for this.
