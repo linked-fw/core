@@ -11,6 +11,8 @@ packages: [core]
 
 # 035 — `sh:nodeKind`-driven blank nodes
 
+PR: [#336](https://github.com/linked-fw/core/pull/336).
+
 Follows [report 034](034-shacl-complex-paths-as-blank-nodes.md) (PR #332, 2.30.0), which wrote
 complex `sh:path` values as blank nodes through a `__blank: true` key on nested create node-data
 and deleted them with a `contains`-tied blank block. That key ran through every layer (builder
