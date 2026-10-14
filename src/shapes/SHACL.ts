@@ -202,21 +202,23 @@ export interface ObjectPropertyShapeConfig extends PropertyShapeConfig {
    */
   shape?: typeof Shape | [string, string];
   /**
-   * Marks this property as *containment* (composition): the value(s) are owned by the subject.
-   * For replace, set-remove and the class check, ownership is decided per predicate across the
-   * registry: another shape's property on this predicate owns its values too.
+   * Marks this property as *containment* (composition): the value(s) are owned by the subject
+   * through this property. Ownership is per property: a plain property of another shape on the
+   * same predicate is a reference and owns nothing. Requires `shape` (throws otherwise).
    *
-   * - With a `shape`: replacing, unsetting or set-removing a value deletes the old node's own
-   *   triples; deleting the subject (by id or in bulk) deletes its immediate values; re-sent
-   *   `{id}`s are kept. Linking an existing node by `{id}` is class-checked: it is refused when
-   *   the node is typed and none of its types is the shape's class, a registered sub-shape's,
-   *   or `sh:class`.
-   * - Without a `shape` (a polymorphic slot): only `dependent`-typed values are deleted.
-   * - In both cases the cascade follows the edge to `dependent`-typed descendants.
+   * - Replacing, unsetting or set-removing a value deletes the old node's own triples and blank
+   *   values, and its owned subtree; re-sent `{id}`s are kept.
+   * - Deleting the subject (by id or in bulk) deletes its owned subtree (recursion other than a
+   *   shape owning its own kind stops after `MAX_OWNED_RECURSION` re-entries): the values
+   *   of its `contains` properties, the values their shapes own in turn, and the extra `contains`
+   *   values of registered sub-shapes (followed only from nodes of the sub-shape's class).
+   * - Linking an existing node by `{id}` is class-checked: it is refused when the node is typed
+   *   and none of its types is the shape's class, a registered sub-shape's, or `sh:class`.
    *
-   * With a `shape`, shape sync also persists a generated SHACL shape for this property (at its
-   * property shape's IRI plus `.singleOwner`, written by the declaring class only) that limits
-   * each value of the predicate to one owner. It is not enforced on write.
+   * Shape sync also persists a generated SHACL shape for this property (at its property shape's
+   * IRI plus `.singleOwner`, written by the declaring class only) that limits each value of the
+   * predicate to one owner of the declaring class or a registered sub-shape's class. It is not
+   * enforced on write.
    */
   contains?: boolean;
 }
@@ -539,6 +541,16 @@ export function createPropertyShape<
   }
 
   if ((config as ObjectPropertyShapeConfig).contains) {
+    // Ownership is walked shape by shape, so an owned value needs a shape to walk into. A
+    // polymorphic slot holding blank structure needs no `contains`: blank values are deleted
+    // through their blank-capable `nodeKind`.
+    if (!(config as ObjectPropertyShapeConfig).shape) {
+      throw new Error(
+        `The contains property "${propertyKey}" needs a \`shape\`: ownership follows the value ` +
+          `shape to what it owns in turn. Declare the value's shape, or drop \`contains\` (a blank ` +
+          `value is deleted through a blank-capable \`nodeKind\` without it).`,
+      );
+    }
     propertyShape.contains = true;
   }
 

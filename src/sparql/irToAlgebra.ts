@@ -17,7 +17,7 @@ import type {
   IRTraversePattern,
 } from '../queries/IntermediateRepresentation.js';
 import {findPropertyShapeById, getPropertyShapes} from '../shapes/nodeShapeData.js';
-import type {PropertyShapeData} from '../shapes/nodeShapeData.js';
+import type {NodeShapeData, PropertyShapeData} from '../shapes/nodeShapeData.js';
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
 import {pathExprToSparql, collectPathUris} from '../paths/pathExprToSparql.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
@@ -56,6 +56,7 @@ import {
   getShapeClass,
   getSubShapes,
   getTargetClassId,
+  isSubShapeOf,
 } from '../utils/ShapeClass.js';
 import {UnresolvedContextError} from '../queries/QueryContext.js';
 
@@ -64,6 +65,7 @@ import {UnresolvedContextError} from '../queries/QueryContext.js';
 // ---------------------------------------------------------------------------
 
 const RDF_TYPE = rdf.type.id;
+const RDF_NIL = rdf.nil.id;
 const XSD_DATETIME = xsd.dateTime.id;
 const XSD_DATE = xsd.date.id;
 const XSD_TIME = xsd.time.id;
@@ -2071,26 +2073,23 @@ function processUpdateFields(
   // Owned cleanup on `contains` replace/remove: dropping a `contains` edge must delete
   // the old object itself (its own triples) AND its owned subtree, not just unlink the
   // one-hop edge — otherwise the old node orphans (backlog 032).
-  const {containsPreds: updContainsPreds} = collectContainment();
   const containsOldVars: Array<{
     oldVar: string;
     propertyTerm: SparqlTerm;
     keep: SparqlTerm[];
-    hasValueShape: boolean;
-    valueShapeId?: string;
+    valueShapeId: string;
   }> = [];
   const cascadeOptionals: SparqlAlgebraNode[] = [];
 
   for (const field of data.fields) {
     const propertyTerm = resolvePropertyPredicateTerm(field.property);
     const suffix = propertySuffix(field.property);
-    const isContainsField =
-      propertyTerm.kind === 'iri' && updContainsPreds.includes(propertyTerm.value);
-    // Only a `contains` property that declares a value shape deletes the old value's own
-    // triples. Without one (a polymorphic slot like `sh:path`) the value may be a shared
-    // IRI, so it is left to the cascade, which deletes it only when it is dependent-typed.
-    const valueShapeId = isContainsField ? findPropertyShapeById(field.property)?.valueShape?.id : undefined;
-    const hasValueShape = !!valueShapeId;
+    const fieldShape = findPropertyShapeById(field.property);
+    // Ownership is the property's own: a `contains` property with a value shape and a simple
+    // path (an IRI predicate term). A plain property on a predicate another shape declares
+    // `contains` owns nothing.
+    const valueShapeId =
+      propertyTerm.kind === 'iri' && fieldShape?.contains ? fieldShape.valueShape?.id : undefined;
 
     // Check for set modification ({add, remove})
     if (
@@ -2118,29 +2117,21 @@ function processUpdateFields(
           oldValueTriples.push(edge);
           // For a `contains` set, removing a value deletes the removed node itself
           // (its own triples) and its owned subtree — exclusive ownership via the edge.
-          if (isContainsField && !readdedIds.has(removeId)) {
-            if (hasValueShape) {
-              const self = buildOwnedSelfDelete(
-                subjectTerm,
-                propertyTerm,
-                removeTerm,
-                `ucr_${suffix}_${ri}_`,
-              );
-              deletePatterns.push(...self.deletePatterns);
-              cascadeOptionals.push(...self.whereOptionals);
-              const blank = valueShapeId
-                ? subjectBlankCascade(valueShapeId, removeTerm, [edge], `ucr_${suffix}_${ri}_vb_`)
-                : null;
-              if (blank) {
-                deletePatterns.push(...blank.deletePatterns);
-                cascadeOptionals.push(blank.whereBlock);
-              }
+          if (valueShapeId && !readdedIds.has(removeId)) {
+            const prefix = `ucr_${suffix}_${ri}_`;
+            const self = buildOwnedSelfDelete(subjectTerm, propertyTerm, removeTerm, prefix);
+            deletePatterns.push(...self.deletePatterns);
+            cascadeOptionals.push(...self.whereOptionals);
+            const blank = subjectBlankCascade(valueShapeId, removeTerm, [edge], `${prefix}vb_`);
+            if (blank) {
+              deletePatterns.push(...blank.deletePatterns);
+              cascadeOptionals.push(blank.whereBlock);
             }
-            // The edge leads the cascade too: with a zero-or-more path the removed node is
-            // itself a match, and it may only be deleted while it is still owned here.
-            const cascade = buildOwnedCascade(removeTerm, `ucr_${suffix}_${ri}_`, edge);
-            deletePatterns.push(...cascade.deletePatterns);
-            cascadeOptionals.push(...cascade.whereOptionals);
+            // The edge leads every branch: the removed node's subtree may only be deleted
+            // while the node is still owned here.
+            const owned = ownedSubtreeBlocks(valueShapeId, removeTerm, [edge], prefix);
+            deletePatterns.push(...owned.deletePatterns);
+            cascadeOptionals.push(...owned.whereBlocks);
           }
         });
       }
@@ -2165,7 +2156,6 @@ function processUpdateFields(
 
     // Replace / unset / overwrite of a blank-capable property: its old blank value and the
     // blank nodes below it go (the branch binds `old_${suffix}` through the edge itself).
-    const fieldShape = findPropertyShapeById(field.property);
     if (isBlankCapable(fieldShape)) {
       const blank = buildBlankCascade(
         [tripleOf(subjectTerm, propertyTerm, varTerm(`old_${suffix}`))],
@@ -2182,12 +2172,11 @@ function processUpdateFields(
 
     // Non-set-modification replace of a `contains` property: cascade the old value's
     // subtree (every branch below binds `old_${suffix}` in the WHERE).
-    if (isContainsField) {
+    if (valueShapeId) {
       containsOldVars.push({
         oldVar: `old_${suffix}`,
         propertyTerm,
         keep: keptReferences(field.value),
-        hasValueShape,
         valueShapeId,
       });
     }
@@ -2291,32 +2280,24 @@ function processUpdateFields(
   // (exclusive ownership via the edge — backlog 032) then cascade any owned descendants.
   // Values re-sent as a bare `{id}` are kept: their blocks are filtered, so re-sending the
   // current value is a no-op (the edge is deleted and re-inserted).
-  containsOldVars.forEach(({oldVar, propertyTerm, keep, hasValueShape, valueShapeId}, n) => {
+  containsOldVars.forEach(({oldVar, propertyTerm, keep, valueShapeId}, n) => {
     const oldTerm = varTerm(oldVar);
-    if (hasValueShape) {
-      const self = buildOwnedSelfDelete(subjectTerm, propertyTerm, oldTerm, `uc${n}_`, keep);
-      deletePatterns.push(...self.deletePatterns);
-      cascadeOptionals.push(...self.whereOptionals);
-      // The old value's own blank values go with it.
-      const blank = valueShapeId
-        ? subjectBlankCascade(valueShapeId, oldTerm, [tripleOf(subjectTerm, propertyTerm, oldTerm)], `uc${n}_vb_`)
-        : null;
-      if (blank) {
-        deletePatterns.push(...blank.deletePatterns);
-        cascadeOptionals.push(keepFilter(blank.whereBlock, oldTerm, keep));
-      }
+    const edge = tripleOf(subjectTerm, propertyTerm, oldTerm);
+    const self = buildOwnedSelfDelete(subjectTerm, propertyTerm, oldTerm, `uc${n}_`, keep);
+    deletePatterns.push(...self.deletePatterns);
+    cascadeOptionals.push(...self.whereOptionals);
+    // The old value's own blank values go with it.
+    const blank = subjectBlankCascade(valueShapeId, oldTerm, [edge], `uc${n}_vb_`);
+    if (blank) {
+      deletePatterns.push(...blank.deletePatterns);
+      cascadeOptionals.push(keepFilter(blank.whereBlock, oldTerm, keep));
     }
-    // Every cascade block binds `?old` itself through the owning edge, like the
-    // self-delete block does. Without it an absent old value leaves `?old` unbound and
-    // the block matches the owned subtree of EVERY node in the graph.
-    const cascade = buildOwnedCascade(
-      oldTerm,
-      `uc${n}_`,
-      tripleOf(subjectTerm, propertyTerm, oldTerm),
-      keep,
-    );
-    deletePatterns.push(...cascade.deletePatterns);
-    cascadeOptionals.push(...cascade.whereOptionals);
+    // Every subtree branch binds `?old` itself through the owning edge, like the self-delete
+    // block does. Without it an absent old value leaves `?old` unbound and the branch matches
+    // the owned subtree of EVERY node in the graph.
+    const owned = ownedSubtreeBlocks(valueShapeId, oldTerm, [edge], `uc${n}_`, keep);
+    deletePatterns.push(...owned.deletePatterns);
+    cascadeOptionals.push(...owned.whereBlocks);
   });
 
   return {
@@ -2547,214 +2528,6 @@ function buildUpdateWhere(
 }
 
 // ---------------------------------------------------------------------------
-// Owned-subtree cascade
-//
-// Composition cleanup driven by two declarative flags:
-//   - a property marked `contains` → the cascade FOLLOWS that edge,
-//   - a shape marked `dependent`   → its instances may be DELETED when reached.
-// Both are read from the live registry, so no vocabulary is hardcoded. From a root
-// node we follow `(c1|c2|…)*` over all contains predicates (zero hops included, so a
-// dependent-typed root is itself a match) and, for each dependent targetClass,
-// wildcard-delete the reached typed nodes. Requiring an asserted `?owned a <dependentType>`
-// naturally excludes shared predicate IRIs (e.g. a simple `sh:path`) and `rdf:nil` (never
-// typed), so only owned structural nodes are removed.
-//
-// Whether a field owns its value is decided per predicate across the registry
-// (`collectContainment`): the replace and set-remove deletes, and the class check in
-// `ownedLinkCheck.ts`, apply that same rule. The subject deletes (by id and bulk) use the
-// deleted shape's own `contains` properties with a value shape for the immediate children.
-// ---------------------------------------------------------------------------
-
-/**
- * The simple-path predicates of the shape's own and inherited `contains` properties that
- * declare a value shape, deduplicated in declaration order. These are the properties
- * whose immediate values a subject delete removes.
- */
-function ownedValueShapePredicates(shapeId: string): string[] {
-  const nodeShape = getShapeClass(shapeId)?.shape ?? getNodeShape(shapeId);
-  if (!nodeShape) return [];
-  const predicates = new Set<string>();
-  for (const ps of getPropertyShapes(nodeShape, true)) {
-    if (!ps.contains || !ps.valueShape) continue;
-    const predicate = getSimplePathId(ps.path);
-    if (predicate) predicates.add(predicate);
-  }
-  return [...predicates];
-}
-
-/**
- * The blank-node cascade of the immediately-owned children of `shapeId` on `predicate` (see
- * `ownedValueShapePredicates`): the blank values of every value shape its `contains` properties
- * on that predicate declare. `ownerTriples` bind the child.
- */
-function ownedChildBlankCascade(
-  shapeId: string,
-  predicate: string,
-  childTerm: SparqlTerm,
-  ownerTriples: SparqlTriple[],
-  varPrefix: string,
-): {deletePatterns: SparqlTriple[]; whereBlock: SparqlAlgebraNode}[] {
-  const nodeShape = getShapeClass(shapeId)?.shape ?? getNodeShape(shapeId);
-  if (!nodeShape) return [];
-  const valueShapes = new Set<string>();
-  for (const ps of getPropertyShapes(nodeShape, true)) {
-    if (ps.contains && ps.valueShape?.id && getSimplePathId(ps.path) === predicate) {
-      valueShapes.add(ps.valueShape.id);
-    }
-  }
-  return [...valueShapes].flatMap((valueShapeId, i) => {
-    const cascade = subjectBlankCascade(valueShapeId, childTerm, ownerTriples, `${varPrefix}${i}_`);
-    return cascade ? [cascade] : [];
-  });
-}
-
-/** True when the shape (or an ancestor) declares at least one `contains` property. */
-function shapeHasContainsProperty(shapeId: string): boolean {
-  const nodeShape = getShapeClass(shapeId)?.shape ?? getNodeShape(shapeId);
-  if (!nodeShape) return false;
-  return getPropertyShapes(nodeShape, true)
-    .some((ps) => (ps as {contains?: boolean}).contains);
-}
-
-// Memoized registry scan for cascade lowering — called once per update/delete and
-// again per owned-cascade item inside loops. Guarded by registry size (same rationale
-// as predicateTermCache). Callers treat the result as read-only.
-type Containment = {
-  containsPreds: string[];
-  dependentTypes: string[];
-  /** Per dependent targetClass: the blank-capable properties of the shapes targeting it. */
-  dependentBlankProps: Map<string, PropertyShapeData[]>;
-};
-let containmentCache: Containment | null = null;
-let containmentCacheSize = -1;
-
-/** Gather contains-predicate IRIs and dependent targetClass IRIs from the registry. */
-export function collectContainment(): Containment {
-  const version = getRegistryVersion();
-  if (containmentCache && version === containmentCacheSize) {
-    return containmentCache;
-  }
-  const containsPreds = new Set<string>();
-  const dependentTypes = new Set<string>();
-  const dependentBlankProps = new Map<string, PropertyShapeData[]>();
-  // Per targetClass, the predicates some shape targeting it declares NOT blank-capable.
-  const plainPredsByType = new Map<string, Set<string>>();
-  for (const nodeShape of getAllNodeShapes().values()) {
-    if (!nodeShape) continue;
-    if (nodeShape.targetClass?.id) {
-      const typeId = nodeShape.targetClass.id;
-      for (const ps of getPropertyShapes(nodeShape, true)) {
-        const predicate = getSimplePathId(ps.path);
-        if (!predicate || isBlankCapable(ps)) continue;
-        if (!plainPredsByType.has(typeId)) plainPredsByType.set(typeId, new Set());
-        plainPredsByType.get(typeId)!.add(predicate);
-      }
-    }
-    if ((nodeShape as {dependent?: boolean}).dependent && nodeShape.targetClass?.id) {
-      const typeId = nodeShape.targetClass.id;
-      dependentTypes.add(typeId);
-      const blank = getPropertyShapes(nodeShape, true).filter(isBlankCapable);
-      if (blank.length > 0) {
-        dependentBlankProps.set(typeId, [...(dependentBlankProps.get(typeId) ?? []), ...blank]);
-      }
-    }
-    const propertyShapes = getPropertyShapes(nodeShape, false);
-    for (const ps of propertyShapes) {
-      if ((ps as {contains?: boolean}).contains) {
-        const predId = getSimplePathId(ps.path);
-        if (predId) containsPreds.add(predId);
-      }
-    }
-  }
-  // A typed node only says its class, not which of the shapes targeting it wrote it. When the
-  // shapes disagree on a predicate (`PathList.first` is blank-capable, `List.first` is not, both
-  // target `rdf:List`), the cascade does not follow it: a user list's blank `rdf:first` member
-  // is content the list does not own.
-  for (const [typeId, props] of dependentBlankProps) {
-    const plain = plainPredsByType.get(typeId);
-    if (!plain) continue;
-    const kept = props.filter((ps) => {
-      const predicate = getSimplePathId(ps.path);
-      return !!predicate && !plain.has(predicate);
-    });
-    if (kept.length > 0) dependentBlankProps.set(typeId, kept);
-    else dependentBlankProps.delete(typeId);
-  }
-  containmentCache = {containsPreds: [...containsPreds], dependentTypes: [...dependentTypes], dependentBlankProps};
-  containmentCacheSize = version;
-  return containmentCache;
-}
-
-let reachableCache = new Map<string, string[]>();
-let reachableCacheVersion = -1;
-
-/**
- * The dependent targetClasses a subject delete of `shapeId` can reach through `contains`
- * edges, in `collectContainment` order. A subject delete emits one cascade block per type it
- * returns, and each block is a property-path closure per subject, so a shape that owns only
- * non-dependent values (every `Thing.image` owner) pays for none.
- *
- * The walk starts at the shape and its registered sub-shapes and follows every flattened
- * property on a `contains` predicate (the registry-wide predicate rule the cascade path uses)
- * to its value shape and that shape's sub-shapes. A property on a `contains` predicate with no
- * value shape is polymorphic (`sh:path`) and may reach anything, so it yields every dependent
- * type; that keeps the shape-sync delete of a NodeShape exact.
- */
-function reachableDependentTypes(shapeId: string): string[] {
-  const version = getRegistryVersion();
-  if (version !== reachableCacheVersion) {
-    reachableCache = new Map();
-    reachableCacheVersion = version;
-  }
-  const cached = reachableCache.get(shapeId);
-  if (cached) return cached;
-
-  const {containsPreds, dependentTypes} = collectContainment();
-  const shapeOf = (id: string) => getShapeClass(id)?.shape ?? getNodeShape(id);
-  const reached = new Set<string>();
-  // Shapes whose instances an owned edge can lead to. The start shapes join only when an
-  // edge leads back to them (a dependent shape that owns its own kind, like a list cell).
-  const owned = new Set<string>();
-  const seen = new Set<string>();
-  const queue: string[] = [];
-  const visit = (id: string, viaEdge: boolean) => {
-    for (const sid of [id, ...getSubShapes(id).map((sub) => sub.id)]) {
-      if (viaEdge) owned.add(sid);
-      if (seen.has(sid)) continue;
-      seen.add(sid);
-      queue.push(sid);
-    }
-  };
-  visit(shapeId, false);
-  let everything = false;
-  while (queue.length > 0 && !everything) {
-    const nodeShape = shapeOf(queue.shift()!);
-    if (!nodeShape) continue;
-    for (const ps of getPropertyShapes(nodeShape, true)) {
-      const predicate = getSimplePathId(ps.path);
-      if (!predicate || !containsPreds.includes(predicate)) continue;
-      if (!ps.valueShape?.id) {
-        everything = true;
-        break;
-      }
-      visit(ps.valueShape.id, true);
-    }
-  }
-  if (!everything) {
-    for (const id of owned) {
-      const nodeShape = shapeOf(id);
-      const dependent = (nodeShape as {dependent?: boolean} | undefined)?.dependent;
-      if (dependent && nodeShape?.targetClass?.id) {
-        reached.add(nodeShape.targetClass.id);
-      }
-    }
-  }
-  const result = everything ? dependentTypes : dependentTypes.filter((t) => reached.has(t));
-  reachableCache.set(shapeId, result);
-  return result;
-}
-
-// ---------------------------------------------------------------------------
 // Blank-node cascade: blank values are deleted through the blank-capable properties
 // (`isBlankCapable`) that hold them, never through `contains`.
 // ---------------------------------------------------------------------------
@@ -2792,8 +2565,8 @@ let blankWalkCacheVersion = -1;
  * the blank-capable properties of every shape the value (and, transitively, its blank values)
  * can have — a property's value shape and its sub-shapes. A blank-capable property without a
  * value shape is polymorphic (`sh:path`, the `PathNode` slots, `PathList.first`) and may hold
- * any shape, so it yields every blank-capable predicate in the registry, the same rule
- * `reachableDependentTypes` applies to `contains`. Precision is not what keeps the walk safe:
+ * any shape, so it yields every blank-capable predicate in the registry. Precision is not what
+ * keeps the walk safe:
  * `buildBlankCascade` refuses any node reached through an IRI.
  */
 function blankWalkPredicates(start: PropertyShapeData[]): string[] {
@@ -2962,91 +2735,396 @@ function subjectBlankCascade(
   return buildBlankCascade(ownerTriples, subjectTerm, simplePredicates(props), blankWalkPredicates(props), varPrefix);
 }
 
+// ---------------------------------------------------------------------------
+// Owned-subtree walk
+//
+// A `contains` property (with a value shape and a simple path) owns its value: replacing,
+// unsetting or set-removing the value, or deleting the subject, deletes the value node, then
+// the values that node's shape owns, and so on down. Ownership is decided per property: the
+// walk starts at the root's shape and follows only the `contains` properties the reached
+// shapes declare (own and inherited), so a plain property on a predicate that another shape
+// declares `contains` is never followed. A registered sub-shape that adds `contains`
+// properties contributes hops guarded by its concrete class (`?n a <SubClass>`). Every node
+// the walk reaches loses its own triples and its blank values; `dependent` plays no part.
+//
+// Recursion: a shape that owns itself through an unguarded edge (`List.rest`) is followed with
+// a closure (`rdf:rest*`), since every such edge from one of its nodes is its own. Any other
+// recursion (a cycle through several shapes, a sub-shape's edge back into the walk) is unrolled
+// into typed hops, up to `MAX_OWNED_RECURSION` repeated shapes per path; deeper values are left.
+// ---------------------------------------------------------------------------
+
 /**
- * Build DELETE patterns + WHERE OPTIONAL blocks that cascade-delete the owned subtree
- * reachable from `rootTerm` via `contains` edges. `varPrefix` keeps generated variables
- * unique across multiple roots in one query. Returns empty when nothing is owned.
- *
- * `anchor`, when given, leads every block: the triple that binds a variable root, so
- * each block stays correct on its own (as a UNION branch) when no such root exists.
- * `onlyTypes`, when given, restricts the blocks to those dependent types (a subject delete
- * passes the types its shape can reach); by default every registered dependent type gets one.
+ * How many times one walk path may re-enter a shape it already passed through (a cycle through
+ * several shapes, or a sub-shape's edge back into its own kind). Values below are not deleted.
  */
-export function buildOwnedCascade(
-  rootTerm: SparqlTerm,
-  varPrefix: string,
-  anchor?: SparqlTriple,
-  keep?: SparqlTerm[],
-  onlyTypes?: string[],
-): {deletePatterns: SparqlTriple[]; whereOptionals: SparqlAlgebraNode[]} {
-  const containment = collectContainment();
-  const {containsPreds} = containment;
-  const dependentTypes = onlyTypes ?? containment.dependentTypes;
-  if (containsPreds.length === 0 || dependentTypes.length === 0) {
-    return {deletePatterns: [], whereOptionals: []};
+export const MAX_OWNED_RECURSION = 4;
+
+/** Above this many branches for one root shape, lowering warns once (see backlog 055). */
+export const OWNED_BRANCH_WARNING = 64;
+
+/** One owned edge of the shape graph: a `contains` property and its value shape. */
+type OwnedEdge = {guard?: string; predicate: string; target: string};
+
+/**
+ * One hop of the walk from the current position: when `typeClasses` is set the position must
+ * have one of them as its `rdf:type`; then along `predicate`, then `closure*` when the target
+ * shape owns itself.
+ */
+type OwnedHop = {typeClasses?: string[]; predicate: string; closure: string[]};
+
+/** A node the walk deletes: the hops leading to it and its shape's blank-capable properties. */
+type OwnedTarget = {hops: OwnedHop[]; blankProps: PropertyShapeData[]};
+
+type OwnedWalk = {
+  /** The root shape's self-loop predicates (`List.rest`). */
+  rootClosure: string[];
+  /** The blank-capable properties of the root shape. */
+  rootBlankProps: PropertyShapeData[];
+  targets: OwnedTarget[];
+};
+
+/** The simple-path predicate through which a property owns its value, or null when it does not. */
+function ownedPredicate(ps: PropertyShapeData): string | null {
+  if (!ps.contains || !ps.valueShape?.id) return null;
+  return getSimplePathId(ps.path) ?? null;
+}
+
+let classHoldersCache = new Map<string, string[]>();
+let classHoldersVersion = -1;
+
+/** Every registered shape id per `targetClass` (memoized per registry version). */
+function classHolders(classId: string): string[] {
+  const version = getRegistryVersion();
+  if (version !== classHoldersVersion) {
+    classHoldersCache = new Map();
+    for (const nodeShape of getAllNodeShapes().values()) {
+      const cls = nodeShape?.targetClass?.id;
+      if (!cls) continue;
+      classHoldersCache.set(cls, [...(classHoldersCache.get(cls) ?? []), nodeShape.id]);
+    }
+    classHoldersVersion = version;
   }
-  // (c1|c2|…)*  — zero or more contains edges, so the root itself is matched when it is
-  // dependent-typed. That is what cleans up the value of a `contains` property that has
-  // no value shape (a polymorphic slot like `sh:path`): it is deleted only when it is a
-  // dependent node, never when it is a shared IRI. On a subject delete `*` also matches
-  // the subject, which is being deleted anyway.
-  const pathExpr: PathExpr =
-    containsPreds.length === 1
-      ? {zeroOrMore: {id: containsPreds[0]}}
-      : {zeroOrMore: {alt: containsPreds.map((id) => ({id}))}};
-  const pathTerm: SparqlTerm = {
-    kind: 'path',
-    value: pathExprToSparql(pathExpr),
-    uris: collectPathUris(pathExpr),
+  return classHoldersCache.get(classId) ?? [];
+}
+
+/**
+ * Why the added `contains` property `ps` of the sub-shape `sub` cannot be followed from nodes of
+ * the sub-shape's class, or null when it can. The guard `?n a <C>` also matches the nodes of
+ * every other shape targeting `C`, so it is refused when one of them is a super-shape of `sub`
+ * (its own nodes would match) or declares the same predicate as a plain property (following it
+ * would delete that shape's references). A holder that does not declare the predicate, or owns
+ * it too, does not block it.
+ */
+function blockedGuard(sub: NodeShapeData, ps: PropertyShapeData): string | null {
+  const cls = sub.targetClass?.id;
+  if (!cls) return 'has no targetClass';
+  const predicate = getSimplePathId(ps.path);
+  for (const id of classHolders(cls)) {
+    if (id === sub.id || isSubShapeOf(id, sub.id)) continue;
+    if (isSubShapeOf(sub.id, id)) return `shares its targetClass with its super-shape '${id}'`;
+    const holder = shapeById(id);
+    const plain = holder && getPropertyShapes(holder, true).some(
+      (q) => !q.contains && getSimplePathId(q.path) === predicate,
+    );
+    if (plain) return `shares its targetClass with '${id}', which holds <${predicate}> as a plain property`;
+  }
+  return null;
+}
+
+const warnedUnguardable = new Set<string>();
+
+/**
+ * The owned edges of a shape: its own and inherited `contains` properties, then, per registered
+ * sub-shape, the `contains` properties it adds, guarded by its `targetClass` (a node carries only
+ * its concrete class's `rdf:type`, so each sub-shape lists its full extra set). An added property
+ * whose guard cannot tell the sub-shape's nodes apart (`blockedGuard`) is not followed and is
+ * warned once, unless the sub-shape is a profile or data-only copy of its direct super-shape (same
+ * class or none, the property inherited from that super-shape), which is skipped silently: that
+ * super-shape's entry covers it.
+ */
+function ownedEdges(shapeId: string): OwnedEdge[] {
+  const nodeShape = shapeById(shapeId);
+  if (!nodeShape) return [];
+  const edges = new Map<string, OwnedEdge>();
+  const add = (ps: PropertyShapeData, guard?: string) => {
+    const predicate = ownedPredicate(ps);
+    if (!predicate) return;
+    const target = ps.valueShape!.id;
+    edges.set(`${guard ?? ''} ${predicate} ${target}`, {guard, predicate, target});
+  };
+  const own = getPropertyShapes(nodeShape, true);
+  own.forEach((ps) => add(ps));
+  const ownIds = new Set(own.map((ps) => ps.id));
+  for (const sub of getSubShapes(shapeId)) {
+    const extra = getPropertyShapes(sub, true).filter((ps) => !ownIds.has(ps.id) && ownedPredicate(ps));
+    if (extra.length === 0) continue;
+    const parent = sub.extends?.id ? shapeById(sub.extends.id) : undefined;
+    const inherited = new Set(parent ? getPropertyShapes(parent, true).map((ps) => ps.id) : []);
+    for (const ps of extra) {
+      const reason = blockedGuard(sub, ps);
+      if (!reason) {
+        add(ps, sub.targetClass!.id);
+        continue;
+      }
+      // A profile or data-only copy of its direct super-shape (same class, or none) is that
+      // super-shape's node by type: the super-shape's own entry covers the property, unless
+      // that super-shape is this walk's shape itself (no other entry covers it, so warn).
+      const sameKind = !sub.targetClass?.id || sub.targetClass.id === parent?.targetClass?.id;
+      if (sameKind && inherited.has(ps.id) && parent?.id !== shapeId) continue;
+      const key = `${sub.id} ${ps.id}`;
+      if (warnedUnguardable.has(key)) continue;
+      warnedUnguardable.add(key);
+      console.warn(
+        `[linked] Shape '${sub.id}' adds the contains property "${ps.label}" to '${shapeId}', but ` +
+          `${reason}, so its nodes cannot be told apart by rdf:type: deleting through ` +
+          `'${shapeId}' does not follow it. Give the shape a targetClass of its own.`,
+      );
+    }
+  }
+  return [...edges.values()];
+}
+
+/** The classes a node of `shapeId` may carry: its targetClass and every registered sub-shape's. */
+function shapeClasses(shapeId: string): string[] {
+  const nodeShape = shapeById(shapeId);
+  const classes = new Set<string>();
+  for (const shape of nodeShape ? [nodeShape, ...getSubShapes(shapeId)] : []) {
+    if (shape.targetClass?.id) classes.add(shape.targetClass.id);
+  }
+  return [...classes];
+}
+
+let ownedWalkCache = new Map<string, OwnedWalk>();
+let ownedWalkCacheVersion = -1;
+const warnedBranches = new Set<string>();
+
+/**
+ * The owned subtree of a root shape, as hops (memoized per registry version; read-only).
+ *
+ * One target per path from the root. A self-loop (`S` owns `S` through an unguarded edge) is a
+ * closure, exact because every such edge from an `S` node is `S`'s own. Every other edge is an
+ * explicit hop. A hop is typed when it is a sub-shape's (its class) or when it stays inside a
+ * cycle of several shapes (the declaring shape's classes), and a path stops after
+ * `MAX_OWNED_RECURSION` hops into a shape already on it.
+ */
+function ownedWalk(rootShapeId: string): OwnedWalk {
+  const version = getRegistryVersion();
+  if (version !== ownedWalkCacheVersion) {
+    ownedWalkCache = new Map();
+    ownedWalkCacheVersion = version;
+  }
+  const cached = ownedWalkCache.get(rootShapeId);
+  if (cached) return cached;
+
+  const edgesOf = new Map<string, OwnedEdge[]>();
+  const pending = [rootShapeId];
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    if (edgesOf.has(id)) continue;
+    const edges = ownedEdges(id);
+    edgesOf.set(id, edges);
+    for (const edge of edges) if (!edgesOf.has(edge.target)) pending.push(edge.target);
+  }
+  const isSelfLoop = (from: string, e: OwnedEdge) => !e.guard && e.target === from;
+  const closureOf = (id: string) => [
+    ...new Set(edgesOf.get(id)!.filter((e) => isSelfLoop(id, e)).map((e) => e.predicate)),
+  ];
+
+  // Tarjan's strongly connected components, over the edges that are not closures.
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const groupOf = new Map<string, number>();
+  const groupSize: number[] = [];
+  const strong = (v: string) => {
+    index.set(v, index.size);
+    low.set(v, index.get(v)!);
+    stack.push(v);
+    onStack.add(v);
+    for (const e of edgesOf.get(v)!) {
+      if (isSelfLoop(v, e)) continue;
+      const w = e.target;
+      if (!index.has(w)) {
+        strong(w);
+        low.set(v, Math.min(low.get(v)!, low.get(w)!));
+      } else if (onStack.has(w)) {
+        low.set(v, Math.min(low.get(v)!, index.get(w)!));
+      }
+    }
+    if (low.get(v) !== index.get(v)) return;
+    let w: string;
+    let size = 0;
+    do {
+      w = stack.pop()!;
+      onStack.delete(w);
+      groupOf.set(w, groupSize.length);
+      size++;
+    } while (w !== v);
+    groupSize.push(size);
+  };
+  strong(rootShapeId);
+  // A non-closure edge back to its own shape (a sub-shape's guarded edge) counts as a cycle too.
+  const inCycle = (from: string, e: OwnedEdge) =>
+    e.target === from || (groupOf.get(from) === groupOf.get(e.target) && groupSize[groupOf.get(from)!] > 1);
+
+  const targets: OwnedTarget[] = [];
+  const visit = (shape: string, hops: OwnedHop[], path: string[], repeats: number) => {
+    for (const edge of edgesOf.get(shape)!) {
+      if (isSelfLoop(shape, edge)) continue;
+      const repeat = path.includes(edge.target) ? 1 : 0;
+      if (repeats + repeat > MAX_OWNED_RECURSION) continue;
+      const typeClasses = edge.guard
+        ? [edge.guard]
+        : inCycle(shape, edge)
+          ? shapeClasses(shape)
+          : undefined;
+      const hop: OwnedHop = {
+        ...(typeClasses?.length ? {typeClasses} : {}),
+        predicate: edge.predicate,
+        closure: closureOf(edge.target),
+      };
+      const next = [...hops, hop];
+      targets.push({hops: next, blankProps: blankCapableProperties(edge.target)});
+      visit(edge.target, next, [...path, edge.target], repeats + repeat);
+    }
+  };
+  visit(rootShapeId, [], [rootShapeId], 0);
+  if (targets.length > OWNED_BRANCH_WARNING && !warnedBranches.has(rootShapeId)) {
+    warnedBranches.add(rootShapeId);
+    console.warn(
+      `[linked] Deleting a '${rootShapeId}' walks ${targets.length} owned paths (more than ` +
+        `${OWNED_BRANCH_WARNING}); each is one UNION branch of the delete.`,
+    );
+  }
+  const walk: OwnedWalk = {
+    rootClosure: closureOf(rootShapeId),
+    rootBlankProps: blankCapableProperties(rootShapeId),
+    targets,
+  };
+  ownedWalkCache.set(rootShapeId, walk);
+  return walk;
+}
+
+/** `FILTER(!sameTerm(?n, rdf:nil))`: the walk never deletes `rdf:nil`, which every list ends in. */
+function notNil(term: SparqlTerm): SparqlExpression | null {
+  if (term.kind !== 'variable') return null;
+  return {
+    kind: 'not_expr',
+    inner: {
+      kind: 'function_expr',
+      name: 'sameTerm',
+      args: [{kind: 'variable_expr', name: term.name}, {kind: 'iri_expr', value: RDF_NIL}],
+    },
+  };
+}
+
+/** `inner` filtered by every expression in `filters` (unchanged when there are none). */
+function filtered(inner: SparqlAlgebraNode, filters: SparqlExpression[]): SparqlAlgebraNode {
+  if (filters.length === 0) return inner;
+  return {
+    type: 'filter',
+    expression: filters.length === 1 ? filters[0] : {kind: 'logical_expr', op: 'and', exprs: filters},
+    inner,
+  };
+}
+
+/**
+ * DELETE patterns and UNION branches that delete the owned subtree below `rootTerm`, a node of
+ * `rootShapeId` (see `ownedWalk`). The root itself is the caller's: the subject wildcard of a
+ * delete, or `buildOwnedSelfDelete` for a replaced value. Each branch deletes one node per
+ * solution, its own triples and its blank values. Schematically (variable names simplified):
+ *
+ * ```sparql
+ * …anchor…  <root> (r…)* ?w .                  # the root shape's self-loop, if any
+ * ?w a <SubClass> .                             # a typed hop only
+ * ?w <c1> ?x0e . ?x0e (s…)* ?x0 .               # closure only for a self-owning target shape
+ * ?x0 ?x0p ?x0o .  FILTER(!sameTerm(?x0, rdf:nil))
+ * ```
+ *
+ * `anchor` leads every branch: the owning edge that binds a variable root (`<s> <p> ?old`), or a
+ * bulk delete's type triple, so a branch evaluated on its own never runs with an unbound root.
+ * `keep` filters every branch on the root (`FILTER(?old NOT IN (…))`).
+ */
+function ownedSubtreeBlocks(
+  rootShapeId: string,
+  rootTerm: SparqlTerm,
+  anchor: SparqlTriple[],
+  varPrefix: string,
+  keep?: SparqlTerm[],
+): {deletePatterns: SparqlTriple[]; whereBlocks: SparqlAlgebraNode[]} {
+  const walk = ownedWalk(rootShapeId);
+  const deletePatterns: SparqlTriple[] = [];
+  const whereBlocks: SparqlAlgebraNode[] = [];
+  const emit = (
+    reach: SparqlTriple[],
+    filters: SparqlExpression[],
+    node: SparqlTerm,
+    blankProps: PropertyShapeData[],
+    prefix: string,
+  ) => {
+    const nil = notNil(node);
+    const all = nil ? [...filters, nil] : filters;
+    const own = tripleOf(node, varTerm(`${prefix}p`), varTerm(`${prefix}o`));
+    deletePatterns.push(own);
+    whereBlocks.push(keepFilter(filtered({type: 'bgp', triples: [...anchor, ...reach, own]}, all), rootTerm, keep));
+    if (blankProps.length === 0) return;
+    const blank = buildBlankCascade(
+      [...anchor, ...reach],
+      node,
+      simplePredicates(blankProps),
+      blankWalkPredicates(blankProps),
+      `${prefix}b_`,
+    );
+    if (!blank) return;
+    deletePatterns.push(...blank.deletePatterns);
+    whereBlocks.push(keepFilter(filtered(blank.whereBlock, all), rootTerm, keep));
   };
 
-  const deletePatterns: SparqlTriple[] = [];
-  const whereOptionals: SparqlAlgebraNode[] = [];
-  dependentTypes.forEach((typeId, i) => {
-    const owned = varTerm(`${varPrefix}own${i}`);
-    const p = varTerm(`${varPrefix}op${i}`);
-    const o = varTerm(`${varPrefix}ov${i}`);
-    deletePatterns.push(tripleOf(owned, p, o));
-    whereOptionals.push(
-      keepFilter(
-        {
-          type: 'bgp',
-          triples: [
-            ...(anchor ? [anchor] : []),
-            tripleOf(rootTerm, pathTerm, owned),
-            tripleOf(owned, iriTerm(RDF_TYPE), iriTerm(typeId)),
-            tripleOf(owned, p, o),
-          ],
-        },
-        rootTerm,
-        keep,
-      ),
+  let base = rootTerm;
+  const baseReach: SparqlTriple[] = [];
+  if (walk.rootClosure.length > 0) {
+    // The other nodes of the root's own kind (the tail cells of a list).
+    const others = varTerm(`${varPrefix}r`);
+    emit(
+      [tripleOf(rootTerm, predicatePathTerm(walk.rootClosure, 'oneOrMore'), others)],
+      [],
+      others,
+      walk.rootBlankProps,
+      `${varPrefix}r`,
     );
+    if (walk.targets.length > 0) {
+      base = varTerm(`${varPrefix}w`);
+      baseReach.push(tripleOf(rootTerm, predicatePathTerm(walk.rootClosure, 'zeroOrMore'), base));
+    }
+  }
+  walk.targets.forEach((target, t) => {
+    const reach = [...baseReach];
+    const filters: SparqlExpression[] = [];
+    let at = base;
+    target.hops.forEach((hop, h) => {
+      const name = `${varPrefix}${t}_${h}`;
+      if (hop.typeClasses?.length === 1) {
+        reach.push(tripleOf(at, iriTerm(RDF_TYPE), iriTerm(hop.typeClasses[0])));
+      } else if (hop.typeClasses) {
+        reach.push(tripleOf(at, iriTerm(RDF_TYPE), varTerm(`${name}t`)));
+        filters.push({
+          kind: 'in_expr',
+          negated: false,
+          value: {kind: 'variable_expr', name: `${name}t`},
+          list: hop.typeClasses.map((value) => ({kind: 'iri_expr' as const, value})),
+        });
+      }
+      const end = varTerm(hop.closure.length > 0 ? `${name}e` : name);
+      reach.push(tripleOf(at, iriTerm(hop.predicate), end));
+      if (hop.closure.length > 0) {
+        reach.push(tripleOf(end, predicatePathTerm(hop.closure, 'zeroOrMore'), varTerm(name)));
+      }
+      at = varTerm(name);
+    });
+    emit(reach, filters, at, target.blankProps, `${varPrefix}${t}_`);
   });
-
-  // The blank values of every dependent node deleted above, through the blank-capable
-  // properties of its type's shapes (a property shape's `sh:path`). Blank nodes carry no type,
-  // so the typed blocks cannot see them; see `buildBlankCascade`.
-  dependentTypes.forEach((typeId, i) => {
-    const props = containment.dependentBlankProps.get(typeId);
-    if (!props) return;
-    const owner = varTerm(`${varPrefix}bo${i}`);
-    const cascade = buildBlankCascade(
-      [
-        ...(anchor ? [anchor] : []),
-        tripleOf(rootTerm, pathTerm, owner),
-        tripleOf(owner, iriTerm(RDF_TYPE), iriTerm(typeId)),
-      ],
-      owner,
-      simplePredicates(props),
-      blankWalkPredicates(props),
-      `${varPrefix}b${i}_`,
-    );
-    if (!cascade) return;
-    deletePatterns.push(...cascade.deletePatterns);
-    whereOptionals.push(keepFilter(cascade.whereBlock, rootTerm, keep));
-  });
-  return {deletePatterns, whereOptionals};
+  return {deletePatterns, whereBlocks};
 }
 
 /**
@@ -3081,13 +3159,8 @@ function keepFilter(
  * Build DELETE + WHERE OPTIONAL that removes the *old node's own* one-hop triples when a
  * `contains` edge is replaced, unset, or set-removed. A `contains` edge asserts exclusive
  * ownership, so overwriting it must delete the previously owned child fully — not merely
- * unlink it — or the child orphans (backlog 032). This is `contains`-driven and deliberately
- * does NOT require the child shape to be `dependent`: ownership via the edge is sufficient.
- * Owned descendants *below* the old node are cascaded separately by `buildOwnedCascade`.
- *
- * Callers use it only for a property that declares a value shape. A shape-less `contains`
- * slot (like `sh:path`) may hold a shared IRI, so its old value is left to
- * `buildOwnedCascade`, which deletes it only when it is dependent-typed.
+ * unlink it — or the child orphans (backlog 032). Ownership via the edge is sufficient.
+ * Owned descendants *below* the old node are deleted separately (`ownedSubtreeBlocks`).
  *
  * The owning edge `<subject> <prop> ?old` is re-asserted INSIDE the WHERE group so `?old`
  * is bound there: when no old value exists the group matches nothing and the DELETE is a
@@ -3109,14 +3182,15 @@ export function buildOwnedSelfDelete(
   const p = varTerm(`${varPrefix}sp`);
   const o = varTerm(`${varPrefix}so`);
   const wildcard = tripleOf(oldTerm, p, o);
+  const nil = notNil(oldTerm);
   return {
     deletePatterns: [wildcard],
     whereOptionals: [
       keepFilter(
-        {
-          type: 'bgp',
-          triples: [tripleOf(subjectTerm, propertyTerm, oldTerm), wildcard],
-        },
+        filtered(
+          {type: 'bgp', triples: [tripleOf(subjectTerm, propertyTerm, oldTerm), wildcard]},
+          nil ? [nil] : [],
+        ),
         oldTerm,
         keep,
       ),
@@ -3128,19 +3202,18 @@ export function buildOwnedSelfDelete(
  * Converts an IRDeleteMutation to a SparqlDeleteInsertPlan (DELETE + WHERE).
  *
  * The WHERE is the type guard of every id, joined with ONE UNION of independent
- * blocks: per id its own triples, its incoming references and, for a shape that
- * owns something, one block per immediately-owned child (`<s> <p> ?dN . ?dN ?dN_p ?dN_o`,
- * for each of the shape's own and inherited `contains` properties with a value shape and
- * a simple path) and one block per dependent type its owned subtree can reach
- * (`reachableDependentTypes`; none for a shape that owns only non-dependent values). The
+ * blocks: per id its own triples, its incoming references, its blank values and one branch
+ * per owned path, plus that node's blank values (`ownedSubtreeBlocks`: the shape's own and
+ * inherited `contains` properties, their value shapes' in turn, and the extra ones of
+ * registered sub-shapes behind a type guard; none for a shape that owns nothing). The
  * bulk deletes (`deleteAllToAlgebra`, `deleteWhereToAlgebra`) add the same owned blocks,
  * rooted at the subject variable (see `bulkDeleteUnion`).
  *
  * The blocks must not be chained as OPTIONALs. A chain of OPTIONALs is a join, so
  * the solutions multiply: own triples x incoming references x owned triples of each
- * dependent type. Deleting one shape description with the shape sync's cascade
+ * owned path. Deleting one shape description with the shape sync's cascade
  * produced ~27,000 solutions for ~130 triples and took over 30 seconds on Fuseki,
- * which re-evaluates the cascade property path for every left-hand row. A UNION
+ * which re-evaluated the former registry-wide cascade path for every left-hand row. A UNION
  * yields each block's matches once, so the solutions add up instead, and it deletes
  * exactly the same triples: a DELETE template triple whose variables a solution
  * leaves unbound is skipped, as it was for an OPTIONAL that did not match.
@@ -3155,9 +3228,6 @@ export function deleteToAlgebra(
   const deletePatterns: SparqlTriple[] = [];
   const guards: SparqlTriple[] = [];
   const blocks: SparqlAlgebraNode[] = [];
-  const hasContains = shapeHasContainsProperty(query.shape);
-  const ownedChildPredicates = hasContains ? ownedValueShapePredicates(query.shape) : [];
-  const cascadeTypes = hasContains ? reachableDependentTypes(query.shape) : [];
 
   for (let i = 0; i < query.ids.length; i++) {
     const subjectTerm = iriTerm(query.ids[i].id);
@@ -3175,30 +3245,6 @@ export function deleteToAlgebra(
     guards.push(typeGuard);
     blocks.push({type: 'bgp', triples: [subjWild]}, {type: 'bgp', triples: [objWild]});
 
-    // The immediately-owned children: for every `contains` property with a value shape,
-    // the child's own one-hop triples, as a replace or a set-remove deletes them. No type
-    // guard and no reference check: the `contains` edge alone asserts ownership.
-    ownedChildPredicates.forEach((predicate, n) => {
-      const child = varTerm(`d${n}${idx}`);
-      const childOwn = tripleOf(child, varTerm(`d${n}${idx}_p`), varTerm(`d${n}${idx}_o`));
-      deletePatterns.push(childOwn);
-      blocks.push({
-        type: 'bgp',
-        triples: [tripleOf(subjectTerm, iriTerm(predicate), child), childOwn],
-      });
-      // …and the child's own blank values.
-      for (const blank of ownedChildBlankCascade(
-        query.shape,
-        predicate,
-        child,
-        [tripleOf(subjectTerm, iriTerm(predicate), child)],
-        `d${n}${idx}_b`,
-      )) {
-        deletePatterns.push(...blank.deletePatterns);
-        blocks.push(blank.whereBlock);
-      }
-    });
-
     // The subject's own blank values (through its blank-capable properties) and the blank
     // nodes below them.
     const blank = subjectBlankCascade(query.shape, subjectTerm, [], `b${idx}_`);
@@ -3207,19 +3253,10 @@ export function deleteToAlgebra(
       blocks.push(blank.whereBlock);
     }
 
-    // Cascade-delete the owned subtree — only for shapes that actually own something
-    // (have a `contains` property); a plain entity delete is left untouched.
-    if (hasContains && cascadeTypes.length > 0) {
-      const cascade = buildOwnedCascade(
-        subjectTerm,
-        `c${idx}_`,
-        undefined,
-        undefined,
-        cascadeTypes,
-      );
-      deletePatterns.push(...cascade.deletePatterns);
-      blocks.push(...cascade.whereOptionals);
-    }
+    // The owned subtree: every node the subject's `contains` properties reach (`ownedWalk`).
+    const owned = ownedSubtreeBlocks(query.shape, subjectTerm, [], `c${idx}_`);
+    deletePatterns.push(...owned.deletePatterns);
+    blocks.push(...owned.whereBlocks);
   }
 
   const whereAlgebra: SparqlAlgebraNode = {
@@ -3242,12 +3279,10 @@ export function deleteToAlgebra(
  * clean up (the root wildcard then stays in the required BGP).
  *
  * - The blank-node cascade of the shape's blank-capable properties (`subjectBlankCascade`).
- * - For a shape that owns something (a `contains` property), the same owned cleanup as a
- *   delete by id: the immediately-owned children of every `contains` property with a value
- *   shape, and the dependent cascade, rooted at the subject variable. Each owned block is led
- *   by the subject's type triple. With a linear join it is redundant; it keeps a branch that
- *   is evaluated on its own from running `?a0 (c…)* ?own` with both ends unbound, which
- *   matches every node in the graph.
+ * - The same owned subtree as a delete by id (`ownedSubtreeBlocks`), rooted at the subject
+ *   variable. Each owned block is led by the subject's type triple. With a linear join it is
+ *   redundant; it keeps a branch that is evaluated on its own from running `?a0 <c> ?x` with
+ *   both ends unbound, which matches every edge in the graph.
  */
 function bulkDeleteUnion(
   shapeId: string,
@@ -3262,34 +3297,9 @@ function bulkDeleteUnion(
     deletePatterns.push(...blank.deletePatterns);
     blocks.push(blank.whereBlock);
   }
-  if (shapeHasContainsProperty(shapeId)) {
-    const subject = varTerm(subjectVar);
-    ownedValueShapePredicates(shapeId).forEach((predicate, n) => {
-      const child = varTerm(`d${n}`);
-      const childOwn = tripleOf(child, varTerm(`d${n}_p`), varTerm(`d${n}_o`));
-      deletePatterns.push(childOwn);
-      blocks.push({
-        type: 'bgp',
-        triples: [typeTriple, tripleOf(subject, iriTerm(predicate), child), childOwn],
-      });
-      for (const blank of ownedChildBlankCascade(
-        shapeId,
-        predicate,
-        child,
-        [typeTriple, tripleOf(subject, iriTerm(predicate), child)],
-        `d${n}_b`,
-      )) {
-        deletePatterns.push(...blank.deletePatterns);
-        blocks.push(blank.whereBlock);
-      }
-    });
-    const cascadeTypes = reachableDependentTypes(shapeId);
-    if (cascadeTypes.length > 0) {
-      const cascade = buildOwnedCascade(subject, 'c_', typeTriple, undefined, cascadeTypes);
-      deletePatterns.push(...cascade.deletePatterns);
-      blocks.push(...cascade.whereOptionals);
-    }
-  }
+  const owned = ownedSubtreeBlocks(shapeId, varTerm(subjectVar), [typeTriple], 'c_');
+  deletePatterns.push(...owned.deletePatterns);
+  blocks.push(...owned.whereBlocks);
   if (blocks.length === 0) return null;
   return unionOf([{type: 'bgp', triples: [rootWildcard]}, ...blocks]);
 }
@@ -3299,7 +3309,7 @@ function bulkDeleteUnion(
  *
  * Generates DELETE { ?a0 ?p ?o . [blank-node and owned-cleanup wildcards] }
  *          WHERE  { ?a0 a <Shape> . { ?a0 ?p ?o } UNION [one block per blank node,
- *                   owned child and dependent type] }
+ *                   owned group] }
  * (see `bulkDeleteUnion`). Unlike a delete by id, incoming references are not deleted.
  */
 export function deleteAllToAlgebra(
@@ -3333,7 +3343,7 @@ export function deleteAllToAlgebra(
  * Converts an IRDeleteWhereMutation to a SparqlDeleteInsertPlan.
  *
  * Like deleteAllToAlgebra but adds filter conditions from the where clause. The cleanup
- * UNION (blank nodes, owned children, dependent cascade) is joined with the filtered match,
+ * UNION (blank nodes, owned subtree) is joined with the filtered match,
  * so only the matched subjects' children are deleted.
  */
 export function deleteWhereToAlgebra(

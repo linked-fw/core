@@ -63,8 +63,9 @@ export type ShapeConfig = {
    */
   description?: string;
   /**
-   * Marks this shape's instances as *dependent* (composition / no independent existence):
-   * they may be cascade-deleted when reached through a `contains` property.
+   * @deprecated No effect on deletes. Ownership is per property: every node a `contains`
+   * property reaches is deleted with its owner, whether or not its shape is
+   * `dependent`. Still accepted and persisted (`core:dependent`) by shape sync.
    */
   dependent?: boolean;
   /**
@@ -588,16 +589,14 @@ corePackage.linkedShape({
   name: 'PropertyShape',
   description:
     'Represents a SHACL PropertyShape; specifies rules for one property of a NodeShape (path, datatype, cardinality). (validation rule, property constraint)',
-  // A property shape has no independent existence — it is owned by its NodeShape via the
-  // `contains` sh:property edge, so deleting the NodeShape cascade-deletes it.
-  dependent: true,
+  // Owned by its NodeShape through the `contains` sh:property edge: deleting the NodeShape
+  // deletes it.
 })(PropertyShape);
 // List is registered here, by value, because PropertyShape.in below uses it as its value
 // shape. Naming it by string instead would leave it unregistered for anyone who loads the
 // SHACL metamodel without importing shapes/List (backlog 045).
 corePackage.linkedShape({
   name: 'List',
-  dependent: true,
 })(List);
 // ValidationReport / ValidationResult removed in core metadata rewrite
 
@@ -684,9 +683,9 @@ createPropertyShape(
     // create pipeline use each value's own shape. Simple paths are passed as
     // {id} node references, complex paths as PathList/PathNode node-data.
     path: shacl.path,
-    contains: true, // a property shape owns its complex path structure (PathList/PathNode)
-    // A predicate path is an `{id}` reference (an IRI); a complex path's operator node or
-    // sequence list is written without an id, so it becomes a blank node, as SHACL requires.
+    // Not `contains`: a predicate path is a shared IRI. A complex path's operator node or
+    // sequence list is written without an id, so it becomes a blank node, as SHACL requires,
+    // and the blank-node cascade deletes it with the property shape.
     nodeKind: shacl.BlankNodeOrIRI,
   },
   'path',
@@ -876,7 +875,7 @@ createPropertyShape(
   PropertyShape,
 );
 
-// NodeShape.closed / ignoredProperties / dependent
+// NodeShape.closed / ignoredProperties / dependent (deprecated, persisted only)
 createPropertyShape(
   {path: shacl.closed, datatype: xsd.boolean, maxCount: 1},
   'closed',
@@ -917,5 +916,37 @@ createPropertyShape(
   {path: coreOntology.generatedShape, shape: NodeShape, contains: true},
   'generatedShapes',
   shacl.IRI,
+  NodeShape,
+);
+
+// The terms of the generated single-owner constraint (`singleOwnerConstraint.ts`):
+// `sh:qualifiedValueShape [ sh:or ( [ sh:class A ] [ sh:class B ] ) ]` and
+// `sh:qualifiedMaxCount`. The qualified shape and the `sh:or` list are written without ids, so
+// they are blank nodes, deleted with their property shape by the blank-node cascade. The list
+// cells are `PathList`s (blank-capable `rdf:List` cells); like `sh:path`, `orShapes` declares no
+// value shape (`PathList.ts` imports `package.js`, which loads this module), so the create uses each value's own shape.
+createPropertyShape(
+  {path: shacl.qualifiedValueShape, shape: NodeShape, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI},
+  'qualifiedValueShape',
+  shacl.BlankNodeOrIRI,
+  PropertyShape,
+);
+createPropertyShape(
+  {path: shacl.qualifiedMaxCount, datatype: xsd.integer, maxCount: 1},
+  'qualifiedMaxCount',
+  shacl.Literal,
+  PropertyShape,
+);
+createPropertyShape(
+  {path: shacl.class, shape: Shape, maxCount: 1},
+  'class',
+  shacl.IRI,
+  NodeShape,
+);
+createPropertyShape(
+  {path: shacl.or, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI},
+  // `or` is reserved (a DSL-JSON combinator), so the accessor is `orShapes`.
+  'orShapes',
+  shacl.BlankNodeOrIRI,
   NodeShape,
 );

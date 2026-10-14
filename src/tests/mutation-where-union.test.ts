@@ -49,7 +49,7 @@ const ex = (n: string) => ({id: `${U}${n}`});
 const iri = (n: string) => `<${U}${n}>`;
 const RDF = 'PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n';
 
-@linkedShape({dependent: true})
+@linkedShape
 class UCell extends Shape {
   static targetClass = ex('UCell');
   @objectProperty({path: ex('next'), shape: UCell, maxCount: 1, contains: true})
@@ -171,7 +171,7 @@ describe('mutation WHERE — algebra', () => {
     expect(where.match(/OPTIONAL/g)).toHaveLength(1);
   });
 
-  test('replacing a contains property: no OPTIONAL chain, and every cascade block re-binds the old value through the owning edge', () => {
+  test('replacing a contains property: no OPTIONAL chain, and every subtree block re-binds the old value through the owning edge', () => {
     const sparql = updateToSparql(
       lower(UpdateBuilder.from(UBox).for(`${U}b1`).set({owns: {id: `${U}newcell`}})) as IRUpdateMutation,
     );
@@ -179,7 +179,7 @@ describe('mutation WHERE — algebra', () => {
     expect(where.match(/OPTIONAL/g)).toHaveLength(1);
     expect(where).toContain('UNION');
     const branches = where.split('UNION');
-    // Old value, self-delete, one cascade block per dependent type: every branch that
+    // Old value, self-delete, the owned subtree: every branch that
     // mentions ?old_owns binds it through <b1> <owns> ?old_owns inside the same branch.
     for (const branch of branches.filter((b) => b.includes('?old_owns'))) {
       expect(branch).toMatch(/<http:\/\/example\.org\/u#b1> <http:\/\/example\.org\/u#owns> \?old_owns \./);
@@ -273,10 +273,9 @@ describeFuseki('mutation WHERE — live Fuseki (solutions add up)', () => {
     const sparql = updateToSparql(
       lower(UpdateBuilder.from(UBox).for(`${U}b1`).set({owns: {id: `${U}newcell`}})) as IRUpdateMutation,
     );
-    // the old value (1) + cell0's own triples (type, next, OWN tags) + the cascade, whose
-    // zero-or-more path reaches cell0 itself (a dependent UCell: its own triples again)
-    // and the cells below it (types and next edges). The overlap is added, never multiplied.
-    const additive = 1 + (OWN + 2) + (OWN + 2) + (CELLS - 1) + (CELLS - 2);
+    // the old value (1) + cell0's own triples (type, next, OWN tags) + the cells after it
+    // (`next+`: their types and next edges). The blocks add up, never multiply.
+    const additive = 1 + (OWN + 2) + (CELLS - 1) + (CELLS - 2);
     expect(await countSolutions(sparql)).toBe(additive);
 
     await executeSparqlUpdate(sparql);

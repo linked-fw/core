@@ -10,8 +10,9 @@ import {shacl} from '../ontologies/shacl.js';
 import {rdf} from '../ontologies/rdf.js';
 
 /**
- * A cell of the `rdf:List` inside a SHACL property path: the members of a sequence path, or the
- * operand of `sh:alternativePath`.
+ * A blank `rdf:List` cell of SHACL structure core writes: the members of a sequence path, the
+ * operand of `sh:alternativePath`, and the `sh:or` list of a generated single-owner constraint
+ * (`singleOwnerConstraint.ts`).
  *
  * Both properties are `sh:BlankNodeOrIRI`, so a cell written without an id is a blank node, and so
  * is an operator node (`PathNode`) held by `first`. That keeps a sequence path a blank list, which
@@ -21,18 +22,14 @@ import {rdf} from '../ontologies/rdf.js';
  * cannot be declared node-only, and making `List.rest` blank-capable would turn the tail cells of
  * every list built without ids into blank nodes. Both shapes target `rdf:List`; `List` is
  * registered first, so a lookup by `rdf:List` still returns `List`.
- *
- * `dependent` and the `contains` on `rest` keep removing the IRI-named, typed list cells of
- * versions before 2.30 through the typed cascade.
  */
-@linkedShape({name: 'PathList', dependent: true})
+@linkedShape({name: 'PathList'})
 export class PathList extends Shape {
   static targetClass = rdf.List;
 
   /**
-   * A predicate IRI, or an operator node (`PathNode`). Not `contains`: ownership is decided per
-   * predicate across the registry, and `rdf:first` of every other list holds values the list
-   * does not own. The blank-node cascade follows it anyway, because it is blank-capable.
+   * A predicate IRI, or an operator node (`PathNode`). Not `contains`: a predicate IRI is
+   * shared. The blank-node cascade follows it, because it is blank-capable.
    */
   @objectProperty({path: rdf.first, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI})
   get first(): unknown {

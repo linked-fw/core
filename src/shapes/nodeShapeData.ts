@@ -68,7 +68,10 @@ export interface NodeShapeData {
   description?: string;
   targetClass?: NodeReferenceValue;
   extends?: NodeReferenceValue;
-  /** Composition marker: instances are dependent (cascade-deletable via `contains`). */
+  /**
+   * @deprecated No effect: every node a `contains` property reaches is deleted with its owner.
+   * Kept for shapes that declare it and persisted as `core:dependent`.
+   */
   dependent?: boolean;
   /** sh:closed — target nodes with undeclared properties are invalid. */
   closed?: boolean;

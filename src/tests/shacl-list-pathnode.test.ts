@@ -10,6 +10,7 @@ import {Shape} from '../shapes/Shape';
 import {objectProperty} from '../shapes/SHACL';
 import {List, rdfList} from '../shapes/List';
 import {PathNode} from '../shapes/PathNode';
+import {shacl} from '../ontologies/shacl';
 import {createToSparql} from '../sparql/irToAlgebra';
 import '../ontologies/rdf';
 import {lower} from '../queries/lower';
@@ -62,16 +63,18 @@ describe('List / PathNode / rdfList', () => {
     expect(sparql).not.toContain('rdf:first');
   });
 
-  test('List: rest is contains + dependent; first is not contains', () => {
-    expect(List.shape.dependent).toBe(true);
+  test('List: rest is contains; first is not', () => {
     expect(getPropertyShape(List.shape, 'rest', false).contains).toBe(true);
     expect(getPropertyShape(List.shape, 'first', false).contains).toBeFalsy();
   });
 
-  test('PathNode: dependent + all operator edges contains', () => {
-    expect(PathNode.shape.dependent).toBe(true);
+  test('PathNode: only alternativePath (value shape PathList) is contains; every slot is blank-capable', () => {
+    expect(getPropertyShape(PathNode.shape, 'alternativePath', false).contains).toBe(true);
+    for (const op of ['inversePath', 'zeroOrMorePath', 'oneOrMorePath', 'zeroOrOnePath']) {
+      expect(getPropertyShape(PathNode.shape, op, false).contains).toBeFalsy();
+    }
     for (const op of ['inversePath', 'alternativePath', 'zeroOrMorePath', 'oneOrMorePath', 'zeroOrOnePath']) {
-      expect(getPropertyShape(PathNode.shape, op, false).contains).toBe(true);
+      expect(getPropertyShape(PathNode.shape, op, false).nodeKind?.id).toBe(shacl.BlankNodeOrIRI.id);
     }
   });
 });

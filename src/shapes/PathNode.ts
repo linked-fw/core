@@ -20,20 +20,18 @@ const BLANK_OR_IRI = shacl.BlankNodeOrIRI;
  * Every slot is `sh:BlankNodeOrIRI`, as is `PropertyShape.path`, so an operator node written
  * without an id is an untyped blank node: the only form SHACL §2.3.1 defines, a blank node that is
  * the subject of exactly one triple (see `serializePathToNodeData`). The blank-node cascade
- * follows these blank-capable slots on delete / replace. The class stays `dependent`, with
- * `contains` slots and its `core:PathNode` type, for the IRI-named, typed nodes versions before
- * 2.30 wrote: the typed cascade removes those on the next sync.
+ * follows these blank-capable slots on delete / replace, so they need no `contains`.
  * Operands are polymorphic (a predicate IRI, a nested `PathNode`, or a `PathList`), so no fixed
  * `valueShape` is declared except for `alternativePath`, which is always a `PathList`.
  */
 // Named explicitly: the class shares its name with the ontology term coreOntology.PathNode,
 // and a bundler resolving that collision renames the class (PathNode2), which would change
 // the shape's IRI.
-@linkedShape({name: 'PathNode', dependent: true})
+@linkedShape({name: 'PathNode'})
 export class PathNode extends Shape {
   static targetClass = coreOntology.PathNode;
 
-  @objectProperty({path: shacl.inversePath, maxCount: 1, contains: true, nodeKind: BLANK_OR_IRI})
+  @objectProperty({path: shacl.inversePath, maxCount: 1, nodeKind: BLANK_OR_IRI})
   get inversePath(): unknown {
     return null;
   }
@@ -49,17 +47,17 @@ export class PathNode extends Shape {
     return null;
   }
 
-  @objectProperty({path: shacl.zeroOrMorePath, maxCount: 1, contains: true, nodeKind: BLANK_OR_IRI})
+  @objectProperty({path: shacl.zeroOrMorePath, maxCount: 1, nodeKind: BLANK_OR_IRI})
   get zeroOrMorePath(): unknown {
     return null;
   }
 
-  @objectProperty({path: shacl.oneOrMorePath, maxCount: 1, contains: true, nodeKind: BLANK_OR_IRI})
+  @objectProperty({path: shacl.oneOrMorePath, maxCount: 1, nodeKind: BLANK_OR_IRI})
   get oneOrMorePath(): unknown {
     return null;
   }
 
-  @objectProperty({path: shacl.zeroOrOnePath, maxCount: 1, contains: true, nodeKind: BLANK_OR_IRI})
+  @objectProperty({path: shacl.zeroOrOnePath, maxCount: 1, nodeKind: BLANK_OR_IRI})
   get zeroOrOnePath(): unknown {
     return null;
   }

@@ -11,9 +11,9 @@ import {rdf} from '../ontologies/rdf.js';
  * SHACL/RDF ordered-list cell shape (`rdf:List`).
  *
  * A list is a chain of cells: `first` holds the value, `rest` points to the next cell
- * (or `rdf:nil`). The cell is `dependent` (it has no independent existence) and `rest` is
- * a `contains` edge, so deleting/replacing a list cascade-cleans the whole spine — while
- * `first` is NOT a `contains` edge, so the list's *contents* (shared IRIs/values) are kept.
+ * (or `rdf:nil`). `rest` is a `contains` edge, so deleting / replacing a list's owner deletes
+ * the whole spine (`rdf:rest*`) — while `first` is NOT a `contains` edge, so the list's
+ * *contents* (shared IRIs / values) are kept.
  *
  * This module holds the class only, and must never import `package.js`: `utils/Package.ts`
  * imports it to register `List` by value (as it does NodeShape and PropertyShape) and to use

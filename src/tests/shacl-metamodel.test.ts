@@ -44,11 +44,11 @@ describe('meta-model serialization', () => {
     expect(sparql).toContain('shacl:name "Name"');
   });
 
-  test('meta-model marks contains on properties/path/in; PropertyShape dependent', () => {
+  test('meta-model marks contains on properties/in, not on the polymorphic path', () => {
     expect(getPropertyShape(NodeShape.shape, 'properties', false).contains).toBe(true);
-    expect(getPropertyShape(PropertyShape.shape, 'path', false).contains).toBe(true);
+    expect(getPropertyShape(PropertyShape.shape, 'path', false).contains).toBeFalsy();
     expect(getPropertyShape(PropertyShape.shape, 'in', false).contains).toBe(true);
-    expect(PropertyShape.shape.dependent).toBe(true);
+    expect(PropertyShape.shape.dependent).toBeFalsy();
   });
 
   test('PropertyShape.defaultValue is registered as queryable', () => {
