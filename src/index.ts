@@ -8,6 +8,7 @@ import './shapes/index.js';
 // Registers the live-query store so `query.live()` works (side effects only).
 import './live.js';
 export {syncShapes, syncShape} from './shapes/syncShapes.js';
+export type {SyncShapesOptions, SyncShapeOptions} from './shapes/syncShapes.js';
 export {
   singleOwnerShapeIri,
   singleOwnerProperties,

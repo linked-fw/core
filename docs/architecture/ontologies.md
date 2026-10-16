@@ -26,7 +26,8 @@ that term at all.
 `linked-core` is core's own vocabulary: the terms of its SHACL meta-model extensions, such as
 `core:contains`, `core:dependent`, `core:displayHidden`, and `core:generated` /
 `core:generatedShape` (the marker and ownership edge of the shapes shape sync generates, see
-[owned-values](owned-values.md)). The `shacl` shortcut likewise grows only by the terms core
+[owned-values](owned-values.md)), and `core:shapeHash` (the content hash shape sync stores on each
+NodeShape it writes, so the next sync skips an unchanged shape). The `shacl` shortcut likewise grows only by the terms core
 writes, e.g. `sh:targetObjectsOf` for those generated shapes.
 
 ## A package's ontology is the full thing

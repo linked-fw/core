@@ -327,9 +327,10 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
     expect(before[1]).toBeGreaterThan(0);
     const blanks = await blankTriples();
     expect(blanks).toBeGreaterThan(0);
-    await runSync();
+    // A forced re-sync rewrites every shape (a default one would skip them all, see below).
+    await runSync({force: true});
     expect([await genTriples(IMAGE()), await genTriples(ATTACHMENTS())]).toEqual(before);
-    // Fresh blank nodes on every sync, but the old ones are deleted first: the count is stable.
+    // Fresh blank nodes on every write, but the old ones are deleted first: the count is stable.
     expect(await blankTriples()).toBe(blanks);
     expect(await orphanBlankNodes()).toBe(0);
   }, LIVE_FUSEKI_TIMEOUT);
@@ -409,10 +410,41 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
       }
     }
     const store = new CountingStore(FUSEKI_BASE_URL, DATASET_NAME);
-    await syncShape(E2EProject, store)();
+    await syncShape(E2EProject, store, {force: true})();
     expect(store.selects).toBe(0);
     expect(store.updates).toBe(2);
     expect(await generatedUnder(E2EProject.shape.id)).toBe(2);
+    // Unforced and unchanged: one select (the stored hash), no write.
+    const unforced = new CountingStore(FUSEKI_BASE_URL, DATASET_NAME);
+    await syncShape(E2EProject, unforced)();
+    expect(unforced.selects).toBe(1);
+    expect(unforced.updates).toBe(0);
+  }, LIVE_FUSEKI_TIMEOUT);
+
+  test('an unchanged sync writes nothing; a changed or hash-less shape is rewritten once', async () => {
+    await runSync();
+    // Every synced shape carries its hash.
+    for (const cls of [E2EPerson, E2EProject, E2ESubProject, E2EOwnerLoss]) {
+      expect(await has(`<${cls.shape.id}> <${CORE}shapeHash> ?h . FILTER(STRLEN(?h) = 64)`)).toBe(true);
+    }
+    expect(await syncShapes()).toEqual([]);
+
+    // A shape stored without a hash (as every version before this one wrote it) is rewritten.
+    await executeSparqlUpdate(`DELETE WHERE { <${E2EImage.shape.id}> <${CORE}shapeHash> ?h }`);
+    const once = await syncShapes();
+    expect(once).toHaveLength(1);
+    await Promise.all(once.map((run) => run()));
+    expect(await has(`<${E2EImage.shape.id}> <${CORE}shapeHash> ?h`)).toBe(true);
+    expect(await syncShapes()).toEqual([]);
+
+    // A changed shape is the only one rewritten, and the change lands.
+    getPropertyShape(E2EImage.shape, 'contentUrl', false).maxCount = 2;
+    const changed = await syncShapes();
+    expect(changed).toHaveLength(1);
+    await Promise.all(changed.map((run) => run()));
+    expect(await has(`<${E2EImage.shape.id}/contentUrl> <${SH}maxCount> 2`)).toBe(true);
+    expect(await syncShapes()).toEqual([]);
+    expect(await orphanBlankNodes()).toBe(0);
   }, LIVE_FUSEKI_TIMEOUT);
 
   // The persisted shapes, read back out of the store, validated by Jena SHACL. Before
@@ -470,7 +502,7 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
       ).toBe(true);
     }
     const blanks = await count('?b ?p ?o . FILTER(isBlank(?b))');
-    await runSync();
+    await runSync({force: true});
     expect(await count('?b ?p ?o . FILTER(isBlank(?b))')).toBe(blanks);
     expect(await orphanBlankNodes()).toBe(0);
   }, LIVE_FUSEKI_TIMEOUT);

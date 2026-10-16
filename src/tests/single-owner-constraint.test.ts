@@ -264,10 +264,11 @@ describe('single-owner constraint sync', () => {
     ]);
   });
 
-  test('exactly two SPARQL requests per shape, no select (no class-check query)', async () => {
+  test('exactly two SPARQL updates per shape; the only select is the stored-hash read (no class-check query)', async () => {
     const ds = new RecordingSparqlDataset();
     await syncShape(Project, ds)();
-    expect(ds.selects).toEqual([]);
+    expect(ds.selects).toHaveLength(1);
+    expect(ds.selects[0]).toMatch(/core:shapeHash/);
     expect(ds.updates).toHaveLength(2);
     const [del, create] = ds.updates;
     // The predicate prints as `core:generatedShape` (prefixed) or as a full IRI.
@@ -290,7 +291,8 @@ describe('single-owner constraint sync', () => {
     // A shape without contains: the same two requests, no generated shape.
     const plain = new RecordingSparqlDataset();
     await syncShape(ImageObject, plain)();
-    expect(plain.selects).toEqual([]);
+    expect(plain.selects).toHaveLength(1);
+    expect(plain.selects[0]).toMatch(/core:shapeHash/);
     expect(plain.updates).toHaveLength(2);
     expect(plain.updates[1]).not.toMatch(new RegExp(EDGE));
   });
