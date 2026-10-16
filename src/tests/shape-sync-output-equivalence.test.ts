@@ -18,6 +18,11 @@
  * The third change: the NodeShape also carries `core:shapeHash`, the content hash of what sync
  * wrote (so the next sync can skip an unchanged shape). It is the last triple of the create and is
  * checked separately, then removed before the comparison.
+ *
+ * The golden is paired with SHAPE_HASH_VERSION in SHAPE_HASH_LEDGER below. Sync skips a stored
+ * shape whose hash is unchanged, so a change to the SHACL it writes must bump the version, or
+ * existing stores keep the old triples. The ledger test fails when the golden changed but the
+ * version did not.
  */
 import {describe, expect, test} from '@jest/globals';
 import {linkedPackage} from '../utils/Package';
@@ -25,7 +30,8 @@ import {Shape} from '../shapes/Shape';
 import {literalProperty, objectProperty} from '../shapes/SHACL';
 import {SparqlDataset} from '../sparql/SparqlDataset';
 import type {SparqlQueryResults} from '../sparql/resultMapping';
-import {syncShape} from '../shapes/syncShapes';
+import {syncShape, SHAPE_HASH_VERSION} from '../shapes/syncShapes';
+import {sha256Hex} from '../utils/sha256';
 import '../shapes/index';
 
 const {linkedShape} = linkedPackage('sync-fixture');
@@ -198,6 +204,16 @@ const GOLDEN_SYNC_OUTPUT = `INSERT DATA {
   <https://linked.cm/shape/sync-fixture/Fixture/image.singleOwner/owners> shacl:qualifiedMaxCount "1"^^xsd:integer .
 }`;
 
+/**
+ * Each SHAPE_HASH_VERSION, paired with the SHA-256 (hex) of the GOLDEN_SYNC_OUTPUT it was
+ * generated for. Append-only: when the golden changes, bump SHAPE_HASH_VERSION
+ * (src/shapes/syncShapes.ts) by one and append an entry; never edit an existing one. A bump for a
+ * change this fixture does not show appends the previous digest again.
+ */
+const SHAPE_HASH_LEDGER: ReadonlyArray<{version: number; goldenDigest: string}> = [
+  {version: 1, goldenDigest: '745c0583dff0d2a757431a8ab45eb3fc84db0375c5ef9b41b9370147a9a887d0'},
+];
+
 const insertDataOf = (updates: string[]) => {
   const create = updates.find((u) => u.includes('INSERT DATA'))!;
   return create.slice(create.indexOf('INSERT DATA {'));
@@ -217,5 +233,40 @@ describe('shape sync output equals the 2.30.0 release, but for the qualified sin
     expect(normalizeLabels(actual)).toBe(normalizeLabels(GOLDEN_SYNC_OUTPUT));
     // Not needed for equivalence, but true today: the labels match too.
     expect(actual).toBe(GOLDEN_SYNC_OUTPUT);
+  });
+});
+
+describe('the golden SHACL output is paired with SHAPE_HASH_VERSION', () => {
+  test('the ledger is consecutive, starting at version 1', () => {
+    expect(SHAPE_HASH_LEDGER.map((e) => e.version)).toEqual(SHAPE_HASH_LEDGER.map((_, i) => i + 1));
+  });
+
+  test('the golden was not regenerated without bumping SHAPE_HASH_VERSION', () => {
+    const digest = sha256Hex(GOLDEN_SYNC_OUTPUT);
+    const last = SHAPE_HASH_LEDGER[SHAPE_HASH_LEDGER.length - 1];
+    const next = last.version + 1;
+    if (SHAPE_HASH_VERSION === last.version && digest !== last.goldenDigest) {
+      throw new Error(
+        `GOLDEN_SYNC_OUTPUT changed (sha256 ${digest}), but SHAPE_HASH_VERSION is still ` +
+          `${last.version}, which SHAPE_HASH_LEDGER records for the previous golden ` +
+          `(sha256 ${last.goldenDigest}).\n` +
+          `Shape sync skips every stored shape whose hash is unchanged, so without a bump existing ` +
+          `stores keep the old SHACL. To fix:\n` +
+          `  1. In src/shapes/syncShapes.ts, set SHAPE_HASH_VERSION = ${next}.\n` +
+          `  2. In src/tests/shape-sync-output-equivalence.test.ts, append to SHAPE_HASH_LEDGER:\n` +
+          `       {version: ${next}, goldenDigest: '${digest}'},\n` +
+          `     Do not edit the existing entry.`,
+      );
+    }
+    if (SHAPE_HASH_VERSION !== last.version) {
+      throw new Error(
+        `SHAPE_HASH_VERSION is ${SHAPE_HASH_VERSION}, but the last SHAPE_HASH_LEDGER entry is ` +
+          `version ${last.version}. SHAPE_HASH_VERSION goes up by exactly one (to ${next}), and ` +
+          `each bump is recorded by appending to SHAPE_HASH_LEDGER in ` +
+          `src/tests/shape-sync-output-equivalence.test.ts:\n` +
+          `  {version: ${next}, goldenDigest: '${digest}'},`,
+      );
+    }
+    expect({version: SHAPE_HASH_VERSION, goldenDigest: digest}).toEqual(last);
   });
 });

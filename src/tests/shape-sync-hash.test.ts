@@ -12,7 +12,7 @@ import {linkedPackage} from '../utils/Package';
 import {Shape} from '../shapes/Shape';
 import {literalProperty, objectProperty} from '../shapes/SHACL';
 import {getPropertyShape} from '../shapes/nodeShapeData';
-import {syncShapes, syncShape, shapeSyncHash} from '../shapes/syncShapes';
+import {syncShapes, syncShape, shapeSyncHash, SHAPE_HASH_VERSION} from '../shapes/syncShapes';
 import {lower} from '../queries/lower';
 import {sha256Hex} from '../utils/sha256';
 import type {IDataset} from '../interfaces/IDataset';
@@ -265,18 +265,21 @@ describe('shapeSyncHash', () => {
     );
   });
 
-  test('is pinned: a fixed input always gives this digest (any process, any runtime)', async () => {
+  test('is pinned: a fixed input always gives this canonical form (any process, any runtime)', async () => {
     // The documented canonical form: sorted keys, sorted array values, tagged non-string scalars.
+    // A change to it rewrites every stored shape once. The prefix follows SHAPE_HASH_VERSION, so a
+    // bump (enforced by shape-sync-output-equivalence.test.ts) leaves this test as it is.
     const canonical =
-      'linked-shape-sync/1\n' +
+      `linked-shape-sync/${SHAPE_HASH_VERSION}\n` +
       '{"data":{"closed":b:true,"properties":[' +
       '{"__id":"https://s/T/a","label":"a","maxCount":n:1,"path":{"id":"https://example.org/h#a"}},' +
       '{"__id":"https://s/T/b","label":"b","minCount":n:0,"path":{"id":"https://example.org/h#b"}}' +
       '],"targetClass":{"id":"https://example.org/h#T"}},"iri":"https://s/T"}';
     const {createHash} = await import('node:crypto');
-    const digest = '39faa2449c092aca0bd6d3f11ac0b85a898b67491c3611f10903206bb6653800';
-    expect(createHash('sha256').update(canonical, 'utf8').digest('hex')).toBe(digest);
-    // A change here rewrites every stored shape once; bump SHAPE_HASH_VERSION if it is meant.
+    const digest = createHash('sha256').update(canonical, 'utf8').digest('hex');
+    if (SHAPE_HASH_VERSION === 1) {
+      expect(digest).toBe('39faa2449c092aca0bd6d3f11ac0b85a898b67491c3611f10903206bb6653800');
+    }
     expect(shapeSyncHash(data(), 'https://s/T')).toBe(digest);
   });
 });

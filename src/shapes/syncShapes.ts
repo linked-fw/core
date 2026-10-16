@@ -103,11 +103,19 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
 }
 
 /**
- * Version of the {@link shapeSyncHash} input. Bump it when the create pipeline starts writing
- * different triples for the same create data (a serialization change that the data itself does
- * not show), so every stored shape is rewritten once by the next sync.
+ * Version of the {@link shapeSyncHash} input. Bump it whenever core changes the SHACL it writes
+ * for a shape (a serialization change that the create data itself does not show), so every stored
+ * shape is rewritten once by the next sync. Without a bump, stores keep the old triples: their
+ * stored hashes still match, so the sync skips them.
+ *
+ * Enforced by `shape-sync-output-equivalence.test.ts`: its golden SHACL output is recorded in
+ * `SHAPE_HASH_LEDGER` with the version it was generated for, and regenerating the golden without
+ * bumping this constant fails that test. To change the output: bump this by one, update the
+ * golden, and append `{version, goldenDigest}` to the ledger (never edit an existing entry).
+ *
+ * @internal Exported for tests only — not part of the public API.
  */
-const SHAPE_HASH_VERSION = 1;
+export const SHAPE_HASH_VERSION = 1;
 
 /**
  * A canonical string for create-pipeline data: equal for equal data, independent of object key
