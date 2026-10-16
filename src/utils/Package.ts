@@ -919,6 +919,15 @@ createPropertyShape(
   NodeShape,
 );
 
+// NodeShape.shapeHash (core:shapeHash — the content hash shape sync stores on each shape it
+// writes, so the next sync can skip an unchanged shape; see syncShapes.ts).
+createPropertyShape(
+  {path: coreOntology.shapeHash, datatype: xsd.string, maxCount: 1},
+  'shapeHash',
+  shacl.Literal,
+  NodeShape,
+);
+
 // The terms of the generated single-owner constraint (`singleOwnerConstraint.ts`):
 // `sh:qualifiedValueShape [ sh:or ( [ sh:class A ] [ sh:class B ] ) ]` and
 // `sh:qualifiedMaxCount`. The qualified shape and the `sh:or` list are written without ids, so

@@ -208,6 +208,13 @@ constraint as conforming whatever the data. Versions before this one wrote `sh:m
   deleted property shape), never the predicate IRI; the create writes the current ones nested.
 - **Markers:** `core:generated true` and no `sh:targetClass`, so catalog readers can skip them.
   They are never registered in the in-memory registry.
+- **Unchanged shapes are skipped:** the create also stores `core:shapeHash` on the NodeShape, a
+  SHA-256 of the canonical create data of the shape *including* its generated shapes (whose owner
+  classes come from the registered sub-shapes). `syncShapes` reads the stored hashes of all code
+  shapes in one select and writes only the shapes whose hash is missing or differs; `syncShape`
+  does the same read inside its thunk. `force: true` rewrites regardless. The hash records what
+  sync last wrote, not what the store holds: a subtree edited or partly deleted by another writer
+  while the NodeShape and its hash survive is not repaired until the shape changes or a forced sync.
 - **Pruning:** `syncShapes` adds every in-code generated IRI to the protected set, so `'all'` and
   `'ownedNamespaces'` keep them. A stale one goes with its owner's delete.
 - **Collisions:** sync throws when a registered shape IRI equals a generated IRI.
@@ -215,5 +222,5 @@ constraint as conforming whatever the data. Versions before this one wrote `sh:m
   Enforcement is the store's responsibility; core adds no validation queries for it.
 
 Meta-model terms: `sh:targetObjectsOf`, `sh:qualifiedValueShape`, `sh:qualifiedMaxCount`, `sh:or` (`src/ontologies/shacl.ts`), `core:generated` and
-`core:generatedShape` (`src/ontologies/linked-core.ts`), NodeShape accessors in
+`core:generatedShape`, `core:shapeHash` (`src/ontologies/linked-core.ts`), NodeShape accessors in
 `src/utils/Package.ts`.

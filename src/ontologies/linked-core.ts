@@ -56,6 +56,11 @@ const generated = ns('generated');
 // shape deletes them, and sync writes them nested in the shape's own create.
 const generatedShape = ns('generatedShape');
 
+// Content hash of everything shape sync writes for a NodeShape (the shape, its property shapes,
+// lists, paths and generated shapes), stored on the NodeShape. A sync skips a shape whose stored
+// hash equals the hash of what it would write.
+const shapeHash = ns('shapeHash');
+
 export const coreOntology = {
   Package,
   ShapeClass,
@@ -71,4 +76,5 @@ export const coreOntology = {
   displayHidden,
   generated,
   generatedShape,
+  shapeHash,
 };

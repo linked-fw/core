@@ -16,6 +16,8 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import {rdfList} from './List.js';
 import {serializePathToNodeData} from './serializePathToNodeData.js';
 import {buildSingleOwnerConstraints} from './singleOwnerConstraint.js';
+import {QueryBuilder} from '../queries/QueryBuilder.js';
+import {sha256Hex} from '../utils/sha256.js';
 
 /**
  * The npm scope of framework shapes (NodeShape/PropertyShape/List/PathNode/Shape) that
@@ -101,9 +103,98 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
 }
 
 /**
+ * Version of the {@link shapeSyncHash} input. Bump it when the create pipeline starts writing
+ * different triples for the same create data (a serialization change that the data itself does
+ * not show), so every stored shape is rewritten once by the next sync.
+ */
+const SHAPE_HASH_VERSION = 1;
+
+/**
+ * A canonical string for create-pipeline data: equal for equal data, independent of object key
+ * order and of the order of array values.
+ *
+ * Arrays are sorted because in create data an array is always a multi-valued property (a set of
+ * RDF values: `properties`, `generatedShapes`, `targetObjectsOf`, …). Ordered `rdf:List`s
+ * (`sh:in`, sequence and alternative paths, `sh:or`) are nested `first`/`rest` objects, so their
+ * order is kept by the structure. A shape class value (`shape: List`) is written as its NodeShape
+ * IRI. Values without ids (blank nodes once written) are compared by structure, so no blank-node
+ * label is ever part of the input.
+ */
+function canonicalize(value: unknown): string {
+  if (value === null || value === undefined) return 'null';
+  switch (typeof value) {
+    case 'string':
+      return JSON.stringify(value);
+    case 'number':
+      return `n:${Object.is(value, -0) ? '0' : String(value)}`;
+    case 'boolean':
+      return `b:${value}`;
+    case 'bigint':
+      return `i:${value.toString()}`;
+    case 'function': {
+      const shapeId = (value as {shape?: {id?: string}}).shape?.id;
+      return `c:${JSON.stringify(shapeId ?? (value as {name?: string}).name ?? '')}`;
+    }
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalize).sort().join(',')}]`;
+  }
+  if (value instanceof Date) return `d:${value.toISOString()}`;
+  if (value instanceof RegExp) return `r:${JSON.stringify(value.source)}/${value.flags}`;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record)
+    .filter((k) => record[k] !== undefined)
+    .sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalize(record[k])}`).join(',')}}`;
+}
+
+/**
+ * The content hash shape sync stores on a NodeShape as `core:shapeHash`: SHA-256 (hex) of the
+ * canonical form of the shape IRI and the exact create data the sync writes for it — the
+ * NodeShape, its flattened own + inherited property shapes, their `sh:in` lists and paths, and
+ * the generated single-owner shapes it owns (whose owner classes come from the registered
+ * sub-shapes, so registering a new sub-shape changes the hash of the declaring shape).
+ *
+ * Deterministic across processes, runtimes and Node versions: no blank-node labels, no object key
+ * order, no array order (see {@link canonicalize}).
+ *
+ * @internal Exported for tests only — not part of the public API.
+ */
+export function shapeSyncHash(data: Record<string, unknown>, shapeIri: string): string {
+  return sha256Hex(`linked-shape-sync/${SHAPE_HASH_VERSION}\n${canonicalize({iri: shapeIri, data})}`);
+}
+
+/** The create data and its content hash for one shape, as the sync writes it. */
+function buildSyncData(
+  nodeShape: NodeShapeData,
+  iri: string,
+): {data: Record<string, unknown>; hash: string} {
+  const data = buildNodeShapeData(nodeShape, iri);
+  return {data, hash: shapeSyncHash(data, iri)};
+}
+
+/**
+ * The stored `core:shapeHash` of each of `iris` that exists as a NodeShape, in one select. A shape
+ * that is absent, or stored without a hash (written before hashes existed), is missing from the
+ * map. `ds` targets an explicit dataset, as for the writes.
+ */
+async function readStoredHashes(iris: string[], ds?: IDataset): Promise<Map<string, string>> {
+  const stored = new Map<string, string>();
+  if (iris.length === 0) return stored;
+  const rows = (await (QueryBuilder.from(NodeShape).select(['shapeHash']).forAll(iris) as unknown as {
+    exec: (target?: IDataset) => Promise<Array<{id: string; shapeHash?: unknown}> | null>;
+  }).exec(ds)) ?? [];
+  for (const row of rows) {
+    if (row && typeof row.shapeHash === 'string') stored.set(row.id, row.shapeHash);
+  }
+  return stored;
+}
+
+/**
  * The per-shape `delete → create` thunk shared by `syncShapes()` and `syncShape()`: exactly two
  * requests. The delete cascade-cleans the shape's old property-shape / list / path subtrees; the
- * create rebuilds them.
+ * create rebuilds them, and stores the content hash (`core:shapeHash`) of what it wrote on the
+ * NodeShape so a later sync can skip the shape while it is unchanged.
  *
  * The single-owner constraints generated from the shape's own `contains` properties
  * (`${iri}/${label}.singleOwner`, see `singleOwnerConstraint.ts`) are owned by the shape through
@@ -117,15 +208,18 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
  * global router. Omitted → today's global behavior.
  */
 function buildSyncThunk(nodeShape: NodeShapeData, iri: string, ds?: IDataset): () => Promise<void> {
-  return async () => {
-    // Build the data fresh on each invocation, so every run writes from the current
-    // shape metadata.
-    const data = buildNodeShapeData(nodeShape, iri);
-    await DeleteBuilder.from(NodeShape, {id: iri}).exec(ds);
-    await (NodeShape.create(data as never).withId(iri) as unknown as {
-      exec: (target?: IDataset) => Promise<unknown>;
-    }).exec(ds);
-  };
+  // `writeShape` builds the data fresh on each invocation, so every run writes from the current
+  // shape metadata, and the hash stored with it always describes what was written.
+  return () => writeShape(nodeShape, iri, ds);
+}
+
+/** Delete (cascade) then create one shape, storing the hash of the written data. */
+async function writeShape(nodeShape: NodeShapeData, iri: string, ds?: IDataset): Promise<void> {
+  const {data, hash} = buildSyncData(nodeShape, iri);
+  await DeleteBuilder.from(NodeShape, {id: iri}).exec(ds);
+  await (NodeShape.create({...data, shapeHash: hash} as never).withId(iri) as unknown as {
+    exec: (target?: IDataset) => Promise<unknown>;
+  }).exec(ds);
 }
 
 /** The generated single-owner shape IRIs a code shape writes. */
@@ -166,6 +260,19 @@ export interface SyncShapesOptions {
    * `'all'` and `'ownedNamespaces'` are destructive and must be requested explicitly.
    */
   orphanScope?: 'all' | 'ownedNamespaces' | 'none';
+  /**
+   * Rewrite every code shape, even one whose stored `core:shapeHash` matches. Default `false`:
+   * a shape is rewritten only when its hash differs or is missing. Use it to repair a shape
+   * whose stored subtree was edited or partly deleted outside shape sync (the hash describes
+   * what sync last wrote, not what is in the store now).
+   */
+  force?: boolean;
+}
+
+/** Options for {@link syncShape}. */
+export interface SyncShapeOptions {
+  /** Rewrite the shape even when its stored `core:shapeHash` matches. See {@link SyncShapesOptions.force}. */
+  force?: boolean;
 }
 
 /** The owning namespace of a shape IRI — everything up to and including the last `/` or `#`. */
@@ -185,6 +292,15 @@ function shapeNamespace(iri: string): string {
  * Each in-code shape's thunk runs `delete → create` in order (the delete cascade-cleans the old
  * property shapes / list / path subtrees via the containment cascade, the create rebuilds them).
  *
+ * **Unchanged shapes are skipped.** The create stores a content hash of everything it writes for
+ * the shape on the NodeShape (`core:shapeHash`, see {@link shapeSyncHash}). The plan reads the
+ * stored hashes of all code shapes in one select and builds a thunk only for a shape whose hash
+ * is missing (never synced, or synced before hashes existed) or differs. Syncing an unchanged
+ * app therefore returns no write thunks, and the length of the plan is the number of shapes
+ * actually written plus the pruned orphans. The hash records what sync last wrote, not what the
+ * store holds now: a subtree edited or partly deleted by another writer while the NodeShape and
+ * its hash survive is not detected. `options.force` rewrites every code shape.
+ *
  * **Shapes in the store but not registered in this process are left alone by default**
  * (`orphanScope: 'none'`). The registry only holds what this process happened to import, and
  * that is routinely a subset of what the dataset holds: shapes are deep-importable one file at a
@@ -201,8 +317,8 @@ function shapeNamespace(iri: string): string {
  * with `'none'` no read is made.
  *
  * `ds` (optional) targets an explicit dataset instead of the global router. It is a **plan-time**
- * parameter: it feeds both the orphan-detection read (so orphans are computed against the same
- * store they'll be pruned from) and every delete/create thunk. Omitted → the global router;
+ * parameter: it feeds the stored-hash read and the orphan-detection read (so both are computed
+ * against the same store they'll be written to) and every delete/create thunk. Omitted → the global router;
  * the returned thunks stay nullary either way.
  */
 export async function syncShapes(
@@ -236,8 +352,14 @@ export async function syncShapes(
 
   const thunks: Array<() => Promise<void>> = [];
 
-  // 2. Per in-code shape: delete (cascade) then recreate.
+  // 2. Per in-code shape whose stored content hash is missing or differs: delete (cascade) then
+  //    recreate. An unchanged shape gets no thunk, so syncing an unchanged app writes nothing.
+  //    The stored hashes are read in one select, against the same `ds` the thunks target.
+  const storedHashes = options?.force
+    ? new Map<string, string>()
+    : await readStoredHashes(userShapes.map((s) => s.iri), ds);
   for (const {iri, nodeShape} of userShapes) {
+    if (!options?.force && storedHashes.get(iri) === buildSyncData(nodeShape, iri).hash) continue;
     thunks.push(buildSyncThunk(nodeShape, iri, ds));
   }
 
@@ -278,12 +400,19 @@ export async function syncShapes(
  *   its registered class via `getShapeClass`; the shape must be code-registered.
  * @param ds optional explicit dataset to materialize into (a store or a router) — both the delete
  *   and the create run against it instead of the global router. Omitted → global behavior.
+ * @param options `force: true` rewrites the shape even when its stored hash matches.
  * @returns a single unexecuted thunk (consistent with {@link syncShapes}), so callers can batch
  *   several together — e.g. a shape plus its referenced object-property shapes:
  *   `await Promise.all([syncShape(Person), syncShape(Address)].map((run) => run()))`.
+ *   Unless `force` is set, the thunk first reads the shape's stored `core:shapeHash` and writes
+ *   nothing when it equals the hash of what it would write (see {@link syncShapes}).
  * @throws if `target` is a framework/meta shape, is not registered, or has no `.shape`.
  */
-export function syncShape(target: typeof Shape | string, ds?: IDataset): () => Promise<void> {
+export function syncShape(
+  target: typeof Shape | string,
+  ds?: IDataset,
+  options?: SyncShapeOptions,
+): () => Promise<void> {
   // Normalize target → its registered shape class.
   const cls =
     typeof target === 'string' ? getShapeClass(target) : (target as typeof Shape);
@@ -308,5 +437,10 @@ export function syncShape(target: typeof Shape | string, ds?: IDataset): () => P
   }
 
   assertNoGeneratedIriCollision(nodeShape, iri, (id) => !!getShapeClass(id));
-  return buildSyncThunk(nodeShape, iri, ds);
+  if (options?.force) return buildSyncThunk(nodeShape, iri, ds);
+  return async () => {
+    const stored = await readStoredHashes([iri], ds);
+    if (stored.get(iri) === buildSyncData(nodeShape, iri).hash) return;
+    await writeShape(nodeShape, iri, ds);
+  };
 }

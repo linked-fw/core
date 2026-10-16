@@ -14,6 +14,10 @@
  * only owners of the declaring class or of a registered sub-shape's class. 2.30.0 wrote `sh:maxCount 1`; it is now
  * `sh:qualifiedValueShape [ sh:class fx:Fixture ] ; sh:qualifiedMaxCount 1`, and its blank labels
  * follow on from the path's.
+ *
+ * The third change: the NodeShape also carries `core:shapeHash`, the content hash of what sync
+ * wrote (so the next sync can skip an unchanged shape). It is the last triple of the create and is
+ * checked separately, then removed before the comparison.
  */
 import {describe, expect, test} from '@jest/globals';
 import {linkedPackage} from '../utils/Package';
@@ -205,7 +209,11 @@ describe('shape sync output equals the 2.30.0 release, but for the qualified sin
     const ds = new Capture();
     await syncShape(Fixture, ds)();
     expect(ds.updates).toHaveLength(2);
-    const actual = insertDataOf(ds.updates);
+    const HASH_TRIPLE =
+      /\n  <https:\/\/linked\.cm\/shape\/sync-fixture\/Fixture> core:shapeHash "[0-9a-f]{64}" \.(?=\n\})/;
+    const withHash = insertDataOf(ds.updates);
+    expect(withHash).toMatch(HASH_TRIPLE);
+    const actual = withHash.replace(HASH_TRIPLE, '');
     expect(normalizeLabels(actual)).toBe(normalizeLabels(GOLDEN_SYNC_OUTPUT));
     // Not needed for equivalence, but true today: the labels match too.
     expect(actual).toBe(GOLDEN_SYNC_OUTPUT);
