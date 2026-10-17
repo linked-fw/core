@@ -54,10 +54,15 @@ export abstract class LinkedFileStorage {
     return (this.url = accessURL);
   }
 
+  /**
+   * Set the directory inserted between the default access URL and relative
+   * asset paths. Use an empty string when the host serves assets from its root.
+   */
   static setDefaultAssetDirectory(directory: string): string {
-    return (this.assetDirectory = directory);
+    return (this.assetDirectory = normalizeAssetDirectory(directory));
   }
 
+  /** The directory currently used by {@link asset} when none is supplied. */
   static getDefaultAssetDirectory(): string {
     return this.assetDirectory;
   }
@@ -260,11 +265,17 @@ function registerWellKnownPurposes() {
 
 registerWellKnownPurposes();
 
+function normalizeAssetDirectory(directory: string): string {
+  return directory.replace(/\/+$/, '');
+}
+
 /**
  * Get the full path of an asset based on the way LinkedFileStorage is configured
  * Returns accessURL + directory (/public by default) + path
  * @param path asset path
- * @param directory asset directory (optional, default is /public)
+ * Relative paths that already contain the configured directory are returned
+ * without adding it again. Fully qualified, data, and blob URLs are unchanged.
+ * @param directory asset directory (optional, configured default is /public)
  * @returns asset url. e.g. https://cdn.example.com/public/image.png
  */
 export function asset(
@@ -276,18 +287,22 @@ export function asset(
   // `asset(...)` call or backend response normalization. Keep this helper
   // idempotent so shared card/image components can safely call `asset(...)`
   // without duplicating the access URL prefix.
-  if (/^(?:[a-z]+:)?\/\//i.test(path) || path.startsWith('data:') || path.startsWith('blob:')) {
+  if (
+    /^(?:[a-z]+:)?\/\//i.test(path) ||
+    path.startsWith('data:') ||
+    path.startsWith('blob:')
+  ) {
     return path;
   }
 
   const accessURL = LinkedFileStorage.accessURL;
-  const normalizedDirectory = directory.replace(/\/+$/, '');
+  const normalizedDirectory = normalizeAssetDirectory(directory);
   if (
     normalizedDirectory &&
     (path === normalizedDirectory || path.startsWith(`${normalizedDirectory}/`))
   ) {
     return accessURL + path;
   }
-  const assetUrl = accessURL + directory + path;
+  const assetUrl = accessURL + normalizedDirectory + path;
   return assetUrl;
 }

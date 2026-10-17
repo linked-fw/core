@@ -209,6 +209,7 @@ describe('LinkedStorage extra behaviors', () => {
 describe('LinkedFileStorage asset helper', () => {
   beforeEach(() => {
     LinkedFileStorage.setDefaultAccessURL('http://localhost:4000');
+    LinkedFileStorage.setDefaultAssetDirectory('/public');
   });
 
   test('asset prefixes relative paths with accessURL and directory', () => {
@@ -231,6 +232,9 @@ describe('LinkedFileStorage asset helper', () => {
     );
     expect(asset('/assets/example.webp', '/assets')).toBe(
       'http://localhost:4000/assets/example.webp',
+    );
+    expect(asset('/images/example.webp', '/assets/')).toBe(
+      'http://localhost:4000/assets/images/example.webp',
     );
   });
 
