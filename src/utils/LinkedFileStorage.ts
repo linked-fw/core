@@ -32,6 +32,7 @@ export interface FileStorePurposeListing {
 export abstract class LinkedFileStorage {
   private static defaultStore: IFileStore;
   private static url: string; // default accessURL
+  private static assetDirectory = '/public';
 
   /** Purpose → the store configured for it. */
   private static stores: Map<string, IFileStore> = new Map();
@@ -51,6 +52,14 @@ export abstract class LinkedFileStorage {
 
   static setDefaultAccessURL(accessURL: string): string {
     return (this.url = accessURL);
+  }
+
+  static setDefaultAssetDirectory(directory: string): string {
+    return (this.assetDirectory = directory);
+  }
+
+  static getDefaultAssetDirectory(): string {
+    return this.assetDirectory;
   }
 
   static getDefaultStore(): IFileStore {
@@ -234,6 +243,7 @@ export abstract class LinkedFileStorage {
     this.loggedFallbacks.clear();
     this.defaultStore = undefined as unknown as IFileStore;
     this.url = undefined as unknown as string;
+    this.assetDirectory = '/public';
     registerWellKnownPurposes();
   }
 }
@@ -257,7 +267,10 @@ registerWellKnownPurposes();
  * @param directory asset directory (optional, default is /public)
  * @returns asset url. e.g. https://cdn.example.com/public/image.png
  */
-export function asset(path: string, directory: string = '/public'): string {
+export function asset(
+  path: string,
+  directory: string = LinkedFileStorage.getDefaultAssetDirectory(),
+): string {
   // Some callers pass a raw app-relative path like `/images/foo.webp`, while
   // others may already have a fully qualified asset URL from an earlier
   // `asset(...)` call or backend response normalization. Keep this helper

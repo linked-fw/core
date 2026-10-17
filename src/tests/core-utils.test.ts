@@ -217,6 +217,14 @@ describe('LinkedFileStorage asset helper', () => {
     );
   });
 
+  test('asset uses a configurable default directory', () => {
+    LinkedFileStorage.setDefaultAssetDirectory('');
+
+    expect(asset('/images/example.webp')).toBe(
+      'http://localhost:4000/images/example.webp',
+    );
+  });
+
   test('asset does not duplicate a directory already present in the path', () => {
     expect(asset('/public/images/example.webp')).toBe(
       'http://localhost:4000/public/images/example.webp',
