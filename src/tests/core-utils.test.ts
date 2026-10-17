@@ -217,6 +217,23 @@ describe('LinkedFileStorage asset helper', () => {
     );
   });
 
+  test('asset does not duplicate a directory already present in the path', () => {
+    expect(asset('/public/images/example.webp')).toBe(
+      'http://localhost:4000/public/images/example.webp',
+    );
+    expect(asset('/assets/example.webp', '/assets')).toBe(
+      'http://localhost:4000/assets/example.webp',
+    );
+  });
+
+  test('asset remains idempotent when accessURL is empty', () => {
+    LinkedFileStorage.setDefaultAccessURL('');
+    const resolved = asset('/images/example.webp');
+
+    expect(resolved).toBe('/public/images/example.webp');
+    expect(asset(resolved)).toBe(resolved);
+  });
+
   test('asset leaves fully qualified URLs unchanged', () => {
     expect(asset('http://cdn.example.com/public/images/example.webp')).toBe(
       'http://cdn.example.com/public/images/example.webp',

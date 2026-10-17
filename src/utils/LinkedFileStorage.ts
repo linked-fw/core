@@ -268,6 +268,13 @@ export function asset(path: string, directory: string = '/public'): string {
   }
 
   const accessURL = LinkedFileStorage.accessURL;
+  const normalizedDirectory = directory.replace(/\/+$/, '');
+  if (
+    normalizedDirectory &&
+    (path === normalizedDirectory || path.startsWith(`${normalizedDirectory}/`))
+  ) {
+    return accessURL + path;
+  }
   const assetUrl = accessURL + directory + path;
   return assetUrl;
 }
