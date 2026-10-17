@@ -555,6 +555,28 @@ await LinkedFileStorage.getStore(FileStorePurposes.appAssets).saveFile('/app.js'
 LinkedFileStorage.accessURLFor(FileStorePurposes.appAssets); // → https://cdn.example.com
 ```
 
+### Resolving public asset URLs
+
+`asset(path)` combines a relative path with the default store's access URL and
+the configured asset directory. The directory defaults to `/public` for
+backwards compatibility. Hosts that expose their public directory at the URL
+root can configure an empty directory during startup:
+
+```ts
+import {asset, LinkedFileStorage} from '@_linked/core';
+
+LinkedFileStorage.setDefaultAccessURL('http://localhost:4000');
+LinkedFileStorage.setDefaultAssetDirectory('');
+
+asset('/images/banner.webp'); // http://localhost:4000/images/banner.webp
+```
+
+Directory insertion is idempotent. With the default `/public` configuration,
+both `asset('/images/banner.webp')` and `asset('/public/images/banner.webp')`
+resolve to the same URL. Fully qualified HTTP(S), protocol-relative, `data:`,
+and `blob:` URLs pass through unchanged. A directory supplied directly to
+`asset(path, directory)` overrides the configured default for that call.
+
 ### Resolution rule
 
 `getStore(purpose)` resolves in one order, and there is no fourth case:

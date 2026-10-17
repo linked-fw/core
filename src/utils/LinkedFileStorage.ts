@@ -32,6 +32,7 @@ export interface FileStorePurposeListing {
 export abstract class LinkedFileStorage {
   private static defaultStore: IFileStore;
   private static url: string; // default accessURL
+  private static assetDirectory = '/public';
 
   /** Purpose → the store configured for it. */
   private static stores: Map<string, IFileStore> = new Map();
@@ -51,6 +52,19 @@ export abstract class LinkedFileStorage {
 
   static setDefaultAccessURL(accessURL: string): string {
     return (this.url = accessURL);
+  }
+
+  /**
+   * Set the directory inserted between the default access URL and relative
+   * asset paths. Use an empty string when the host serves assets from its root.
+   */
+  static setDefaultAssetDirectory(directory: string): string {
+    return (this.assetDirectory = normalizeAssetDirectory(directory));
+  }
+
+  /** The directory currently used by {@link asset} when none is supplied. */
+  static getDefaultAssetDirectory(): string {
+    return this.assetDirectory;
   }
 
   static getDefaultStore(): IFileStore {
@@ -234,6 +248,7 @@ export abstract class LinkedFileStorage {
     this.loggedFallbacks.clear();
     this.defaultStore = undefined as unknown as IFileStore;
     this.url = undefined as unknown as string;
+    this.assetDirectory = '/public';
     registerWellKnownPurposes();
   }
 }
@@ -250,24 +265,44 @@ function registerWellKnownPurposes() {
 
 registerWellKnownPurposes();
 
+function normalizeAssetDirectory(directory: string): string {
+  return directory.replace(/\/+$/, '');
+}
+
 /**
  * Get the full path of an asset based on the way LinkedFileStorage is configured
  * Returns accessURL + directory (/public by default) + path
  * @param path asset path
- * @param directory asset directory (optional, default is /public)
+ * Relative paths that already contain the configured directory are returned
+ * without adding it again. Fully qualified, data, and blob URLs are unchanged.
+ * @param directory asset directory (optional, configured default is /public)
  * @returns asset url. e.g. https://cdn.example.com/public/image.png
  */
-export function asset(path: string, directory: string = '/public'): string {
+export function asset(
+  path: string,
+  directory: string = LinkedFileStorage.getDefaultAssetDirectory(),
+): string {
   // Some callers pass a raw app-relative path like `/images/foo.webp`, while
   // others may already have a fully qualified asset URL from an earlier
   // `asset(...)` call or backend response normalization. Keep this helper
   // idempotent so shared card/image components can safely call `asset(...)`
   // without duplicating the access URL prefix.
-  if (/^(?:[a-z]+:)?\/\//i.test(path) || path.startsWith('data:') || path.startsWith('blob:')) {
+  if (
+    /^(?:[a-z]+:)?\/\//i.test(path) ||
+    path.startsWith('data:') ||
+    path.startsWith('blob:')
+  ) {
     return path;
   }
 
   const accessURL = LinkedFileStorage.accessURL;
-  const assetUrl = accessURL + directory + path;
+  const normalizedDirectory = normalizeAssetDirectory(directory);
+  if (
+    normalizedDirectory &&
+    (path === normalizedDirectory || path.startsWith(`${normalizedDirectory}/`))
+  ) {
+    return accessURL + path;
+  }
+  const assetUrl = accessURL + normalizedDirectory + path;
   return assetUrl;
 }

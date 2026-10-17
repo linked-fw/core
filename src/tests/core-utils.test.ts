@@ -209,12 +209,41 @@ describe('LinkedStorage extra behaviors', () => {
 describe('LinkedFileStorage asset helper', () => {
   beforeEach(() => {
     LinkedFileStorage.setDefaultAccessURL('http://localhost:4000');
+    LinkedFileStorage.setDefaultAssetDirectory('/public');
   });
 
   test('asset prefixes relative paths with accessURL and directory', () => {
     expect(asset('/images/example.webp')).toBe(
       'http://localhost:4000/public/images/example.webp',
     );
+  });
+
+  test('asset uses a configurable default directory', () => {
+    LinkedFileStorage.setDefaultAssetDirectory('');
+
+    expect(asset('/images/example.webp')).toBe(
+      'http://localhost:4000/images/example.webp',
+    );
+  });
+
+  test('asset does not duplicate a directory already present in the path', () => {
+    expect(asset('/public/images/example.webp')).toBe(
+      'http://localhost:4000/public/images/example.webp',
+    );
+    expect(asset('/assets/example.webp', '/assets')).toBe(
+      'http://localhost:4000/assets/example.webp',
+    );
+    expect(asset('/images/example.webp', '/assets/')).toBe(
+      'http://localhost:4000/assets/images/example.webp',
+    );
+  });
+
+  test('asset remains idempotent when accessURL is empty', () => {
+    LinkedFileStorage.setDefaultAccessURL('');
+    const resolved = asset('/images/example.webp');
+
+    expect(resolved).toBe('/public/images/example.webp');
+    expect(asset(resolved)).toBe(resolved);
   });
 
   test('asset leaves fully qualified URLs unchanged', () => {
