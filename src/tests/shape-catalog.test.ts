@@ -43,6 +43,7 @@ import {
   selectToSparql,
 } from '../sparql/irToAlgebra';
 import {SparqlDataset} from '../sparql/SparqlDataset';
+import type {IRDeleteMutation} from '../queries/IntermediateRepresentation';
 import type {SparqlQueryResults} from '../sparql/resultMapping';
 import {LinkedStorage} from '../utils/LinkedStorage';
 import type {IDataset} from '../interfaces/IDataset';
@@ -352,7 +353,9 @@ describe('ShapeCatalog', () => {
         ),
       ],
     };
-    const create = withShapeCatalog(catalog, () => (NodeShape.create(data as never) as any).withId(shapeIri));
+    const create: CreateBuilder = withShapeCatalog(catalog, () =>
+      (NodeShape.create(data as never) as unknown as CreateBuilder).withId(shapeIri),
+    );
     expect(catalogOf(create)).toBe(catalog);
     const sparql = createToSparql(lower(create));
     expect(sparql).toContain(`<${shapeIri}> rdf:type shacl:NodeShape`);
@@ -360,7 +363,7 @@ describe('ShapeCatalog', () => {
     expect(sparql).toContain('"ACTIVE"');
     expect(sparql).toContain(`<${EX}a>`);
     const del = withShapeCatalog(catalog, () => DeleteBuilder.from(NodeShape, {id: shapeIri}));
-    expect(deleteToSparql(lower(del))).toContain(`<${shapeIri}>`);
+    expect(deleteToSparql(lower(del) as IRDeleteMutation)).toContain(`<${shapeIri}>`);
   });
 
   test('getAllNodeShapes() in a scope is the catalog plus the built-ins; a global shape changes nothing', () => {
@@ -381,7 +384,9 @@ describe('ShapeCatalog', () => {
       expect([...getAllNodeShapes().keys()].sort()).toEqual([HOLDER, PART, ...builtInShapeIris()].sort());
     });
     const compile = (c: ShapeCatalog) =>
-      deleteToSparql(lower(withShapeCatalog(c, () => DeleteBuilder.from(HOLDER, {id: `${EX}h1`}))));
+      deleteToSparql(
+        lower(withShapeCatalog(c, () => DeleteBuilder.from(HOLDER, {id: `${EX}h1`}))) as IRDeleteMutation,
+      );
     const sparqlBefore = compile(before);
 
     // Globally: a shape on the same targetClass as Part with the owned predicate as a plain
