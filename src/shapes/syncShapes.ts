@@ -362,7 +362,10 @@ export async function syncShapes(
     for (const generated of generatedIrisOf(nodeShape, iri)) localShapeIris.add(generated);
   }
   // Namespaces this process actually writes — the ownership scope for `'ownedNamespaces'` pruning.
-  const ownedNamespaces = new Set(userShapes.map((s) => shapeNamespace(s.iri)));
+  // Core's namespace is never one: every app writes the built-ins, and no app owns core's shapes.
+  const ownedNamespaces = new Set(
+    userShapes.filter((s) => !builtIns.has(s.iri)).map((s) => shapeNamespace(s.iri)),
+  );
 
   const thunks: Array<() => Promise<void>> = [];
 

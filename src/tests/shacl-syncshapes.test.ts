@@ -158,6 +158,16 @@ describe('syncShapes orphanScope (multi-writer, arch-04)', () => {
     expect(creates).not.toContain(FOREIGN_ORPHAN);
   });
 
+  test("'ownedNamespaces' never prunes core's namespace, though every app writes the built-ins", async () => {
+    const CORE_ORPHAN = 'https://linked.cm/shape/core/WrittenByANewerCore';
+    installMock([userIri(), CORE_ORPHAN]);
+    const plan = await syncShapes(undefined, {orphanScope: 'ownedNamespaces'});
+    for (const run of plan) await run();
+    const deletes = calls.filter((c) => c.kind === 'delete').map((c) => c.id);
+    expect(deletes).not.toContain(CORE_ORPHAN);
+    for (const iri of builtInShapeIris()) expect(deletes).toContain(iri); // delete → recreate
+  });
+
   test("'none' prunes nothing — purely additive", async () => {
     const plan = await syncShapes(undefined, {orphanScope: 'none'});
     for (const run of plan) await run();

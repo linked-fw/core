@@ -27,7 +27,7 @@ import {
 } from '../utils/ShapeClass';
 import {registerRuntimeShape} from '../shapes/registerRuntimeShape';
 import type {NodeShapeWire} from '../shapes/nodeShapeWire';
-import {NodeShape} from '../shapes/SHACL';
+import {NodeShape, PropertyShape} from '../shapes/SHACL';
 import {Shape} from '../shapes/Shape';
 import {buildPropertyShapeData} from '../shapes/syncShapes';
 import {SelectBuilder} from '../queries/QueryBuilder';
@@ -144,18 +144,16 @@ describe('ShapeCatalog', () => {
     });
   });
 
-  test('a built-in present in the data comes from the data, not from code', () => {
+  test('built-in rows in the data are ignored: core’s code always wins', () => {
     const shapeRow = shapeWire(SHAPE_IRI, `${EX}DataShapeClass`, [
       {label: 'label', path: 'http://www.w3.org/2000/01/rdf-schema#label'},
     ]);
     const catalog = ShapeCatalog.from([shapeRow]);
-    expect(catalog.get(SHAPE_IRI)).not.toBe(Shape.shape);
-    expect(catalog.get(SHAPE_IRI)?.targetClass?.id).toBe(`${EX}DataShapeClass`);
+    expect(catalog.get(SHAPE_IRI)).toBe(Shape.shape);
     expect(catalog.size).toBe(6);
     withShapeCatalog(catalog, () => {
-      expect(getShapeClass(SHAPE_IRI)).toBeUndefined(); // data, so no class
-      expect(getAllShapeClasses().size).toBe(5); // the other five still come from code
-      expect(getOrCreateShapeAdapter(SHAPE_IRI)?.shape).toBe(catalog.get(SHAPE_IRI));
+      expect(getShapeClass(SHAPE_IRI)).toBe(Shape);
+      expect(getAllShapeClasses().size).toBe(6);
     });
   });
 
@@ -457,6 +455,101 @@ describe('ShapeCatalog', () => {
   });
 });
 
+describe('review round 1', () => {
+  /** A catalog whose data holds rows for NodeShape and PropertyShape that differ from core's. */
+  const withMetamodelRows = () =>
+    ShapeCatalog.from([
+      shapeWire(PERSON, PERSON_CLASS, [{label: 'name', path: `${EX}name`}]),
+      shapeWire(NodeShape.shape.id, `${EX}NotTheShaclNodeShape`, [{label: 'properties', path: `${EX}p`}]),
+      shapeWire(PropertyShape.shape.id, `${EX}NotTheShaclPropertyShape`, [{label: 'in', path: `${EX}in`}]),
+    ]);
+
+  test('NodeShape routes to its pin inside a catalog whose data holds a NodeShape row, as globally', async () => {
+    const catalog = withMetamodelRows();
+    const previous = LinkedStorage.getDefaultDataset();
+    const fallback = new RecordingDataset();
+    const pinned = new RecordingDataset();
+    LinkedStorage.setDefaultDataset(fallback as unknown as IDataset);
+    LinkedStorage.setDatasetForShapes(pinned as unknown as IDataset, NodeShape);
+    try {
+      await NodeShape.select((n: any) => [n.targetClass]);
+      await withShapeCatalog(catalog, () => NodeShape.select((n: any) => [n.targetClass]));
+      expect(pinned.selects).toHaveLength(2);
+      expect(fallback.selects).toHaveLength(0);
+      expect(pinned.selects[1]).toBe(pinned.selects[0]);
+    } finally {
+      LinkedStorage.unsetDatasetForShape(NodeShape);
+      if (previous) LinkedStorage.setDefaultDataset(previous);
+    }
+  });
+
+  test('a NodeShape delete inside a catalog cascades through core’s metamodel, whatever the data holds', () => {
+    const iri = `${EX}shape/Deleted`;
+    const compile = (catalog?: ShapeCatalog) =>
+      deleteToSparql(
+        lower(withShapeCatalog(catalog, () => DeleteBuilder.from(NodeShape, {id: iri}))) as IRDeleteMutation,
+      );
+    const withRows = compile(withMetamodelRows());
+    const withoutRows = compile(ShapeCatalog.from([shapeWire(PERSON, PERSON_CLASS, [{label: 'name', path: `${EX}name`}])]));
+    expect(withRows).toBe(withoutRows);
+    // The owned walk and the blank-node cascade the global registry uses for the same delete:
+    // property shapes, their sh:in lists and path nodes. (The global SPARQL may differ only by
+    // blank-capable predicates of shapes other tests registered globally, which a catalog
+    // never sees.)
+    const global = compile(undefined);
+    for (const term of ['shacl:property', 'shacl:in', 'rdf:first', 'rdf:rest', 'shacl:path']) {
+      expect(withRows).toContain(term);
+      expect(global).toContain(term);
+    }
+    expect(withRows).not.toContain(`${EX}p>`);
+    expect(withRows).not.toContain(`${EX}in>`);
+  });
+
+  test('FieldSet.for(authored class) inside a catalog holding its IRI reads the catalog’s data', () => {
+    const catalog = ShapeCatalog.from([
+      shapeWire(Pet.shape.id, `${EX}CatalogPet`, [{label: 'onlyInData', path: `${EX}onlyInData`}]),
+    ]);
+    const fields = withShapeCatalog(catalog, () => FieldSet.for(Pet, ['onlyInData']));
+    expect(catalogOf(fields)).toBe(catalog);
+    expect(fields.shape).toBe(catalog.get(Pet.shape.id));
+    expect(fields.toJSON()).toEqual({shape: Pet.shape.id, fields: ['onlyInData']});
+    const q = withShapeCatalog(catalog, () => SelectBuilder.from(Pet).select(fields as any));
+    expect(selectToSparql(lower(q))).toContain(`<${EX}onlyInData>`);
+  });
+
+  test('a dataset is called outside the catalog even from inside an outer scope', async () => {
+    const a = branchA();
+    const b = branchB();
+    const previous = LinkedStorage.getDefaultDataset();
+    const ds = new RecordingDataset();
+    LinkedStorage.setDefaultDataset(ds as unknown as IDataset);
+    const warn = console.warn;
+    const warned: string[] = [];
+    console.warn = (m: string) => warned.push(m);
+    try {
+      const qa = namesOf(a);
+      await withShapeCatalog(b, () => qa.exec());
+      await withShapeCatalog(b, () => qa.exec());
+      expect(ds.calledIn).toEqual([undefined, undefined]);
+      expect(ds.selects[0]).toContain(`<${EX}a/name>`);
+      // fn returned a promise: said once.
+      expect(warned.filter((m) => m.includes('fn returned a promise'))).toHaveLength(1);
+    } finally {
+      console.warn = warn;
+      if (previous) LinkedStorage.setDefaultDataset(previous);
+    }
+  });
+
+  test('an IR without its catalog field (a spread copy) compiles in the active catalog', () => {
+    const a = branchA();
+    const ir = lower(namesOf(a));
+    const copy = {...ir};
+    expect(catalogOf(copy)).toBeUndefined();
+    expect(withShapeCatalog(a, () => selectToSparql(copy))).toBe(selectToSparql(ir));
+    expect(withShapeCatalog(branchB(), () => selectToSparql(copy))).toContain(`${EX}b/`);
+  });
+});
+
 describe('live queries in catalogs', () => {
   afterEach(() => resetLiveQueryStore());
 
@@ -491,10 +584,19 @@ describe('live queries in catalogs', () => {
       expect(countFor(`${EX}a/name`)).toBe(2);
       expect(countFor(`${EX}b/name`)).toBe(1);
 
-      // A local mutation built in branch b refetches branch b's template.
+      // A local mutation built in branch b refetches branch b's template, and only it — the
+      // same create would decode in branch a too, but it changed branch b's data.
       await withShapeCatalog(b, () => CreateBuilder.from(PERSON).set({name: 'm'} as any)).exec();
       await new Promise((r) => setTimeout(r, 0));
       await new Promise((r) => setTimeout(r, 0));
+      expect(countFor(`${EX}b/name`)).toBe(2);
+      expect(countFor(`${EX}a/name`)).toBe(2);
+
+      // And one built in branch a refetches branch a's only.
+      await withShapeCatalog(a, () => CreateBuilder.from(PERSON).set({name: 'o'} as any)).exec();
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(countFor(`${EX}a/name`)).toBe(3);
       expect(countFor(`${EX}b/name`)).toBe(2);
       la.close();
       lb.close();
@@ -531,7 +633,7 @@ async function readCatalog(store: IDataset): Promise<ShapeCatalog> {
   return ShapeCatalog.from(wires);
 }
 
-describeFuseki('core built-ins are synced and read back into a catalog (Fuseki)', () => {
+describeFuseki('core built-ins are synced; a catalog read back resolves them from code (Fuseki)', () => {
   const store = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME);
   beforeAll(async () => {
     if (!fusekiLive) return;
@@ -539,7 +641,7 @@ describeFuseki('core built-ins are synced and read back into a catalog (Fuseki)'
     await clearAllData();
   });
 
-  test('a sync into an empty store writes the six; a second sync writes nothing; a catalog from the store holds the six from data', async () => {
+  test('a sync into an empty store writes the six; a second sync writes nothing; a catalog from the store resolves them from code', async () => {
     const first = await syncShapes(store as unknown as IDataset);
     for (const run of first) await run();
     const stored = await (SelectBuilder.from(NodeShape).select([]) as any).exec(store);
@@ -550,17 +652,19 @@ describeFuseki('core built-ins are synced and read back into a catalog (Fuseki)'
     expect(second).toHaveLength(0);
 
     const catalog = await readCatalog(store as unknown as IDataset);
+    // The rows are in the store, but inside the catalog the six resolve from core's code.
+    const read = (await (SelectBuilder.from(NodeShape)
+      .select((n: any) => [n.properties.select((p: any) => [p.label])])
+      .for(SHAPE_IRI) as any).exec(store)) as {properties: Array<{label: string}>};
+    expect(read.properties.map((p) => p.label).sort()).toEqual(['label', 'type']);
     withShapeCatalog(catalog, () => {
-      expect(getAllShapeClasses().size).toBe(0); // all six came from the data
+      expect(getAllShapeClasses().size).toBe(6);
       for (const iri of builtInShapeIris()) {
-        expect(catalog.get(iri)).toBeDefined();
-        expect(getShapeClass(iri)).toBeUndefined();
+        expect(getShapeClass(iri)).toBeDefined();
+        expect(catalog.get(iri)).toBe(getShapeClass(iri)!.shape);
       }
-      const labels = (iri: string) => catalog.get(iri)!.propertyShapes.map((p) => p.label).sort();
-      expect(labels(NodeShape.shape.id)).toEqual(expect.arrayContaining(['properties', 'targetClass']));
-      expect(labels(SHAPE_IRI)).toEqual(['label', 'type']);
     });
-    // The data built-ins drive a NodeShape create inside the catalog.
+    // The built-ins drive a NodeShape create inside the catalog.
     const create = withShapeCatalog(catalog, () =>
       (NodeShape.create({targetClass: {id: `${EX}FromData`}} as never) as unknown as CreateBuilder).withId(
         `${EX}shape/FromData`,

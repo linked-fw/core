@@ -5,7 +5,8 @@
  * time per 1000 iterations. Asserts no absolute time — a machine's speed is not a
  * property of the code. The select and create cases use only API that predates shape
  * catalogs, so the same file runs on an older checkout to compare against; the catalog
- * case runs only where `ShapeCatalog` exists.
+ * cases (warm: one catalog reused; cold: a new catalog per query) run only where
+ * `ShapeCatalog` exists.
  */
 import {describe, expect, test} from '@jest/globals';
 import {Person, Pet, Dog, tmpEntityBase} from '../test-helpers/query-fixtures';
@@ -72,9 +73,14 @@ describe('query compile timing', () => {
     } catch {
       return; // a checkout without shape catalogs: nothing to compare
     }
-    const catalog = mod.ShapeCatalog.from([Person, Pet, Dog].map((c) => toWire(c.shape)));
+    const wires = [Person, Pet, Dog].map((c) => toWire(c.shape));
+    const catalog = mod.ShapeCatalog.from(wires);
     const inCatalog = () => mod.withShapeCatalog(catalog, compileSelect);
     expect(inCatalog()).toContain('SELECT');
     report('select-in-catalog', medianPer1000(inCatalog));
+    // Cold: a new catalog per iteration, so every index, adapter and cache fills from empty.
+    const cold = () => mod.withShapeCatalog(mod.ShapeCatalog.from(wires), compileSelect);
+    expect(cold()).toBe(inCatalog());
+    report('select-cold-catalog', medianPer1000(cold));
   });
 });

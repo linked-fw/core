@@ -38,9 +38,10 @@ export {
 } from './ShapeClass.js';
 
 /**
- * Core's own shapes, which every catalog holds: from its data, else from core's code.
+ * Core's own shapes, which every catalog holds from core's code, with their classes.
  *
- * `syncShapes` writes them into a dataset like any package's shapes. Data-only shapes depend
+ * `syncShapes` writes them into a dataset like any package's shapes, but a catalog ignores
+ * those rows: inside a catalog the built-ins resolve from code. Data-only shapes depend
  * on them: a property shape's `type` points at `Shape`, and the shape metamodel itself
  * (`NodeShape`, `PropertyShape`, their `sh:in` lists and complex paths) is how a shape
  * sync reads and writes shapes.
@@ -62,10 +63,7 @@ export class ShapeCatalog {
    * @internal
    */
   readonly nodeShapes: ReadonlyMap<string, NodeShapeData>;
-  /**
-   * Core's built-in classes by IRI, for the built-ins the data lacked — the only classes a
-   * catalog holds. @internal
-   */
+  /** Core's built-in classes by IRI — the only classes a catalog holds. @internal */
   readonly shapeClasses: ReadonlyMap<string, typeof Shape>;
 
   private constructor(
@@ -85,9 +83,10 @@ export class ShapeCatalog {
    * global registry, a row for an IRI that has a compiled class elsewhere is kept: inside a
    * catalog the data is the authority.
    *
-   * Core's six built-in shapes come from the data like any other shape (`syncShapes` writes
-   * them). Only a built-in the data lacks — a dataset synced by an older core — is added from
-   * core's code, with its class.
+   * Core's six built-in shapes always come from core's code, with their classes. `syncShapes`
+   * writes them into datasets too, but a row for one of their IRIs is ignored here: the
+   * metamodel (its cascades, its routing pins) must not depend on how faithfully a catalog was
+   * read, or on which core version last synced the dataset.
    */
   static from(
     shapes:
@@ -102,20 +101,19 @@ export class ShapeCatalog {
 
     const nodeShapes = new Map<string, NodeShapeData>();
     const shapeClasses = new Map<string, typeof Shape>();
+    for (const iri of builtInShapeIris()) {
+      const shapeClass = getRegisteredShapeClass(iri);
+      if (!shapeClass?.shape) continue;
+      shapeClasses.set(iri, shapeClass);
+      nodeShapes.set(iri, shapeClass.shape);
+    }
     for (const shape of list) {
-      if (!shape?.id) continue;
+      if (!shape?.id || shapeClasses.has(shape.id)) continue;
       const data = isNodeShapeWire(shape) ? fromWire(shape) : (shape as NodeShapeData);
       for (const ps of data.propertyShapes ?? []) {
         warnOnReservedPropertyLabel(ps.label, data.label, data.id);
       }
       nodeShapes.set(data.id, data);
-    }
-    for (const iri of builtInShapeIris()) {
-      if (nodeShapes.has(iri)) continue;
-      const shapeClass = getRegisteredShapeClass(iri);
-      if (!shapeClass?.shape) continue;
-      shapeClasses.set(iri, shapeClass);
-      nodeShapes.set(iri, shapeClass.shape);
     }
     return new ShapeCatalog(nodeShapes, shapeClasses, options?.name);
   }

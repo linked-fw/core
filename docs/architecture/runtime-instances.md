@@ -45,17 +45,19 @@ const rows = await withShapeCatalog(catalog, () => SelectBuilder.from(personIri)
   `globalThis.__linkedShapeRegistry.activeCatalog` for the duration of `fn` and restores it in
   `finally`; `undefined` means the global registry (it never inherits an outer catalog). It
   works the same in the browser and in Node, with no AsyncLocalStorage, and two copies of core
-  see one scope. A promise returned by `fn` runs on outside the scope.
+  see one scope. A promise returned by `fn` runs on outside the scope; outside production
+  `withShapeCatalog` says so once when `fn` returns a `Promise` (a builder is not one).
 - **Every registry accessor reads the active catalog** (`getNodeShape`, `getAllNodeShapes`,
   `getShapeClass`, `getSuperShapes`, `getSubShapes`, `getTargetClassId`,
   `getShapesForTargetClass`, `findPropertyShapeById`, …), else the global registry: one shared
   read and a null check. Inside a catalog `getAllNodeShapes()` is exactly the catalog's shapes
   plus core's six built-ins (`Shape`, `NodeShape`, `PropertyShape`, `List`, `PathNode`,
-  `PathList`). `syncShapes` writes the built-ins into a dataset like any package's shapes, so a
-  catalog read from one takes them from the data; only a built-in the data lacks (a dataset
-  synced by an older core) is added from core's code, as a class. `getShapeClass` knows only
-  those code built-ins. A catalog is exhaustive and never falls back to the global registry.
-- **The catalog's data wins.** A class whose IRI the catalog holds (an app's compiled `Person`
+  `PathList`), always from core's code, as classes. `syncShapes` writes the built-ins into a
+  dataset like any package's shapes, but a catalog ignores those rows: the metamodel's cascades
+  and routing pins never depend on how a catalog was read or which core version synced it.
+  `getShapeClass` knows only the built-ins. A catalog is exhaustive and never falls back to the
+  global registry.
+- **The catalog's data wins** (built-ins aside). A class whose IRI the catalog holds (an app's compiled `Person`
   for a project's `Person`) resolves to the catalog's shape inside the scope.
 - **Builders, field sets and IRs capture their catalog.** A builder made inside a scope keeps
   the active catalog when its root is an IRI or a shape the catalog holds; one made from an
@@ -70,9 +72,10 @@ const rows = await withShapeCatalog(catalog, () => SelectBuilder.from(personIri)
   methods, `lower`, every `*ToAlgebra` and `*ToSparql`, `collectOwnedLinks`,
   `queryDependencies`, `mutationEffects`, `LinkedStorage`'s routing, and the live store
   (template keys, local mutations, change decoding, matching). Re-entry wraps core's own
-  registry reads, never a call into an `IDataset`: `exec()` and `await` dispatch in the
-  caller's scope, and `LinkedStorage` resolves only the route inside the catalog. A router's
-  own queries therefore never run inside a project's catalog.
+  registry reads, never a call into an `IDataset`: `LinkedStorage` resolves only the route
+  inside the catalog and calls the dataset with no catalog active, even from inside an outer
+  scope. A router's own queries therefore never run inside a project's catalog. An IR without
+  its `catalog` field (built by hand, or a spread copy) compiles in the active catalog.
 - **The wire never carries a catalog.** DSL-JSON stays IRIs only; each side supplies its own
   (`fromJSON(json, {catalog})`, where an explicit `undefined` is the global registry).
 - **Caches are per catalog.** Every registry-derived cache (`RegistryCache`) keeps one map for
@@ -85,7 +88,8 @@ const rows = await withShapeCatalog(catalog, () => SelectBuilder.from(personIri)
 - **Live queries.** A template's key is `<shapeCatalogKey(catalog)>|<template JSON>` (the bare
   JSON for the global registry), so one query in two catalogs is two templates. A change is
   decoded once per catalog among the templates; one that does not resolve in a catalog (its
-  shape is not there) leaves that catalog's templates alone.
+  shape is not there) leaves that catalog's templates alone. A local mutation refetches only
+  the templates of the catalog it was made in (the global ones when made outside any).
 
 ## Two runtimes, one contract
 

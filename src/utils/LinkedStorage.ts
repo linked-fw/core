@@ -11,6 +11,7 @@ import {
   catalogOf,
   getActiveShapeCatalog,
   getShapeClass,
+  outsideShapeCatalog,
   withShapeCatalog,
 } from './ShapeClass.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
@@ -298,7 +299,10 @@ export abstract class LinkedStorage {
         new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().'),
       );
     }
-    return dataset.selectQuery(query) as Promise<ResultType>;
+    // Called outside any catalog: a router's own queries never run in the query's catalog.
+    return (getActiveShapeCatalog() === undefined
+      ? dataset.selectQuery(query)
+      : outsideShapeCatalog(() => dataset.selectQuery(query))) as Promise<ResultType>;
   }
 
   /**
@@ -330,7 +334,9 @@ export abstract class LinkedStorage {
         'No query dataset configured. Call LinkedStorage.setDefaultDataset().',
       );
     }
-    return resolveExistence(dataset, query);
+    return getActiveShapeCatalog() === undefined
+      ? resolveExistence(dataset, query)
+      : outsideShapeCatalog(() => resolveExistence(dataset, query));
   }
 
   /**
@@ -350,7 +356,10 @@ export abstract class LinkedStorage {
       );
     }
     for (const dataset of datasets) {
-      if (await resolveExistence(dataset, query)) return true;
+      const exists = getActiveShapeCatalog() === undefined
+        ? resolveExistence(dataset, query)
+        : outsideShapeCatalog(() => resolveExistence(dataset, query));
+      if (await exists) return true;
     }
     return false;
   }
@@ -369,7 +378,9 @@ export abstract class LinkedStorage {
         new Error('No update handler configured on the query dataset.'),
       );
     }
-    return dataset.updateQuery(query) as Promise<ResponseType>;
+    return (getActiveShapeCatalog() === undefined
+      ? dataset.updateQuery(query)
+      : outsideShapeCatalog(() => dataset.updateQuery(query))) as Promise<ResponseType>;
   }
 
   static createQuery<ResponseType>(query: CreateQuery): Promise<ResponseType> {
@@ -386,7 +397,9 @@ export abstract class LinkedStorage {
         new Error('No create handler configured on the query dataset.'),
       );
     }
-    return dataset.createQuery(query) as Promise<ResponseType>;
+    return (getActiveShapeCatalog() === undefined
+      ? dataset.createQuery(query)
+      : outsideShapeCatalog(() => dataset.createQuery(query))) as Promise<ResponseType>;
   }
 
   static deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
@@ -403,6 +416,8 @@ export abstract class LinkedStorage {
         new Error('No delete handler configured on the query dataset.'),
       );
     }
-    return dataset.deleteQuery(query);
+    return getActiveShapeCatalog() === undefined
+      ? dataset.deleteQuery(query)
+      : outsideShapeCatalog(() => dataset.deleteQuery(query));
   }
 }

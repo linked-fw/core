@@ -420,7 +420,21 @@ export class LiveQueryStore {
    * in quick succession are two changes — and manual invalidations never are.
    */
   publish(event: ChangeEvent, origin: ChangeOrigin = 'app'): void {
-    const decoded = this._decodePerCatalog(event);
+    this._publish(event, origin);
+  }
+
+  /**
+   * `within` limits the change to one catalog's templates (undefined = the global registry's):
+   * a local mutation changes the data of the catalog it was made in, and only that one.
+   */
+  private _publish(
+    event: ChangeEvent,
+    origin: ChangeOrigin,
+    within?: {catalog: ShapeCatalog | undefined},
+  ): void {
+    const decoded: Array<[ShapeCatalog | undefined, MutationEffects]> = within
+      ? [[within.catalog, normalizeChange(event, {catalog: within.catalog})]]
+      : this._decodePerCatalog(event);
     const effects = decoded[0][1];
     if (origin !== 'manual') {
       const hash = effectsHash(effects);
@@ -517,7 +531,7 @@ export class LiveQueryStore {
           console.error('[linked] could not derive the effects of a mutation; live queries were not refetched', err);
           return;
         }
-        this.publish({effects}, 'local');
+        this._publish({effects}, 'local', {catalog});
       },
       () => {}, // a failed mutation changed nothing
     );

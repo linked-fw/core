@@ -64,6 +64,10 @@ import {
 } from '../utils/ShapeClass.js';
 import {UnresolvedContextError} from '../queries/QueryContext.js';
 
+// The `*ToAlgebra` / `*ToSparql` exports compile in the catalog the IR was lowered in (its
+// non-enumerable `catalog` field). An IR without one — built by hand, or copied with a spread,
+// which drops the field — compiles in the active catalog, or globally outside any scope.
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -615,7 +619,7 @@ export function selectToAlgebra(
   _options?: SparqlOptions,
 ): SparqlSelectPlan {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => selectToAlgebra(query, _options));
   }
   const registry = new VariableRegistry();
@@ -2021,7 +2025,7 @@ export function createToAlgebra(
   options?: SparqlOptions,
 ): SparqlInsertDataPlan {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => createToAlgebra(query, options));
   }
   const {triples} = generateNodeDataTriples(query.data, options, {next: 0});
@@ -2346,7 +2350,7 @@ export function updateToAlgebra(
   options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => updateToAlgebra(query, options));
   }
   return buildDeleteInsertPlan(query, options);
@@ -2366,7 +2370,7 @@ export function upsertToAlgebra(
   options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => upsertToAlgebra(query, options));
   }
   return buildDeleteInsertPlan(query, options, {
@@ -3226,7 +3230,7 @@ export function deleteToAlgebra(
   _options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => deleteToAlgebra(query, _options));
   }
   const deletePatterns: SparqlTriple[] = [];
@@ -3321,7 +3325,7 @@ export function deleteAllToAlgebra(
   _options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => deleteAllToAlgebra(query, _options));
   }
   const subjectVar = 'a0';
@@ -3359,7 +3363,7 @@ export function deleteWhereToAlgebra(
   _options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => deleteWhereToAlgebra(query, _options));
   }
   const subjectVar = 'a0';
@@ -3427,7 +3431,7 @@ export function updateWhereToAlgebra(
   options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => updateWhereToAlgebra(query, options));
   }
   const subjectTerm = varTerm('a0');
@@ -3501,7 +3505,7 @@ export function askToAlgebra(
   options?: SparqlOptions,
 ): SparqlAskPlan {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => askToAlgebra(query, options));
   }
   if (!query.root) {
@@ -3585,7 +3589,7 @@ export function countToAlgebra(
   options?: SparqlOptions,
 ): SparqlSelectPlan {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => countToAlgebra(query, options));
   }
   if (!query.root) {
@@ -3651,7 +3655,7 @@ export function selectToSparql(
   options?: SparqlOptions,
 ): string {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => selectToSparql(query, options));
   }
   const plan = selectToAlgebra(query, options);
@@ -3666,7 +3670,7 @@ export function askToSparql(
   options?: SparqlOptions,
 ): string {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => askToSparql(query, options));
   }
   const plan = askToAlgebra(query, options);
@@ -3682,7 +3686,7 @@ export function countToSparql(
   options?: SparqlOptions,
 ): string {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => countToSparql(query, options));
   }
   const plan = countToAlgebra(query, options);
@@ -3698,7 +3702,7 @@ export function createToSparql(
   options?: SparqlOptions,
 ): string {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => createToSparql(query, options));
   }
   const plan = createToAlgebra(query, options);
@@ -3714,7 +3718,7 @@ export function updateToSparql(
   options?: SparqlOptions,
 ): string {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => updateToSparql(query, options));
   }
   const plan = updateToAlgebra(query, options);
@@ -3727,7 +3731,7 @@ export function upsertToSparql(
   options?: SparqlOptions,
 ): string {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => upsertToSparql(query, options));
   }
   const plan = upsertToAlgebra(query, options);
@@ -3742,7 +3746,7 @@ export function deleteToSparql(
   options?: SparqlOptions,
 ): string {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => deleteToSparql(query, options));
   }
   const plan = deleteToAlgebra(query, options);
@@ -3757,7 +3761,7 @@ export function deleteAllToSparql(
   options?: SparqlOptions,
 ): string {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => deleteAllToSparql(query, options));
   }
   const plan = deleteAllToAlgebra(query, options);
@@ -3772,7 +3776,7 @@ export function deleteWhereToSparql(
   options?: SparqlOptions,
 ): string {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => deleteWhereToSparql(query, options));
   }
   const plan = deleteWhereToAlgebra(query, options);
@@ -3787,7 +3791,7 @@ export function updateWhereToSparql(
   options?: SparqlOptions,
 ): string {
   const catalog = catalogOf(query);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => updateWhereToSparql(query, options));
   }
   const plan = updateWhereToAlgebra(query, options);

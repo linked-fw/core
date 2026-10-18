@@ -131,10 +131,46 @@ export function withShapeCatalog<T>(catalog: ShapeCatalog | undefined, fn: () =>
   if (previous === catalog) return fn();
   registryState.activeCatalog = catalog;
   try {
+    const result = fn();
+    if (result instanceof Promise) warnPromiseInScope();
+    return result;
+  } finally {
+    registryState.activeCatalog = previous;
+  }
+}
+
+/**
+ * Run `fn` with no catalog active, without the promise warning: for core's own calls into a
+ * dataset, whose asynchronous continuation is meant to run outside any catalog. @internal
+ */
+export function outsideShapeCatalog<T>(fn: () => T): T {
+  const previous = registryState.activeCatalog;
+  if (previous === undefined) return fn();
+  registryState.activeCatalog = undefined;
+  try {
     return fn();
   } finally {
     registryState.activeCatalog = previous;
   }
+}
+
+let warnedPromiseInScope = false;
+
+/**
+ * A scope ends when `fn` returns, so the continuation of a promise `fn` returns runs outside
+ * it. Said once, outside production. A builder (a thenable, not a Promise) is the intended
+ * return value: it captured the catalog and re-enters it.
+ */
+function warnPromiseInScope(): void {
+  if (warnedPromiseInScope) return;
+  const env = (globalThis as {process?: {env?: Record<string, string | undefined>}}).process?.env;
+  if (env?.NODE_ENV === 'production') return;
+  warnedPromiseInScope = true;
+  console.warn(
+    '[linked] withShapeCatalog(catalog, fn): fn returned a promise. The scope ended when fn ' +
+      'returned, so code after its first await runs outside the catalog. Build the query inside ' +
+      'the scope and await it outside — a builder keeps its catalog.',
+  );
 }
 
 /** The catalog of the current `withShapeCatalog` scope, or undefined for the global registry. */

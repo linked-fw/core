@@ -141,7 +141,7 @@ function walk(data: IRNodeData, cache: Map<string, OwnedRule | null>, out: Owned
 export function collectOwnedLinks(ir: OwnedLinkMutation): OwnedLink[] {
   // Resolves the rules in the catalog the IR was lowered in.
   const catalog = catalogOf(ir);
-  if (catalog !== getActiveShapeCatalog()) {
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => collectOwnedLinks(ir));
   }
   const out: OwnedLink[] = [];

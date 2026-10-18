@@ -750,6 +750,18 @@ export class FieldSet<R = any, Source = any> {
    * Accepts: ShapeConstructor (class with .shape), NodeShapeData, or IRI string.
    */
   private static resolveShapeInput(shape: ShapeConstructor<any> | NodeShapeData | string): {nodeShape: NodeShapeData; shapeClass?: ShapeConstructor<any>} {
+    // Inside a catalog the catalog's data is the authority for every IRI it holds, so an
+    // authored class (or metadata) for one of them resolves to the catalog's shape — as
+    // `resolveShape` does for the builders.
+    const catalog = getActiveShapeCatalog();
+    if (catalog !== undefined && typeof shape !== 'string') {
+      const id = typeof shape === 'function' ? shape.shape?.id : shape?.id;
+      const own = id ? catalog.get(id) : undefined;
+      if (own) {
+        const shapeClass = getQueryShapeClass(id!);
+        return shapeClass ? {nodeShape: own, shapeClass} : {nodeShape: own};
+      }
+    }
     if (typeof shape === 'string') {
       const shapeClass = getQueryShapeClass(shape);
       if (shapeClass?.shape) {
