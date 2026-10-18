@@ -105,8 +105,9 @@ the browser registered every project shape it ever saw into one registry.
 
 ```
 npx linked build            ✔ Build successful
-npm test                    Test Suites: 4 skipped, 103 passed, 103 of 107 total
-                            Tests:       120 skipped, 2297 passed, 2417 total
+npm test                    Test Suites: 4 skipped, 104 passed, 104 of 108 total
+                            Tests:       120 skipped, 2303 passed, 2423 total
+                            (rebased onto 2.34.0; npm run check:dts clean)
 ```
 
 `src/tests/shape-catalog.test.ts` (27 tests) covers: built-ins from code, with built-in rows in
