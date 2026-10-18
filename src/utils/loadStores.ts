@@ -8,6 +8,27 @@
 import type {DatasetsConfig} from './parseDatasetsConfig.js';
 
 /**
+ * The module loader `loadStores` imports each store with. A host that
+ * evaluates the app through another loader sets it on `globalThis`, so a
+ * store comes from the same copy of its package as the app's own import of
+ * it. `linked start` (dev) sets it, because there the app runs in Vite's SSR
+ * module runner while a native `import()` would load a second copy through
+ * Node (cli backlog 014). Unset, `loadStores` uses the native `import()`.
+ *
+ * The hook receives the specifier unchanged and resolves to the module
+ * namespace. It is read on every call: the host may set it after this module
+ * was evaluated.
+ */
+const IMPORT_MODULE = Symbol.for('@_linked/core:importModule');
+
+function importModule(specifier: string): Promise<unknown> {
+  const hook = (globalThis as Record<symbol, unknown>)[IMPORT_MODULE];
+  return typeof hook === 'function'
+    ? (hook as (specifier: string) => Promise<unknown>)(specifier)
+    : import(specifier);
+}
+
+/**
  * Dynamically imports each alias's `store` (an npm specifier) and
  * instantiates the resolved class with the entry's `config` verbatim —
  * `new StoreClass(entry.config)`. Returns alias → store.
@@ -16,6 +37,10 @@ import type {DatasetsConfig} from './parseDatasetsConfig.js';
  * to use (e.g. `@_linked/fuseki/shapes/FusekiStore` → `FusekiStore`).
  * Falls back to the module's `default` export if the named export is
  * absent. Each store class must accept a single config-object argument.
+ *
+ * Imports through the host loader under
+ * `Symbol.for('@_linked/core:importModule')` when one is set (see
+ * `importModule` above), else the native `import()`.
  *
  * Async + uses runtime dynamic import; works in Node where the module
  * specifier can be resolved at runtime. Frontends should instead
@@ -48,7 +73,7 @@ export async function loadStores<T = unknown>(
     // It must come from a trusted developer artifact (datasets.json) and must
     // NEVER be attacker-influenced — an arbitrary specifier is arbitrary code
     // execution. Do not source this from request/user input.
-    const mod = await import(entry.store);
+    const mod = await importModule(entry.store);
     const exportName = entry.store.split('/').pop()!;
     const StoreClass =
       (mod && (mod as Record<string, unknown>)[exportName]) ??
