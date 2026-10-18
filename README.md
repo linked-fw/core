@@ -1266,7 +1266,8 @@ const received = fromJSON(json, {catalog: branch}); // the wire never carries a 
 
 A builder keeps the catalog it was made in (`catalogOf(query)`), through clones, `exists()`,
 `count()`, lowering, compile and live queries. Inside a scope every registry read sees the
-catalog's shapes plus core's built-ins; a class the catalog does not hold keeps resolving
+catalog's shapes plus core's six built-ins (synced into every dataset by `syncShapes`, and
+taken from code only when the data lacks them); a class the catalog does not hold keeps resolving
 globally. See [runtime instances](./docs/architecture/runtime-instances.md#shape-catalogs).
 
 ### DSL-JSON — the standard query format

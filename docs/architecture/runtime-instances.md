@@ -51,8 +51,10 @@ const rows = await withShapeCatalog(catalog, () => SelectBuilder.from(personIri)
   `getShapesForTargetClass`, `findPropertyShapeById`, …), else the global registry: one shared
   read and a null check. Inside a catalog `getAllNodeShapes()` is exactly the catalog's shapes
   plus core's six built-ins (`Shape`, `NodeShape`, `PropertyShape`, `List`, `PathNode`,
-  `PathList`), which every catalog holds as classes; `getShapeClass` knows only those. A
-  catalog is exhaustive and never falls back to the global registry.
+  `PathList`). `syncShapes` writes the built-ins into a dataset like any package's shapes, so a
+  catalog read from one takes them from the data; only a built-in the data lacks (a dataset
+  synced by an older core) is added from core's code, as a class. `getShapeClass` knows only
+  those code built-ins. A catalog is exhaustive and never falls back to the global registry.
 - **The catalog's data wins.** A class whose IRI the catalog holds (an app's compiled `Person`
   for a project's `Person`) resolves to the catalog's shape inside the scope.
 - **Builders, field sets and IRs capture their catalog.** A builder made inside a scope keeps

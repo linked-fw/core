@@ -49,6 +49,11 @@ import {LinkedStorage} from '../utils/LinkedStorage';
 import type {IDataset} from '../interfaces/IDataset';
 import {getLiveQueryStore, resetLiveQueryStore} from '../live/LiveQueryStore';
 import {Pet} from '../test-helpers/query-fixtures';
+import {describeFuseki, fusekiLive} from '../test-helpers/fuseki-live';
+import {clearAllData, createTestDataset, DATASET_NAME, FUSEKI_BASE_URL} from '../test-helpers/fuseki-test-store';
+import {FusekiStore} from '../test-helpers/FusekiStore';
+import {syncShapes} from '../shapes/syncShapes';
+import {beforeAll} from '@jest/globals';
 import {rdf} from '../ontologies/rdf';
 import {shacl} from '../ontologies/shacl';
 
@@ -126,28 +131,32 @@ class RecordingDataset extends SparqlDataset {
 }
 
 describe('ShapeCatalog', () => {
-  test('from() adds core’s six built-ins as classes and drops data rows for them', () => {
-    const warn = console.warn;
-    const warned: string[] = [];
-    console.warn = (m: string) => warned.push(m);
-    try {
-      const catalog = ShapeCatalog.from([
-        shapeWire(PERSON, PERSON_CLASS, [{label: 'name', path: `${EX}name`}]),
-        {id: SHAPE_IRI, propertyShapes: []} as NodeShapeWire,
-      ]);
-      expect(builtInShapeIris()).toHaveLength(6);
-      for (const iri of builtInShapeIris()) expect(catalog.has(iri)).toBe(true);
-      expect(catalog.get(SHAPE_IRI)).toBe(Shape.shape); // core's code won over the row
-      expect(catalog.size).toBe(7);
-      expect(warned.some((m) => m.includes(SHAPE_IRI))).toBe(true);
-      withShapeCatalog(catalog, () => {
-        expect([...getAllShapeClasses().keys()].sort()).toEqual(builtInShapeIris().sort());
-        expect(getShapeClass(SHAPE_IRI)).toBe(Shape);
-        expect(getShapeClass(PERSON)).toBeUndefined(); // a catalog holds no other class
-      });
-    } finally {
-      console.warn = warn;
-    }
+  test('from() adds core’s six built-ins from code when the data lacks them', () => {
+    const catalog = ShapeCatalog.from([shapeWire(PERSON, PERSON_CLASS, [{label: 'name', path: `${EX}name`}])]);
+    expect(builtInShapeIris()).toHaveLength(6);
+    for (const iri of builtInShapeIris()) expect(catalog.has(iri)).toBe(true);
+    expect(catalog.get(SHAPE_IRI)).toBe(Shape.shape);
+    expect(catalog.size).toBe(7);
+    withShapeCatalog(catalog, () => {
+      expect([...getAllShapeClasses().keys()].sort()).toEqual(builtInShapeIris().sort());
+      expect(getShapeClass(SHAPE_IRI)).toBe(Shape);
+      expect(getShapeClass(PERSON)).toBeUndefined(); // a catalog holds no other class
+    });
+  });
+
+  test('a built-in present in the data comes from the data, not from code', () => {
+    const shapeRow = shapeWire(SHAPE_IRI, `${EX}DataShapeClass`, [
+      {label: 'label', path: 'http://www.w3.org/2000/01/rdf-schema#label'},
+    ]);
+    const catalog = ShapeCatalog.from([shapeRow]);
+    expect(catalog.get(SHAPE_IRI)).not.toBe(Shape.shape);
+    expect(catalog.get(SHAPE_IRI)?.targetClass?.id).toBe(`${EX}DataShapeClass`);
+    expect(catalog.size).toBe(6);
+    withShapeCatalog(catalog, () => {
+      expect(getShapeClass(SHAPE_IRI)).toBeUndefined(); // data, so no class
+      expect(getAllShapeClasses().size).toBe(5); // the other five still come from code
+      expect(getOrCreateShapeAdapter(SHAPE_IRI)?.shape).toBe(catalog.get(SHAPE_IRI));
+    });
   });
 
   test('withShapeCatalog nests, restores in finally, and undefined means the global registry', () => {
@@ -493,4 +502,70 @@ describe('live queries in catalogs', () => {
       if (previous) LinkedStorage.setDefaultDataset(previous);
     }
   });
+});
+
+/**
+ * A minimal store → catalog reader, as a host builds one: every NodeShape with its property
+ * shapes' label, simple path, value shape, node kind and cardinality.
+ */
+async function readCatalog(store: IDataset): Promise<ShapeCatalog> {
+  const rows = (await (SelectBuilder.from(NodeShape)
+    .select((n: any) => [
+      n.targetClass,
+      n.properties.select((p: any) => [p.label, p.path, p.valueShape, p.nodeKind, p.maxCount, p.minCount]),
+    ]) as any).exec(store)) as any[];
+  const wires: NodeShapeWire[] = rows.map((row) => ({
+    id: row.id,
+    label: row.id.slice(row.id.lastIndexOf('/') + 1),
+    ...(row.targetClass?.id ? {targetClass: {id: row.targetClass.id}} : {}),
+    propertyShapes: (row.properties ?? []).map((p: any) => ({
+      id: p.id,
+      label: p.label,
+      path: {id: p.path?.id},
+      ...(p.valueShape?.id ? {valueShape: {id: p.valueShape.id}} : {}),
+      ...(p.nodeKind?.id ? {nodeKind: {id: p.nodeKind.id}} : {}),
+      ...(typeof p.maxCount === 'number' ? {maxCount: p.maxCount} : {}),
+      ...(typeof p.minCount === 'number' ? {minCount: p.minCount} : {}),
+    })),
+  }));
+  return ShapeCatalog.from(wires);
+}
+
+describeFuseki('core built-ins are synced and read back into a catalog (Fuseki)', () => {
+  const store = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME);
+  beforeAll(async () => {
+    if (!fusekiLive) return;
+    await createTestDataset();
+    await clearAllData();
+  });
+
+  test('a sync into an empty store writes the six; a second sync writes nothing; a catalog from the store holds the six from data', async () => {
+    const first = await syncShapes(store as unknown as IDataset);
+    for (const run of first) await run();
+    const stored = await (SelectBuilder.from(NodeShape).select([]) as any).exec(store);
+    const storedIris = (stored as Array<{id: string}>).map((r) => r.id);
+    for (const iri of builtInShapeIris()) expect(storedIris).toContain(iri);
+
+    const second = await syncShapes(store as unknown as IDataset);
+    expect(second).toHaveLength(0);
+
+    const catalog = await readCatalog(store as unknown as IDataset);
+    withShapeCatalog(catalog, () => {
+      expect(getAllShapeClasses().size).toBe(0); // all six came from the data
+      for (const iri of builtInShapeIris()) {
+        expect(catalog.get(iri)).toBeDefined();
+        expect(getShapeClass(iri)).toBeUndefined();
+      }
+      const labels = (iri: string) => catalog.get(iri)!.propertyShapes.map((p) => p.label).sort();
+      expect(labels(NodeShape.shape.id)).toEqual(expect.arrayContaining(['properties', 'targetClass']));
+      expect(labels(SHAPE_IRI)).toEqual(['label', 'type']);
+    });
+    // The data built-ins drive a NodeShape create inside the catalog.
+    const create = withShapeCatalog(catalog, () =>
+      (NodeShape.create({targetClass: {id: `${EX}FromData`}} as never) as unknown as CreateBuilder).withId(
+        `${EX}shape/FromData`,
+      ),
+    );
+    expect(createToSparql(lower(create))).toContain(`<${EX}FromData>`);
+  }, 30000);
 });

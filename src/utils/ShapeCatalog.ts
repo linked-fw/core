@@ -38,22 +38,19 @@ export {
 } from './ShapeClass.js';
 
 /**
- * Core's own shapes, added to every catalog with core's classes.
+ * Core's own shapes, which every catalog holds: from its data, else from core's code.
  *
- * They are code, not data, and identical on every side of a wire, so a synced dataset
- * never holds them (`syncShapes` skips the core package). Data-only shapes still depend
+ * `syncShapes` writes them into a dataset like any package's shapes. Data-only shapes depend
  * on them: a property shape's `type` points at `Shape`, and the shape metamodel itself
  * (`NodeShape`, `PropertyShape`, their `sh:in` lists and complex paths) is how a shape
  * sync reads and writes shapes.
  */
 const BUILT_IN_NAMES = ['Shape', 'NodeShape', 'PropertyShape', 'List', 'PathNode', 'PathList'];
 
-/** The IRIs of core's built-in shapes, which every catalog holds as classes. */
+/** The IRIs of core's six built-in shapes, which every catalog holds. */
 export function builtInShapeIris(): string[] {
   return BUILT_IN_NAMES.map((name) => getNodeShapeUri('@_linked/core', name));
 }
-
-const warnedBuiltInRows = new Set<string>();
 
 export class ShapeCatalog {
   /** For log lines only, e.g. `"<projectId>#<branch>"`. */
@@ -65,7 +62,10 @@ export class ShapeCatalog {
    * @internal
    */
   readonly nodeShapes: ReadonlyMap<string, NodeShapeData>;
-  /** Core's built-in classes by IRI — the only classes a catalog holds. @internal */
+  /**
+   * Core's built-in classes by IRI, for the built-ins the data lacked — the only classes a
+   * catalog holds. @internal
+   */
   readonly shapeClasses: ReadonlyMap<string, typeof Shape>;
 
   private constructor(
@@ -81,11 +81,13 @@ export class ShapeCatalog {
 
   /**
    * Build a catalog from shape metadata or its wire form. Wires are converted as
-   * `registerRuntimeShape` converts them (`fromWire`, the reserved-label warning). Core's
-   * six built-in shapes are added with their classes; a row carrying one of their IRIs is
-   * dropped (core's code wins), with a one-time warning. Unlike the global registry, a
-   * row for an IRI that has a compiled class elsewhere is kept: inside a catalog the
-   * data is the authority.
+   * `registerRuntimeShape` converts them (`fromWire`, the reserved-label warning). Unlike the
+   * global registry, a row for an IRI that has a compiled class elsewhere is kept: inside a
+   * catalog the data is the authority.
+   *
+   * Core's six built-in shapes come from the data like any other shape (`syncShapes` writes
+   * them). Only a built-in the data lacks — a dataset synced by an older core — is added from
+   * core's code, with its class.
    */
   static from(
     shapes:
@@ -100,31 +102,20 @@ export class ShapeCatalog {
 
     const nodeShapes = new Map<string, NodeShapeData>();
     const shapeClasses = new Map<string, typeof Shape>();
-    for (const iri of builtInShapeIris()) {
-      const shapeClass = getRegisteredShapeClass(iri);
-      if (!shapeClass?.shape) continue;
-      shapeClasses.set(iri, shapeClass);
-      nodeShapes.set(iri, shapeClass.shape);
-    }
-
     for (const shape of list) {
       if (!shape?.id) continue;
-      if (shapeClasses.has(shape.id)) {
-        if (!warnedBuiltInRows.has(shape.id)) {
-          warnedBuiltInRows.add(shape.id);
-          console.warn(
-            `[linked] ShapeCatalog${options?.name ? ` '${options.name}'` : ''}: dropped the ` +
-              `data row for '${shape.id}'. It is one of core's built-in shapes, which every ` +
-              `catalog holds as code.`,
-          );
-        }
-        continue;
-      }
       const data = isNodeShapeWire(shape) ? fromWire(shape) : (shape as NodeShapeData);
       for (const ps of data.propertyShapes ?? []) {
         warnOnReservedPropertyLabel(ps.label, data.label, data.id);
       }
       nodeShapes.set(data.id, data);
+    }
+    for (const iri of builtInShapeIris()) {
+      if (nodeShapes.has(iri)) continue;
+      const shapeClass = getRegisteredShapeClass(iri);
+      if (!shapeClass?.shape) continue;
+      shapeClasses.set(iri, shapeClass);
+      nodeShapes.set(iri, shapeClass.shape);
     }
     return new ShapeCatalog(nodeShapes, shapeClasses, options?.name);
   }

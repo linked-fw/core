@@ -5,7 +5,8 @@ summary: >
   can mean different shapes in different catalogs at once. The scope is synchronous and lives on
   the shared registry container; builders, field sets and IRs capture their catalog and every
   place core picks a query up later re-enters it. Registry caches are per catalog. An app with
-  no catalog runs the same code at the same cost. Minor.
+  no catalog runs the same code at the same cost. `syncShapes` now also writes core's six
+  built-in shapes, which a catalog then takes from the data. Minor.
 packages: [core]
 ---
 
@@ -29,8 +30,12 @@ the browser registered every project shape it ever saw into one registry.
   `withShapeCatalog(catalog, fn)`, `getActiveShapeCatalog()`, `catalogOf(queryOrIr)`,
   `shapeCatalogKey(catalog)`, `builtInShapeIris()`. Wires convert as `registerRuntimeShape`
   converts them. Core's six built-ins (`Shape`, `NodeShape`, `PropertyShape`, `List`, `PathNode`,
-  `PathList`) are added as classes; a data row with one of their IRIs is dropped with a one-time
-  warning.
+  `PathList`) come from the data when it has them; only a built-in the data lacks (a dataset
+  synced by an older core) is added from core's code, as a class.
+- **`syncShapes` writes the six built-ins** (owner decision) like every package's shapes, with
+  the same hash skip: the first sync writes them once, later syncs only when their hash changes.
+  Other shapes declared with core's own `linkedShape` (core's test fixtures) are still skipped,
+  and `syncShape` (one shape) still refuses core-package shapes.
 - **State:** `globalThis.__linkedShapeRegistry.activeCatalog`. `withShapeCatalog` calls `fn`
   directly when the catalog is already active; otherwise it sets and restores it in `finally`.
 - **Accessors** (`ShapeClass.ts`): every read of the metadata map or the class map goes through
@@ -98,10 +103,13 @@ the browser registered every project shape it ever saw into one registry.
 ```
 npx linked build            ✔ Build successful
 npm test                    Test Suites: 4 skipped, 103 passed, 103 of 107 total
-                            Tests:       120 skipped, 2289 passed, 2409 total
+                            Tests:       120 skipped, 2291 passed, 2411 total
 ```
 
-`src/tests/shape-catalog.test.ts` (20 tests) covers: built-ins and dropped rows; nesting and
+`src/tests/shape-catalog.test.ts` (22 tests) covers: built-ins from code when the data lacks
+them and from the data when present; a live Fuseki round trip (a sync into an empty store writes
+the six, a second sync writes nothing, a catalog read back from the store holds the six from data
+and drives a `NodeShape` create); nesting and
 restore; two catalogs with one IRI compiled interleaved; per-catalog adapters; a builder awaited
 outside its scope (dataset called outside the catalog); `then()` through `LinkedStorage`;
 `forAll`/`limit`/`FieldSet` outside the scope; a create and an update compiled after the
@@ -110,7 +118,8 @@ built-in `Shape`; a `NodeShape` create with an `sh:in` list and a sequence path 
 without core rows; the catalog's own `getAllNodeShapes()`, class holders and blank-walk
 predicates unaffected by global shapes; a class-built builder outside the catalog capturing
 none; the catalog winning over an authored class; registry writes throwing; live templates per
-catalog and a change touching only the catalog it decodes in. `live-query-store.test.ts` gained
+catalog and a change touching only the catalog it decodes in. `shacl-syncshapes.test.ts` and
+`shape-sync-hash.test.ts` now expect the six built-ins in the sync. `live-query-store.test.ts` gained
 the key and per-catalog invalidation tests, `owned-walk-recursion.test.ts` the per-catalog walk.
 
 Timing (`src/tests/query-compile-timing.test.ts`, median of 5 × 2000 iterations, six
