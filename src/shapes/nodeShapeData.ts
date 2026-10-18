@@ -4,8 +4,9 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
+import {RegistryCache} from '../utils/registryCache.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
-import {getAllNodeShapes, getRegistryVersion, getSuperShapes} from '../utils/ShapeClass.js';
+import {getAllNodeShapes, getSuperShapes} from '../utils/ShapeClass.js';
 
 /**
  * Plain-object SHACL metadata — the QResult-like shape of a `sh:PropertyShape`.
@@ -188,8 +189,8 @@ export function getPropertyShapes(
 
 // The registry scan behind predicate, datatype and dependency resolution, cached on
 // successful lookups only and invalidated by the registry version.
-const propertyShapeCache = new Map<string, PropertyShapeData>();
-let propertyShapeCacheVersion = -1;
+// One map per catalog, as every registry-derived cache.
+const propertyShapeCache = new RegistryCache<string, PropertyShapeData>();
 
 /**
  * Find the property shape declared under a property-shape IRI, across every
@@ -207,12 +208,8 @@ let propertyShapeCacheVersion = -1;
  * still resolve correctly afterwards.
  */
 export function findPropertyShapeById(propertyId: string): PropertyShapeData | undefined {
-  const version = getRegistryVersion();
-  if (version !== propertyShapeCacheVersion) {
-    propertyShapeCache.clear();
-    propertyShapeCacheVersion = version;
-  }
-  const cached = propertyShapeCache.get(propertyId);
+  const cache = propertyShapeCache.get();
+  const cached = cache.get(propertyId);
   if (cached) return cached;
 
   for (const nodeShape of getAllNodeShapes().values()) {
@@ -220,7 +217,7 @@ export function findPropertyShapeById(propertyId: string): PropertyShapeData | u
       (prop: {id?: string}) => prop.id === propertyId,
     );
     if (propertyShape) {
-      propertyShapeCache.set(propertyId, propertyShape);
+      cache.set(propertyId, propertyShape);
       return propertyShape;
     }
   }

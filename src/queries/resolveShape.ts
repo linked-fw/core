@@ -1,5 +1,5 @@
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
-import {getOrCreateShapeAdapter, getShapeClass} from '../utils/ShapeClass.js';
+import {getActiveShapeCatalog, getOrCreateShapeAdapter, getShapeClass} from '../utils/ShapeClass.js';
 
 /**
  * Resolve a shape class or IRI string to a ShapeConstructor.
@@ -20,6 +20,17 @@ export function resolveShape<S extends Shape>(
       throw new Error(`Cannot resolve shape for '${shape}'`);
     }
     return shapeClass as ShapeConstructor<S>;
+  }
+  // Inside a catalog the catalog's data is the authority for every IRI it holds, so an
+  // authored class for one of them (CN's compiled `Person` for a project's `Person`)
+  // resolves to the catalog's shape. A class the catalog does not hold is kept as is.
+  const catalog = getActiveShapeCatalog();
+  if (catalog !== undefined) {
+    const id = shape?.shape?.id;
+    if (id && catalog.has(id)) {
+      const own = getOrCreateShapeAdapter(id);
+      if (own) return own as unknown as ShapeConstructor<S>;
+    }
   }
   return shape;
 }

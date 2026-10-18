@@ -32,6 +32,9 @@ import {
 } from '../sparql/irToAlgebra';
 import type {IRDeleteMutation, IRUpdateMutation} from '../queries/IntermediateRepresentation';
 import {lower} from '../queries/lower';
+import {ShapeCatalog, withShapeCatalog} from '../utils/ShapeCatalog';
+import type {NodeShapeWire} from '../shapes/nodeShapeWire';
+import {shacl} from '../ontologies/shacl';
 
 const PKG = 'owned-walk-recursion-test';
 const {linkedShape} = linkedPackage(PKG);
@@ -652,5 +655,45 @@ describeFuseki('owned walk: recursion — live Fuseki', () => {
       ),
     );
     expect(await count('rdf:nil')).toBe(2);
+  });
+});
+
+describe('owned walk in a shape catalog', () => {
+  const C = 'http://example.org/catalog-walk#';
+  const wire = (name: string, props: NodeShapeWire['propertyShapes']): NodeShapeWire => ({
+    id: `${C}shape/${name}`,
+    label: name,
+    targetClass: {id: `${C}${name}`},
+    propertyShapes: props,
+  });
+  const ownerWith = (contains: boolean) =>
+    ShapeCatalog.from([
+      wire('Owner', [
+        {
+          id: `${C}shape/Owner/parts`,
+          label: 'parts',
+          path: {id: `${C}parts`},
+          valueShape: {id: `${C}shape/Part`},
+          nodeKind: {id: shacl.IRI.id},
+          ...(contains ? {contains: true} : {}),
+        },
+      ]),
+      wire('Part', [
+        {id: `${C}shape/Part/next`, label: 'next', path: {id: `${C}next`}, valueShape: {id: `${C}shape/Part`}, nodeKind: {id: shacl.IRI.id}, contains: true},
+      ]),
+    ]);
+  const deleteIn = (catalog: ShapeCatalog) =>
+    deleteToSparql(
+      lower(withShapeCatalog(catalog, () => DeleteBuilder.from(`${C}shape/Owner`, {id: `${C}o1`}))) as unknown as IRDeleteMutation,
+    );
+
+  test('each catalog walks its own contains edges, for one shape IRI', () => {
+    const owning = deleteIn(ownerWith(true));
+    const plain = deleteIn(ownerWith(false));
+    expect(owning).toContain(`<${C}parts>`);
+    expect(owning).toContain(`<${C}next>`);
+    expect(plain).not.toContain(`<${C}next>`);
+    // Interleaved again: the per-catalog walk caches never mix.
+    expect(deleteIn(ownerWith(true))).toBe(owning);
   });
 });

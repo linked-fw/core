@@ -37,7 +37,7 @@
  * Not covered: `sh:languageIn` / `sh:uniqueLang` (skipped at serialization time
  * too, so there is no metadata to check against) and `sh:hasValue`.
  */
-import {getShapeRegistryInstanceCount} from '../utils/ShapeClass.js';
+import {getShapeRegistryInstanceCount, getQueryShapeClass} from '../utils/ShapeClass.js';
 import {shacl} from '../ontologies/shacl.js';
 import {xsd} from '../ontologies/xsd.js';
 import {isNodeReferenceValue, type NodeReferenceValue} from '../utils/NodeReference.js';
@@ -976,7 +976,7 @@ function resolveValueShape(
 ): NodeShapeData | undefined {
   const own = (value as {shape?: {shape?: NodeShapeData}}).shape?.shape;
   if (!ps.valueShape) return own;
-  const declared = getShapeClass(ps.valueShape)?.shape;
+  const declared = getQueryShapeClass(ps.valueShape)?.shape;
   // A value naming a subclass of the declared shape is validated as that subclass.
   if (own && declared && isSubShapeOf(own, declared)) return own;
   return declared;

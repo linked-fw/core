@@ -4,6 +4,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import {describe, expect, test, beforeEach} from '@jest/globals';
+import {builtInShapeIris} from '../utils/ShapeCatalog';
 import {linkedPackage} from '../utils/Package';
 import {Shape} from '../shapes/Shape';
 import {literalProperty, objectProperty, NodeShape} from '../shapes/SHACL';
@@ -76,7 +77,7 @@ describe('syncShapes', () => {
     expect(plan.every((t) => typeof t === 'function')).toBe(true);
   });
 
-  test('routes create/delete for user shape, delete for orphan, skips framework shapes', async () => {
+  test('routes create/delete for user shape and core built-ins, delete for orphan', async () => {
     const plan = await syncShapes(undefined, {orphanScope: 'all'});
     for (const run of plan) await run(); // sequential for deterministic ordering
 
@@ -89,12 +90,12 @@ describe('syncShapes', () => {
     // orphan: delete only, no create
     expect(deletes).toContain(ORPHAN);
     expect(creates).not.toContain(ORPHAN);
-    // framework shapes never synced
-    expect(creates).not.toContain('https://linked.cm/shape/core/NodeShape');
-    expect(creates).not.toContain('https://linked.cm/shape/core/List');
-    expect(deletes).not.toContain('https://linked.cm/shape/core/PropertyShape');
-    // base Shape has no packageName and must also be excluded
-    expect(creates).not.toContain('https://linked.cm/shape/core/Shape');
+    // core's six built-ins are synced like any package's shapes, the base Shape included
+    for (const iri of builtInShapeIris()) expect(creates).toContain(iri);
+    // other shapes declared with core's own linkedShape are not
+    expect(creates.filter((id) => id.startsWith('https://linked.cm/shape/core/')).sort()).toEqual(
+      builtInShapeIris().sort(),
+    );
   });
 
   test('per-shape ordering: delete runs before create', async () => {
@@ -157,6 +158,16 @@ describe('syncShapes orphanScope (multi-writer, arch-04)', () => {
     expect(creates).not.toContain(FOREIGN_ORPHAN);
   });
 
+  test("'ownedNamespaces' never prunes core's namespace, though every app writes the built-ins", async () => {
+    const CORE_ORPHAN = 'https://linked.cm/shape/core/WrittenByANewerCore';
+    installMock([userIri(), CORE_ORPHAN]);
+    const plan = await syncShapes(undefined, {orphanScope: 'ownedNamespaces'});
+    for (const run of plan) await run();
+    const deletes = calls.filter((c) => c.kind === 'delete').map((c) => c.id);
+    expect(deletes).not.toContain(CORE_ORPHAN);
+    for (const iri of builtInShapeIris()) expect(deletes).toContain(iri); // delete → recreate
+  });
+
   test("'none' prunes nothing — purely additive", async () => {
     const plan = await syncShapes(undefined, {orphanScope: 'none'});
     for (const run of plan) await run();
@@ -191,8 +202,9 @@ describe('syncShapes with a partial registry (deep imports)', () => {
     const creates = storeCalls.filter((c) => c.kind === 'create').map((c) => c.id);
     // only the registered shapes are touched (delete→recreate); neither has a `contains`
     // property or a stored generated shape, so no single-owner shape is deleted or created
-    expect(deletes.sort()).toEqual([TOther.shape.id, TUser.shape.id].sort());
-    expect(creates.sort()).toEqual([TOther.shape.id, TUser.shape.id].sort());
+    const touched = [TOther.shape.id, TUser.shape.id, ...builtInShapeIris()].sort();
+    expect(deletes.sort()).toEqual(touched);
+    expect(creates.sort()).toEqual(touched);
   });
 
   test("explicit 'all' still prunes every store shape the process did not load", async () => {

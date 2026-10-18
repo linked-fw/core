@@ -32,6 +32,12 @@ import {
 } from './IRMutation.js';
 import {toWhere} from './IRDesugar.js';
 import {lowerWhereToIR} from './IRLower.js';
+import {
+  attachCatalog,
+  catalogOf,
+  getActiveShapeCatalog,
+  withShapeCatalog,
+} from '../utils/ShapeClass.js';
 import type {WherePath} from './SelectQuery.js';
 import type {
   IRAskQuery,
@@ -184,7 +190,7 @@ function lowerAsk(input: RawAskInput): IRAskQuery {
       subject instanceof PendingQueryContext
         ? resolveContextId(subject.contextName, true)!
         : (subject as {id?: string} | undefined)?.id;
-    return {kind: 'ask', patterns: [], subjectId: id};
+    return attachCatalog<IRAskQuery>({kind: 'ask', patterns: [], subjectId: id});
   }
   const selected = buildSelectQuery({
     entries: [],
@@ -194,14 +200,14 @@ function lowerAsk(input: RawAskInput): IRAskQuery {
     where: input.where,
     minusEntries: input.minusEntries,
   });
-  return {
+  return attachCatalog<IRAskQuery>({
     kind: 'ask',
     root: selected.root,
     patterns: selected.patterns,
     where: selected.where,
     subjectId: selected.subjectId,
     subjectIds: selected.subjectIds,
-  };
+  });
 }
 
 /**
@@ -259,7 +265,7 @@ function lowerCount(input: RawCountInput): IRCountQuery {
     where: input.where,
     minusEntries: input.minusEntries,
   });
-  return {
+  return attachCatalog<IRCountQuery>({
     kind: 'count',
     root: selected.root,
     patterns: selected.patterns,
@@ -267,7 +273,7 @@ function lowerCount(input: RawCountInput): IRCountQuery {
     subjectId: selected.subjectId,
     subjectIds: selected.subjectIds,
     alias: COUNT_ALIAS,
-  };
+  });
 }
 
 export function lower(query: LowerableSelect): IRSelectQuery;
@@ -285,6 +291,12 @@ export function lower(
   | IRCreateQuery
   | IRUpdateQuery
   | IRDeleteQuery {
+  // Lower in the catalog the query captured; the IR it returns records it (non-enumerable
+  // `catalog`) for the compile that may run after an await.
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => lower(query as LowerableSelect));
+  }
   switch (query.__queryKind) {
     case 'select':
       return buildSelectQuery(query.toRawInput());

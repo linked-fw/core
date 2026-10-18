@@ -1246,6 +1246,30 @@ import {lower} from '@_linked/core';
 const ir = lower(CreateBuilder.from(Person).set({name: 'Alice'}));
 ```
 
+### Shape catalogs — queries against shapes you do not register
+
+The shape registry holds one definition per IRI. A host serving several projects (or branches)
+that share shape IRIs with different properties resolves each query against a `ShapeCatalog`
+instead:
+
+```typescript
+import {ShapeCatalog, withShapeCatalog, fromJSON} from '@_linked/core';
+
+const branch = ShapeCatalog.from(nodeShapeWires, {name: 'project-1#main'}); // immutable
+const query = withShapeCatalog(branch, () =>
+  SelectBuilder.from('https://example.org/shape/Person').select(['name']),
+);
+await query; // lowers and compiles against `branch`, though the scope has closed
+
+const received = fromJSON(json, {catalog: branch}); // the wire never carries a catalog
+```
+
+A builder keeps the catalog it was made in (`catalogOf(query)`), through clones, `exists()`,
+`count()`, lowering, compile and live queries. Inside a scope every registry read sees the
+catalog's shapes plus core's six built-ins (always from code, though `syncShapes` writes them
+into every dataset); a class the catalog does not hold keeps resolving
+globally. See [runtime instances](./docs/architecture/runtime-instances.md#shape-catalogs).
+
 ### DSL-JSON — the standard query format
 
 Every Linked query — select **and** every mutation — has one canonical, language-neutral form:

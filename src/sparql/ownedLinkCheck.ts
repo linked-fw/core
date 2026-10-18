@@ -29,7 +29,13 @@ import type {
   IRUpsertMutation,
 } from '../queries/IntermediateRepresentation.js';
 import {findPropertyShapeById, type PropertyShapeData} from '../shapes/nodeShapeData.js';
-import {getSubShapes, getTargetClassId} from '../utils/ShapeClass.js';
+import {
+  catalogOf,
+  getActiveShapeCatalog,
+  getSubShapes,
+  getTargetClassId,
+  withShapeCatalog,
+} from '../utils/ShapeClass.js';
 import {rdf} from '../ontologies/rdf.js';
 import {assertSafeIri} from './sparqlUtils.js';
 import {isBareNodeReference} from './irToAlgebra.js';
@@ -133,6 +139,11 @@ function walk(data: IRNodeData, cache: Map<string, OwnedRule | null>, out: Owned
 
 /** Every owned link in a create, update, upsert or update-where mutation. Pure; no I/O. */
 export function collectOwnedLinks(ir: OwnedLinkMutation): OwnedLink[] {
+  // Resolves the rules in the catalog the IR was lowered in.
+  const catalog = catalogOf(ir);
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => collectOwnedLinks(ir));
+  }
   const out: OwnedLink[] = [];
   walk(ir.data, new Map(), out);
   return out;

@@ -12,9 +12,14 @@ import {getQueryContext, setQueryContext} from '../queries/QueryContext';
 import {isContextRefJSON, resolveContextId, CONTEXT_REF_KEY} from '../queries/ContextRef';
 import {AskBuilder} from '../queries/AskBuilder';
 import {resetLiveQueryStore, getLiveQueryStore, LiveQueryStore} from '../live/LiveQueryStore';
-import {splitQuery, templateKey, stripSubjects} from '../live/keys';
+import {splitQuery, templateKey, stripSubjects, stableStringify} from '../live/keys';
 import {LIVE_STORE_KEY} from '../live/registry';
 import {Person, Team, ids} from '../test-helpers/live-fixtures';
+import {ShapeCatalog, withShapeCatalog} from '../utils/ShapeCatalog';
+import {toWire} from '../shapes/nodeShapeWire';
+
+/** A catalog holding the fixtures' Person and Team as data, as a project branch would. */
+const fixtureCatalog = () => ShapeCatalog.from([toWire(Person.shape), toWire(Team.shape)]);
 
 type Row = {id: string; [k: string]: unknown};
 
@@ -107,6 +112,19 @@ describe('keys', () => {
     expect(params).toEqual({subject: ids.T1, limit: 5});
     expect(templateKey(Team.select((t) => t.name).for(ids.T1))).toBe(
       templateKey(Team.select((t) => t.name).for(ids.T4)),
+    );
+  });
+
+  test('a template key names its catalog; the global registry keeps the bare JSON', () => {
+    const catalog = fixtureCatalog();
+    const global = Team.select((t) => t.name);
+    const scoped = withShapeCatalog(catalog, () => Team.select((t) => t.name));
+    expect(templateKey(global)).toBe(stableStringify(splitQuery(global).templateJson));
+    expect(splitQuery(scoped).templateJson).toEqual(splitQuery(global).templateJson);
+    expect(templateKey(scoped)).not.toBe(templateKey(global));
+    expect(templateKey(scoped).endsWith(`|${templateKey(global)}`)).toBe(true);
+    expect(templateKey(stripSubjects(withShapeCatalog(catalog, () => Team.select((t) => t.name).for(ids.T1))))).toBe(
+      templateKey(scoped),
     );
   });
 
@@ -425,6 +443,25 @@ describe('LiveQueryStore', () => {
       (globalThis as any)[LIVE_STORE_KEY] = saved;
     }
     expect(getLiveQueryStore()).toBe(store);
+  });
+
+  test('one query in a catalog and globally: two instances, each invalidated on its own', async () => {
+    const catalog = fixtureCatalog();
+    const global = Person.select((p) => p.name).for(ids.P1).live(() => {});
+    const scoped = withShapeCatalog(catalog, () => Person.select((p) => p.name).for(ids.P1)).live(() => {});
+    await settle();
+    expect(global.key).not.toBe(scoped.key);
+    expect(dataset.selects).toBe(2);
+    store.invalidate(withShapeCatalog(catalog, () => Person.select((p) => p.name)));
+    await settle();
+    expect(dataset.selects).toBe(3);
+    store.invalidate(Person.select((p) => p.name));
+    await settle();
+    expect(dataset.selects).toBe(4);
+    // A node id is not a catalog's: both instances mention P1.
+    store.invalidate({id: ids.P1});
+    await settle();
+    expect(dataset.selects).toBe(6);
   });
 
   test('invalidate by id, by query and by template refetches the right instances', async () => {

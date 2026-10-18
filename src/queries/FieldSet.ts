@@ -2,7 +2,17 @@ import type {NodeShapeData, PropertyShapeData} from '../shapes/SHACL.js';
 import {getUniquePropertyShapes, getPropertyShape} from '../shapes/nodeShapeData.js';
 import type {Shape, ShapeConstructor} from '../shapes/Shape.js';
 import {PropertyPath, walkPropertyPath} from './PropertyPath.js';
-import {getShapeClass, getAllShapeClasses, getNodeShape, getAllNodeShapes} from '../utils/ShapeClass.js';
+import {
+  captureCatalog,
+  getActiveShapeCatalog,
+  getAllNodeShapes,
+  getAllShapeClasses,
+  getNodeShape,
+  getShapeClass,
+  withShapeCatalog,
+  getQueryShapeClass,
+} from '../utils/ShapeClass.js';
+import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import type {WherePath} from './SelectQuery.js';
 import {createProxiedPathBuilder} from './ProxiedPathBuilder.js';
 import {isExpressionNode, ExpressionNode} from '../expressions/ExpressionNode.js';
@@ -209,9 +219,35 @@ export class FieldSet<R = any, Source = any> {
   readonly innerOffset?: number;
   readonly innerOrderBy?: FieldSetInnerOrderBy[];
 
-  private constructor(shape: NodeShapeData, entries: FieldSetEntry[]) {
+  private readonly _catalog: ShapeCatalog | undefined;
+
+  private constructor(
+    shape: NodeShapeData,
+    entries: FieldSetEntry[],
+    catalog: ShapeCatalog | undefined = FieldSet.captureFor(shape),
+  ) {
     this.shape = shape;
     this.entries = entries;
+    this._catalog = catalog;
+  }
+
+  /** The catalog this FieldSet resolves shapes in (undefined = the global registry). */
+  get catalog(): ShapeCatalog | undefined {
+    return this._catalog;
+  }
+
+  /**
+   * The catalog a FieldSet rooted at `shape` captures: the active one for an IRI or a
+   * shape it holds, none for a shape it does not (an authored class built by code that
+   * runs inside a project scope), else the catalog an adapter class came from.
+   */
+  private static captureFor(
+    shape: ShapeConstructor<any> | NodeShapeData | string,
+  ): ShapeCatalog | undefined {
+    if (typeof shape === 'function') return captureCatalog(shape);
+    const active = getActiveShapeCatalog();
+    if (active === undefined || typeof shape === 'string') return active;
+    return active.has(shape.id) ? active : undefined;
   }
 
   // ---------------------------------------------------------------------------
@@ -233,6 +269,10 @@ export class FieldSet<R = any, Source = any> {
     shape: ShapeConstructor<any> | NodeShapeData | string,
     fieldsOrFn: FieldSetInput[] | ((p: any) => any),
   ): FieldSet<any> {
+    const catalog = FieldSet.captureFor(shape);
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => FieldSet.for(shape as string, fieldsOrFn as FieldSetInput[]));
+    }
     const resolved = FieldSet.resolveShapeInput(shape);
     const resolvedShape = resolved.nodeShape;
 
@@ -301,6 +341,10 @@ export class FieldSet<R = any, Source = any> {
   static all<S extends Shape>(shape: ShapeConstructor<S>, opts?: {depth?: number}): FieldSet;
   static all(shape: NodeShapeData | string, opts?: {depth?: number}): FieldSet;
   static all(shape: ShapeConstructor<any> | NodeShapeData | string, opts?: {depth?: number}): FieldSet {
+    const catalog = FieldSet.captureFor(shape);
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => FieldSet.all(shape as string, opts));
+    }
     const depth = opts?.depth ?? 1;
     if (depth < 1) {
       throw new Error(
@@ -330,7 +374,7 @@ export class FieldSet<R = any, Source = any> {
 
       // If depth > 1, recurse into nested shapes
       if (depth > 1 && ps.valueShape) {
-        const nestedShapeClass = getShapeClass(ps.valueShape);
+        const nestedShapeClass = getQueryShapeClass(ps.valueShape);
         if (nestedShapeClass?.shape && !visited.has(nestedShapeClass.shape.id)) {
           visited.add(nestedShapeClass.shape.id);
           const nestedFs = FieldSet.allForShape(nestedShapeClass.shape, depth - 1, visited);
@@ -378,7 +422,7 @@ export class FieldSet<R = any, Source = any> {
       }
     }
 
-    return new FieldSet(shape, merged);
+    return new FieldSet(shape, merged, sets[0]._catalog);
   }
 
   // ---------------------------------------------------------------------------
@@ -387,8 +431,12 @@ export class FieldSet<R = any, Source = any> {
 
   /** Returns a new FieldSet with only the given fields. */
   select(fields: FieldSetInput[]): FieldSet {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.select(fields));
+    }
     const entries = FieldSet.resolveInputs(this.shape, fields);
-    return new FieldSet(this.shape, entries);
+    return new FieldSet(this.shape, entries, this._catalog);
   }
 
   /**
@@ -399,7 +447,7 @@ export class FieldSet<R = any, Source = any> {
   private cloneWith(
     overrides: Partial<Pick<FieldSet, 'innerLimit' | 'innerOffset' | 'innerOrderBy'>>,
   ): this {
-    const clone = new FieldSet(this.shape, this.entries as FieldSetEntry[]) as this;
+    const clone = new FieldSet(this.shape, this.entries as FieldSetEntry[], this._catalog) as this;
     // The sub-select carrier fields are declared `readonly` (normally set once at
     // construction via `forSubSelect`). Copy this FieldSet's identity onto the
     // clone through a mutable view, then layer the pagination overrides on top.
@@ -442,6 +490,10 @@ export class FieldSet<R = any, Source = any> {
     paths: string | string[] | ((p: any) => unknown),
     direction: 'ASC' | 'DESC' = 'ASC',
   ): this {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.orderBy(paths, direction));
+    }
     const orderBy: FieldSetInnerOrderBy[] =
       typeof paths === 'function'
         ? this.orderByFromProxy(paths, direction)
@@ -480,6 +532,10 @@ export class FieldSet<R = any, Source = any> {
 
   /** Returns a new FieldSet with additional entries. */
   add(fields: FieldSetInput[]): FieldSet {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.add(fields));
+    }
     const newEntries = FieldSet.resolveInputs(this.shape, fields);
     // Deduplicate
     const existing = new Set(this.entries.map((e) => e.path.toString()));
@@ -489,7 +545,7 @@ export class FieldSet<R = any, Source = any> {
         combined.push(entry);
       }
     }
-    return new FieldSet(this.shape, combined);
+    return new FieldSet(this.shape, combined, this._catalog);
   }
 
   /** Returns a new FieldSet without entries matching the given labels. */
@@ -498,13 +554,17 @@ export class FieldSet<R = any, Source = any> {
     const filtered = (this.entries as FieldSetEntry[]).filter(
       (e) => !labelSet.has(e.path.terminal?.label),
     );
-    return new FieldSet(this.shape, filtered);
+    return new FieldSet(this.shape, filtered, this._catalog);
   }
 
   /** Synonym for replacing all entries — returns a new FieldSet with only the given fields. */
   set(fields: FieldSetInput[]): FieldSet {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.set(fields));
+    }
     const entries = FieldSet.resolveInputs(this.shape, fields);
-    return new FieldSet(this.shape, entries);
+    return new FieldSet(this.shape, entries, this._catalog);
   }
 
   /** Returns a new FieldSet keeping only entries matching the given labels. */
@@ -513,7 +573,7 @@ export class FieldSet<R = any, Source = any> {
     const filtered = (this.entries as FieldSetEntry[]).filter(
       (e) => labelSet.has(e.path.terminal?.label),
     );
-    return new FieldSet(this.shape, filtered);
+    return new FieldSet(this.shape, filtered, this._catalog);
   }
 
   /** Returns all PropertyPaths in this FieldSet. */
@@ -535,6 +595,10 @@ export class FieldSet<R = any, Source = any> {
    * Shape is identified by its IRI, paths by dot-separated labels.
    */
   toJSON(): FieldSetJSON {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.toJSON());
+    }
     return {shape: this.shape.id, fields: this.toFieldsJSON()};
   }
 
@@ -591,7 +655,7 @@ export class FieldSet<R = any, Source = any> {
     const seg = entry.path.segments[idx] as PropertyShapeData | undefined;
     const valueShapeId = (seg as unknown as {valueShape?: {id: string}})
       ?.valueShape?.id;
-    return (valueShapeId && getShapeClass(valueShapeId)?.shape) || this.shape;
+    return (valueShapeId && getQueryShapeClass(valueShapeId)?.shape) || this.shape;
   }
 
   /**
@@ -646,7 +710,7 @@ export class FieldSet<R = any, Source = any> {
       const idx = opts.whereIndex ?? path.segments.length - 1;
       const seg = path.segments[idx] as PropertyShapeData | undefined;
       const valueShapeId = (seg as unknown as {valueShape?: {id: string}})?.valueShape?.id;
-      const scopedShape = (valueShapeId && getShapeClass(valueShapeId)?.shape) || shape;
+      const scopedShape = (valueShapeId && getQueryShapeClass(valueShapeId)?.shape) || shape;
       entry.scopedFilter = deserializeWherePath(scopedShape, opts.where);
       entry.scopedFilterIndex = idx;
     }
@@ -674,7 +738,7 @@ export class FieldSet<R = any, Source = any> {
   private static nestedShapeOf(path: PropertyPath): NodeShapeData | undefined {
     const seg = path.segments[path.segments.length - 1] as PropertyShapeData | undefined;
     const valueShapeId = (seg as unknown as {valueShape?: {id: string}})?.valueShape?.id;
-    return (valueShapeId && getShapeClass(valueShapeId)?.shape) || undefined;
+    return (valueShapeId && getQueryShapeClass(valueShapeId)?.shape) || undefined;
   }
 
   // ---------------------------------------------------------------------------
@@ -686,8 +750,20 @@ export class FieldSet<R = any, Source = any> {
    * Accepts: ShapeConstructor (class with .shape), NodeShapeData, or IRI string.
    */
   private static resolveShapeInput(shape: ShapeConstructor<any> | NodeShapeData | string): {nodeShape: NodeShapeData; shapeClass?: ShapeConstructor<any>} {
+    // Inside a catalog the catalog's data is the authority for every IRI it holds, so an
+    // authored class (or metadata) for one of them resolves to the catalog's shape — as
+    // `resolveShape` does for the builders.
+    const catalog = getActiveShapeCatalog();
+    if (catalog !== undefined && typeof shape !== 'string') {
+      const id = typeof shape === 'function' ? shape.shape?.id : shape?.id;
+      const own = id ? catalog.get(id) : undefined;
+      if (own) {
+        const shapeClass = getQueryShapeClass(id!);
+        return shapeClass ? {nodeShape: own, shapeClass} : {nodeShape: own};
+      }
+    }
     if (typeof shape === 'string') {
-      const shapeClass = getShapeClass(shape);
+      const shapeClass = getQueryShapeClass(shape);
       if (shapeClass?.shape) {
         return {nodeShape: shapeClass.shape, shapeClass};
       }
@@ -705,7 +781,7 @@ export class FieldSet<R = any, Source = any> {
     }
     // NodeShapeData: has .id directly — try to look up its ShapeConstructor for full proxy support
     const nodeShape = shape as NodeShapeData;
-    const shapeClass = nodeShape.id ? getShapeClass(nodeShape.id) : undefined;
+    const shapeClass = nodeShape.id ? getQueryShapeClass(nodeShape.id) : undefined;
     return shapeClass
       ? {nodeShape, shapeClass}
       : {nodeShape};
@@ -749,7 +825,7 @@ export class FieldSet<R = any, Source = any> {
                 `Property '${key}' has no valueShape; cannot resolve nested fields`,
               );
             }
-            const nestedShapeClass = getShapeClass(basePropertyShape.valueShape);
+            const nestedShapeClass = getQueryShapeClass(basePropertyShape.valueShape);
             if (!nestedShapeClass || !nestedShapeClass.shape) {
               throw new Error(
                 `Cannot resolve valueShape for property '${key}'`,
@@ -927,11 +1003,17 @@ export class FieldSet<R = any, Source = any> {
   }
 
   private static shapeByLabel(label: string): NodeShapeData | undefined {
+    // Inside a catalog every shape is data (core's built-ins aside), so scan its shapes;
+    // the global registry keeps scanning authored classes.
+    const matches = (shape?: NodeShapeData): shape is NodeShapeData =>
+      !!shape && (shape.label === label || FieldSet.labelOfId(shape.id) === label);
+    if (getActiveShapeCatalog() !== undefined) {
+      for (const shape of getAllNodeShapes().values()) if (matches(shape)) return shape;
+      return undefined;
+    }
     for (const cls of getAllShapeClasses().values()) {
       const shape = (cls as unknown as {shape?: NodeShapeData}).shape;
-      if (shape && (shape.label === label || FieldSet.labelOfId(shape.id) === label)) {
-        return shape;
-      }
+      if (matches(shape)) return shape;
     }
     return undefined;
   }

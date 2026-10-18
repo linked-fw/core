@@ -8,6 +8,7 @@
  * after a sync sees what a real store would.
  */
 import {describe, expect, test, beforeEach} from '@jest/globals';
+import {builtInShapeIris} from '../utils/ShapeCatalog';
 import {linkedPackage} from '../utils/Package';
 import {Shape} from '../shapes/Shape';
 import {literalProperty, objectProperty} from '../shapes/SHACL';
@@ -58,7 +59,8 @@ class HProject extends Shape {
 }
 
 const ORPHAN = 'https://linked.cm/shape/shapehash-test/Gone';
-const userIris = () => [HPerson.shape.id, HImage.shape.id, HProject.shape.id];
+// Core's six built-ins are synced like any package's shapes.
+const userIris = () => [HPerson.shape.id, HImage.shape.id, HProject.shape.id, ...builtInShapeIris()];
 
 type Call = {kind: 'create' | 'delete' | 'select'; id?: string};
 
@@ -112,7 +114,7 @@ describe('syncShapes skips unchanged shapes (core:shapeHash)', () => {
 
   test('first sync writes every shape and stores a 64-hex hash on each', async () => {
     const plan = await syncShapes(s.store);
-    expect(plan).toHaveLength(3);
+    expect(plan).toHaveLength(userIris().length);
     await run(plan);
     expect(s.ids('create').sort()).toEqual(userIris().sort());
     for (const iri of userIris()) expect(s.shapes.get(iri)).toMatch(/^[0-9a-f]{64}$/);
@@ -180,7 +182,7 @@ describe('syncShapes skips unchanged shapes (core:shapeHash)', () => {
     await run(await syncShapes(s.store));
     s.reset();
     const plan = await syncShapes(s.store, {force: true});
-    expect(plan).toHaveLength(3);
+    expect(plan).toHaveLength(userIris().length);
     expect(s.calls).toEqual([]); // no read at plan time
     await run(plan);
     expect(s.ids('create').sort()).toEqual(userIris().sort());

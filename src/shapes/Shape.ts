@@ -15,6 +15,7 @@ import type {NodeId} from '../queries/MutationQuery.js';
 import {QueryBuilder} from '../queries/QueryBuilder.js';
 import {AskBuilder} from '../queries/AskBuilder.js';
 import {CountBuilder} from '../queries/CountBuilder.js';
+import {resolveShape} from '../queries/resolveShape.js';
 import type {PendingQueryContext} from '../queries/QueryContext.js';
 import type {IDataset} from '../interfaces/IDataset.js';
 import {CreateBuilder} from '../queries/CreateBuilder.js';
@@ -287,7 +288,7 @@ export abstract class Shape {
       );
     }
     return CountBuilder.of({
-      shapeClass: this as ShapeConstructor<S>,
+      shapeClass: resolveShape(this as ShapeConstructor<S>),
     }).exec(target);
   }
 

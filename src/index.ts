@@ -33,7 +33,15 @@ export {SelectBuilder, QueryBuilder} from './queries/QueryBuilder.js';
 export {lower} from './queries/lower.js';
 export type {LowerableQuery} from './queries/lower.js';
 export {fromJSON} from './queries/fromJSON.js';
-export type {QueryJSON} from './queries/fromJSON.js';
+export type {QueryJSON, FromJSONOptions} from './queries/fromJSON.js';
+// Shape catalogs: resolve queries against a set of shapes without registering them.
+export {
+  ShapeCatalog,
+  withShapeCatalog,
+  getActiveShapeCatalog,
+  catalogOf,
+  shapeCatalogKey,
+} from './utils/ShapeCatalog.js';
 export {
   getQueryContext,
   setQueryContext,

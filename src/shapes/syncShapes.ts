@@ -18,10 +18,11 @@ import {serializePathToNodeData} from './serializePathToNodeData.js';
 import {buildSingleOwnerConstraints} from './singleOwnerConstraint.js';
 import {QueryBuilder} from '../queries/QueryBuilder.js';
 import {sha256Hex} from '../utils/sha256.js';
+import {builtInShapeIris} from '../utils/ShapeCatalog.js';
 
 /**
- * The npm scope of framework shapes (NodeShape/PropertyShape/List/PathNode/Shape) that
- * describe the meta-model itself and must never be synced as user data.
+ * The npm scope of core's shapes. Only its six built-ins (`builtInShapeIris`) are synced; any
+ * other shape declared with core's own `linkedShape` (core's test fixtures) is not.
  */
 const FRAMEWORK_PACKAGE = '@_linked/core';
 
@@ -290,8 +291,9 @@ function shapeNamespace(iri: string): string {
 }
 
 /**
- * Plan an idempotent sync of all code-registered (non-framework) NodeShapes into the store as
- * SHACL data — the forward (code → graph) materialization of arch-05 "code is canonical".
+ * Plan an idempotent sync of all code-registered NodeShapes into the store as SHACL data — the
+ * forward (code → graph) materialization of arch-05 "code is canonical". Core's six built-in
+ * shapes are included, like any package's; other shapes in the core package are not.
  *
  * Returns built-but-unexecuted thunks; the caller controls execution and batching:
  * ```ts
@@ -328,20 +330,24 @@ function shapeNamespace(iri: string): string {
  * parameter: it feeds the stored-hash read and the orphan-detection read (so both are computed
  * against the same store they'll be written to) and every delete/create thunk. Omitted → the global router;
  * the returned thunks stay nullary either way.
+ *
+ * It enumerates the globally registered classes, so it must run outside any `withShapeCatalog`
+ * scope: inside one it would see only core's built-ins, which it skips.
  */
 export async function syncShapes(
   ds?: IDataset,
   options?: SyncShapesOptions,
 ): Promise<Array<() => Promise<void>>> {
   const orphanScope = options?.orphanScope ?? 'none';
-  // 1. Enumerate code-registered user shapes (exclude framework/meta shapes).
+  // 1. Enumerate code-registered shapes: every package's, and core's six built-ins (`Shape`,
+  //    `NodeShape`, `PropertyShape`, `List`, `PathNode`, `PathList`), so a dataset is a complete
+  //    shape catalog on its own. Other core-package shapes and classes with no package are skipped.
+  const builtIns = new Set(builtInShapeIris());
   const userShapes: Array<{iri: string; nodeShape: NodeShapeData}> = [];
   for (const [iri, shapeClass] of getAllShapeClasses()) {
     if (!shapeClass?.shape) continue;
     const pkg = (shapeClass as {packageName?: string}).packageName;
-    // Skip framework/meta shapes: the core package, and the base `Shape` which is registered
-    // directly (no applyLinkedShape) and therefore carries no packageName.
-    if (!pkg || pkg === FRAMEWORK_PACKAGE) continue;
+    if (!builtIns.has(iri) && (!pkg || pkg === FRAMEWORK_PACKAGE)) continue;
     userShapes.push({iri, nodeShape: shapeClass.shape});
   }
   const localShapeIris = new Set(userShapes.map((s) => s.iri));
@@ -356,7 +362,10 @@ export async function syncShapes(
     for (const generated of generatedIrisOf(nodeShape, iri)) localShapeIris.add(generated);
   }
   // Namespaces this process actually writes — the ownership scope for `'ownedNamespaces'` pruning.
-  const ownedNamespaces = new Set(userShapes.map((s) => shapeNamespace(s.iri)));
+  // Core's namespace is never one: every app writes the built-ins, and no app owns core's shapes.
+  const ownedNamespaces = new Set(
+    userShapes.filter((s) => !builtIns.has(s.iri)).map((s) => shapeNamespace(s.iri)),
+  );
 
   const thunks: Array<() => Promise<void>> = [];
 

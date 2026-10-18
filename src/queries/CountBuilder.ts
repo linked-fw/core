@@ -36,6 +36,8 @@ import {
 } from './QueryBuilderSerialization.js';
 import type {CountQuery, CountQueryJSON, RawCountInput} from './CountQuery.js';
 import {requireLiveQueryStore} from '../live/registry.js';
+import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
+import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
 
 /**
@@ -45,6 +47,8 @@ import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryS
  * `shapeClass` is required — a shapeless count would count every node in the store.
  */
 export type CountSpec = {
+  /** The catalog the builder resolves in; absent = captured from the active one. */
+  catalog?: ShapeCatalog;
   shapeClass: ShapeConstructor<any>;
   subject?: NodeReferenceValue | PendingQueryContext;
   subjects?: NodeReferenceValue[];
@@ -56,9 +60,16 @@ export type CountSpec = {
 
 export class CountBuilder implements PromiseLike<number>, Promise<number> {
   private readonly _spec: CountSpec;
+  private readonly _catalog: ShapeCatalog | undefined;
 
   private constructor(spec: CountSpec) {
     this._spec = spec;
+    this._catalog = 'catalog' in spec ? spec.catalog : captureCatalog(spec.shapeClass);
+  }
+
+  /** The catalog this builder resolves shapes in (undefined = the global registry). */
+  get catalog(): ShapeCatalog | undefined {
+    return this._catalog;
   }
 
   /** Build from an assembled spec — used by `.toCount()` and `Shape.count()`. */
@@ -75,6 +86,10 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
   }
 
   toRawInput(): RawCountInput {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.toRawInput());
+    }
     const {shapeClass, subject, subjects, where, minusEntries, nullSubject} =
       this._spec;
     const input: RawCountInput = {shape: shapeClass as any};
@@ -91,6 +106,10 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
   }
 
   toJSON(): CountQueryJSON {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.toJSON());
+    }
     const {shapeClass, subject, subjects, where, minusEntries, nullSubject} =
       this._spec;
     const shapeId = shapeClass.shape?.id;
