@@ -1,6 +1,6 @@
 import type {PropertyShapeData, NodeShapeData} from '../shapes/SHACL.js';
 import {getPropertyShape} from '../shapes/nodeShapeData.js';
-import {getShapeClass} from '../utils/ShapeClass.js';
+import {getQueryShapeClass} from '../utils/ShapeClass.js';
 
 /**
  * A value object representing a sequence of property traversals from a root shape.
@@ -78,7 +78,7 @@ export function walkPropertyPath(shape: NodeShapeData, path: string): PropertyPa
           `Property '${label}' on shape '${currentShape.label || currentShape.id}' has no valueShape; cannot traverse further in path '${path}'`,
         );
       }
-      const shapeClass = getShapeClass(propertyShape.valueShape);
+      const shapeClass = getQueryShapeClass(propertyShape.valueShape);
       if (!shapeClass || !shapeClass.shape) {
         throw new Error(
           `Cannot resolve valueShape '${propertyShape.valueShape.id}' for property '${label}' in path '${path}'`,

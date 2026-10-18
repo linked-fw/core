@@ -1,4 +1,6 @@
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
+import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
+import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import {resolveShape} from './resolveShape.js';
 import type {UpdatePartial} from './QueryFactory.js';
 import type {CreateResponse} from './CreateQuery.js';
@@ -16,6 +18,8 @@ import type {CreateLowerSpec} from './mutationLowerSpec.js';
  */
 interface CreateBuilderInit<S extends Shape> {
   shape: ShapeConstructor<S>;
+  /** The catalog the builder resolves in; absent = captured from the active one. */
+  catalog?: ShapeCatalog;
   data?: UpdatePartial<S>;
   fixedId?: string;
 }
@@ -41,9 +45,12 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
   private readonly _data?: UpdatePartial<S>;
   private readonly _fixedId?: string;
 
+  private readonly _catalog: ShapeCatalog | undefined;
+
   private constructor(init: CreateBuilderInit<S>) {
     super();
     this._shape = init.shape;
+    this._catalog = 'catalog' in init ? init.catalog : captureCatalog(init.shape);
     this._data = init.data;
     this._fixedId = init.fixedId;
   }
@@ -53,6 +60,7 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
       shape: this._shape,
       data: this._data,
       fixedId: this._fixedId,
+      catalog: this._catalog,
       ...overrides,
     });
   }
@@ -102,8 +110,17 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
     return this._shape.shape;
   }
 
+  /** The catalog this builder resolves shapes in (undefined = the global registry). */
+  get catalog(): ShapeCatalog | undefined {
+    return this._catalog;
+  }
+
   /** @internal The IR-free lowering spec consumed by `lower()`. Validates inputs. */
   _lowerSpec(): CreateLowerSpec<S> {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this._lowerSpec());
+    }
     if (!this._data) {
       throw new Error(
         'CreateBuilder requires .set(data) before it can be lowered. Specify what to create.',
@@ -127,6 +144,10 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
    * so the result is concrete and JSON-safe, then encodes the node description.
    */
   toJSON(): CreateMutationJSON {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.toJSON());
+    }
     if (!this._data) {
       throw new Error('CreateBuilder requires .set(data) before .toJSON().');
     }

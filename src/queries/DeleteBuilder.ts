@@ -1,4 +1,6 @@
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
+import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
+import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import {resolveShape} from './resolveShape.js';
 import type {DeleteResponse} from './DeleteQuery.js';
 import type {NodeId} from './MutationQuery.js';
@@ -24,6 +26,8 @@ export type DeleteId = NodeId | PendingQueryContext;
  */
 interface DeleteBuilderInit<S extends Shape> {
   shape: ShapeConstructor<S>;
+  /** The catalog the builder resolves in; absent = captured from the active one. */
+  catalog?: ShapeCatalog;
   ids?: DeleteId[];
   mode?: DeleteMode;
   whereFn?: WhereClause<S>;
@@ -52,9 +56,12 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
   private readonly _whereFn?: WhereClause<S>;
   private readonly _where?: WherePath;
 
+  private readonly _catalog: ShapeCatalog | undefined;
+
   private constructor(init: DeleteBuilderInit<S>) {
     super();
     this._shape = init.shape;
+    this._catalog = 'catalog' in init ? init.catalog : captureCatalog(init.shape);
     this._ids = init.ids;
     this._mode = init.mode;
     this._whereFn = init.whereFn;
@@ -68,6 +75,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
       mode: this._mode,
       whereFn: this._whereFn,
       where: this._where,
+      catalog: this._catalog,
       ...overrides,
     });
   }
@@ -136,8 +144,17 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     return this._shape.shape;
   }
 
+  /** The catalog this builder resolves shapes in (undefined = the global registry). */
+  get catalog(): ShapeCatalog | undefined {
+    return this._catalog;
+  }
+
   /** @internal The IR-free lowering spec consumed by `lower()`. Validates inputs. */
   _lowerSpec(): DeleteLowerSpec<S> {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this._lowerSpec());
+    }
     const mode = this._mode || (this._ids ? 'ids' : undefined);
 
     if (mode === 'all') {
@@ -164,6 +181,10 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
 
   /** Serialize this delete mutation to lightweight DSL-JSON. */
   toJSON(): DeleteMutationJSON {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.toJSON());
+    }
     const shape = this._shape.shape.id;
     const mode = this._mode || (this._ids ? 'ids' : undefined);
     if (mode === 'all') {

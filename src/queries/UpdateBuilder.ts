@@ -1,4 +1,6 @@
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
+import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
+import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import {resolveShape} from './resolveShape.js';
 import {type AddId, type UpdatePartial, NodeReferenceValue} from './QueryFactory.js';
 import {MutationQueryFactory} from './MutationQuery.js';
@@ -27,6 +29,8 @@ type UpdateMode = 'for' | 'forAll' | 'where';
  */
 interface UpdateBuilderInit<S extends Shape> {
   shape: ShapeConstructor<S>;
+  /** The catalog the builder resolves in; absent = captured from the active one. */
+  catalog?: ShapeCatalog;
   data?: UpdatePartial<S>;
   targetId?: string;
   mode?: UpdateMode;
@@ -69,9 +73,12 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
   private readonly _targetContextName?: string;
   private readonly _upsert: boolean;
 
+  private readonly _catalog: ShapeCatalog | undefined;
+
   private constructor(init: UpdateBuilderInit<S>) {
     super();
     this._shape = init.shape;
+    this._catalog = 'catalog' in init ? init.catalog : captureCatalog(init.shape);
     this._data = init.data;
     this._targetId = init.targetId;
     this._mode = init.mode;
@@ -91,6 +98,7 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
       where: this._where,
       targetContextName: this._targetContextName,
       upsert: this._upsert,
+      catalog: this._catalog,
       ...overrides,
     });
   }
@@ -205,8 +213,17 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
     return this._shape.shape;
   }
 
+  /** The catalog this builder resolves shapes in (undefined = the global registry). */
+  get catalog(): ShapeCatalog | undefined {
+    return this._catalog;
+  }
+
   /** @internal The IR-free lowering spec consumed by `lower()`. Validates inputs. */
   _lowerSpec(): UpdateLowerSpec<S> {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this._lowerSpec());
+    }
     if (!this._data) {
       throw new Error(
         'UpdateBuilder requires .set(data) before it can be lowered. Specify what to update.',
@@ -286,6 +303,10 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
    * of `.set()`), and serializes the where clause for `where`-mode updates.
    */
   toJSON(): UpdateMutationJSON | UpsertMutationJSON {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.toJSON());
+    }
     if (!this._data) {
       throw new Error('UpdateBuilder requires .set(data) before .toJSON().');
     }

@@ -6,6 +6,7 @@
 import {fromJSON} from '../queries/fromJSON.js';
 import {mutationEffects, type MutationEffects} from '../queries/queryDependencies.js';
 import type {MutationJSON} from '../queries/MutationSerialization.js';
+import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 
 /**
  * A change in the data, from any source, in one of two forms:
@@ -31,9 +32,17 @@ export type ChangeEvent =
  */
 export type ChangeOrigin = 'local' | 'feed' | 'app' | 'manual';
 
-export function normalizeChange(event: ChangeEvent): MutationEffects {
+/**
+ * The effects of a change. A mutation is decoded in `options.catalog` when the key is
+ * given (the live store decodes a change once per catalog among its templates), else in
+ * the active catalog.
+ */
+export function normalizeChange(
+  event: ChangeEvent,
+  options?: {catalog?: ShapeCatalog},
+): MutationEffects {
   if ('effects' in event) return reviveEffects(event.effects);
-  const builder = fromJSON(event.mutation as any) as any;
+  const builder = fromJSON(event.mutation as any, options) as any;
   return mutationEffects(builder, event.result);
 }
 

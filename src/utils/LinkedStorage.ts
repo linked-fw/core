@@ -7,7 +7,12 @@ import type {CreateQuery} from '../queries/CreateQuery.js';
 import type {UpdateQuery} from '../queries/UpdateQuery.js';
 import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
 import {setQueryDispatch, resolveExistence} from '../queries/queryDispatch.js';
-import {getShapeClass} from './ShapeClass.js';
+import {
+  catalogOf,
+  getActiveShapeCatalog,
+  getShapeClass,
+  withShapeCatalog,
+} from './ShapeClass.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
 
 // plan-011 — count physical evaluations of THIS module on the one shared
@@ -226,6 +231,22 @@ export abstract class LinkedStorage {
     return undefined;
   }
 
+  /**
+   * The dataset a query routes to, resolved in the catalog the query captured. Only the
+   * routing runs in that catalog: the caller then calls the dataset in the scope it was
+   * called in, so a router's own queries (CN's `BranchDataFork` lookups) never run inside
+   * a project's catalog. The dataset re-enters from the query or its IR where it lowers.
+   */
+  private static resolveDatasetForQuery(query: {shape?: unknown}): IDataset | undefined {
+    const catalog = catalogOf(query);
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.resolveDatasetForQuery(query));
+    }
+    return this.resolveDatasetForQueryShape(
+      query.shape as string | Function | NodeShapeData | null | undefined,
+    );
+  }
+
   private static resolveDatasetForQueryShape(
     shape?: string | Function | NodeShapeData | null,
   ): IDataset | undefined {
@@ -271,7 +292,7 @@ export abstract class LinkedStorage {
         ),
       );
     }
-    const dataset = this.resolveDatasetForQueryShape(query.shape);
+    const dataset = this.resolveDatasetForQuery(query);
     if (!dataset?.selectQuery) {
       return Promise.reject(
         new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().'),
@@ -303,7 +324,7 @@ export abstract class LinkedStorage {
     if (!query?.shape) {
       return this.askAnyDataset(query);
     }
-    const dataset = this.resolveDatasetForQueryShape(query.shape);
+    const dataset = this.resolveDatasetForQuery(query);
     if (!dataset) {
       throw new Error(
         'No query dataset configured. Call LinkedStorage.setDefaultDataset().',
@@ -342,7 +363,7 @@ export abstract class LinkedStorage {
         ),
       );
     }
-    const dataset = this.resolveDatasetForQueryShape(query.shape);
+    const dataset = this.resolveDatasetForQuery(query);
     if (!dataset?.updateQuery) {
       return Promise.reject(
         new Error('No update handler configured on the query dataset.'),
@@ -359,7 +380,7 @@ export abstract class LinkedStorage {
         ),
       );
     }
-    const dataset = this.resolveDatasetForQueryShape(query.shape);
+    const dataset = this.resolveDatasetForQuery(query);
     if (!dataset?.createQuery) {
       return Promise.reject(
         new Error('No create handler configured on the query dataset.'),
@@ -376,7 +397,7 @@ export abstract class LinkedStorage {
         ),
       );
     }
-    const dataset = this.resolveDatasetForQueryShape(query.shape);
+    const dataset = this.resolveDatasetForQuery(query);
     if (!dataset?.deleteQuery) {
       return Promise.reject(
         new Error('No delete handler configured on the query dataset.'),

@@ -16,6 +16,7 @@ import type {
   IRSetModificationValue,
   IRTraversePattern,
 } from '../queries/IntermediateRepresentation.js';
+import {RegistryCache} from '../utils/registryCache.js';
 import {findPropertyShapeById, getPropertyShapes} from '../shapes/nodeShapeData.js';
 import type {NodeShapeData, PropertyShapeData} from '../shapes/nodeShapeData.js';
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
@@ -50,13 +51,16 @@ import {shacl} from '../ontologies/shacl.js';
 import {xsd} from '../ontologies/xsd.js';
 import {getSimplePathId} from '../paths/normalizePropertyPath.js';
 import {
+  attachCatalog,
+  catalogOf,
+  getActiveShapeCatalog,
   getAllNodeShapes,
   getNodeShape,
-  getRegistryVersion,
   getShapeClass,
   getSubShapes,
   getTargetClassId,
   isSubShapeOf,
+  withShapeCatalog,
 } from '../utils/ShapeClass.js';
 import {UnresolvedContextError} from '../queries/QueryContext.js';
 
@@ -160,12 +164,11 @@ function resolveShapeScanIri(shapeId: string): string {
  *   better is knowable; the caller passed an id no registered shape declares).
  */
 // Memoizes resolved predicate terms across the many call sites that resolve the
-// same property. Guarded by the shape-registry size so it self-invalidates when
-// new shapes register (e.g. across test-file module instances). Only successful
-// resolutions are cached — a not-found fallback is never stored, so a predicate
-// resolved before its shape registers can still resolve correctly afterwards.
-const predicateTermCache = new Map<string, SparqlTerm>();
-let predicateTermCacheSize = -1;
+// same property. One map per catalog; the global one is rebuilt when the registry
+// version moves. Only successful resolutions are cached — a not-found fallback is never
+// stored, so a predicate resolved before its shape registers can still resolve
+// correctly afterwards.
+const predicateTermCache = new RegistryCache<string, SparqlTerm>();
 
 /**
  * The `sh:datatype` declared for a property, if any. Lets the serializer emit the
@@ -178,12 +181,8 @@ function resolvePropertyDatatype(propertyId: string): string | undefined {
 }
 
 function resolvePropertyPredicateTerm(propertyId: string): SparqlTerm {
-  const version = getRegistryVersion();
-  if (version !== predicateTermCacheSize) {
-    predicateTermCache.clear();
-    predicateTermCacheSize = version;
-  }
-  const cached = predicateTermCache.get(propertyId);
+  const cache = predicateTermCache.get();
+  const cached = cache.get(propertyId);
   if (cached) return cached;
 
   const propertyShape = findPropertyShapeById(propertyId);
@@ -203,7 +202,7 @@ function resolvePropertyPredicateTerm(propertyId: string): SparqlTerm {
         uris: collectPathUris(propertyShape.path),
       };
     }
-    predicateTermCache.set(propertyId, term);
+    cache.set(propertyId, term);
     return term;
   }
   return iriTerm(propertyId);
@@ -615,6 +614,10 @@ export function selectToAlgebra(
   query: IRSelectQuery,
   _options?: SparqlOptions,
 ): SparqlSelectPlan {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => selectToAlgebra(query, _options));
+  }
   const registry = new VariableRegistry();
 
   // Promote bindings only when the top-level WHERE would reject rows without
@@ -2017,6 +2020,10 @@ export function createToAlgebra(
   query: IRCreateMutation,
   options?: SparqlOptions,
 ): SparqlInsertDataPlan {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => createToAlgebra(query, options));
+  }
   const {triples} = generateNodeDataTriples(query.data, options, {next: 0});
   return {
     type: 'insert_data',
@@ -2338,6 +2345,10 @@ export function updateToAlgebra(
   query: IRUpdateMutation,
   options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => updateToAlgebra(query, options));
+  }
   return buildDeleteInsertPlan(query, options);
 }
 
@@ -2354,6 +2365,10 @@ export function upsertToAlgebra(
   query: IRUpsertMutation,
   options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => upsertToAlgebra(query, options));
+  }
   return buildDeleteInsertPlan(query, options, {
     // Must match the IRI `create` asserts and `select` scans for; the raw shape id is
     // not the same thing, and a node typed with it would be invisible to queries.
@@ -2557,8 +2572,7 @@ function simplePredicates(props: PropertyShapeData[]): string[] {
   return [...predicates];
 }
 
-let blankWalkCache = new Map<string, string[]>();
-let blankWalkCacheVersion = -1;
+const blankWalkCache = new RegistryCache<string, string[]>();
 
 /**
  * The predicates the blank-node cascade follows *below* a blank value held by one of `start`:
@@ -2570,13 +2584,9 @@ let blankWalkCacheVersion = -1;
  * `buildBlankCascade` refuses any node reached through an IRI.
  */
 function blankWalkPredicates(start: PropertyShapeData[]): string[] {
-  const version = getRegistryVersion();
-  if (version !== blankWalkCacheVersion) {
-    blankWalkCache = new Map();
-    blankWalkCacheVersion = version;
-  }
+  const cache = blankWalkCache.get();
   const key = start.map((ps) => ps.id).join('|');
-  const cached = blankWalkCache.get(key);
+  const cached = cache.get(key);
   if (cached) return cached;
 
   let everything = false;
@@ -2610,7 +2620,7 @@ function blankWalkPredicates(start: PropertyShapeData[]): string[] {
     }
   }
   const result = simplePredicates(predicates);
-  blankWalkCache.set(key, result);
+  cache.set(key, result);
   return result;
 }
 
@@ -2789,22 +2799,17 @@ function ownedPredicate(ps: PropertyShapeData): string | null {
   return getSimplePathId(ps.path) ?? null;
 }
 
-let classHoldersCache = new Map<string, string[]>();
-let classHoldersVersion = -1;
-
-/** Every registered shape id per `targetClass` (memoized per registry version). */
-function classHolders(classId: string): string[] {
-  const version = getRegistryVersion();
-  if (version !== classHoldersVersion) {
-    classHoldersCache = new Map();
-    for (const nodeShape of getAllNodeShapes().values()) {
-      const cls = nodeShape?.targetClass?.id;
-      if (!cls) continue;
-      classHoldersCache.set(cls, [...(classHoldersCache.get(cls) ?? []), nodeShape.id]);
-    }
-    classHoldersVersion = version;
+const classHoldersCache = new RegistryCache<string, string[]>((holders) => {
+  for (const nodeShape of getAllNodeShapes().values()) {
+    const cls = nodeShape?.targetClass?.id;
+    if (!cls) continue;
+    holders.set(cls, [...(holders.get(cls) ?? []), nodeShape.id]);
   }
-  return classHoldersCache.get(classId) ?? [];
+});
+
+/** Every registered shape id per `targetClass` (memoized per registry version, or per catalog). */
+function classHolders(classId: string): string[] {
+  return classHoldersCache.get().get(classId) ?? [];
 }
 
 /**
@@ -2894,8 +2899,7 @@ function shapeClasses(shapeId: string): string[] {
   return [...classes];
 }
 
-let ownedWalkCache = new Map<string, OwnedWalk>();
-let ownedWalkCacheVersion = -1;
+const ownedWalkCache = new RegistryCache<string, OwnedWalk>();
 const warnedBranches = new Set<string>();
 
 /**
@@ -2908,12 +2912,8 @@ const warnedBranches = new Set<string>();
  * `MAX_OWNED_RECURSION` hops into a shape already on it.
  */
 function ownedWalk(rootShapeId: string): OwnedWalk {
-  const version = getRegistryVersion();
-  if (version !== ownedWalkCacheVersion) {
-    ownedWalkCache = new Map();
-    ownedWalkCacheVersion = version;
-  }
-  const cached = ownedWalkCache.get(rootShapeId);
+  const cache = ownedWalkCache.get();
+  const cached = cache.get(rootShapeId);
   if (cached) return cached;
 
   const edgesOf = new Map<string, OwnedEdge[]>();
@@ -3002,7 +3002,7 @@ function ownedWalk(rootShapeId: string): OwnedWalk {
     rootBlankProps: blankCapableProperties(rootShapeId),
     targets,
   };
-  ownedWalkCache.set(rootShapeId, walk);
+  cache.set(rootShapeId, walk);
   return walk;
 }
 
@@ -3225,6 +3225,10 @@ export function deleteToAlgebra(
   query: IRDeleteMutation,
   _options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => deleteToAlgebra(query, _options));
+  }
   const deletePatterns: SparqlTriple[] = [];
   const guards: SparqlTriple[] = [];
   const blocks: SparqlAlgebraNode[] = [];
@@ -3316,6 +3320,10 @@ export function deleteAllToAlgebra(
   query: IRDeleteAllMutation,
   _options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => deleteAllToAlgebra(query, _options));
+  }
   const subjectVar = 'a0';
 
   // DELETE patterns: root wildcard
@@ -3350,6 +3358,10 @@ export function deleteWhereToAlgebra(
   query: IRDeleteWhereMutation,
   _options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => deleteWhereToAlgebra(query, _options));
+  }
   const subjectVar = 'a0';
   const registry = new VariableRegistry();
 
@@ -3414,6 +3426,10 @@ export function updateWhereToAlgebra(
   query: IRUpdateWhereMutation,
   options?: SparqlOptions,
 ): SparqlDeleteInsertPlan {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => updateWhereToAlgebra(query, options));
+  }
   const subjectTerm = varTerm('a0');
   const result = processUpdateFields(query.data, subjectTerm, options);
 
@@ -3484,6 +3500,10 @@ export function askToAlgebra(
   query: IRAskQuery,
   options?: SparqlOptions,
 ): SparqlAskPlan {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => askToAlgebra(query, options));
+  }
   if (!query.root) {
     if (!query.subjectId) {
       throw new Error(
@@ -3501,15 +3521,18 @@ export function askToAlgebra(
     return {type: 'ask', algebra: bgp};
   }
   const inner = selectToAlgebra(
-    {
-      kind: 'select',
-      root: query.root,
-      patterns: query.patterns,
-      projection: [],
-      where: query.where,
-      subjectId: query.subjectId,
-      subjectIds: query.subjectIds,
-    },
+    attachCatalog<IRSelectQuery>(
+      {
+        kind: 'select',
+        root: query.root,
+        patterns: query.patterns,
+        projection: [],
+        where: query.where,
+        subjectId: query.subjectId,
+        subjectIds: query.subjectIds,
+      },
+      catalog,
+    ),
     options,
   );
   if (inner.having) {
@@ -3561,6 +3584,10 @@ export function countToAlgebra(
   query: IRCountQuery,
   options?: SparqlOptions,
 ): SparqlSelectPlan {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => countToAlgebra(query, options));
+  }
   if (!query.root) {
     throw new Error(
       'countToAlgebra: query.root is undefined. A count needs a shape to scan — a ' +
@@ -3568,15 +3595,18 @@ export function countToAlgebra(
     );
   }
   const inner = selectToAlgebra(
-    {
-      kind: 'select',
-      root: query.root,
-      patterns: query.patterns,
-      projection: [],
-      where: query.where,
-      subjectId: query.subjectId,
-      subjectIds: query.subjectIds,
-    },
+    attachCatalog<IRSelectQuery>(
+      {
+        kind: 'select',
+        root: query.root,
+        patterns: query.patterns,
+        projection: [],
+        where: query.where,
+        subjectId: query.subjectId,
+        subjectIds: query.subjectIds,
+      },
+      catalog,
+    ),
     options,
   );
   if (inner.having) {
@@ -3620,6 +3650,10 @@ export function selectToSparql(
   query: IRSelectQuery,
   options?: SparqlOptions,
 ): string {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => selectToSparql(query, options));
+  }
   const plan = selectToAlgebra(query, options);
   return selectPlanToSparql(plan, options);
 }
@@ -3631,6 +3665,10 @@ export function askToSparql(
   query: IRAskQuery,
   options?: SparqlOptions,
 ): string {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => askToSparql(query, options));
+  }
   const plan = askToAlgebra(query, options);
   return askPlanToSparql(plan, options);
 }
@@ -3643,6 +3681,10 @@ export function countToSparql(
   query: IRCountQuery,
   options?: SparqlOptions,
 ): string {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => countToSparql(query, options));
+  }
   const plan = countToAlgebra(query, options);
   return selectPlanToSparql(plan, options);
 }
@@ -3655,6 +3697,10 @@ export function createToSparql(
   query: IRCreateMutation,
   options?: SparqlOptions,
 ): string {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => createToSparql(query, options));
+  }
   const plan = createToAlgebra(query, options);
   return insertDataPlanToSparql(plan, options);
 }
@@ -3667,6 +3713,10 @@ export function updateToSparql(
   query: IRUpdateMutation,
   options?: SparqlOptions,
 ): string {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => updateToSparql(query, options));
+  }
   const plan = updateToAlgebra(query, options);
   return deleteInsertPlanToSparql(plan, options);
 }
@@ -3676,6 +3726,10 @@ export function upsertToSparql(
   query: IRUpsertMutation,
   options?: SparqlOptions,
 ): string {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => upsertToSparql(query, options));
+  }
   const plan = upsertToAlgebra(query, options);
   return deleteInsertPlanToSparql(plan, options);
 }
@@ -3687,6 +3741,10 @@ export function deleteToSparql(
   query: IRDeleteMutation,
   options?: SparqlOptions,
 ): string {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => deleteToSparql(query, options));
+  }
   const plan = deleteToAlgebra(query, options);
   return deleteInsertPlanToSparql(plan, options);
 }
@@ -3698,6 +3756,10 @@ export function deleteAllToSparql(
   query: IRDeleteAllMutation,
   options?: SparqlOptions,
 ): string {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => deleteAllToSparql(query, options));
+  }
   const plan = deleteAllToAlgebra(query, options);
   return deleteInsertPlanToSparql(plan, options);
 }
@@ -3709,6 +3771,10 @@ export function deleteWhereToSparql(
   query: IRDeleteWhereMutation,
   options?: SparqlOptions,
 ): string {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => deleteWhereToSparql(query, options));
+  }
   const plan = deleteWhereToAlgebra(query, options);
   return deleteInsertPlanToSparql(plan, options);
 }
@@ -3720,6 +3786,10 @@ export function updateWhereToSparql(
   query: IRUpdateWhereMutation,
   options?: SparqlOptions,
 ): string {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => updateWhereToSparql(query, options));
+  }
   const plan = updateWhereToAlgebra(query, options);
   return deleteInsertPlanToSparql(plan, options);
 }

@@ -25,6 +25,7 @@ import type {
   IRTraversalPattern,
 } from './IntermediateRepresentation.js';
 import {createTraversalResolver} from './IRLower.js';
+import {attachCatalog} from '../utils/ShapeClass.js';
 
 type CreateMutationInput = {
   shape: NodeShapeData;
@@ -186,11 +187,11 @@ const toNodeData = (
 export const buildCanonicalCreateMutationIR = (
   query: CreateMutationInput,
 ): IRCreateMutation => {
-  return {
+  return attachCatalog({
     kind: 'create',
     shape: query.shape.id,
     data: toNodeData(query.description),
-  };
+  });
 };
 
 /** Builds an IRUpdateMutation from an update factory's internal description. */
@@ -199,7 +200,7 @@ export const buildCanonicalUpdateMutationIR = (
 ): IRUpdateMutation => {
   const collector = createTraversalCollector();
   const data = toNodeData(query.updates, collector);
-  return {
+  return attachCatalog({
     kind: 'update',
     shape: query.shape.id,
     id: query.id,
@@ -207,7 +208,7 @@ export const buildCanonicalUpdateMutationIR = (
     ...(collector.patterns.length > 0
       ? {traversalPatterns: collector.patterns}
       : {}),
-  };
+  });
 };
 
 /**
@@ -226,7 +227,7 @@ export const buildCanonicalUpsertMutationIR = (
   assertNoExpressionFields(query.updates, query.shape.id);
   const collector = createTraversalCollector();
   const data = toNodeData(query.updates, collector);
-  return {
+  return attachCatalog({
     kind: 'upsert',
     shape: query.shape.id,
     id: query.id,
@@ -234,18 +235,18 @@ export const buildCanonicalUpsertMutationIR = (
     ...(collector.patterns.length > 0
       ? {traversalPatterns: collector.patterns}
       : {}),
-  };
+  });
 };
 
 /** Builds an IRDeleteMutation from a delete factory's internal description. */
 export const buildCanonicalDeleteMutationIR = (
   query: DeleteMutationInput,
 ): IRDeleteMutation => {
-  return {
+  return attachCatalog({
     kind: 'delete',
     shape: query.shape.id,
     ids: query.ids.map((id) => ({id: id.id})),
-  };
+  });
 };
 
 type DeleteAllMutationInput = {
@@ -256,10 +257,10 @@ type DeleteAllMutationInput = {
 export const buildCanonicalDeleteAllMutationIR = (
   query: DeleteAllMutationInput,
 ): IRDeleteAllMutation => {
-  return {
+  return attachCatalog({
     kind: 'delete_all',
     shape: query.shape.id,
-  };
+  });
 };
 
 type DeleteWhereMutationInput = {
@@ -272,12 +273,12 @@ type DeleteWhereMutationInput = {
 export const buildCanonicalDeleteWhereMutationIR = (
   query: DeleteWhereMutationInput,
 ): IRDeleteWhereMutation => {
-  return {
+  return attachCatalog({
     kind: 'delete_where',
     shape: query.shape.id,
     where: query.where,
     wherePatterns: query.wherePatterns,
-  };
+  });
 };
 
 type UpdateWhereMutationInput = {
@@ -293,7 +294,7 @@ export const buildCanonicalUpdateWhereMutationIR = (
 ): IRUpdateWhereMutation => {
   const collector = createTraversalCollector();
   const data = toNodeData(query.updates, collector);
-  return {
+  return attachCatalog({
     kind: 'update_where',
     shape: query.shape.id,
     data,
@@ -302,5 +303,5 @@ export const buildCanonicalUpdateWhereMutationIR = (
     ...(collector.patterns.length > 0
       ? {traversalPatterns: collector.patterns}
       : {}),
-  };
+  });
 };

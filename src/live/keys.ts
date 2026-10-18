@@ -7,6 +7,8 @@ import type {SelectBuilder, QueryBuilderJSON} from '../queries/QueryBuilder.js';
 import type {CountBuilder} from '../queries/CountBuilder.js';
 import type {AskBuilder} from '../queries/AskBuilder.js';
 import {isContextRefJSON, resolveContextId, CONTEXT_REF_KEY} from '../queries/ContextRef.js';
+import {catalogOf, shapeCatalogKey} from '../utils/ShapeClass.js';
+import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 
 /** A builder that can go live: a select, a count, or an ask. */
 export type LiveBuilder = SelectBuilder<any, any, any> | CountBuilder | AskBuilder;
@@ -122,9 +124,21 @@ const templateKeyMemo = new WeakMap<object, string>();
 export function templateKey(query: LiveBuilder): string {
   const cached = templateKeyMemo.get(query as object);
   if (cached) return cached;
-  const key = stableStringify(splitQuery(query).templateJson);
+  const key = templateKeyFor(splitQuery(query).templateJson, catalogOf(query));
   templateKeyMemo.set(query as object, key);
   return key;
+}
+
+/**
+ * The key of a template JSON in a catalog. The same JSON in two catalogs is two
+ * templates: `<catalog id>|<json>`. The global registry keeps the bare JSON.
+ */
+export function templateKeyFor(
+  templateJson: Record<string, unknown>,
+  catalog: ShapeCatalog | undefined,
+): string {
+  const json = stableStringify(templateJson);
+  return catalog === undefined ? json : `${shapeCatalogKey(catalog)}|${json}`;
 }
 
 export function paramsKey(params: InstanceParams): string {

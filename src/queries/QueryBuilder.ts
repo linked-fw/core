@@ -37,6 +37,8 @@ import {
   type RawMinusEntryJSON,
 } from './QueryBuilderSerialization.js';
 import {requireLiveQueryStore} from '../live/registry.js';
+import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
+import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
 
 /** JSON representation of a SelectBuilder. */
@@ -73,6 +75,8 @@ interface MinusEntry<S extends Shape> {
 /** Internal state bag for SelectBuilder. */
 interface QueryBuilderInit<S extends Shape, R> {
   shape: ShapeConstructor<S>;
+  /** The catalog the builder resolves in; absent = captured from the active one. */
+  catalog?: ShapeCatalog;
   selectFn?: QueryBuildFn<S, R>;
   whereFn?: WhereClause<S>;
   sortByFn?: QueryBuildFn<S, any>;
@@ -131,9 +135,11 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   private readonly _where?: WherePath;
   private readonly _sortBy?: SortByPath;
   private readonly _rawMinusEntries?: RawMinusEntry[];
+  private readonly _catalog: ShapeCatalog | undefined;
 
   private constructor(init: QueryBuilderInit<S, R>) {
     this._shape = init.shape;
+    this._catalog = 'catalog' in init ? init.catalog : captureCatalog(init.shape);
     this._selectFn = init.selectFn;
     this._whereFn = init.whereFn;
     this._sortByFn = init.sortByFn;
@@ -176,6 +182,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       _where: this._where,
       _sortBy: this._sortBy,
       _rawMinusEntries: this._rawMinusEntries,
+      catalog: this._catalog,
       ...overrides,
     });
   }
@@ -223,6 +230,10 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
 
   /** Select all decorated properties of the shape. */
   selectAll(): SelectBuilder<S, any, QueryResponseToResultType<SelectAllQueryResponse<S>, S>[]> {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.selectAll());
+    }
     const propertyLabels = getUniquePropertyShapes(this._shape.shape)
       .map((ps) => ps.label);
     const selectFn = ((p: any) =>
@@ -438,8 +449,13 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
    * separate builder rather than a mode of this one.
    */
   toCount(): CountBuilder {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.toCount());
+    }
     return CountBuilder.of({
       shapeClass: this._shape,
+      catalog: this._catalog,
       // `.for(null)` rides along in the spec. An unresolved pending context is
       // handled by CountBuilder.exec, which answers `0` without querying.
       ...this._patternSpec(),
@@ -463,6 +479,10 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     minusEntries?: RawMinusEntry[];
     nullSubject?: boolean;
   } {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this._patternSpec());
+    }
     let where: WherePath | undefined;
     if (this._whereFn) {
       where = processWhereClause(this._whereFn, this._shape);
@@ -507,8 +527,13 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
    * normalisation cannot be forgotten or half-applied.
    */
   private _toAsk(): AskBuilder {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this._toAsk());
+    }
     return AskBuilder.of({
       shapeClass: this._shape,
+      catalog: this._catalog,
       // `.for(null)` rides along in the spec. An unresolved pending context is
       // handled by AskBuilder.exec, which sees the live context and answers `false`
       // without querying.
@@ -550,6 +575,10 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
    * If set via a callback, eagerly evaluates it through the proxy to produce a FieldSet.
    */
   fields(): FieldSet | undefined {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.fields());
+    }
     if (this._fieldSet) {
       return this._fieldSet;
     }
@@ -634,6 +663,10 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
    * as subSelect entries, producing identical IR on deserialization.
    */
   toJSON(): QueryBuilderJSON {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.toJSON());
+    }
     const shapeId = this._shape.shape?.id || '';
     const json: QueryBuilderJSON = {
       v: WIRE_VERSION,
@@ -778,6 +811,10 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
    * Constructs RawSelectInput directly from FieldSet entries.
    */
   toRawInput(): RawSelectInput {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.toRawInput());
+    }
     return this._buildDirectRawInput();
   }
 
@@ -841,6 +878,14 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   /** The shape this query targets — the routing key datasets/`LinkedStorage` use. */
   get shape(): NodeShapeData {
     return this._shape.shape;
+  }
+
+  /**
+   * The catalog this builder resolves shapes in — captured when it was built, kept by
+   * every derived builder. Undefined = the global registry. Never serialized.
+   */
+  get catalog(): ShapeCatalog | undefined {
+    return this._catalog;
   }
 
   /**

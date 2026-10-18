@@ -328,6 +328,9 @@ function shapeNamespace(iri: string): string {
  * parameter: it feeds the stored-hash read and the orphan-detection read (so both are computed
  * against the same store they'll be written to) and every delete/create thunk. Omitted → the global router;
  * the returned thunks stay nullary either way.
+ *
+ * It enumerates the globally registered classes, so it must run outside any `withShapeCatalog`
+ * scope: inside one it would see only core's built-ins, which it skips.
  */
 export async function syncShapes(
   ds?: IDataset,

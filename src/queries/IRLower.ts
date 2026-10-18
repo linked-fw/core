@@ -25,6 +25,7 @@ import type {
 } from './IntermediateRepresentation.js';
 import {lowerSelectionPathExpression, projectionKeyFromPath} from './IRProjection.js';
 import {IRAliasScope} from './IRAliasScope.js';
+import {attachCatalog} from '../utils/ShapeClass.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
 
 /**
@@ -527,7 +528,7 @@ export const lowerSelectQuery = (
     }
   }
 
-  return {
+  return attachCatalog<IRSelectQuery>({
     kind: 'select',
     root,
     patterns: [...ctx.getPatterns(), ...minusPatterns],
@@ -540,7 +541,7 @@ export const lowerSelectQuery = (
     subjectIds: canonical.subjectIds,
     singleResult: canonical.singleResult,
     resultMap: resultMapEntries,
-  };
+  });
 };
 
 /**

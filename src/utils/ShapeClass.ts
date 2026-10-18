@@ -12,6 +12,10 @@ import {
 import type {NodeShapeWire} from '../shapes/nodeShapeWire.js';
 import type {ICoreIterable} from '../interfaces/ICoreIterable.js';
 import type {NodeReferenceValue} from './NodeReference.js';
+import type {ShapeCatalog} from './ShapeCatalog.js';
+import {RegistryCache} from './registryCache.js';
+
+export {RegistryCache};
 
 const resolveTargetClassId = (
   targetClass?: NodeReferenceValue | null,
@@ -87,20 +91,156 @@ const registryState: {
   nodeShapeRegistry: Map<string, NodeShapeData>;
   shapeAdapters: Map<string, typeof Shape>;
   registryVersion: number;
+  /**
+   * The catalog `withShapeCatalog` made current, or undefined for the global registry.
+   * Shared like the rest, so a scope opened by one copy of this module is seen by another.
+   */
+  activeCatalog: ShapeCatalog | undefined;
 } = (shapeRegistryGlobal.__linkedShapeRegistry ??= {
   nodeShapeToShapeClass: new Map(),
   nodeShapeRegistry: new Map(),
   shapeAdapters: new Map(),
   registryVersion: 0,
+  activeCatalog: undefined,
 });
+// A container created by an older copy has no slot yet; give it one so every read below
+// sees the same object layout.
+if (!('activeCatalog' in (registryState as object))) registryState.activeCatalog = undefined;
 
 /** How many distinct copies of this module are loaded. One is expected. */
 export function getShapeRegistryInstanceCount(): number {
   return copies.size;
 }
 
-let subShapesCache: Map<string, (typeof Shape)[]> = new Map();
-let mostSpecificSubShapesCache: Map<string, (typeof Shape)[]> = new Map();
+// ---------------------------------------------------------------------------
+// The active shape catalog
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `fn` with `catalog` as the shapes every registry accessor reads; `undefined` means
+ * the global registry (explicitly — it does not inherit an outer catalog).
+ *
+ * Synchronous on purpose: it works the same in the browser and in Node, with no
+ * AsyncLocalStorage. Scopes nest, the previous catalog is restored in `finally`, and fn's
+ * value is returned unchanged. A promise returned by fn is not awaited, so its
+ * continuation runs outside the scope. That is why builders and IRs capture their catalog
+ * and every place that picks one up later re-enters it (see docs/architecture/runtime-instances.md).
+ */
+export function withShapeCatalog<T>(catalog: ShapeCatalog | undefined, fn: () => T): T {
+  const previous = registryState.activeCatalog;
+  if (previous === catalog) return fn();
+  registryState.activeCatalog = catalog;
+  try {
+    return fn();
+  } finally {
+    registryState.activeCatalog = previous;
+  }
+}
+
+/** The catalog of the current `withShapeCatalog` scope, or undefined for the global registry. */
+export function getActiveShapeCatalog(): ShapeCatalog | undefined {
+  return registryState.activeCatalog;
+}
+
+/**
+ * The catalog a builder, a FieldSet or an IR captured — undefined means the global registry.
+ * Reads the object's `catalog` field, which builders keep as a getter and IRs as a
+ * non-enumerable property, so neither appears in `toJSON` or a JSON round trip.
+ */
+export function catalogOf(queryOrIr: object | null | undefined): ShapeCatalog | undefined {
+  return (queryOrIr as {catalog?: ShapeCatalog} | null | undefined)?.catalog;
+}
+
+/**
+ * Record `catalog` on an IR object as a non-enumerable `catalog` field, so the code that
+ * compiles it later (often after an `await`) re-enters the catalog it was lowered in.
+ * Nothing is written for the global registry: an IR without the field compiles globally.
+ * @internal
+ */
+export function attachCatalog<T extends object>(
+  ir: T,
+  catalog: ShapeCatalog | undefined = registryState.activeCatalog,
+): T {
+  if (catalog !== undefined) {
+    Object.defineProperty(ir, 'catalog', {
+      value: catalog,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return ir;
+}
+
+/**
+ * Process-unique ids for catalogs, for live-query template keys. On `globalThis`, like the
+ * registry, so two copies of core give one catalog the same id.
+ */
+const keyState: {keys: WeakMap<object, number>; next: number} =
+  (shapeRegistryGlobal.__linkedShapeCatalogKeys ??= {keys: new WeakMap(), next: 1});
+
+/** 0 for the global registry, else a process-unique id for the catalog. */
+export function shapeCatalogKey(catalog: ShapeCatalog | undefined): number {
+  if (catalog === undefined) return 0;
+  let key = keyState.keys.get(catalog);
+  if (key === undefined) {
+    key = keyState.next++;
+    keyState.keys.set(catalog, key);
+  }
+  return key;
+}
+
+/** The catalog of an adapter class a catalog built, keyed on the class. */
+const adapterCatalogs = new WeakMap<Function, ShapeCatalog>();
+
+/**
+ * The catalog a builder made from `shape` captures.
+ *
+ * Inside a scope: the active catalog when the root is an IRI (`shape` undefined) or a
+ * shape the catalog holds; otherwise none. A class the active catalog does not hold is
+ * authored code (CN's own shapes, built by CN code while a project scope is active) and
+ * must lower against the global registry. Outside a scope: the catalog that built the
+ * adapter class, if it is one, else none.
+ * @internal
+ */
+export function captureCatalog(
+  shape?: {shape?: {id?: string}} | Function | null,
+): ShapeCatalog | undefined {
+  const active = registryState.activeCatalog;
+  if (shape === undefined || shape === null) return active;
+  if (active !== undefined) {
+    const id = (shape as {shape?: {id?: string}}).shape?.id;
+    if (id && active.has(id)) return active;
+  }
+  return typeof shape === 'function' ? adapterCatalogs.get(shape) : undefined;
+}
+
+/**
+ * Throw when a registry write is attempted inside a catalog scope. A catalog is
+ * immutable, and a write meant for it would land in the global registry instead.
+ * @internal
+ */
+export function assertNoActiveCatalog(): void {
+  if (registryState.activeCatalog !== undefined) {
+    throw new Error(
+      'Cannot register shapes while a ShapeCatalog is active. Register outside ' +
+        'withShapeCatalog, or build a new catalog with ShapeCatalog.from().',
+    );
+  }
+}
+
+/** What a catalog holds, as the accessors below read it. Plain fields: any copy can read them. */
+type CatalogContents = {
+  readonly nodeShapes: ReadonlyMap<string, NodeShapeData>;
+  readonly shapeClasses: ReadonlyMap<string, typeof Shape>;
+};
+
+function contentsOf(catalog: ShapeCatalog): CatalogContents {
+  return catalog as unknown as CatalogContents;
+}
+
+const subShapesCache = new RegistryCache<string, (typeof Shape)[]>();
+const mostSpecificSubShapesCache = new RegistryCache<string, (typeof Shape)[]>();
 const nodeShapeToShapeClass = registryState.nodeShapeToShapeClass;
 const warnedDuplicateBases = new Set<string>();
 
@@ -116,8 +256,20 @@ const warnedDuplicateBases = new Set<string>();
  */
 const nodeShapeRegistry = registryState.nodeShapeRegistry;
 
-/** Version the sub-shape caches above were filled at. */
-let subShapesCacheVersion = -1;
+/**
+ * The shapes the accessors read: the active catalog's (its shapes plus core's built-ins),
+ * else the global registry. One shared read and a null check on the global path.
+ */
+function activeNodeShapes(): ReadonlyMap<string, NodeShapeData> {
+  const catalog = registryState.activeCatalog;
+  return catalog === undefined ? nodeShapeRegistry : contentsOf(catalog).nodeShapes;
+}
+
+/** The authored classes the accessors read: the catalog's built-ins, else every registered class. */
+function activeShapeClasses(): ReadonlyMap<string, typeof Shape> {
+  const catalog = registryState.activeCatalog;
+  return catalog === undefined ? nodeShapeToShapeClass : contentsOf(catalog).shapeClasses;
+}
 
 /**
  * The current registration version — a monotonic counter, bumped on every write.
@@ -136,30 +288,24 @@ export function getRegistryVersion(): number {
 }
 
 /** Reverse index parentIri → direct child IRIs, rebuilt when the registry changes. */
-let childIndex: Map<string, string[]> | null = null;
-let childIndexVersion = -1;
-
-function getChildIndex(): Map<string, string[]> {
-  if (childIndex && childIndexVersion === registryState.registryVersion) return childIndex;
-  const index = new Map<string, string[]>();
-  nodeShapeRegistry.forEach((shape, id) => {
+const childIndex = new RegistryCache<string, string[]>((index) => {
+  activeNodeShapes().forEach((shape, id) => {
     const parent = shape.extends?.id;
     if (!parent) return;
     const siblings = index.get(parent);
     if (siblings) siblings.push(id);
     else index.set(parent, [id]);
   });
-  childIndex = index;
-  childIndexVersion = registryState.registryVersion;
-  return index;
+});
+
+function getChildIndex(): Map<string, string[]> {
+  return childIndex.get();
 }
 
+// Every derived cache is a RegistryCache keyed on this version, so bumping it is the
+// whole invalidation.
 function invalidateRegistryCaches() {
   registryState.registryVersion++;
-  subShapesCache.clear();
-  mostSpecificSubShapesCache.clear();
-  childIndex = null;
-  targetClassIndex = null;
 }
 
 /** Drop the adapter for a shape whose metadata was replaced. */
@@ -176,6 +322,7 @@ function invalidateShapeAdapter(id: string) {
  * invalidation cannot be keyed on registry size.
  */
 export function registerNodeShape(nodeShape: NodeShapeData): void {
+  assertNoActiveCatalog();
   if (!nodeShape?.id) return;
   nodeShapeRegistry.set(nodeShape.id, nodeShape);
   invalidateShapeAdapter(nodeShape.id);
@@ -188,12 +335,15 @@ export function getNodeShape(
 ): NodeShapeData | undefined {
   const id = typeof nodeShape === 'string' ? nodeShape : nodeShape?.id;
   if (!id) return undefined;
-  return nodeShapeRegistry.get(id);
+  return activeNodeShapes().get(id);
 }
 
-/** Every registered shape's metadata, keyed by node-shape IRI. */
+/**
+ * Every registered shape's metadata, keyed by node-shape IRI. Inside a catalog scope:
+ * exactly the catalog's shapes plus core's built-ins.
+ */
 export function getAllNodeShapes(): ReadonlyMap<string, NodeShapeData> {
-  return nodeShapeRegistry;
+  return activeNodeShapes();
 }
 
 /**
@@ -220,17 +370,28 @@ const shapeAdapters = registryState.shapeAdapters;
  * you specifically need an authored class; use this when you need *something*
  * constructor-shaped to drive the query builders.
  */
+/** Adapters built inside a catalog: one map per catalog, keyed by IRI. */
+const catalogAdapters = new WeakMap<object, Map<string, typeof Shape>>();
+
 export function getOrCreateShapeAdapter(
   nodeShape: NodeShapeData | string,
 ): typeof Shape | undefined {
-  const data =
-    typeof nodeShape === 'string' ? nodeShapeRegistry.get(nodeShape) : nodeShape;
+  const catalog = registryState.activeCatalog;
+  const shapes = catalog === undefined ? nodeShapeRegistry : contentsOf(catalog).nodeShapes;
+  const data = typeof nodeShape === 'string' ? shapes.get(nodeShape) : nodeShape;
   if (!data?.id) return undefined;
 
-  const authored = nodeShapeToShapeClass.get(data.id);
+  const authored = (
+    catalog === undefined ? nodeShapeToShapeClass : contentsOf(catalog).shapeClasses
+  ).get(data.id);
   if (authored) return authored;
 
-  const cached = shapeAdapters.get(data.id);
+  let adapters: Map<string, typeof Shape> | undefined = shapeAdapters;
+  if (catalog !== undefined) {
+    adapters = catalogAdapters.get(catalog);
+    if (!adapters) catalogAdapters.set(catalog, (adapters = new Map()));
+  }
+  const cached = adapters.get(data.id);
   // Re-registering a shape replaces its metadata, so an adapter built from the old
   // object must not be reused.
   if (cached && cached.shape === data) return cached;
@@ -242,7 +403,8 @@ export function getOrCreateShapeAdapter(
   Object.defineProperty(RuntimeShape, 'name', {
     value: (data as NodeShapeData).label || 'RuntimeShape',
   });
-  shapeAdapters.set(data.id, RuntimeShape);
+  adapters.set(data.id, RuntimeShape);
+  if (catalog !== undefined) adapterCatalogs.set(RuntimeShape, catalog);
   return RuntimeShape;
 }
 
@@ -252,15 +414,16 @@ export type ShapeLike = NodeShapeData | typeof Shape | Function | string;
 /** Resolve a ShapeLike to node-shape metadata, or undefined if it isn't a shape. */
 function toNodeShapeData(shape: ShapeLike): NodeShapeData | undefined {
   if (!shape) return undefined;
-  if (typeof shape === 'string') return nodeShapeRegistry.get(shape);
+  const shapes = activeNodeShapes();
+  if (typeof shape === 'string') return shapes.get(shape);
   const asData = shape as NodeShapeData;
   // NodeShapeData is a plain object with an id; a Shape class is a function.
   if (typeof shape === 'object' && typeof asData.id === 'string') {
-    return nodeShapeRegistry.get(asData.id) ?? asData;
+    return shapes.get(asData.id) ?? asData;
   }
   const asClass = shape as typeof Shape;
   const shapeData = asClass?.shape;
-  if (shapeData?.id) return nodeShapeRegistry.get(shapeData.id) ?? shapeData;
+  if (shapeData?.id) return shapes.get(shapeData.id) ?? shapeData;
   return undefined;
 }
 
@@ -297,7 +460,8 @@ export function getSuperShapes(shape: ShapeLike): NodeShapeData[] {
   if (!start) return chain;
 
   // Class-backed: the prototype chain is the authority.
-  const startClass = nodeShapeToShapeClass.get(start.id);
+  const shapes = activeNodeShapes();
+  const startClass = activeShapeClasses().get(start.id);
   if (startClass) {
     let current: typeof Shape | undefined = startClass;
     while (current) {
@@ -316,7 +480,7 @@ export function getSuperShapes(shape: ShapeLike): NodeShapeData[] {
     const parentId = current.extends.id;
     if (seen.has(parentId)) break; // cycle guard — malformed data must not hang a read
     seen.add(parentId);
-    const parent = nodeShapeRegistry.get(parentId);
+    const parent = shapes.get(parentId);
     if (!parent) {
       if (!warnedUnresolvedExtends.has(current.id)) {
         warnedUnresolvedExtends.add(current.id);
@@ -339,6 +503,7 @@ export function getSubShapes(shape: ShapeLike): NodeShapeData[] {
   const start = toNodeShapeData(shape);
   if (!start) return [];
   const index = getChildIndex();
+  const shapes = activeNodeShapes();
   const out: NodeShapeData[] = [];
   const seen = new Set<string>([start.id]);
   const queue = [start.id];
@@ -347,7 +512,7 @@ export function getSubShapes(shape: ShapeLike): NodeShapeData[] {
     for (const childId of index.get(current) ?? []) {
       if (seen.has(childId)) continue;
       seen.add(childId);
-      const child = nodeShapeRegistry.get(childId);
+      const child = shapes.get(childId);
       if (child) {
         out.push(child);
         queue.push(childId);
@@ -392,7 +557,7 @@ function superShapesWithin(
     seen.add(parentId);
     const parent = local.get(parentId);
     if (!parent) {
-      const registered = nodeShapeRegistry.get(parentId);
+      const registered = activeNodeShapes().get(parentId);
       if (registered) chain.push(registered, ...getSuperShapes(registered));
       break;
     }
@@ -423,14 +588,15 @@ function targetClassIdWithin(
   const id = typeof shape === 'string' ? shape : shape.id;
   if (!id) return undefined;
   const given = typeof shape === 'string' ? undefined : (shape as ShapeHeader);
+  const shapes = activeNodeShapes();
   const own =
     given?.targetClass?.id ??
     local?.get(id)?.targetClass?.id ??
     getShapeClass(id)?.targetClass?.id ??
-    nodeShapeRegistry.get(id)?.targetClass?.id;
+    shapes.get(id)?.targetClass?.id;
   if (own) return own;
   // A data-only shape's targetClass is not inherited for free, so walk `extends`.
-  const start = local?.get(id) ?? (given?.extends ? given : nodeShapeRegistry.get(id) ?? given);
+  const start = local?.get(id) ?? (given?.extends ? given : shapes.get(id) ?? given);
   if (!start) return undefined;
   return superShapesWithin(start, local).find((s) => s.targetClass?.id)?.targetClass?.id;
 }
@@ -475,15 +641,8 @@ function leastSpecific<S extends ShapeHeader>(
 }
 
 /** targetClass IRI → registered shapes targeting it, ordered. Rebuilt when the registry changes. */
-let targetClassIndex: Map<string, NodeShapeData[]> | null = null;
-let targetClassIndexVersion = -1;
-
-function getTargetClassIndex(): Map<string, NodeShapeData[]> {
-  if (targetClassIndex && targetClassIndexVersion === registryState.registryVersion) {
-    return targetClassIndex;
-  }
-  const index = new Map<string, NodeShapeData[]>();
-  nodeShapeRegistry.forEach((shape) => {
+const targetClassIndex = new RegistryCache<string, NodeShapeData[]>((index) => {
+  activeNodeShapes().forEach((shape) => {
     const classId = targetClassIdWithin(shape);
     if (!classId) return;
     const shapes = index.get(classId);
@@ -491,9 +650,10 @@ function getTargetClassIndex(): Map<string, NodeShapeData[]> {
     else index.set(classId, [shape]);
   });
   index.forEach((shapes, classId) => index.set(classId, leastSpecific(shapes)));
-  targetClassIndex = index;
-  targetClassIndexVersion = registryState.registryVersion;
-  return index;
+});
+
+function getTargetClassIndex(): Map<string, NodeShapeData[]> {
+  return targetClassIndex.get();
 }
 
 /**
@@ -530,6 +690,7 @@ export function addNodeShapeToShapeClass(
   nodeShape: NodeShapeData,
   shapeClass: typeof Shape,
 ) {
+  assertNoActiveCatalog();
   if (!nodeShape?.id) {
     return;
   }
@@ -599,6 +760,20 @@ export function resolveShapeConstructor(
   return getOrCreateShapeAdapter(id) as unknown as ShapeConstructor | undefined;
 }
 
+/**
+ * The constructor the query layer resolves an IRI to. In the global registry it is
+ * `getShapeClass` (authored classes only, as always). Inside a catalog, where every shape
+ * but core's built-ins is data, it is the catalog's constructor for any shape it holds.
+ * @internal
+ */
+export function getQueryShapeClass(
+  nodeShape: NodeReferenceValue | {id: string} | string,
+): ShapeConstructor | undefined {
+  return registryState.activeCatalog === undefined
+    ? getShapeClass(nodeShape)
+    : resolveShapeConstructor(nodeShape);
+}
+
 export function getShapeClass(
   nodeShape: NodeReferenceValue | {id: string} | string,
 ): ShapeConstructor | undefined {
@@ -608,14 +783,20 @@ export function getShapeClass(
   }
   // SAFETY: The map stores `typeof Shape` (abstract), but registered shapes are always
   // concrete subclasses with a constructor and static .shape — i.e. ShapeConstructor.
-  return nodeShapeToShapeClass.get(id) as unknown as ShapeConstructor | undefined;
+  return activeShapeClasses().get(id) as unknown as ShapeConstructor | undefined;
+}
+
+/** The class registered globally for an IRI, whatever catalog is active. @internal */
+export function getRegisteredShapeClass(id: string): typeof Shape | undefined {
+  return nodeShapeToShapeClass.get(id);
 }
 
 /**
- * Returns all registered shape classes (keyed by NodeShape URI).
+ * Returns all registered shape classes (keyed by NodeShape URI). Inside a catalog scope:
+ * core's built-in classes only — a catalog holds no other class.
  */
 export function getAllShapeClasses(): Map<string, typeof Shape> {
-  return nodeShapeToShapeClass;
+  return activeShapeClasses() as Map<string, typeof Shape>;
 }
 
 /**
@@ -629,16 +810,12 @@ export function getSubShapesClasses(
   _internalKey?: string,
 ): (typeof Shape)[] {
   let key = _internalKey || getKey(shape);
-  if (subShapesCacheVersion !== registryState.registryVersion) {
-    subShapesCache.clear();
-    mostSpecificSubShapesCache.clear();
-    subShapesCacheVersion = registryState.registryVersion;
-  }
-  if (!subShapesCache.has(key)) {
+  const cache = subShapesCache.get();
+  if (!cache.has(key)) {
     //apply the hasSuperclass function to the shape
     let filterFunction = applyFnToShapeOrArray(shape, hasSubClass);
     //filter and then sort the results based on their inheritance (most specific classes first, so we use hasSuperClass for the sorting)
-    subShapesCache.set(
+    cache.set(
       key,
       filterShapeClasses(filterFunction).sort((a, b) => {
         return hasSubClass(a, b) ? 1 : -1;
@@ -646,7 +823,7 @@ export function getSubShapesClasses(
     );
   }
   //return a copy of the array to prevent it from being modified
-  return [...subShapesCache.get(key)];
+  return [...cache.get(key)!];
 }
 
 /**
@@ -713,7 +890,7 @@ function applyFnToShapeOrArray(shape, filterFn) {
 
 function filterShapeClasses(filterFn) {
   let result = [];
-  nodeShapeToShapeClass.forEach((shapeClass) => {
+  activeShapeClasses().forEach((shapeClass) => {
     if (filterFn(shapeClass)) {
       result.push(shapeClass);
     }
@@ -723,7 +900,7 @@ function filterShapeClasses(filterFn) {
 
 export function getLeastSpecificShapeClasses(shapes: ICoreIterable<Shape>) {
   let shapeClasses = shapes.map((shape) =>
-    getShapeClass(shape.nodeShape.id),
+    getQueryShapeClass(shape.nodeShape.id),
   );
   return filterShapesToLeastSpecific(shapeClasses);
 }
@@ -736,18 +913,14 @@ export function getMostSpecificSubShapes(
   }
   //get the subshapes of the given shapes
   let key = shape.map((s) => s.name).join(',');
-  if (subShapesCacheVersion !== registryState.registryVersion) {
-    subShapesCache.clear();
-    mostSpecificSubShapesCache.clear();
-    subShapesCacheVersion = registryState.registryVersion;
-  }
-  if (!mostSpecificSubShapesCache.has(key)) {
+  const cache = mostSpecificSubShapesCache.get();
+  if (!cache.has(key)) {
     //get the subshapes of the given shapes
     let subShapes: (typeof Shape)[] = getSubShapesClasses(shape, key);
     //filter them down to the most specific ones (that are not extended by any other shape)
-    mostSpecificSubShapesCache.set(key, filterShapesToMostSpecific(subShapes));
+    cache.set(key, filterShapesToMostSpecific(subShapes));
   }
-  return mostSpecificSubShapesCache.get(key);
+  return cache.get(key)!;
 }
 
 /**

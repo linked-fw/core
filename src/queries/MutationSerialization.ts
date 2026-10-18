@@ -34,7 +34,7 @@ import {ExpressionNode, isExpressionNode} from '../expressions/ExpressionNode.js
 import type {WherePathJSON} from './QueryBuilderSerialization.js';
 import type {ContextRefJSON} from './ContextRef.js';
 import {PendingQueryContext} from './QueryContext.js';
-import {getShapeClass, resolveShapeConstructor} from '../utils/ShapeClass.js';
+import {resolveShapeConstructor, getQueryShapeClass} from '../utils/ShapeClass.js';
 import type {ShapeConstructor} from '../shapes/Shape.js';
 import type {NodeShapeData, PropertyShapeData} from '../shapes/SHACL.js';
 import {
@@ -139,7 +139,7 @@ export type MutationJSON =
 /** The shape a nested node is expected to have (a property's value shape), if resolvable. */
 export function valueShapeOf(prop?: PropertyShapeData): NodeShapeData | undefined {
   const id = (prop as unknown as {valueShape?: {id: string}})?.valueShape?.id;
-  return id ? getShapeClass(id)?.shape : undefined;
+  return id ? getQueryShapeClass(id)?.shape : undefined;
 }
 
 /** Encode a single (non-array, non-setMod) property value. `prop` gives the nested-node shape. */

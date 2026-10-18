@@ -22,6 +22,19 @@ import type {AskQueryJSON} from './AskQuery.js';
 import type {CountQueryJSON} from './CountQuery.js';
 import type {MutationJSON} from './MutationSerialization.js';
 import {assertWireVersion} from './wireVersion.js';
+import {getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
+import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
+
+/** Options for {@link fromJSON}. */
+export type FromJSONOptions = {
+  /**
+   * Decode against this catalog — even `undefined`, which means the global registry.
+   * Without the key, the active catalog (`withShapeCatalog`) is used. The builder keeps
+   * the catalog it was decoded with. The wire never carries a catalog: each side
+   * supplies its own.
+   */
+  catalog?: ShapeCatalog;
+};
 
 /** Any query in its wire (DSL-JSON) form. */
 export type QueryJSON =
@@ -32,6 +45,7 @@ export type QueryJSON =
 
 export function fromJSON(
   json: QueryJSON,
+  options?: FromJSONOptions,
 ):
   | SelectBuilder
   | AskBuilder
@@ -39,6 +53,9 @@ export function fromJSON(
   | CreateBuilder
   | UpdateBuilder
   | DeleteBuilder {
+  if (options && 'catalog' in options && options.catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(options.catalog, () => fromJSON(json));
+  }
   assertWireVersion((json as {v?: unknown})?.v);
   if (json && typeof json === 'object' && 'op' in json) {
     switch (json.op) {

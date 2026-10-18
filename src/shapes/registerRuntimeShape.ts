@@ -24,7 +24,7 @@
  * only the shapes that have a real authored class.
  */
 
-import {getShapeClass, registerNodeShape} from '../utils/ShapeClass.js';
+import {assertNoActiveCatalog, getShapeClass, registerNodeShape} from '../utils/ShapeClass.js';
 import {warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
 import type {NodeShapeData} from './nodeShapeData.js';
 import {fromWire, isNodeShapeWire, type NodeShapeWire} from './nodeShapeWire.js';
@@ -43,6 +43,7 @@ import {fromWire, isNodeShapeWire, type NodeShapeWire} from './nodeShapeWire.js'
 export function registerRuntimeShape(
   shape: NodeShapeData | NodeShapeWire,
 ): boolean {
+  assertNoActiveCatalog();
   if (!shape?.id) return false;
   if (getShapeClass(shape.id)) return false;
   const data = isNodeShapeWire(shape) ? fromWire(shape) : (shape as NodeShapeData);
@@ -66,6 +67,7 @@ export function registerRuntimeShape(
 export function registerRuntimeShapes(
   shapes: Record<string, NodeShapeData | NodeShapeWire> | (NodeShapeData | NodeShapeWire)[],
 ): number {
+  assertNoActiveCatalog();
   const list = Array.isArray(shapes) ? shapes : Object.values(shapes);
   const byId = new Map(list.map((s) => [s.id, s]));
 

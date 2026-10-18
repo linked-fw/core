@@ -20,6 +20,7 @@
  * (`^member`, `knows/name`) contributes every predicate it touches.
  */
 import {lower} from './lower.js';
+import {RegistryCache} from '../utils/registryCache.js';
 import type {
   LowerableAsk,
   LowerableCount,
@@ -53,7 +54,9 @@ import {
 import {
   getAllNodeShapes,
   getNodeShape,
-  getRegistryVersion,
+  catalogOf,
+  getActiveShapeCatalog,
+  withShapeCatalog,
   getShapeClass,
 } from '../utils/ShapeClass.js';
 
@@ -129,8 +132,7 @@ function valueShapeOf(propertyShapeId: string): string | undefined {
 
 // Owner lookups, cached on the same terms as `findPropertyShapeById`: successful
 // resolutions only, invalidated by the registry version.
-const declaringShapeCache = new Map<string, string>();
-let declaringShapeCacheVersion = -1;
+const declaringShapeCache = new RegistryCache<string, string>();
 
 /**
  * The node shape that declares a property shape as its own.
@@ -141,16 +143,12 @@ let declaringShapeCacheVersion = -1;
  * trace of `Employee` left is that `employeeId` is declared there.
  */
 function declaringShapeOf(propertyShapeId: string): string | undefined {
-  const version = getRegistryVersion();
-  if (version !== declaringShapeCacheVersion) {
-    declaringShapeCache.clear();
-    declaringShapeCacheVersion = version;
-  }
-  const cached = declaringShapeCache.get(propertyShapeId);
+  const cache = declaringShapeCache.get();
+  const cached = cache.get(propertyShapeId);
   if (cached) return cached;
   for (const nodeShape of getAllNodeShapes().values()) {
     if (getPropertyShapes(nodeShape, false).some((ps) => ps.id === propertyShapeId)) {
-      declaringShapeCache.set(propertyShapeId, nodeShape.id);
+      cache.set(propertyShapeId, nodeShape.id);
       return nodeShape.id;
     }
   }
@@ -388,6 +386,10 @@ function isBound(ir: {subjectId?: string; subjectIds?: string[]}): boolean {
 export function queryDependencies(
   query: LowerableSelect | LowerableCount | LowerableAsk,
 ): QueryDependencies {
+  const catalog = catalogOf(query);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => queryDependencies(query));
+  }
   const ir = lowerQuery(query);
   const collector = new DependencyCollector();
   const deps = collector.deps;
@@ -515,6 +517,10 @@ export function mutationEffects(
   mutation: LowerableCreate | LowerableUpdate | LowerableDelete,
   result?: unknown,
 ): MutationEffects {
+  const catalog = catalogOf(mutation);
+  if (catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => mutationEffects(mutation, result));
+  }
   const ir = lowerMutation(mutation);
   const collector = new EffectCollector();
 

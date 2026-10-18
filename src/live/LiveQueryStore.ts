@@ -14,7 +14,13 @@ import {
   type MutationEffects,
   type QueryDependencies,
 } from '../queries/queryDependencies.js';
-import {getShapeClass} from '../utils/ShapeClass.js';
+import {
+  catalogOf,
+  getActiveShapeCatalog,
+  getShapeClass,
+  withShapeCatalog,
+} from '../utils/ShapeClass.js';
+import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import type {ShapeConstructor} from '../shapes/Shape.js';
 import {effectsHash, normalizeChange, type ChangeEvent, type ChangeOrigin} from './changes.js';
 import {selectInstances} from './matcher.js';
@@ -22,8 +28,8 @@ import {
   kindOf,
   paramsKey,
   splitQuery,
-  stableStringify,
   stripSubjects,
+  templateKeyFor,
   type InstanceParams,
   type LiveBuilder,
   type LiveQueryKind,
@@ -101,6 +107,11 @@ export interface LiveQuery<R = unknown> extends PromiseLike<R> {
 export type Template = {
   key: string;
   kind: LiveQueryKind;
+  /**
+   * The catalog the template's queries resolve in (undefined = the global registry). Part
+   * of its identity: the same JSON in two catalogs is two templates.
+   */
+  catalog?: ShapeCatalog;
   name?: string;
   json: Record<string, unknown>;
   /** Subject-stripped builder, used for dependency analysis only. */
@@ -172,6 +183,8 @@ export class LiveQueryStore {
   private readonly _recentChanges = new Map<string, {at: number; origin: ChangeOrigin}>();
   private _pendingRefetch = new Set<Instance>();
   private _flushScheduled = false;
+  /** How many templates each catalog has; a change is decoded once per catalog listed here. */
+  private readonly _catalogTemplates = new Map<ShapeCatalog, number>();
 
   constructor() {
     this._disposers.push(subscribeQueryContext((name) => this._onContextChange(name)));
@@ -190,12 +203,14 @@ export class LiveQueryStore {
   }
 
   private _template(templateJson: Record<string, unknown>, query: LiveBuilder, opts: LiveQueryOptions): Template {
-    const key = stableStringify(templateJson);
+    const catalog = catalogOf(query);
+    const key = templateKeyFor(templateJson, catalog);
     let t = this._templates.get(key);
     if (!t) {
       t = {
         key,
         kind: kindOf(query),
+        ...(catalog !== undefined ? {catalog} : {}),
         json: templateJson,
         builder: stripSubjects(query),
         shapeIri: typeof templateJson.shape === 'string' ? (templateJson.shape as string) : undefined,
@@ -204,6 +219,9 @@ export class LiveQueryStore {
         instances: new Map(),
       };
       this._templates.set(key, t);
+      if (catalog !== undefined) {
+        this._catalogTemplates.set(catalog, (this._catalogTemplates.get(catalog) ?? 0) + 1);
+      }
     }
     if (opts.name !== undefined) t.name = opts.name;
     if (opts.reactive !== undefined) t.reactive = opts.reactive;
@@ -368,7 +386,9 @@ export class LiveQueryStore {
     if (isTemplate(target)) {
       for (const i of target.instances.values()) instances.add(i);
     } else if (typeof (target as {__queryKind?: string}).__queryKind === 'string') {
-      const t = this._templates.get(stableStringify(splitQuery(target as LiveBuilder).templateJson));
+      const t = this._templates.get(
+        templateKeyFor(splitQuery(target as LiveBuilder).templateJson, catalogOf(target)),
+      );
       if (t) for (const i of t.instances.values()) instances.add(i);
     } else if (typeof (target as {id?: unknown}).id === 'string') {
       for (const i of this.instancesById.get((target as {id: string}).id) ?? []) instances.add(i);
@@ -400,7 +420,8 @@ export class LiveQueryStore {
    * in quick succession are two changes — and manual invalidations never are.
    */
   publish(event: ChangeEvent, origin: ChangeOrigin = 'app'): void {
-    const effects = normalizeChange(event);
+    const decoded = this._decodePerCatalog(event);
+    const effects = decoded[0][1];
     if (origin !== 'manual') {
       const hash = effectsHash(effects);
       const now = Date.now();
@@ -414,8 +435,47 @@ export class LiveQueryStore {
         for (const [h, r] of this._recentChanges) if (now - r.at >= this.options.echoMs) this._recentChanges.delete(h);
       }
     }
-    for (const inst of selectInstances(this, effects)) this._pendingRefetch.add(inst);
+    if (decoded.length === 1 && decoded[0][0] === undefined && this._catalogTemplates.size === 0) {
+      for (const inst of selectInstances(this, effects)) this._pendingRefetch.add(inst);
+    } else {
+      for (const [catalog, e] of decoded) {
+        for (const inst of selectInstances(this, e, {catalog})) this._pendingRefetch.add(inst);
+      }
+    }
     this._scheduleFlush();
+  }
+
+  /**
+   * The effects of a change in the global registry and in each catalog that has
+   * templates. A mutation is decoded once per catalog; one that does not resolve in a
+   * catalog (its shape is not there) leaves that catalog's templates alone, and effects
+   * given as data apply to a catalog only when it holds their shape. Throws only when
+   * the change resolves nowhere, as a change that cannot be decoded did before catalogs.
+   */
+  private _decodePerCatalog(
+    event: ChangeEvent,
+  ): Array<[ShapeCatalog | undefined, MutationEffects]> {
+    if (this._catalogTemplates.size === 0) {
+      return [[undefined, normalizeChange(event, {catalog: undefined})]];
+    }
+    const out: Array<[ShapeCatalog | undefined, MutationEffects]> = [];
+    let globalError: unknown;
+    try {
+      out.push([undefined, normalizeChange(event, {catalog: undefined})]);
+    } catch (err) {
+      globalError = err;
+    }
+    for (const catalog of this._catalogTemplates.keys()) {
+      try {
+        const effects = normalizeChange(event, {catalog});
+        if ('effects' in event && !catalog.has(effects.shape)) continue;
+        out.push([catalog, effects]);
+      } catch {
+        // Not a change to this catalog's shapes.
+      }
+    }
+    if (out.length === 0) throw globalError;
+    return out;
   }
 
   private _scheduleFlush(): void {
@@ -436,10 +496,16 @@ export class LiveQueryStore {
   private _onDispatch(e: QueryDispatchEvent): void {
     if (e.kind !== 'create' && e.kind !== 'update' && e.kind !== 'delete') return;
     const query = e.query as {shape?: {id?: string}};
+    // The routing lookup reads the registry, so it runs in the mutation's catalog.
+    const catalog = catalogOf(query);
+    const shapeClassOf = (id: string) =>
+      catalog === getActiveShapeCatalog()
+        ? getShapeClass(id)
+        : withShapeCatalog(catalog, () => getShapeClass(id));
     const dataset =
       e.target ??
       LinkedStorage.getDatasetForShapeClass(
-        (query.shape?.id ? getShapeClass(query.shape.id) : undefined) as Function | undefined,
+        (query.shape?.id ? shapeClassOf(query.shape.id) : undefined) as Function | undefined,
       );
     if (dataset?.authoritativeChanges) return; // the dataset's own feed will report it
     e.result.then(
@@ -501,6 +567,7 @@ export class LiveQueryStore {
       for (const i of [...t.instances.values()]) this._dropInstance(i, true);
     }
     this._templates.clear();
+    this._catalogTemplates.clear();
     this.templatesByProp.clear();
     this.templatesByShape.clear();
     this.instancesById.clear();
@@ -654,7 +721,15 @@ export class LiveQueryStore {
     if (!keepTemplate && t.instances.size === 0 && !t.pinned) {
       this._templates.delete(t.key);
       this._unindexTemplate(t);
+      this._forgetCatalogTemplate(t);
     }
+  }
+
+  private _forgetCatalogTemplate(t: Template): void {
+    if (t.catalog === undefined) return;
+    const left = (this._catalogTemplates.get(t.catalog) ?? 1) - 1;
+    if (left > 0) this._catalogTemplates.set(t.catalog, left);
+    else this._catalogTemplates.delete(t.catalog);
   }
 
   private _scheduleGc(inst: Instance): void {

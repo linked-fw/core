@@ -4,7 +4,13 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import type {MutationEffects, QueryDependencies} from '../queries/queryDependencies.js';
-import {getSubShapes, getSuperShapes} from '../utils/ShapeClass.js';
+import {
+  getActiveShapeCatalog,
+  getSubShapes,
+  getSuperShapes,
+  withShapeCatalog,
+} from '../utils/ShapeClass.js';
+import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import type {Instance, Template} from './LiveQueryStore.js';
 
 /** The indexes the matcher reads. Maintained by the store. */
@@ -39,13 +45,22 @@ export type LiveIndexes = {
  * This is what keeps a `Team` rename away from a `Person` list sorted by the
  * same `schema:name` predicate.
  */
-export function selectInstances(index: LiveIndexes, e: MutationEffects): Set<Instance> {
+export function selectInstances(
+  index: LiveIndexes,
+  e: MutationEffects,
+  within?: {catalog: ShapeCatalog | undefined},
+): Set<Instance> {
+  // With `within`, only that catalog's templates match, and shapes expand in it.
+  if (within && within.catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(within.catalog, () => selectInstances(index, e, within));
+  }
   const out = new Set<Instance>();
+  const inCatalog = (t: Template) => !within || t.catalog === within.catalog;
   const add = (inst: Instance) => {
-    if (inst.template.reactive) out.add(inst);
+    if (inst.template.reactive && inCatalog(inst.template)) out.add(inst);
   };
   const addAll = (t: Template) => {
-    if (!t.reactive) return;
+    if (!t.reactive || !inCatalog(t)) return;
     for (const inst of t.instances.values()) out.add(inst);
   };
 
@@ -83,7 +98,7 @@ export function selectInstances(index: LiveIndexes, e: MutationEffects): Set<Ins
       for (const t of index.templatesByShape.get(shape) ?? []) {
         if (e.op === 'delete') {
           addAll(t);
-        } else if (t.reactive) {
+        } else if (t.reactive && inCatalog(t)) {
           for (const inst of t.instances.values()) if (isUnbound(index, inst)) out.add(inst);
         }
       }
