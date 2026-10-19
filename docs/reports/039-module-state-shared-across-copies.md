@@ -5,7 +5,8 @@ summary: >
   `isLinkedInstance(value, Cls)` extend the error brands to any class, 19 public classes are
   branded, core's own 63 class checks use them, and `UnresolvedShapeError` is branded. Built on
   `sharedState` / `brandLinkedError` / `isLinkedError` (2.36.0, minor); the copy sharing shipped in
-  2.36.2 and the memoised brand lookup in 2.36.3 (patches).
+  2.36.2, the memoised brand lookup in 2.36.3, and a cheap failed check (backlog 058, query
+  building back within 2% of 2.36.1) in the patch after it.
 packages: [core]
 ---
 
@@ -154,9 +155,10 @@ classes (`UnresolvedShapeError`, `UnresolvedContextError`, `ShapeValidationError
 
 ## Known limits
 
-- **Cost of a failed check.** A failed `isLinkedInstance` costs about 68 ns, against about 3 ns for
-  a failed `instanceof` (a pass is the `instanceof` fast path). That is fine once per query or per
-  builder step; do not use it per result row.
+- **Cost of a failed check.** A failed `isLinkedInstance` on a plain object or array costs about
+  15 ns and on a query proxy about 45 ns (jest, CPU time), against about 3 ns for a failed
+  `instanceof` (a pass is the `instanceof` fast path). Fine once per value a builder sees; do not
+  use it per result row.
 - **Query-building cost.** `src/tests/query-compile-timing.test.ts`, ms per 1000 queries, 10
   alternating runs each (the timing file only, no Fuseki):
 
@@ -165,14 +167,36 @@ classes (`UnresolvedShapeError`, `UnresolvedContextError`, `ShapeValidationError
   | select | 49.07 / 51.53 | 67.44 / 77.11 (+50%) | 55.01 / 60.28 (+17%) |
   | create | 121.07 / 125.84 | 149.96 / 164.12 (+30%) | 137.21 / 151.14 (+20%) |
 
-  2.36.3 memoises the walk per prototype (`brandsByPrototype` in `utils/linkedError.ts`: a WeakMap
-  from prototype to the brands found on its chain, filled on the first walk, cleared whenever the
-  copy brands a class). That removes about two thirds of the slowdown. A select runs 19
-  `isLinkedInstance` calls and a create 66, mostly misses. A native `brand in proto` instead of the
-  memo measured the same. The rest is not the walk. With the class's static brand removed (each
-  miss then returns at the `hasOwnProperty` check), timing was back at 2.36.1. So what remains
-  comes from the miss path itself (the megamorphic static-brand read, `getPrototypeOf` and the
-  lookup). Making that path cheap is backlog 058.
+  Backlog 058 (removed with this update) found the remaining cost. It was not the walk or the
+  memo: the miss path read the built-ins `Object.getPrototypeOf`, `Object.prototype` and
+  `Object.prototype.hasOwnProperty` by their global names on every call. Inside a `vm` context,
+  which is where jest runs each test file, every global-name read goes through the context's
+  interceptor at about 150 ns, so a failed check cost about 500 ns there. The fix, in `utils/linkedError.ts`:
+
+  - the built-ins are read once into module constants;
+  - a value whose prototype is `Object.prototype`, `Array.prototype` or `Function.prototype`
+    (most misses: mutation data, arrays, callbacks) returns `false` before any lookup, since a
+    brand is only ever defined on a class's own prototype;
+  - the per-prototype memo is keyed by the class rather than its brand, so a repeat check never
+    reads the class's static brand.
+
+  And in `FieldSet.convertTraceResult`, the `FieldSet` and `ExpressionNode` checks moved after the
+  query-proxy branch: every leaf of a select callback is a proxy, none of the duck-typed branches
+  before them can match a `FieldSet` or an `ExpressionNode`, and a failed check on a proxy is the
+  dearest kind. No call site went back to plain `instanceof`, so every check still accepts the
+  other copy's value.
+
+  After the fix, same method, 10 alternating runs, the same session for all three:
+
+  | Case | 2.36.1 best / median | 2.36.3 best / median | this fix best / median |
+  |---|---|---|---|
+  | select | 48.69 / 50.36 | 53.56 / 54.94 (+9.1%) | 49.80 / 50.45 (+0.2%) |
+  | create | 117.90 / 126.41 | 135.10 / 137.42 (+8.7%) | 121.55 / 126.96 (+0.4%) |
+
+  The machine was under load (load average 4 to 10), so 2.36.3's gap reads smaller than in the
+  table above; a repeat of the 2.36.1 / fix pair gave select 49.93 / 49.84 (-0.2%) and create
+  123.27 / 125.19 (+1.6%) medians. In a CPU profile of the create case, `isLinkedInstance` is now
+  about 1% of the time.
 - **Test isolation.** `jest.resetModules` / `jest.isolateModules` no longer reset core's shared
   state: it lives on `globalThis`, which a module reset keeps. A test that needs clean state resets
   it explicitly (`LinkedFileStorage.resetForTests()`, `setQueryContext(name, null)`, assigning
@@ -195,6 +219,14 @@ classes (`UnresolvedShapeError`, `UnresolvedContextError`, `ShapeValidationError
   and `asContextRef` accepting the other copy's `PendingQueryContext`. It needs `linked build`
   first (CI builds before it tests) and fails with that message when `lib/esm` is missing.
   Against `main`'s code the file (then 37 tests) fails 36 of 37 (only "are distinct copies" passes).
+- `src/tests/two-copies-entry-points.test.ts` (11 tests, with backlog 058): this copy's source and
+  the built `lib/esm` as the other copy. Each public entry point that takes a caller's
+  `PendingQueryContext`, `FieldSet` or `ExpressionNode` (`asContextRef`, `SelectBuilder.for`,
+  `UpdateBuilder.for`, `DeleteBuilder.from`, `AskBuilder.forNode`, `CountBuilder.of`, a mutation
+  field value serialized and lowered, a select subject lowered, `select(FieldSet)`,
+  `toIRExpression` / `Expr`, a `where` clause) gives the same result for the other copy's value
+  as for its own. With plain `instanceof` at `SelectBuilder.for`, `select(FieldSet)`,
+  `toIRExpression` and `isExpressionNode`, 4 of the 11 fail.
 - `src/tests/shared-state-and-error-brands.test.ts`: 6 new `isLinkedInstance` cases (a second
   copy of `linkedError`, a private-constructor class, subclass and prototype matching, the
   unbranded fallback, a proxy whose `get` throws on symbols, primitives).
@@ -223,3 +255,4 @@ classes (`UnresolvedShapeError`, `UnresolvedContextError`, `ShapeValidationError
 - https://github.com/linked-fw/core/pull/349 — `sharedState`, error brands (2.36.0)
 - https://github.com/linked-fw/core/pull/355 — shared module state, `isLinkedInstance`, class brands (2.36.2)
 - https://github.com/linked-fw/core/pull/357 — memoised `isLinkedInstance` lookup (2.36.3)
+- https://github.com/linked-fw/core/pull/360 — cheap failed `isLinkedInstance` check (backlog 058)

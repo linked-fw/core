@@ -934,26 +934,6 @@ export class FieldSet<R = any, Source = any> {
       };
     }
 
-    // FieldSet sub-select — use its entries directly (created by forSubSelect)
-    if (isLinkedInstance(obj, FieldSet) && obj.parentSegments !== undefined) {
-      const subSelect = obj.entries.length > 0 ? obj : undefined;
-      const entry: FieldSetEntry = {
-        path: new PropertyPath(rootShape, obj.parentSegments),
-        subSelect: subSelect as FieldSet | undefined,
-      };
-      // Carry an inline `.where()` from the parent traversal chain
-      // (e.g. `p.friends.where(...).select(...)`).
-      if (obj.parentWherePath) {
-        entry.scopedFilter = obj.parentWherePath;
-        entry.scopedFilterIndex = obj.parentWherePathIndex;
-      }
-      // Carry inner LIMIT/OFFSET/ORDER BY from `.limit()`/`.offset()`/`.orderBy()`.
-      if (typeof obj.innerLimit === 'number') entry.innerLimit = obj.innerLimit;
-      if (typeof obj.innerOffset === 'number') entry.innerOffset = obj.innerOffset;
-      if (obj.innerOrderBy) entry.innerOrderBy = obj.innerOrderBy;
-      return entry;
-    }
-
     // BoundComponent → preload composition (e.g. p.bestFriend.preloadFor(component))
     // Extract the component's FieldSet and store it as preloadSubSelect.
     if (isBoundComponent(obj)) {
@@ -962,14 +942,6 @@ export class FieldSet<R = any, Source = any> {
       return {
         path: new PropertyPath(rootShape, segments),
         preloadSubSelect: componentFieldSet,
-      };
-    }
-
-    // ExpressionNode → computed expression (e.g. p.age.times(12))
-    if (isExpressionNode(obj)) {
-      return {
-        path: new PropertyPath(rootShape, []),
-        expressionNode: obj,
       };
     }
 
@@ -993,6 +965,38 @@ export class FieldSet<R = any, Source = any> {
         leafDistance++;
       }
       return entry;
+    }
+
+    // The FieldSet and ExpressionNode checks come after the QueryBuilderObject branch: most
+    // trace results are query proxies, none of the duck-typed checks above matches a FieldSet or
+    // an ExpressionNode, and a failed class check on a proxy is the dearest kind (report 039).
+
+    // FieldSet sub-select — use its entries directly (created by forSubSelect)
+    if (isLinkedInstance(obj, FieldSet) && obj.parentSegments !== undefined) {
+      const subSelect = obj.entries.length > 0 ? obj : undefined;
+      const entry: FieldSetEntry = {
+        path: new PropertyPath(rootShape, obj.parentSegments),
+        subSelect: subSelect as FieldSet | undefined,
+      };
+      // Carry an inline `.where()` from the parent traversal chain
+      // (e.g. `p.friends.where(...).select(...)`).
+      if (obj.parentWherePath) {
+        entry.scopedFilter = obj.parentWherePath;
+        entry.scopedFilterIndex = obj.parentWherePathIndex;
+      }
+      // Carry inner LIMIT/OFFSET/ORDER BY from `.limit()`/`.offset()`/`.orderBy()`.
+      if (typeof obj.innerLimit === 'number') entry.innerLimit = obj.innerLimit;
+      if (typeof obj.innerOffset === 'number') entry.innerOffset = obj.innerOffset;
+      if (obj.innerOrderBy) entry.innerOrderBy = obj.innerOrderBy;
+      return entry;
+    }
+
+    // ExpressionNode → computed expression (e.g. p.age.times(12))
+    if (isExpressionNode(obj)) {
+      return {
+        path: new PropertyPath(rootShape, []),
+        expressionNode: obj,
+      };
     }
 
     // Fallback: string label

@@ -15,6 +15,18 @@
 /** Static key on a branded class whose value is the class's brand symbol. */
 const LINKED_ERROR_BRAND = Symbol.for('@_linked/core:errorBrand');
 
+/*
+ * The built-ins the miss path uses, read once. A global name (`Object`, `Array`) is a lookup
+ * on the global object each time it is read, and inside a `vm` context (jest runs every test
+ * file in one) that lookup goes through the context's interceptor, about 150 ns per read;
+ * reading them per call made a failed check cost about 500 ns there.
+ */
+const getPrototypeOf = Object.getPrototypeOf;
+const hasOwn = Object.prototype.hasOwnProperty;
+const OBJECT_PROTOTYPE: object = Object.prototype;
+const ARRAY_PROTOTYPE: object = Array.prototype;
+const FUNCTION_PROTOTYPE: object = Function.prototype;
+
 type ErrorClass = abstract new (...args: never[]) => Error;
 /**
  * Any class whose instances are `T`: abstract or not, whatever its constructor takes, and
@@ -64,7 +76,7 @@ export function brandLinkedClass<C extends AnyClass<object>>(Cls: C, pkg: string
 export function isLinkedError<C extends ErrorClass>(err: unknown, Cls: C): err is InstanceType<C> {
   if (err instanceof Cls) return true;
   if (err === null || (typeof err !== 'object' && typeof err !== 'function')) return false;
-  if (!Object.prototype.hasOwnProperty.call(Cls, LINKED_ERROR_BRAND)) return false;
+  if (!hasOwn.call(Cls, LINKED_ERROR_BRAND)) return false;
   const brand = (Cls as unknown as Record<symbol, symbol>)[LINKED_ERROR_BRAND];
   return (err as Record<symbol, unknown>)[brand] === true;
 }
@@ -84,34 +96,41 @@ export function isLinkedError<C extends ErrorClass>(err: unknown, Cls: C): err i
 export function isLinkedInstance<T>(value: unknown, Cls: AnyClass<T>): value is T {
   if (value instanceof Cls) return true;
   if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return false;
-  if (!Object.prototype.hasOwnProperty.call(Cls, LINKED_ERROR_BRAND)) return false;
-  const brand = (Cls as unknown as Record<symbol, symbol>)[LINKED_ERROR_BRAND];
-  const proto = Object.getPrototypeOf(value);
-  return proto !== null && prototypeChainHasBrand(proto, brand);
+  const proto = getPrototypeOf(value);
+  // Most misses are plain objects, arrays and functions. A brand is only ever defined on a
+  // class's own prototype, never on these, so stop before any lookup.
+  if (proto === null || proto === OBJECT_PROTOTYPE || proto === ARRAY_PROTOTYPE || proto === FUNCTION_PROTOTYPE) {
+    return false;
+  }
+  return prototypeChainHasBrandOf(proto, Cls);
 }
 
 /**
- * Per prototype, whether its chain carries each brand asked about. Most checks are misses
- * (`isLinkedInstance(x, PendingQueryContext)` on every value a builder sees), and walking the
- * chain each time made query building measurably slower; with this a repeat check is one
- * WeakMap and one Map lookup. A memo, so per copy of this module. Cleared whenever this copy
- * brands a class, so a brand added after a lookup is never hidden by it.
+ * Per prototype, whether its chain carries the brand of each class asked about, keyed by the
+ * class. Most checks are misses (`isLinkedInstance(x, PendingQueryContext)` on every value a
+ * builder sees), and walking the chain each time made query building measurably slower; with
+ * this a repeat check is one WeakMap and one Map lookup, and the class's static brand is read
+ * only on the first. A memo, so per copy of this module. Cleared whenever this copy brands a
+ * class, so a brand added after a lookup is never hidden by it.
  */
-let brandsByPrototype = new WeakMap<object, Map<symbol, boolean>>();
+let brandsByPrototype = new WeakMap<object, Map<Function, boolean>>();
 
-function prototypeChainHasBrand(proto: object, brand: symbol): boolean {
+function prototypeChainHasBrandOf(proto: object, Cls: Function): boolean {
   let known = brandsByPrototype.get(proto);
   if (!known) brandsByPrototype.set(proto, (known = new Map()));
-  let has = known.get(brand);
+  let has = known.get(Cls);
   if (has === undefined) {
     has = false;
-    for (let p: object | null = proto; p; p = Object.getPrototypeOf(p)) {
-      if (Object.prototype.hasOwnProperty.call(p, brand)) {
-        has = true;
-        break;
+    if (hasOwn.call(Cls, LINKED_ERROR_BRAND)) {
+      const brand = (Cls as unknown as Record<symbol, symbol>)[LINKED_ERROR_BRAND];
+      for (let p: object | null = proto; p; p = getPrototypeOf(p)) {
+        if (hasOwn.call(p, brand)) {
+          has = true;
+          break;
+        }
       }
     }
-    known.set(brand, has);
+    known.set(Cls, has);
   }
   return has;
 }
