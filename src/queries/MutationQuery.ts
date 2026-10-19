@@ -22,6 +22,7 @@ import {
   undeclaredPropertyMessage,
   type ValidationMode,
 } from '../shapes/validation.js';
+import {topLevelDetails, unresolvedShapeError, unresolvedValueShapeError} from '../utils/unresolvedShape.js';
 
 export type NodeId = {id: string} | string;
 
@@ -82,7 +83,10 @@ export class MutationQueryFactory extends QueryFactory {
       // fail here with "Shape class not found".
       const shapeClass = shape.id ? resolveShapeConstructor(shape.id) : undefined;
       if (!shapeClass) {
-        throw new Error(`Shape class not found for ${shape.id || 'unknown'}`);
+        throw unresolvedShapeError(
+          `Shape class not found for ${shape.id || 'unknown'}`,
+          topLevelDetails(shape.id || ''),
+        );
       }
       const proxy = createProxiedPathBuilder(shapeClass);
       const result = obj(proxy);
@@ -274,8 +278,9 @@ export class MutationQueryFactory extends QueryFactory {
           const shapeClass = resolveShapeConstructor(propShape.valueShape);
           valueShape = shapeClass?.shape || null;
           if (!valueShape) {
-            throw new Error(
+            throw unresolvedValueShapeError(
               `Shape class not found for ${propShape.valueShape.id}`,
+              propShape,
             );
           }
         }

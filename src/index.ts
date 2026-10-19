@@ -20,6 +20,7 @@ export {serializePathToNodeData} from './shapes/serializePathToNodeData.js';
 export {Shape} from './shapes/Shape.js';
 // SHACL-aligned validation of plain data objects against a shape.
 export {validate, assertValid, ShapeValidationError} from './shapes/validation.js';
+export {UnresolvedShapeError, type UnresolvedShapeDetails} from './utils/unresolvedShape.js';
 export type {
   ValidationReport,
   ValidationResult,

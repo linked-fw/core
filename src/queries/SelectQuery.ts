@@ -20,6 +20,7 @@ import {PropertyPath} from './PropertyPath.js';
 import type {QueryBuilder, QueryBuilderJSON} from './QueryBuilder.js';
 import {ExpressionNode, ExistsCondition, isExpressionNode, isExistsCondition, tracedPropertyExpression, tracedAliasExpression} from '../expressions/ExpressionNode.js';
 import {PendingQueryContext} from './QueryContext.js';
+import {unresolvedValueShapeError} from '../utils/unresolvedShape.js';
 
 /**
  * String keys the query-shape proxy must let through *without* treating them as
@@ -578,7 +579,7 @@ export class QueryBuilderObject<
         // but Im not sure if that's even possible with dynamic import paths, that are only known at runtime
         //UPDATE: we should not need to load shapeclasses. We just need to be able to access shapes.
         // but the problem remains that the ImageObject shape needs to be available, but thats easier, as its data
-        throw new Error(`Shape class not found for ${valueShape.id}`);
+        throw unresolvedValueShapeError(`Shape class not found for ${valueShape.id}`, property);
       }
       const shapeValue = createShapeTarget(shapeClass);
       if (singleValue) {
@@ -936,6 +937,13 @@ export class QueryShapeSet<
           if (!valueShape && queryShapeSet.property?.valueShape) {
             const shapeClass = getQueryShapeClass(queryShapeSet.property.valueShape);
             valueShape = shapeClass?.shape;
+            if (!valueShape) {
+              // Not an undecorated key: the set's shape itself is missing.
+              throw unresolvedValueShapeError(
+                `Shape class not found for ${queryShapeSet.property.valueShape.id}`,
+                queryShapeSet.property,
+              );
+            }
           }
           let propertyShape: PropertyShapeData = valueShape
             ? getPropertyShapes(valueShape, true).find(

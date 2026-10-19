@@ -1,5 +1,6 @@
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
 import {getActiveShapeCatalog, getOrCreateShapeAdapter, getShapeClass} from '../utils/ShapeClass.js';
+import {topLevelDetails, unresolvedShapeError} from '../utils/unresolvedShape.js';
 
 /**
  * Resolve a shape class or IRI string to a ShapeConstructor.
@@ -17,7 +18,7 @@ export function resolveShape<S extends Shape>(
     // metadata, so a project-authored shape that exists only as data resolves too.
     const shapeClass = getShapeClass(shape) ?? getOrCreateShapeAdapter(shape);
     if (!shapeClass) {
-      throw new Error(`Cannot resolve shape for '${shape}'`);
+      throw unresolvedShapeError(`Cannot resolve shape for '${shape}'`, topLevelDetails(shape));
     }
     return shapeClass as ShapeConstructor<S>;
   }

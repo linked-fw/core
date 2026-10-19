@@ -22,6 +22,7 @@ import {
   deserializeWherePath,
   type WherePathJSON,
 } from './QueryBuilderSerialization.js';
+import {topLevelDetails, unresolvedShapeError, unresolvedValueShapeError} from '../utils/unresolvedShape.js';
 
 // Duck-type helpers for runtime detection.
 // These check structural shape since the classes live in SelectQuery.ts (runtime circular dep).
@@ -728,10 +729,33 @@ export class FieldSet<R = any, Source = any> {
     if (subFields) {
       const nested = opts.shape
         ? FieldSet.resolveShape(opts.shape)
-        : FieldSet.nestedShapeOf(path) ?? shape;
+        : FieldSet.requireNestedShapeOf(path, shape);
       entry.subSelect = FieldSet.fromFields(nested, subFields);
     }
     return entry;
+  }
+
+  /**
+   * The shape sub-fields of `path` are read against: its terminal segment's value shape, or
+   * `shape` when that segment declares none. A declared value shape that does not resolve is
+   * an error: reading the sub-fields against `shape` instead would resolve them on the wrong
+   * shape (or fail with a message about the wrong property).
+   */
+  private static requireNestedShapeOf(path: PropertyPath, shape: NodeShapeData): NodeShapeData {
+    const nested = FieldSet.nestedShapeOf(path);
+    if (nested) return nested;
+    const seg = path.segments[path.segments.length - 1] as PropertyShapeData | undefined;
+    if (seg?.valueShape?.id) {
+      const owner = path.segments.length > 1
+        ? FieldSet.nestedShapeOf(new PropertyPath(path.rootShape, path.segments.slice(0, -1)))
+        : path.rootShape;
+      throw unresolvedValueShapeError(
+        `Cannot resolve valueShape '${seg.valueShape.id}' for property '${seg.label}' in path '${path.toString()}'`,
+        seg,
+        owner,
+      );
+    }
+    return shape;
   }
 
   /** The shape reached at the end of a relation path (its terminal segment's value shape). */
@@ -771,7 +795,7 @@ export class FieldSet<R = any, Source = any> {
       // below is already supported, it just was not reachable from an IRI.
       const nodeShape = getNodeShape(shape);
       if (!nodeShape) {
-        throw new Error(`Cannot resolve shape for '${shape}'`);
+        throw unresolvedShapeError(`Cannot resolve shape for '${shape}'`, topLevelDetails(shape));
       }
       return {nodeShape};
     }
@@ -827,8 +851,9 @@ export class FieldSet<R = any, Source = any> {
             }
             const nestedShapeClass = getQueryShapeClass(basePropertyShape.valueShape);
             if (!nestedShapeClass || !nestedShapeClass.shape) {
-              throw new Error(
-                `Cannot resolve valueShape for property '${key}'`,
+              throw unresolvedValueShapeError(
+                `Cannot resolve valueShape '${basePropertyShape.valueShape.id}' for property '${key}'`,
+                basePropertyShape,
               );
             }
             for (const nestedField of value) {
