@@ -69,8 +69,10 @@ export function topLevelDetails(shapeIri: string): UnresolvedShapeDetails {
 }
 
 /**
- * Why the shape is missing, in words: `property 'home' of '<owner>' points at it; catalog
- * 'p1#main' does not hold it`. Each error keeps its own leading sentence and appends this.
+ * Why the shape is missing, in words: `property 'home' of '<owner>' points at it; not among the
+ * shapes in scope 'p1#main'`. The scope is named only while a scoped `ShapeCatalog` is active
+ * (`withShapeCatalog`); against the global registry the text ends after "points at it". Each
+ * error keeps its own leading sentence and appends this; empty when there is nothing to add.
  */
 export function describeUnresolved(details: UnresolvedShapeDetails): string {
   const parts: string[] = [];
@@ -84,21 +86,20 @@ export function describeUnresolved(details: UnresolvedShapeDetails): string {
   if (getActiveShapeCatalog() !== undefined) {
     parts.push(
       details.catalog !== undefined
-        ? `catalog '${details.catalog}' does not hold it`
-        : 'the active catalog does not hold it',
+        ? `not among the shapes in scope '${details.catalog}'`
+        : 'not among the shapes in scope',
     );
-  } else {
-    parts.push('it is not registered');
   }
   return parts.join('; ');
 }
 
-/** `<prefix> (<why>)` as an {@link UnresolvedShapeError}. */
+/** `<prefix> (<why>)` as an {@link UnresolvedShapeError}; just `<prefix>` when there is no why. */
 export function unresolvedShapeError(
   prefix: string,
   details: UnresolvedShapeDetails,
 ): UnresolvedShapeError {
-  return new UnresolvedShapeError(`${prefix} (${describeUnresolved(details)})`, details);
+  const why = describeUnresolved(details);
+  return new UnresolvedShapeError(why ? `${prefix} (${why})` : prefix, details);
 }
 
 /** The error for a property whose `valueShape` does not resolve. */
