@@ -28,6 +28,9 @@ export type {
   ValidatableShape,
 } from './shapes/validation.js';
 export {LinkedStorage} from './utils/LinkedStorage.js';
+// Conventions that make a second copy of a framework module harmless.
+export {sharedState, sharedStateKey} from './utils/sharedState.js';
+export {brandLinkedError, isLinkedError, linkedErrorBrand} from './utils/linkedError.js';
 // New dynamic query building API (Phase 2)
 export {SelectBuilder, QueryBuilder} from './queries/QueryBuilder.js';
 export {lower} from './queries/lower.js';

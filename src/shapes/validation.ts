@@ -39,6 +39,7 @@
  */
 import {getShapeRegistryInstanceCount, getQueryShapeClass} from '../utils/ShapeClass.js';
 import {shacl} from '../ontologies/shacl.js';
+import {brandLinkedError} from '../utils/linkedError.js';
 import {xsd} from '../ontologies/xsd.js';
 import {isNodeReferenceValue, type NodeReferenceValue} from '../utils/NodeReference.js';
 import {getUniquePropertyShapes} from './nodeShapeData.js';
@@ -134,6 +135,7 @@ export class ShapeValidationError extends Error {
     this.report = report;
   }
 }
+brandLinkedError(ShapeValidationError, '@_linked/core', 'ShapeValidationError');
 
 /**
  * Keys that carry metadata about the node rather than a property value: `id` /

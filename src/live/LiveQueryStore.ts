@@ -35,6 +35,7 @@ import {
   type LiveQueryKind,
 } from './keys.js';
 import {setLiveQueryStore, peekLiveQueryStore} from './registry.js';
+import {isLinkedError} from '../utils/linkedError.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -251,7 +252,7 @@ export class LiveQueryStore {
       template.deps = queryDependencies(template.builder as any);
       template.depsProvisional = false;
     } catch (err) {
-      if (!(err instanceof UnresolvedContextError)) throw err;
+      if (!isLinkedError(err, UnresolvedContextError)) throw err;
       if (template.deps) return template.deps; // still provisional
       template.deps = {
         narrow: new Set(),

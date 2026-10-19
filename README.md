@@ -1368,6 +1368,36 @@ await Team.update({members: {add: [{id: personId}]}}).for({id: teamId});
 - A dataset can report changes made elsewhere through the optional `IDataset.subscribeChanges(listener)`;
   `publishChange(event)` does the same from application code; `invalidate(Shape | {id} | query)` is the manual lever.
 
+## Shared state and error brands
+
+A framework module can be evaluated twice in one process (under `linked start`, once by Vite's SSR
+module runner and once by Node) or twice in a browser. Two conventions make that second copy harmless:
+
+- **Module state lives on `globalThis`.** A module-level value that more than one caller reads or writes
+  (a registry, a configured singleton, a static that callers assign) is kept with `sharedState`, under
+  `Symbol.for('<pkg>:<name>')`, so every copy reads and writes the same container:
+
+  ```ts
+  import {sharedState} from '@_linked/core';
+  const state = sharedState('@_linked/my-pkg', 'Mailer.state', () => ({provider: null as Provider | null}));
+  export function setProvider(p: Provider) { state.provider = p; }
+  ```
+
+- **Errors are matched by brand, not `instanceof`.** A framework error class is branded once with
+  `brandLinkedError(Cls, '<pkg>', '<ClassName>')`, and code that catches an error from another package
+  checks it with `isLinkedError(err, Cls)`. That matches an instance thrown by any copy of the defining
+  module, and a subclass instance against its base.
+
+  ```ts
+  export class StoreError extends Error {}
+  brandLinkedError(StoreError, '@_linked/my-pkg', 'StoreError');
+  // elsewhere
+  if (isLinkedError(err, StoreError)) { /* … */ }
+  ```
+
+The full convention, including what stays per copy and how React contexts are handled, is in
+[shared state and error brands](https://github.com/linked-fw/cli/blob/main/docs/architecture/shared-state-and-error-brands.md).
+
 ## TODO
 
 - Allow `preloadFor` to accept another query (not just a component).

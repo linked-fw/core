@@ -39,6 +39,7 @@ import {
 import {requireLiveQueryStore} from '../live/registry.js';
 import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
+import {isLinkedError} from '../utils/linkedError.js';
 import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
 
 /** JSON representation of a SelectBuilder. */
@@ -931,7 +932,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       // UnresolvedContextError when the dataset lowers the query. For SELECT this
       // means "not ready" — return null (a reactive layer re-runs once it lands),
       // mirroring the pending-subject behavior. Mutations still throw.
-      if (swallowUnresolvedContext && err instanceof UnresolvedContextError) {
+      if (swallowUnresolvedContext && isLinkedError(err, UnresolvedContextError)) {
         return null;
       }
       // The message names the query, which is what a human needs. `cause` keeps

@@ -1,5 +1,6 @@
 import {type QShape, QueryShape} from './SelectQuery.js';
 import {Shape, createShapeTarget} from '../shapes/Shape.js';
+import {brandLinkedError} from '../utils/linkedError.js';
 
 const queryContext = new Map<string, QShape<any, any, any>>();
 
@@ -31,6 +32,7 @@ export class UnresolvedContextError extends Error {
     this.name = 'UnresolvedContextError';
   }
 }
+brandLinkedError(UnresolvedContextError, '@_linked/core', 'UnresolvedContextError');
 
 /** Listener notified (with the changed context name) whenever a context is set or cleared. */
 export type QueryContextListener = (name: string) => void;
