@@ -16,6 +16,7 @@ import {createNodeShapeData, type NodeShapeData} from '../shapes/nodeShapeData.j
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
 import {List} from '../shapes/List.class.js';
 import {Prefix} from './Prefix.js';
+import {sharedState} from './sharedState.js';
 import {coreOntology} from '../ontologies/linked-core.js';
 import {rdf} from '../ontologies/rdf.js';
 import {addNodeShapeToShapeClass,getShapeClass} from './ShapeClass.js';
@@ -32,8 +33,22 @@ declare var global;
 
 // var packageParsePromises: Map<string,Promise<any>> = new Map();
 // var loadedPackages: Set<NamedNode> = new Set();
-let ontologies: Set<any> = new Set();
-let _autoLoadOntologyData = false;
+/**
+ * Ontology registrations and package settings, shared by every copy of core in the runtime:
+ * `autoLoadOntologyData(true)` through one copy loads ontologies another copy registered, and
+ * `setDefaultPageLimit` through either sets the limit both read.
+ */
+const packageState = sharedState('@_linked/core', 'Package', () => ({
+  ontologies: new Set<any>(),
+  autoLoadOntologyData: false,
+  defaultLimit: 12,
+  /** One setter per copy of this module, keeping that copy's `DEFAULT_LIMIT` binding in step. */
+  limitBindings: new Set<(limit: number) => void>(),
+}));
+// A container an older copy of core created lacks the fields added since.
+packageState.defaultLimit ??= 12;
+packageState.limitBindings ??= new Set();
+const ontologies = packageState.ontologies;
 /**
  * a map of requested property shapes for specific nodes
  * The value is a promise if it's still loading, or true if it is fully loaded
@@ -208,18 +223,32 @@ export interface LinkedPackageObject
   registerPackageModule(_module): void;
 }
 
-export var DEFAULT_LIMIT = 12;
+/**
+ * The default page size. A live binding that follows `setDefaultPageLimit` calls made through
+ * any copy of core; {@link getDefaultPageLimit} reads the same value.
+ */
+export var DEFAULT_LIMIT = packageState.defaultLimit;
+packageState.limitBindings.add((limit) => {
+  DEFAULT_LIMIT = limit;
+});
 
 export function setDefaultPageLimit(limit: number)
 {
-  DEFAULT_LIMIT = limit;
+  packageState.defaultLimit = limit;
+  packageState.limitBindings.forEach((bind) => bind(limit));
+}
+
+/** The default page size set with {@link setDefaultPageLimit} (12 unless set). */
+export function getDefaultPageLimit(): number
+{
+  return packageState.defaultLimit;
 }
 
 export function autoLoadOntologyData(value: boolean)
 {
-  _autoLoadOntologyData = value;
+  packageState.autoLoadOntologyData = value;
   //this may be set to true after some ontologies have already indexed,
-  if (_autoLoadOntologyData)
+  if (value)
   {
     // so in that case we load all data of ontologies that are already indexed
     ontologies.forEach((ontologyExport) => {
@@ -468,7 +497,7 @@ export function linkedPackage(
     registerInPackageTree(prefixAndFileName,exportsCopy);
     // });
 
-    if (_autoLoadOntologyData)
+    if (packageState.autoLoadOntologyData)
     {
       loadData().catch((err) => {
         console.warn(

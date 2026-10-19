@@ -54,6 +54,7 @@ import type {
   UpdateLowerSpec,
   DeleteLowerSpec,
 } from './mutationLowerSpec.js';
+import {isLinkedInstance} from '../utils/linkedError.js';
 
 /** A select query that can be lowered (the select builder). */
 export type LowerableSelect = {readonly __queryKind: 'select'; toRawInput(): any};
@@ -85,7 +86,7 @@ function lowerWherePath(where: WherePath) {
  * context is resolved here and an unset one throws `UnresolvedContextError`.
  */
 function resolveValueContexts(val: unknown): unknown {
-  if (val instanceof PendingQueryContext) {
+  if (isLinkedInstance(val, PendingQueryContext)) {
     return {id: resolveContextId(val.contextName, true)!};
   }
   if (Array.isArray(val)) {
@@ -156,7 +157,7 @@ function lowerDelete(spec: DeleteLowerSpec): IRDeleteQuery {
   // Resolve any context-ref ids ({@ctx}) against the live map — a delete must hit
   // a concrete node, so an unresolved one throws (never a silent `{id: undefined}`).
   const resolvedIds = spec.ids!.map((id) =>
-    id instanceof PendingQueryContext
+    isLinkedInstance(id, PendingQueryContext)
       ? {id: resolveContextId(id.contextName, true)!}
       : id,
   );
@@ -187,7 +188,7 @@ function lowerAsk(input: RawAskInput): IRAskQuery {
   if (!input.shape) {
     // Shapeless: no rdf:type constraint, so no shape scan and no property refs.
     const id =
-      subject instanceof PendingQueryContext
+      isLinkedInstance(subject, PendingQueryContext)
         ? resolveContextId(subject.contextName, true)!
         : (subject as {id?: string} | undefined)?.id;
     return attachCatalog<IRAskQuery>({kind: 'ask', patterns: [], subjectId: id});
@@ -254,7 +255,7 @@ function lowerCount(input: RawCountInput): IRCountQuery {
   // the context is unset — the same "not ready" a where-clause reference raises, and
   // never a plausible number.
   const subject =
-    input.subject instanceof PendingQueryContext
+    isLinkedInstance(input.subject, PendingQueryContext)
       ? {id: resolveContextId(input.subject.contextName, true)!}
       : input.subject;
   const selected = buildSelectQuery({

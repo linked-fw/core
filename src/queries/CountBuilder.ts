@@ -39,6 +39,7 @@ import {requireLiveQueryStore} from '../live/registry.js';
 import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
+import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
 
 /**
  * Everything a count can carry. Assembled by `SelectBuilder.toCount()` or
@@ -128,7 +129,7 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
       shape: shapeId,
     };
 
-    if (subject instanceof PendingQueryContext) {
+    if (isLinkedInstance(subject, PendingQueryContext)) {
       // Carry the reference, not its (possibly unresolved) id, so the receiver
       // resolves it against its own context map at lowering time.
       json.subject = encodeContextRef(subject.contextName);
@@ -198,7 +199,7 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
   async exec(target?: IDataset): Promise<number> {
     const {nullSubject, subject} = this._spec;
     if (nullSubject) return 0;
-    if (subject instanceof PendingQueryContext && !subject.id) return 0;
+    if (isLinkedInstance(subject, PendingQueryContext) && !subject.id) return 0;
     // `async` ensures a missing global dispatch rejects rather than throwing
     // synchronously past the caller's `.catch()`.
     const dispatch = target ?? getQueryDispatch();
@@ -245,6 +246,8 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
     return 'CountBuilder';
   }
 }
+brandLinkedClass(CountBuilder, '@_linked/core', 'CountBuilder');
+
 
 /** Narrow an unknown query object to a count. */
 export function isCountQuery(query: unknown): query is CountQuery {

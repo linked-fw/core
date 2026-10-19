@@ -1,8 +1,9 @@
 import {ExpressionNode, toIRExpression} from './ExpressionNode.js';
 import type {ExpressionInput, PropertyRefMap} from './ExpressionNode.js';
+import {isLinkedInstance} from '../utils/linkedError.js';
 
 function wrap(input: ExpressionInput): ExpressionNode {
-  return input instanceof ExpressionNode
+  return isLinkedInstance(input, ExpressionNode)
     ? input
     : new ExpressionNode(toIRExpression(input));
 }
@@ -15,7 +16,7 @@ function wrap(input: ExpressionInput): ExpressionNode {
 function mergedRefs(inputs: readonly ExpressionInput[]): PropertyRefMap {
   const merged = new Map<string, readonly string[]>();
   for (const input of inputs) {
-    if (input instanceof ExpressionNode) {
+    if (isLinkedInstance(input, ExpressionNode)) {
       for (const [k, v] of input._refs) merged.set(k, v);
     }
   }

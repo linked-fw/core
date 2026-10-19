@@ -39,7 +39,7 @@ import {
 import {requireLiveQueryStore} from '../live/registry.js';
 import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
-import {isLinkedError} from '../utils/linkedError.js';
+import {brandLinkedClass, isLinkedError, isLinkedInstance} from '../utils/linkedError.js';
 import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
 
 /** JSON representation of a SelectBuilder. */
@@ -214,7 +214,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   select(labels: string[]): SelectBuilder<S>;
   select<NewR>(fieldSet: FieldSet<NewR>): SelectBuilder<S, NewR, QueryResponseToResultType<NewR, S>[]>;
   select<NewR = R>(fnOrLabelsOrFieldSet: QueryBuildFn<S, NewR> | string[] | FieldSet<any>): SelectBuilder<S, NewR, any> {
-    if (fnOrLabelsOrFieldSet instanceof FieldSet) {
+    if (isLinkedInstance(fnOrLabelsOrFieldSet, FieldSet)) {
       const labels = fnOrLabelsOrFieldSet.labels();
       const selectFn = ((p: any) =>
         labels.map((label) => p[label])) as unknown as QueryBuildFn<S, any>;
@@ -295,7 +295,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
 
   /** Target a single entity by ID. Implies singleResult; unwraps array Result type. */
   for(id: string | NodeReferenceValue | PendingQueryContext | null | undefined): SelectBuilder<S, R, Result extends (infer E)[] ? E : Result> {
-    if (id instanceof PendingQueryContext) {
+    if (isLinkedInstance(id, PendingQueryContext)) {
       // Store the pending context as subject — its .id getter resolves lazily
       // from the global context map when the query is lowered/serialized.
       return this.clone({subject: id as any, subjects: undefined, singleResult: true, _nullSubject: false, _pendingContextName: id.contextName}) as any;
@@ -503,7 +503,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     // context map — and the query would then travel as a concrete IRI where the
     // equivalent select travels as `{"@ctx": name}` for the receiver to resolve.
     const subject =
-      this._subject instanceof PendingQueryContext
+      isLinkedInstance(this._subject, PendingQueryContext)
         ? this._subject
         : this._subject && typeof this._subject === 'object' && 'id' in this._subject
           ? {id: (this._subject as NodeReferenceValue).id}
@@ -997,6 +997,8 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     return 'SelectBuilder';
   }
 }
+brandLinkedClass(SelectBuilder, '@_linked/core', 'SelectBuilder');
+
 
 /** @deprecated Renamed to `SelectBuilder`. This alias will be removed in a future major. */
 export {SelectBuilder as QueryBuilder};

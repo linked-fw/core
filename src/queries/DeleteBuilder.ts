@@ -15,6 +15,7 @@ import {serializeWherePath, deserializeWherePath} from './QueryBuilderSerializat
 import type {DeleteLowerSpec} from './mutationLowerSpec.js';
 import {PendingQueryContext, asContextRef} from './QueryContext.js';
 import {encodeContextRef, isContextRefJSON} from './ContextRef.js';
+import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
 
 type DeleteMode = 'ids' | 'all' | 'where';
 
@@ -216,7 +217,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
       ids: this._ids.map((id) =>
         // An unresolved context ref travels as a `{@ctx}` marker; a concrete id
         // (string or `{id}`, incl. a resolved context shape) as a plain string.
-        id instanceof PendingQueryContext
+        isLinkedInstance(id, PendingQueryContext)
           ? encodeContextRef(id.contextName)
           : typeof id === 'string'
             ? id
@@ -243,3 +244,5 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
   }
 
 }
+brandLinkedClass(DeleteBuilder, '@_linked/core', 'DeleteBuilder');
+

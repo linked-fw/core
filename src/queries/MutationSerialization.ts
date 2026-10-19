@@ -42,6 +42,7 @@ import {
   decodeValueExpr,
   type DslJsonValue,
 } from './DslJsonExpression.js';
+import {isLinkedInstance} from '../utils/linkedError.js';
 
 // =============================================================================
 // JSON types
@@ -163,7 +164,7 @@ function encodeSingleValue(
   if (value && typeof value === 'object') {
     // Query-context reference — carry the name, resolve at lowering (checked
     // before the generic `.id` branch since a PendingQueryContext has an `.id` getter).
-    if (value instanceof PendingQueryContext) {
+    if (isLinkedInstance(value, PendingQueryContext)) {
       return {'@ctx': value.contextName};
     }
     if ('fields' in value) {

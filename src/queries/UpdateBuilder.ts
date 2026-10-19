@@ -21,6 +21,7 @@ import {
 } from './MutationSerialization.js';
 import {serializeWherePath, deserializeWherePath} from './QueryBuilderSerialization.js';
 import type {UpdateLowerSpec} from './mutationLowerSpec.js';
+import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
 
 type UpdateMode = 'for' | 'forAll' | 'where';
 
@@ -161,7 +162,7 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
 
   /** Target a specific entity by ID. */
   for(id: string | NodeReferenceValue | PendingQueryContext): UpdateBuilder<S, U, AddId<U>> {
-    if (id instanceof PendingQueryContext) {
+    if (isLinkedInstance(id, PendingQueryContext)) {
       return this.clone({targetContextName: id.contextName, targetId: undefined, mode: 'for'}) as unknown as UpdateBuilder<S, U, AddId<U>>;
     }
     const resolvedId = typeof id === 'string' ? id : id.id;
@@ -365,3 +366,5 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
   }
 
 }
+brandLinkedClass(UpdateBuilder, '@_linked/core', 'UpdateBuilder');
+

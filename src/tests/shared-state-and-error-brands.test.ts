@@ -1,6 +1,12 @@
 import {describe, expect, it, jest} from '@jest/globals';
 import {sharedState, sharedStateKey} from '../utils/sharedState.js';
-import {brandLinkedError, isLinkedError, linkedErrorBrand} from '../utils/linkedError.js';
+import {
+  brandLinkedClass,
+  brandLinkedError,
+  isLinkedError,
+  isLinkedInstance,
+  linkedErrorBrand,
+} from '../utils/linkedError.js';
 
 type SharedStateModule = typeof import('../utils/sharedState.js');
 type LinkedErrorModule = typeof import('../utils/linkedError.js');
@@ -98,5 +104,76 @@ describe('isLinkedError', () => {
     });
     expect(isLinkedError(new HandBranded(), DatasetError)).toBe(true);
     expect(linkedErrorBrand('@_linked/test', 'DatasetError')).toBe(Symbol.for('@_linked/test:DatasetError'));
+  });
+});
+
+/** Defines the same (non-error) classes a package module would, through the given copy of core. */
+function defineClasses(core: Pick<LinkedErrorModule, 'brandLinkedClass'>) {
+  class Collection {
+    private constructor() {}
+    static make() {
+      return new Collection();
+    }
+  }
+  core.brandLinkedClass(Collection, '@_linked/test', 'Collection');
+  class Base {}
+  core.brandLinkedClass(Base, '@_linked/test', 'Base');
+  class Sub extends Base {}
+  core.brandLinkedClass(Sub, '@_linked/test', 'Sub');
+  class Unbranded extends Base {}
+  return {Collection, Base, Sub, Unbranded};
+}
+
+describe('isLinkedInstance', () => {
+  it('matches an instance made by another copy, including a class with a private constructor', async () => {
+    const otherCore = await secondCopy<LinkedErrorModule>(() => import('../utils/linkedError.js'));
+    const mine = defineClasses({brandLinkedClass});
+    const theirs = defineClasses(otherCore);
+    const made = theirs.Collection.make();
+    expect(made instanceof mine.Collection).toBe(false);
+    expect(isLinkedInstance(made, mine.Collection)).toBe(true);
+    expect(otherCore.isLinkedInstance(mine.Collection.make(), theirs.Collection)).toBe(true);
+  });
+
+  it('matches a subclass instance and a subclass prototype against the base', () => {
+    const mine = defineClasses({brandLinkedClass});
+    const theirs = defineClasses({brandLinkedClass});
+    expect(isLinkedInstance(new theirs.Sub(), mine.Base)).toBe(true);
+    expect(isLinkedInstance(theirs.Sub.prototype, mine.Base)).toBe(true);
+    expect(isLinkedInstance(new theirs.Base(), mine.Sub)).toBe(false);
+    // `X.prototype instanceof X` is false; so is this.
+    expect(isLinkedInstance(theirs.Base.prototype, mine.Base)).toBe(false);
+  });
+
+  it('falls back to instanceof for an unbranded class', () => {
+    const mine = defineClasses({brandLinkedClass});
+    const theirs = defineClasses({brandLinkedClass});
+    expect(isLinkedInstance(new mine.Unbranded(), mine.Unbranded)).toBe(true);
+    expect(isLinkedInstance(new theirs.Unbranded(), mine.Unbranded)).toBe(false);
+  });
+
+  it('never reads the brand off the value, so a guarded proxy is not tripped', () => {
+    const mine = defineClasses({brandLinkedClass});
+    const theirs = defineClasses({brandLinkedClass});
+    const guarded = new Proxy(new theirs.Sub(), {
+      get(target, key) {
+        if (typeof key === 'symbol') throw new Error(`undecorated property ${String(key)}`);
+        return Reflect.get(target, key);
+      },
+    });
+    expect(isLinkedInstance(guarded, mine.Base)).toBe(true);
+  });
+
+  it('rejects primitives, null and plain objects', () => {
+    const {Base} = defineClasses({brandLinkedClass});
+    for (const value of [undefined, null, 0, 'Base', {}, Object.create(null), () => {}]) {
+      expect(isLinkedInstance(value, Base)).toBe(false);
+    }
+  });
+
+  it('shares its brand with brandLinkedError, so a branded error is a linked instance too', () => {
+    const {DatasetError} = defineErrors({brandLinkedError});
+    const theirs = defineErrors({brandLinkedError});
+    expect(isLinkedInstance(new theirs.UnreachableError(), DatasetError)).toBe(true);
   });
 });

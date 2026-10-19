@@ -1,5 +1,6 @@
 import {Shape, createShapeTarget, type ShapeConstructor} from '../shapes/Shape.js';
 import {QueryBuilderObject, QueryShape} from './SelectQuery.js';
+import {isLinkedInstance} from '../utils/linkedError.js';
 
 /**
  * Creates the proxy object used as the `p` parameter in query callbacks.
@@ -15,7 +16,7 @@ import {QueryBuilderObject, QueryShape} from './SelectQuery.js';
 export function createProxiedPathBuilder<S extends Shape>(
   shape: ShapeConstructor<S> | QueryBuilderObject,
 ): QueryBuilderObject {
-  if (shape instanceof QueryBuilderObject) {
+  if (isLinkedInstance(shape, QueryBuilderObject)) {
     // When a QueryBuilderObject is passed directly (e.g. QueryPrimitives
     // used as the shape for where-clause evaluation), use it as-is.
     return shape;

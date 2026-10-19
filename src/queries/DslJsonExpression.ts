@@ -30,6 +30,7 @@ import {
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import type {WherePath} from './SelectQuery.js';
 import {walkPropertyPath} from './PropertyPath.js';
+import {isLinkedInstance} from '../utils/linkedError.js';
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -282,7 +283,7 @@ export function encodeCondition(
   node: ExpressionNode | ExistsCondition,
   shape: NodeShapeData,
 ): DslJsonCondition {
-  if (node instanceof ExistsCondition) {
+  if (isLinkedInstance(node, ExistsCondition)) {
     return encodeExists(node, shape);
   }
   return encodeBoolExpr(node.ir, node._refs, shape);
@@ -308,7 +309,7 @@ function encodeExists(ec: ExistsCondition, shape: NodeShapeData): DslJsonConditi
   // Fold any chained and/or conditions into nested logical combinators.
   for (const {op, condition} of ec.chain) {
     const c = encodeCondition(
-      condition instanceof ExistsCondition ? condition : (condition as ExpressionNode),
+      isLinkedInstance(condition, ExistsCondition) ? condition : (condition as ExpressionNode),
       shape,
     );
     base = {[op]: [base, c]} as DslJsonCondition;
@@ -385,7 +386,7 @@ function tryMergeAnd(parts: DslJsonCondition[]): DslJsonCondition | null {
 /** Decode a DSL-JSON condition into a runtime WherePath (`{expressionNode}` | `{existsCondition}`). */
 export function decodeCondition(json: DslJsonCondition, shape: NodeShapeData): WherePath {
   const node = decodeConditionNode(json, shape);
-  return node instanceof ExistsCondition
+  return isLinkedInstance(node, ExistsCondition)
     ? ({existsCondition: node} as WherePath)
     : ({expressionNode: node} as WherePath);
 }
@@ -407,13 +408,13 @@ function decodeConditionNode(
     const k = keys[0];
     if (k === 'not') {
       const inner = decodeConditionNode(o.not as DslJsonCondition, shape);
-      if (inner instanceof ExistsCondition) return inner.not();
+      if (isLinkedInstance(inner, ExistsCondition)) return inner.not();
       return new ExpressionNode({kind: 'not_expr', expression: inner.ir}, inner._refs);
     }
     // and / or
     const elems = (o[k] as DslJsonCondition[]).map((c) => decodeConditionNode(c, shape));
     // An exists-chain: first operand is an ExistsCondition → fold the rest as its chain.
-    if (elems[0] instanceof ExistsCondition) {
+    if (isLinkedInstance(elems[0], ExistsCondition)) {
       let ec = elems[0] as ExistsCondition;
       for (let i = 1; i < elems.length; i++) {
         ec = (k === 'and' ? ec.and(elems[i] as never) : ec.or(elems[i] as never)) as ExistsCondition;
@@ -525,7 +526,7 @@ function matchQuantifier(
 /** A quantifier predicate decodes to an ExpressionNode (its inner boolean). */
 function expressionNodeFromCondition(json: DslJsonCondition, shape: NodeShapeData): ExpressionNode {
   const node = decodeConditionNode(json, shape);
-  if (node instanceof ExistsCondition) {
+  if (isLinkedInstance(node, ExistsCondition)) {
     // Nested exists as a predicate is uncommon; wrap is not representable here.
     throw new Error('Nested exists inside a quantifier predicate is not supported');
   }

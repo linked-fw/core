@@ -1,5 +1,6 @@
 import type {IFileStore, SaveFileOptions} from '../interfaces/IFileStore.js';
 import type {Readable} from 'stream';
+import {sharedState} from './sharedState.js';
 
 /**
  * Well-known file store purposes shipped with core.
@@ -29,14 +30,42 @@ export interface FileStorePurposeListing {
   configured: boolean;
 }
 
+/**
+ * The configured stores, shared by every copy of core in the runtime: the server configures
+ * them through one copy and an upload may reach them through another.
+ */
+const storageState = sharedState('@_linked/core', 'LinkedFileStorage', () => ({
+  defaultStore: undefined as IFileStore | undefined,
+  /** The default accessURL, used while no default store is set. */
+  url: undefined as string | undefined,
+  /** Purpose → the store configured for it. */
+  stores: new Map<string, IFileStore>(),
+  /** Every declared purpose, configured or not. */
+  purposes: new Map<string, FileStorePurposeInfo>(),
+}));
+
 export abstract class LinkedFileStorage {
-  private static defaultStore: IFileStore;
-  private static url: string; // default accessURL
+  private static get defaultStore(): IFileStore {
+    return storageState.defaultStore as IFileStore;
+  }
+  private static set defaultStore(store: IFileStore) {
+    storageState.defaultStore = store;
+  }
+  private static get url(): string {
+    return storageState.url as string;
+  }
+  private static set url(accessURL: string) {
+    storageState.url = accessURL;
+  }
 
   /** Purpose → the store configured for it. */
-  private static stores: Map<string, IFileStore> = new Map();
+  private static get stores(): Map<string, IFileStore> {
+    return storageState.stores;
+  }
   /** Every declared purpose, configured or not. */
-  private static purposes: Map<string, FileStorePurposeInfo> = new Map();
+  private static get purposes(): Map<string, FileStorePurposeInfo> {
+    return storageState.purposes;
+  }
   /** Purposes already reported as falling back, so the log fires once each. */
   private static loggedFallbacks: Set<string> = new Set();
 

@@ -14,6 +14,8 @@ import type {ICoreIterable} from '../interfaces/ICoreIterable.js';
 import type {NodeReferenceValue} from './NodeReference.js';
 import type {ShapeCatalog} from './ShapeCatalog.js';
 import {RegistryCache} from './registryCache.js';
+import {sharedState} from './sharedState.js';
+import {isLinkedInstance} from './linkedError.js';
 
 export {RegistryCache};
 
@@ -227,7 +229,11 @@ export function shapeCatalogKey(catalog: ShapeCatalog | undefined): number {
 }
 
 /** The catalog of an adapter class a catalog built, keyed on the class. */
-const adapterCatalogs = new WeakMap<Function, ShapeCatalog>();
+const adapterCatalogs = sharedState(
+  '@_linked/core',
+  'ShapeClass.adapterCatalogs',
+  () => new WeakMap<Function, ShapeCatalog>(),
+);
 
 /**
  * The catalog a builder made from `shape` captures.
@@ -406,8 +412,15 @@ const shapeAdapters = registryState.shapeAdapters;
  * you specifically need an authored class; use this when you need *something*
  * constructor-shaped to drive the query builders.
  */
-/** Adapters built inside a catalog: one map per catalog, keyed by IRI. */
-const catalogAdapters = new WeakMap<object, Map<string, typeof Shape>>();
+/**
+ * Adapters built inside a catalog: one map per catalog, keyed by IRI. Shared with
+ * `adapterCatalogs` above, so an adapter one copy of core built keeps its catalog in another.
+ */
+const catalogAdapters = sharedState(
+  '@_linked/core',
+  'ShapeClass.catalogAdapters',
+  () => new WeakMap<object, Map<string, typeof Shape>>(),
+);
 
 export function getOrCreateShapeAdapter(
   nodeShape: NodeShapeData | string,
@@ -902,7 +915,7 @@ export function hasSuperClass(a: ShapeLike, b: ShapeLike) {
   const bData = toNodeShapeData(b);
   if (aData && bData) return isSubShapeOf(aData, bData);
   return typeof a === 'function' && typeof b === 'function'
-    ? (a as Function).prototype instanceof (b as Function)
+    ? isLinkedInstance((a as Function).prototype, b as Function)
     : false;
 }
 
@@ -966,7 +979,7 @@ export function getMostSpecificSubShapes(
 function filterShapesToMostSpecific(subShapes) {
   return subShapes.filter((subShape) => {
     return !subShapes.some((otherSubShape) => {
-      return otherSubShape.prototype instanceof subShape;
+      return isLinkedInstance(otherSubShape.prototype, subShape);
     });
   });
 }
@@ -980,7 +993,7 @@ function filterShapesToLeastSpecific(shapeClasses) {
     return !shapeClasses.some((otherShapeClass) => {
       return (
         otherShapeClass !== shapeClass &&
-        shapeClass.prototype instanceof otherShapeClass
+        isLinkedInstance(shapeClass.prototype, otherShapeClass)
       );
     });
   });

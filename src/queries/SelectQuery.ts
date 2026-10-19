@@ -21,6 +21,7 @@ import type {QueryBuilder, QueryBuilderJSON} from './QueryBuilder.js';
 import {ExpressionNode, ExistsCondition, isExpressionNode, isExistsCondition, tracedPropertyExpression, tracedAliasExpression} from '../expressions/ExpressionNode.js';
 import {PendingQueryContext} from './QueryContext.js';
 import {unresolvedValueShapeError} from '../utils/unresolvedShape.js';
+import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
 
 /**
  * String keys the query-shape proxy must let through *without* treating them as
@@ -683,6 +684,8 @@ export class QueryBuilderObject<
     return path;
   }
 }
+brandLinkedClass(QueryBuilderObject, '@_linked/core', 'QueryBuilderObject');
+
 
 export class BoundComponent<
   Source extends QueryBuilderObject,
@@ -787,7 +790,7 @@ function toExpressionNode(qbo: QueryBuilderObject): ExpressionNode {
 function findContextName(qbo: QueryBuilderObject): string | undefined {
   let current: QueryBuilderObject | undefined = qbo;
   while (current) {
-    if (current instanceof QueryShape && (current.originalValue as any)?.__queryContextName) {
+    if (isLinkedInstance(current, QueryShape) && (current.originalValue as any)?.__queryContextName) {
       return (current.originalValue as any).__queryContextName;
     }
     current = current.subject as QueryBuilderObject | undefined;
@@ -832,7 +835,7 @@ function wrapWithExpressionProxy<T>(qp: QueryPrimitive<T>): QueryPrimitive<T> {
           return (...args: any[]) => {
             // Convert QueryBuilderObject arguments to ExpressionNode
             const convertedArgs = args.map((arg) =>
-              arg instanceof QueryBuilderObject ? (toExpressionNode(arg) ?? arg) : arg,
+              isLinkedInstance(arg, QueryBuilderObject) ? (toExpressionNode(arg) ?? arg) : arg,
             );
             return (baseNode as any)[key](...convertedArgs);
           };
@@ -856,11 +859,11 @@ export const evaluateSortCallback = <S extends Shape>(
   const response = sortFn(proxy);
   const nodeShape = shape.shape;
   const paths: PropertyPath[] = [];
-  if (response instanceof QueryBuilderObject || response instanceof QueryPrimitiveSet) {
+  if (isLinkedInstance(response, QueryBuilderObject) || isLinkedInstance(response, QueryPrimitiveSet)) {
     paths.push(new PropertyPath(nodeShape, FieldSet.collectPropertySegments(response)));
   } else if (Array.isArray(response)) {
     for (const item of response) {
-      if (item instanceof QueryBuilderObject) {
+      if (isLinkedInstance(item, QueryBuilderObject)) {
         paths.push(new PropertyPath(nodeShape, FieldSet.collectPropertySegments(item)));
       }
     }
@@ -1007,7 +1010,7 @@ export class QueryShapeSet<
 
   concat(other: QueryShapeSet): QueryShapeSet {
     if (other) {
-      if (other instanceof QueryShapeSet) {
+      if (isLinkedInstance(other, QueryShapeSet)) {
         (other as QueryShapeSet).queryShapes.forEach(
           this.queryShapes.add.bind(this.queryShapes),
         );
@@ -1149,6 +1152,8 @@ export class QueryShapeSet<
     throw new Error('Expected a callback or ExpressionNode for some/every/none');
   }
 }
+brandLinkedClass(QueryShapeSet, '@_linked/core', 'QueryShapeSet');
+
 
 export class QueryShape<
   S extends Shape = Shape,
@@ -1241,14 +1246,14 @@ export class QueryShape<
     const self = toExpressionNode(this);
     // An unresolved query-context reference (`getQueryContext('user')` before it
     // is set) carries no `.id` yet — keep it as a `{@ctx}` ref, resolved at lower.
-    if (otherValue instanceof PendingQueryContext) {
+    if (isLinkedInstance(otherValue, PendingQueryContext)) {
       return self.eq(otherValue as any);
     }
     //validate the value is formed correctly
     if(!otherValue.id) {
       throw Error(`Invalid value for .equals(). ${JSON.stringify(otherValue)}`);
     }
-    const arg = otherValue instanceof QueryBuilderObject
+    const arg = isLinkedInstance(otherValue, QueryBuilderObject)
       ? toExpressionNode(otherValue)
       : otherValue;
     return self.eq(arg as any);
@@ -1256,12 +1261,12 @@ export class QueryShape<
 
   oneOf(values: (NodeReferenceValue | QShape<any>)[]): ExpressionNode {
     return toExpressionNode(this).oneOf(
-      values.map((v) => (v instanceof QueryBuilderObject ? toExpressionNode(v) : v)) as any,
+      values.map((v) => (isLinkedInstance(v, QueryBuilderObject) ? toExpressionNode(v) : v)) as any,
     );
   }
   notOneOf(values: (NodeReferenceValue | QShape<any>)[]): ExpressionNode {
     return toExpressionNode(this).notOneOf(
-      values.map((v) => (v instanceof QueryBuilderObject ? toExpressionNode(v) : v)) as any,
+      values.map((v) => (isLinkedInstance(v, QueryBuilderObject) ? toExpressionNode(v) : v)) as any,
     );
   }
 
@@ -1312,6 +1317,8 @@ export class QueryShape<
   //   // return this._count;
   // }
 }
+brandLinkedClass(QueryShape, '@_linked/core', 'QueryShape');
+
 
 
 /**
@@ -1336,7 +1343,7 @@ export class QueryPrimitive<
 
   equals(otherValue: ComparisonValue): ExpressionNode {
     const self = toExpressionNode(this);
-    const arg = otherValue instanceof QueryBuilderObject
+    const arg = isLinkedInstance(otherValue, QueryBuilderObject)
       ? toExpressionNode(otherValue)
       : otherValue;
     return self.eq(arg as any);
@@ -1344,12 +1351,12 @@ export class QueryPrimitive<
 
   oneOf(values: ComparisonValue[]): ExpressionNode {
     return toExpressionNode(this).oneOf(
-      values.map((v) => (v instanceof QueryBuilderObject ? toExpressionNode(v) : v)) as any,
+      values.map((v) => (isLinkedInstance(v, QueryBuilderObject) ? toExpressionNode(v) : v)) as any,
     );
   }
   notOneOf(values: ComparisonValue[]): ExpressionNode {
     return toExpressionNode(this).notOneOf(
-      values.map((v) => (v instanceof QueryBuilderObject ? toExpressionNode(v) : v)) as any,
+      values.map((v) => (isLinkedInstance(v, QueryBuilderObject) ? toExpressionNode(v) : v)) as any,
     );
   }
 
@@ -1363,6 +1370,8 @@ export class QueryPrimitive<
     return this as any;
   }
 }
+brandLinkedClass(QueryPrimitive, '@_linked/core', 'QueryPrimitive');
+
 
 
 export class QueryPrimitiveSet<
@@ -1440,6 +1449,8 @@ export class QueryPrimitiveSet<
     //countable, resultKey
   }
 }
+brandLinkedClass(QueryPrimitiveSet, '@_linked/core', 'QueryPrimitiveSet');
+
 
 export class SetSize<Source = null> extends QueryPrimitive<number, Source> {
   constructor(

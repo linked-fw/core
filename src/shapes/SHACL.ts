@@ -8,6 +8,7 @@ import {Shape, type ShapeConstructor} from './Shape.js';
 import {shacl} from '../ontologies/shacl.js';
 import {warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
 import {getShapeClass} from '../utils/ShapeClass.js';
+import {sharedState} from '../utils/sharedState.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
 import {normalizePropertyPath, type PropertyPathDecoratorInput} from '../paths/normalizePropertyPath.js';
 import {
@@ -66,9 +67,10 @@ export function packageNameToSlug(packageName: string): string {
  * Where each package publishes its IRIs (the identity root). The slug is always
  * derived from the package name; only the root is configurable — `linkedPackage`
  * defaults it to `LINKED_DATA_ROOT` (linked.cm), and CN injects a workspace-scoped
- * root (`{workspaceSlug}.id.create.now`) for private packages.
+ * root (`{workspaceSlug}.id.create.now`) for private packages. Shared by every copy of core,
+ * so a private package's root holds whichever copy derives its IRIs.
  */
-const packageBaseUri = new Map<string, string>();
+const packageBaseUri = sharedState('@_linked/core', 'SHACL.packageBaseUri', () => new Map<string, string>());
 
 /** Record a package's publish root. Called by `linkedPackage()`. */
 export function setPackagePublishConfig(
@@ -749,7 +751,12 @@ export function getNodeShapeUri(packageName: string, shapeName: string): string 
   return `${resolveBaseUri(packageName)}shape/${packageNameToSlug(packageName)}/${shapeName}`;
 }
 
-const nodeShapeCallbacks = new Map<string, ((shape: NodeShapeData) => void)[]>();
+/** Callbacks waiting for a node shape to register, shared so a registration through any copy of core fires them. */
+const nodeShapeCallbacks = sharedState(
+  '@_linked/core',
+  'SHACL.nodeShapeCallbacks',
+  () => new Map<string, ((shape: NodeShapeData) => void)[]>(),
+);
 export function getAndClearCallbacks(
   nodeShapeId: string,
 ): ((shape: NodeShapeData) => void)[] {

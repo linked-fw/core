@@ -27,6 +27,7 @@ import {lowerSelectionPathExpression, projectionKeyFromPath} from './IRProjectio
 import {IRAliasScope} from './IRAliasScope.js';
 import {attachCatalog} from '../utils/ShapeClass.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
+import {isLinkedInstance} from '../utils/linkedError.js';
 
 /**
  * Creates a memoized traversal resolver that deduplicates (fromAlias, propertyShapeId)
@@ -273,7 +274,7 @@ const lowerExistsCondition = (
     let result: IRExpression = existsExpr;
     for (const link of condition.chain) {
       let rightExpr: IRExpression;
-      if (link.condition instanceof ExistsCondition) {
+      if (isLinkedInstance(link.condition, ExistsCondition)) {
         rightExpr = lowerExistsCondition(link.condition, ctx, options);
       } else {
         rightExpr = resolveExpressionRefs(

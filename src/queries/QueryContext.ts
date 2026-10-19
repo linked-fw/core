@@ -1,8 +1,18 @@
 import {type QShape, QueryShape} from './SelectQuery.js';
 import {Shape, createShapeTarget} from '../shapes/Shape.js';
-import {brandLinkedError} from '../utils/linkedError.js';
+import {brandLinkedClass, brandLinkedError, isLinkedInstance} from '../utils/linkedError.js';
+import {sharedState} from '../utils/sharedState.js';
 
-const queryContext = new Map<string, QShape<any, any, any>>();
+/**
+ * The context map and its listeners, shared by every copy of core in the runtime: a context
+ * the app sets through one copy must resolve for a query lowered by the other, and a React
+ * layer subscribed through one copy must hear a change made through the other.
+ */
+const contextState = sharedState('@_linked/core', 'QueryContext', () => ({
+  contexts: new Map<string, QShape<any, any, any>>(),
+  listeners: new Set<QueryContextListener>(),
+}));
+const queryContext = contextState.contexts;
 
 /**
  * A live reference returned by getQueryContext when the context hasn't been set yet.
@@ -16,6 +26,8 @@ export class PendingQueryContext {
     return queryContext.get(this.contextName)?.id;
   }
 }
+brandLinkedClass(PendingQueryContext, '@_linked/core', 'PendingQueryContext');
+
 
 /**
  * Thrown when a query carrying a context reference is lowered but the context
@@ -36,7 +48,7 @@ brandLinkedError(UnresolvedContextError, '@_linked/core', 'UnresolvedContextErro
 
 /** Listener notified (with the changed context name) whenever a context is set or cleared. */
 export type QueryContextListener = (name: string) => void;
-const contextListeners = new Set<QueryContextListener>();
+const contextListeners = contextState.listeners;
 
 /**
  * Subscribe to query-context changes. Returns an unsubscribe function.
@@ -78,7 +90,7 @@ function notifyContextChange(name: string): void {
  * build time — resolution always happens at lowering.
  */
 export function asContextRef(value: unknown): PendingQueryContext | undefined {
-  if (value instanceof PendingQueryContext) return value;
+  if (isLinkedInstance(value, PendingQueryContext)) return value;
   if (!value || typeof value !== 'object') return undefined;
   // A resolved context is a QueryShape proxy wrapping a Shape stamped with
   // `__queryContextName`. Read it via `originalValue` (a known QueryShape field)
@@ -113,7 +125,7 @@ export function setQueryContext(name: string, value: any, shapeType?) {
   // Already a QShape — stamp the underlying shape and store as-is. (Checked before
   // the plain-`{id}` branch below: a QueryShape's `.id` getter is also a string, so
   // testing for `{id}` first would wrongly require a shapeType and no-op.)
-  if (value instanceof QueryShape) {
+  if (isLinkedInstance(value, QueryShape)) {
     const orig = (value as any).originalValue;
     if (orig) {
       orig.__queryContextName = name;
@@ -126,7 +138,7 @@ export function setQueryContext(name: string, value: any, shapeType?) {
 
   // A Shape-shaped value (e.g. a `createShapeTarget` proxy target) — stamp it and
   // wrap as a QShape. Needs no shapeType (it already carries its shape class).
-  if (value instanceof Shape) {
+  if (isLinkedInstance(value, Shape)) {
     value.__queryContextName = name;
     if (typeof value.id === 'string') value.__queryContextId = value.id;
     queryContext.set(name, new QueryShape(value) as any);
