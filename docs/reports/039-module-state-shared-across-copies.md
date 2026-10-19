@@ -41,7 +41,7 @@ assignable) over the container.
 | `SHACL.nodeShapeCallbacks` | `shapes/SHACL.ts` | callbacks waiting for a node shape |
 | `ShapeClass.adapterCatalogs` | `utils/ShapeClass.ts` | adapter class → the catalog that built it |
 | `ShapeClass.catalogAdapters` | `utils/ShapeClass.ts` | catalog → its adapters by IRI |
-| `Shape` | `shapes/Shape.ts` | `typesToShapes` |
+| `Shape.typesToShapes` | `shapes/Shape.ts` | `typesToShapes` (static getter and setter; assigning replaces the shared map) |
 
 17 values in all (the backlog's 14 rows counted `LinkedFileStorage`'s statics and the adapter
 WeakMaps as one each).
@@ -117,23 +117,37 @@ so a same-copy value costs one extra call.
 `isLinkedError(err, UnresolvedShapeError)` matches one thrown by another copy. Core's three error
 classes (`UnresolvedShapeError`, `UnresolvedContextError`, `ShapeValidationError`) are all branded.
 
+## Known limits
+
+- **Cost of a failed check.** A failed `isLinkedInstance` costs about 68 ns, against about 3 ns for
+  a failed `instanceof` (a pass is the `instanceof` fast path). That is fine once per query or per
+  builder step; do not use it per result row.
+- **Test isolation.** `jest.resetModules` / `jest.isolateModules` no longer reset core's shared
+  state: it lives on `globalThis`, which a module reset keeps. A test that needs clean state resets
+  it explicitly (`LinkedFileStorage.resetForTests()`, `setQueryContext(name, null)`, assigning
+  `Shape.typesToShapes`, …). Each jest test file still gets its own `globalThis`.
+- **Container names must not equal a brand name.** Both are `Symbol.for('<pkg>:<name>')`; a
+  container under a class's brand key puts the brand on `globalThis`, so anything inheriting from
+  it would pass `isLinkedInstance`. Hence `Shape.typesToShapes`, not `Shape`; the two-copies test
+  checks no container sits under a brand key.
+
 ## Tests
 
-- `src/tests/two-copies-built.test.ts` (new, 37 tests): loads the **built** `lib/esm` twice in one
+- `src/tests/two-copies-built.test.ts` (new, 39 tests): loads the **built** `lib/esm` twice in one
   test runtime, the second time as a whole new module graph with `jest.isolateModulesAsync`, and
   shows for each container that a write through one copy is read by the other (query context set
   with the other copy's shape target, a pending context resolving later, listeners, file stores and
   purposes, the logger, prefixes, the page limit on the getter and on both `DEFAULT_LIMIT`
   bindings, ontology auto-load, publish roots, node-shape callbacks, catalog adapters,
-  `typesToShapes`). It then checks each of the 19 classes and 3 errors across copies with
+  `typesToShapes`, including replacing it by assignment), and that no container sits under a brand key. It then checks each of the 19 classes and 3 errors across copies with
   `isLinkedInstance` / `isLinkedError`, subclass and prototype matching, the unbranded fallback,
   and `asContextRef` accepting the other copy's `PendingQueryContext`. It needs `linked build`
   first (CI builds before it tests) and fails with that message when `lib/esm` is missing.
-  Against `main`'s code the same file fails 36 of 37 (only "are distinct copies" passes).
+  Against `main`'s code the file (then 37 tests) fails 36 of 37 (only "are distinct copies" passes).
 - `src/tests/shared-state-and-error-brands.test.ts`: 6 new `isLinkedInstance` cases (a second
   copy of `linkedError`, a private-constructor class, subclass and prototype matching, the
   unbranded fallback, a proxy whose `get` throws on symbols, primitives).
-- Full suite: 107 suites passed, 2365 tests passed (120 skipped), 304 live Fuseki tests passed;
+- Full suite: 107 suites passed, 2367 tests passed (120 skipped), 304 live Fuseki tests passed;
   `typecheck` and `check:dts` clean.
 
 ## Documentation

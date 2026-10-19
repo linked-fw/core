@@ -230,6 +230,31 @@ describe('state set through one copy is read by the other', () => {
     a.shape.Shape.registerByType(Typed);
     expect(b.shape.Shape.typesToShapes.get('https://ex.org/two-copies/Typed')?.has(Typed)).toBe(true);
   });
+
+  it('Shape.typesToShapes: assigning a new map replaces it for both copies', () => {
+    const previous = a.shape.Shape.typesToShapes;
+    const fresh = new Map();
+    try {
+      b.shape.Shape.typesToShapes = fresh;
+      expect(a.shape.Shape.typesToShapes).toBe(fresh);
+    } finally {
+      a.shape.Shape.typesToShapes = previous;
+    }
+    expect(b.shape.Shape.typesToShapes).toBe(previous);
+  });
+
+  it('no shared container sits under a class brand key', () => {
+    // A container on globalThis under a brand key would make anything that inherits from
+    // globalThis pass the brand check.
+    const fromGlobal = Object.create(globalThis);
+    for (const C of [a.shape.Shape, a.qc.PendingQueryContext, a.coreSet.CoreSet, a.core.FieldSet]) {
+      expect(a.error.isLinkedInstance(fromGlobal, C)).toBe(false);
+    }
+    for (const name of ['Shape', 'CoreSet', 'ShapeSet', 'SelectBuilder', 'PendingQueryContext', 'FieldSet',
+      'PropertyPath', 'ExpressionNode', 'QueryShape', 'UnresolvedShapeError']) {
+      expect(shared(name)).toBeUndefined();
+    }
+  });
 });
 
 describe('class and error checks across copies', () => {

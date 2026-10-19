@@ -27,8 +27,13 @@ import {ShapeSet} from '../collections/ShapeSet.js';
 import {sharedState} from '../utils/sharedState.js';
 import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
 
-/** Shape classes by target class, shared so a class registered through any copy of core is listed. */
-const shapeTypeState = sharedState('@_linked/core', 'Shape', () => ({
+/**
+ * Shape classes by target class, shared so a class registered through any copy of core is listed.
+ * Named `Shape.typesToShapes`, not `Shape`: `Symbol.for('@_linked/core:Shape')` is Shape's class
+ * brand, and a container under that key on `globalThis` would make anything inheriting from
+ * `globalThis` pass `isLinkedInstance(x, Shape)`.
+ */
+const shapeTypeState = sharedState('@_linked/core', 'Shape.typesToShapes', () => ({
   typesToShapes: new Map<string, Set<typeof Shape>>(),
 }));
 
@@ -82,6 +87,10 @@ export abstract class Shape {
   static shape: NodeShapeData;
   static get typesToShapes(): Map<string, Set<typeof Shape>> {
     return shapeTypeState.typesToShapes;
+  }
+  /** Replaces the shared map, for every copy of core (e.g. a test reset). */
+  static set typesToShapes(map: Map<string, Set<typeof Shape>>) {
+    shapeTypeState.typesToShapes = map;
   }
 
   __queryContextId?: string;
