@@ -3,7 +3,9 @@ summary: >
   A second copy of core in one runtime now shares core's module state (17 values in 10
   `sharedState` containers) and accepts the other copy's values: `brandLinkedClass` /
   `isLinkedInstance(value, Cls)` extend the error brands to any class, 19 public classes are
-  branded, core's own 63 class checks use them, and `UnresolvedShapeError` is branded. Patch.
+  branded, core's own 63 class checks use them, and `UnresolvedShapeError` is branded. Built on
+  `sharedState` / `brandLinkedError` / `isLinkedError` (2.36.0, minor); the copy sharing shipped in
+  2.36.2 and the memoised brand lookup in 2.36.3 (patches).
 packages: [core]
 ---
 
@@ -12,7 +14,40 @@ packages: [core]
 Source: backlog 057 (removed with this report), from the dual-copy survey in linked-fw/cli
 ([shared state and error brands](https://github.com/linked-fw/cli/blob/main/docs/architecture/shared-state-and-error-brands.md),
 cli report 020). Core 2.36.0 had added `sharedState`, `brandLinkedError` and `isLinkedError` and
-branded core's own errors; this finishes core's part of that convention.
+branded core's own errors (next section); 2.36.2 and 2.36.3 finish core's part of that convention.
+
+## Base: `sharedState` and error brands (2.36.0)
+
+The core half of linked-fw/cli backlog 017. Both helpers are exported from the package root:
+
+```ts
+sharedState<T extends object>(pkg: string, name: string, init: () => T): T  // utils/sharedState.ts
+sharedStateKey(pkg: string, name: string): symbol                           // Symbol.for('<pkg>:<name>')
+brandLinkedError<C>(Cls: C, pkg: string, name: string): C                   // utils/linkedError.ts
+isLinkedError<C>(err: unknown, Cls: C): err is InstanceType<C>
+linkedErrorBrand(pkg: string, name: string): symbol
+```
+
+- `sharedState` returns `globalThis[Symbol.for('<pkg>:<name>')]`, calling `init` only when the
+  first copy asks; every later copy gets the same object.
+- `brandLinkedError` puts `Symbol.for('<pkg>:<name>')` on the class's prototype. `isLinkedError`
+  matches an instance from any copy of the defining module, and a subclass instance against its
+  base; an unbranded class falls back to `instanceof` and does not inherit its base's brand.
+- 2.36.0 branded `UnresolvedContextError` and `ShapeValidationError`; the two catch sites for
+  `UnresolvedContextError` (`QueryBuilder`, `LiveQueryStore`) use `isLinkedError`.
+- Test: `src/tests/shared-state-and-error-brands.test.ts` (8 tests at the time) evaluates a second
+  copy of each module with `jest.isolateModulesAsync` and shows one shared value, `init` called
+  once, names kept apart, and cross-copy, subclass, unbranded and hand-set brand matching.
+- The survey of core state a second copy did not yet see was filed as backlog 057, which the
+  sections below implement.
+
+```ts
+import {sharedState, brandLinkedError, isLinkedError} from '@_linked/core';
+const state = sharedState('@_linked/my-pkg', 'Registry', () => ({items: new Map()}));
+export class MyError extends Error {}
+brandLinkedError(MyError, '@_linked/my-pkg', 'MyError');
+if (isLinkedError(err, MyError)) { /* also true for one thrown by another copy */ }
+```
 
 ## Problem
 
@@ -182,3 +217,9 @@ classes (`UnresolvedShapeError`, `UnresolvedContextError`, `ShapeValidationError
   the status table still point at core backlog 057; they should point at this report and list
   `isLinkedInstance` as available from the release this change ships in.
 - `ExpressionNode._refCounter` placeholder collisions across copies stay a known, unobserved risk.
+
+## PRs
+
+- https://github.com/linked-fw/core/pull/349 — `sharedState`, error brands (2.36.0)
+- https://github.com/linked-fw/core/pull/355 — shared module state, `isLinkedInstance`, class brands (2.36.2)
+- https://github.com/linked-fw/core/pull/357 — memoised `isLinkedInstance` lookup (2.36.3)

@@ -188,3 +188,7 @@ Best-of-run select and create are within 5 % of `main`.
   fallback. Hosts moving project shapes into catalogs (CN plan 068 phase 3) no longer depend on
   the global path for them. Recorded here; no backlog item, since the global path is kept as is
   on purpose.
+
+## PRs
+
+- https://github.com/linked-fw/core/pull/343 (2.35.0)
