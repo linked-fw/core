@@ -961,9 +961,10 @@ function runChecks(
  */
 function unresolvedValueShapeMessage(ps: PropertyShapeData, owner: NodeShapeData): string {
   const label = labelOf(ps);
+  const why = ps.valueShape ? describeUnresolved(unresolvedValueShapeDetails(ps, owner)) : '';
   return ps.valueShape
-    ? `Cannot validate the value of '${label}': its shape '${ps.valueShape.id}' does not resolve ` +
-        `(${describeUnresolved(unresolvedValueShapeDetails(ps, owner))}).`
+    ? `Cannot validate the value of '${label}': its shape '${ps.valueShape.id}' does not resolve` +
+        (why ? ` (${why}).` : '.')
     : `Cannot validate the value of '${label}' of '${owner.id}': the property declares no shape for its values. ` +
         `Add a 'shape' to its @objectProperty decorator, or give the value a 'shape' key.`;
 }

@@ -221,7 +221,7 @@ describe('a shape it cannot resolve is reported, never silently skipped', () => 
     expect(report.conforms).toBe(false);
     expect(report.results[0].sourceConstraintComponent).toEqual(shacl.NodeConstraintComponent);
     expect(report.results[0].propertyPath).toBe('author');
-    expect(report.results[0].resultMessage).toMatch(/is not registered/);
+    expect(report.results[0].resultMessage).toMatch(/-unregistered' does not resolve \(property 'author' of '.*-detached' points at it\)\.$/);
   });
 
   test('a nested value under a property that declares no shape', () => {

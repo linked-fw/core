@@ -6,6 +6,7 @@ summary: >
   RDF literals; and the errors for an sh:node target missing from the active catalog name the
   shape but not the property or the catalog.
 packages: [core]
+status: Done — §2 implemented (PR #350); §1 closed by decision, not implemented
 ---
 
 # 056 — `validate` accepts lexical forms; missing-shape errors name the property
@@ -24,6 +25,10 @@ instead (`src/utils/shapeValidity.ts`), so its readiness and its commit agree.
 Wanted: an option (or the default) under which `validate` accepts the lexical form of each XSD
 datatype it checks (the XSD lexical spaces), and an IRI string for a node-valued property.
 
+Closed by owner decision, not implemented: core refuses strings for typed datatypes on purpose
+(`src/shapes/validation.ts`, the `xsd:date`/`xsd:dateTime` note above the datatype checks); Create
+Now keeps its own lexical rule.
+
 ## 2. Errors for a missing `sh:node` target
 
 Inside a `ShapeCatalog`, a property whose `sh:node` names a shape the catalog does not hold makes
@@ -36,4 +41,6 @@ can map it without parsing the message.
 Done: every such error (select, `walkPropertyPath`, `FieldSet`, `fromJSON`, mutations, and
 `validate`'s violation message) names the property, its shape and the catalog, and is thrown as
 `UnresolvedShapeError` (still an `Error`) with `shapeIri`, `property`, `propertyIri`,
-`ownerShapeIri` and `catalog` fields. §1 stays open.
+`ownerShapeIri` and `catalog` fields. The message names the scope only while a scoped
+`ShapeCatalog` is active (`… points at it; not among the shapes in scope 'p1#main'`); against the
+global registry it ends after "points at it".

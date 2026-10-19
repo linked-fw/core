@@ -66,9 +66,10 @@ const HOME_FIELDS = {
 };
 
 /** The error `fn` throws, asserted to be an UnresolvedShapeError that is still a plain Error. */
-function thrown(fn: () => unknown): UnresolvedShapeError {
+function thrown(fn: () => unknown, scoped = true): UnresolvedShapeError {
   try {
-    withShapeCatalog(lacking, fn);
+    if (scoped) withShapeCatalog(lacking, fn);
+    else fn();
   } catch (e) {
     expect(e).toBeInstanceOf(Error);
     expect(e).toBeInstanceOf(UnresolvedShapeError);
@@ -78,13 +79,13 @@ function thrown(fn: () => unknown): UnresolvedShapeError {
   throw new Error('expected a throw');
 }
 
-const NAMES_IT = /property 'home' of 'https:\/\/example\.org\/unresolved\/shape\/Person' points at it; catalog 'p1#main' does not hold it/;
+const NAMES_IT = /property 'home' of 'https:\/\/example\.org\/unresolved\/shape\/Person' points at it; not among the shapes in scope 'p1#main'/;
 
 describe('nested select', () => {
   test('a single-valued property', () => {
     const err = thrown(() => lower(SelectBuilder.from(PERSON).select((p: any) => [p.home.city])));
     expect(err.message).toBe(
-      `Shape class not found for ${PLACE} (property 'home' of '${PERSON}' points at it; catalog 'p1#main' does not hold it)`,
+      `Shape class not found for ${PLACE} (property 'home' of '${PERSON}' points at it; not among the shapes in scope 'p1#main')`,
     );
     expect(err).toMatchObject(HOME_FIELDS);
   });
@@ -106,11 +107,13 @@ describe('nested select', () => {
     expect(viaFieldSet).toMatchObject(HOME_FIELDS);
   });
 
-  test('the global registry says the shape is not registered', () => {
+  test('against the global registry the message ends after "points at it"', () => {
     const shape = lacking.get(PERSON)!;
-    expect(() => walkPropertyPath(shape, 'home.city')).toThrow(
-      /property 'home' of '.*Person' points at it; it is not registered/,
-    );
+    const err = thrown(() => walkPropertyPath(shape, 'home.city'), false);
+    expect(err.message).toMatch(/property 'home' of '.*Person' points at it\)$/);
+    expect(err.message).not.toMatch(/scope|catalog/);
+    expect(err).toMatchObject({shapeIri: PLACE, property: 'home', ownerShapeIri: PERSON});
+    expect(err).not.toHaveProperty('catalog');
   });
 });
 
@@ -181,10 +184,18 @@ describe('fromJSON', () => {
     expect((err as Error).message).toMatch(NAMES_IT);
   });
 
-  test("a query's own shape names the catalog", () => {
+  test("a query's own shape names the scope", () => {
     const other = `${EX}shape/Other`;
     const err = thrown(() => fromJSON({...selectJson, shape: other}));
-    expect(err.message).toBe(`Cannot resolve shape for '${other}' (catalog 'p1#main' does not hold it)`);
+    expect(err.message).toBe(`Cannot resolve shape for '${other}' (not among the shapes in scope 'p1#main')`);
     expect(err).toMatchObject({shapeIri: other, catalog: 'p1#main'});
+  });
+
+  test("against the global registry a query's own shape gets no parenthetical", () => {
+    const other = `${EX}shape/Other`;
+    const err = thrown(() => fromJSON({...selectJson, shape: other}), false);
+    expect(err.message).toBe(`Cannot resolve shape for '${other}'`);
+    expect(err).toMatchObject({shapeIri: other});
+    expect(err).not.toHaveProperty('catalog');
   });
 });
