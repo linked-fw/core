@@ -31,7 +31,7 @@ const MODULES = {
   error: 'utils/linkedError.js',
 } as const;
 
-type Copy = {[K in keyof typeof MODULES]: any};
+type Copy = {-readonly [K in keyof typeof MODULES]: any};
 
 async function loadCopy(): Promise<Copy> {
   const copy = {} as Copy;
