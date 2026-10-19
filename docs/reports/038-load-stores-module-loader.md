@@ -87,3 +87,7 @@ The built `lib/esm/utils/loadStores.js` contains `Symbol.for('@_linked/core:impo
 
 - The CLI sets the hook in `linked start` (linked-fw/cli, plan 068 phase 4).
 - The app template returns to `instanceof` once both halves are on npm (plan 068 phase 4).
+
+## PRs
+
+- https://github.com/linked-fw/core/pull/344 (2.34.0)
