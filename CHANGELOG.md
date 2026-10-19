@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.36.3
+
+### Patch Changes
+
+- [#357](https://github.com/linked-fw/core/pull/357) [`5985c51`](https://github.com/linked-fw/core/commit/5985c51ded778653187f5934c3b1c9fec169f10b) Thanks [@flyon](https://github.com/flyon)! - `isLinkedInstance` memoises its prototype-chain lookup per prototype, so a repeated failed check is
+  one WeakMap and one Map lookup instead of a walk. This recovers most of the query-building time
+  2.36.2 added: select +50% → +17%, create +30% → +20% against 2.36.1 (medians). The rest is tracked
+  in backlog 058.
+
 ## 2.36.2
 
 ### Patch Changes
