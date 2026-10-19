@@ -24,6 +24,18 @@ import {DeleteBuilder, type DeleteId} from '../queries/DeleteBuilder.js';
 import type {ExpressionUpdateProxy, ExpressionUpdateResult} from '../expressions/ExpressionMethods.js';
 import {getPropertyShapeByLabel} from '../utils/ShapeClass.js';
 import {ShapeSet} from '../collections/ShapeSet.js';
+import {sharedState} from '../utils/sharedState.js';
+import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
+
+/**
+ * Shape classes by target class, shared so a class registered through any copy of core is listed.
+ * Named `Shape.typesToShapes`, not `Shape`: `Symbol.for('@_linked/core:Shape')` is Shape's class
+ * brand, and a container under that key on `globalThis` would make anything inheriting from
+ * `globalThis` pass `isLinkedInstance(x, Shape)`.
+ */
+const shapeTypeState = sharedState('@_linked/core', 'Shape.typesToShapes', () => ({
+  typesToShapes: new Map<string, Set<typeof Shape>>(),
+}));
 
 //shape that returns property shapes for its keys
 type AccessPropertiesShape<T extends Shape> = {
@@ -73,7 +85,13 @@ export function createShapeTarget<S extends Shape>(
 export abstract class Shape {
   static targetClass: NodeReferenceValue = null;
   static shape: NodeShapeData;
-  static typesToShapes: Map<string, Set<typeof Shape>> = new Map();
+  static get typesToShapes(): Map<string, Set<typeof Shape>> {
+    return shapeTypeState.typesToShapes;
+  }
+  /** Replaces the shared map, for every copy of core (e.g. a test reset). */
+  static set typesToShapes(map: Map<string, Set<typeof Shape>>) {
+    shapeTypeState.typesToShapes = map;
+  }
 
   __queryContextId?: string;
   /** The query-context name this shape was registered under (for `{@ctx}` refs). */
@@ -450,7 +468,7 @@ export abstract class Shape {
   ): ShapeSet<T> {
     const set = new ShapeSet<T>();
     for (const value of values) {
-      if (value instanceof Shape) {
+      if (isLinkedInstance(value, Shape)) {
         set.add(value as T);
       } else {
         const instance = createShapeTarget(
@@ -463,3 +481,5 @@ export abstract class Shape {
     return set;
   }
 }
+brandLinkedClass(Shape, '@_linked/core', 'Shape');
+

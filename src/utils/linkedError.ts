@@ -16,6 +16,11 @@
 const LINKED_ERROR_BRAND = Symbol.for('@_linked/core:errorBrand');
 
 type ErrorClass = abstract new (...args: never[]) => Error;
+/**
+ * Any class whose instances are `T`: abstract or not, whatever its constructor takes, and
+ * also one whose constructor is `private` (which no `new (...) => T` type accepts).
+ */
+type AnyClass<T = unknown> = Function & {prototype: T};
 
 /**
  * Brand an error class so {@link isLinkedError} matches its instances from any copy of the
@@ -27,6 +32,21 @@ type ErrorClass = abstract new (...args: never[]) => Error;
  * @returns The class, for `export const X = brandLinkedError(class X ..., pkg, 'X')` use.
  */
 export function brandLinkedError<C extends ErrorClass>(Cls: C, pkg: string, name: string): C {
+  return brandLinkedClass(Cls, pkg, name);
+}
+
+/**
+ * Brand any class so {@link isLinkedInstance} matches its instances from any copy of the
+ * defining module: `brandLinkedError` for classes that are not errors. Call it once, right
+ * after the class declaration. The brand is the same `Symbol.for('<pkg>:<name>')` an error
+ * class gets, so a branded error is also matched by `isLinkedInstance`.
+ *
+ * @param Cls  The class.
+ * @param pkg  The defining package's npm name, e.g. `'@_linked/core'`.
+ * @param name The class name. Passed explicitly because a minifier may rename the class.
+ * @returns The class.
+ */
+export function brandLinkedClass<C extends AnyClass<object>>(Cls: C, pkg: string, name: string): C {
   const brand = linkedErrorBrand(pkg, name);
   Object.defineProperty(Cls, LINKED_ERROR_BRAND, {value: brand, configurable: true});
   Object.defineProperty(Cls.prototype, brand, {value: true, configurable: true});
@@ -46,6 +66,29 @@ export function isLinkedError<C extends ErrorClass>(err: unknown, Cls: C): err i
   if (!Object.prototype.hasOwnProperty.call(Cls, LINKED_ERROR_BRAND)) return false;
   const brand = (Cls as unknown as Record<symbol, symbol>)[LINKED_ERROR_BRAND];
   return (err as Record<symbol, unknown>)[brand] === true;
+}
+
+/**
+ * `value instanceof Cls`, extended to instances of `Cls` from another copy of its module.
+ *
+ * Use it for a value another package (or another copy of this one) may have made: a
+ * `Shape`, `ShapeSet`, `QueryBuilder`, `PendingQueryContext`, `FieldSet`. It also answers
+ * `Sub.prototype instanceof Cls` when passed `Sub.prototype`.
+ *
+ * The brand is looked up on the value's prototype chain, never read off the value itself,
+ * so a proxy whose `get` trap guards unknown keys is not touched. Falls back to plain
+ * `instanceof` for a class that is not branded; a subclass that is not branded itself does
+ * not inherit its base's brand for this check.
+ */
+export function isLinkedInstance<T>(value: unknown, Cls: AnyClass<T>): value is T {
+  if (value instanceof Cls) return true;
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return false;
+  if (!Object.prototype.hasOwnProperty.call(Cls, LINKED_ERROR_BRAND)) return false;
+  const brand = (Cls as unknown as Record<symbol, symbol>)[LINKED_ERROR_BRAND];
+  for (let proto = Object.getPrototypeOf(value); proto; proto = Object.getPrototypeOf(proto)) {
+    if (Object.prototype.hasOwnProperty.call(proto, brand)) return true;
+  }
+  return false;
 }
 
 /** The brand symbol for a class: `Symbol.for('<pkg>:<name>')`. */

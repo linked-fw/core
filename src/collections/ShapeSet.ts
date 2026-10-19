@@ -6,6 +6,7 @@
 import {CoreSet} from './CoreSet.js';
 import {Shape} from '../shapes/Shape.js';
 import {getLeastSpecificShapeClasses} from '../utils/ShapeClass.js';
+import {brandLinkedClass} from '../utils/linkedError.js';
 
 export class ShapeSet<R extends Shape = Shape> extends CoreSet<R> {
   constructor(iterable?: Iterable<R>) {
@@ -16,3 +17,5 @@ export class ShapeSet<R extends Shape = Shape> extends CoreSet<R> {
     return getLeastSpecificShapeClasses(this).shift();
   }
 }
+brandLinkedClass(ShapeSet, '@_linked/core', 'ShapeSet');
+

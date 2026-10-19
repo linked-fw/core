@@ -36,6 +36,7 @@ import {requireLiveQueryStore} from '../live/registry.js';
 import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
+import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
 
 /** Everything an ask can carry. Assembled by `.exists()` or by `Shape.exists()`. */
 export type AskSpec = {
@@ -80,7 +81,7 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
     if (id === null || id === undefined) {
       return new AskBuilder({nullSubject: true});
     }
-    if (id instanceof PendingQueryContext) {
+    if (isLinkedInstance(id, PendingQueryContext)) {
       return new AskBuilder({subject: id});
     }
     const ref =
@@ -129,7 +130,7 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
     if (shapeClass) {
       json.shape = shapeClass.shape?.id || '';
     }
-    if (subject instanceof PendingQueryContext) {
+    if (isLinkedInstance(subject, PendingQueryContext)) {
       // Carry the reference, not its (possibly unresolved) id, so the receiver
       // resolves it against its own context map at lowering time.
       json.subject = encodeContextRef(subject.contextName);
@@ -205,7 +206,7 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
   async exec(target?: IDataset): Promise<boolean> {
     const {nullSubject, subject} = this._spec;
     if (nullSubject) return false;
-    if (subject instanceof PendingQueryContext && !subject.id) return false;
+    if (isLinkedInstance(subject, PendingQueryContext) && !subject.id) return false;
     // `async` ensures a missing global dispatch rejects rather than throwing
     // synchronously past the caller's `.catch()`.
     const dispatch = target ?? getQueryDispatch();
@@ -249,6 +250,8 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
     return 'AskBuilder';
   }
 }
+brandLinkedClass(AskBuilder, '@_linked/core', 'AskBuilder');
+
 
 /** Narrow an unknown query object to an ask. */
 export function isAskQuery(query: unknown): query is AskQuery {

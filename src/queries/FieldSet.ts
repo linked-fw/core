@@ -23,6 +23,7 @@ import {
   type WherePathJSON,
 } from './QueryBuilderSerialization.js';
 import {topLevelDetails, unresolvedShapeError, unresolvedValueShapeError} from '../utils/unresolvedShape.js';
+import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
 
 // Duck-type helpers for runtime detection.
 // These check structural shape since the classes live in SelectQuery.ts (runtime circular dep).
@@ -824,15 +825,15 @@ export class FieldSet<R = any, Source = any> {
     for (const input of inputs) {
       if (typeof input === 'string') {
         entries.push({path: walkPropertyPath(shape, input)});
-      } else if (input instanceof PropertyPath) {
+      } else if (isLinkedInstance(input, PropertyPath)) {
         entries.push({path: input});
-      } else if (input instanceof FieldSet) {
+      } else if (isLinkedInstance(input, FieldSet)) {
         entries.push(...(input.entries as FieldSetEntry[]));
       } else if (typeof input === 'object') {
         // Nested object form: { friends: ['name', 'hobby'] }
         for (const [key, value] of Object.entries(input)) {
           const basePath = walkPropertyPath(shape, key);
-          if (value instanceof FieldSet) {
+          if (isLinkedInstance(value, FieldSet)) {
             // Merge nested FieldSet entries under this path
             for (const entry of value.entries as FieldSetEntry[]) {
               const combined = new PropertyPath(shape, [
@@ -891,7 +892,7 @@ export class FieldSet<R = any, Source = any> {
       return [FieldSet.convertTraceResult(nodeShape, result)];
     }
     // Single FieldSet sub-select (e.g. p.friends.select(f => [f.name]))
-    if (result instanceof FieldSet && result.parentSegments !== undefined) {
+    if (isLinkedInstance(result, FieldSet) && result.parentSegments !== undefined) {
       return [FieldSet.convertTraceResult(nodeShape, result)];
     }
     // Single SetSize (e.g. p.friends.size())
@@ -934,7 +935,7 @@ export class FieldSet<R = any, Source = any> {
     }
 
     // FieldSet sub-select — use its entries directly (created by forSubSelect)
-    if (obj instanceof FieldSet && obj.parentSegments !== undefined) {
+    if (isLinkedInstance(obj, FieldSet) && obj.parentSegments !== undefined) {
       const subSelect = obj.entries.length > 0 ? obj : undefined;
       const entry: FieldSetEntry = {
         path: new PropertyPath(rootShape, obj.parentSegments),
@@ -1107,11 +1108,11 @@ export class FieldSet<R = any, Source = any> {
    */
   static extractComponentFieldSet(component: any): FieldSet | undefined {
     // Prefer .fields if it's a FieldSet
-    if (component.fields instanceof FieldSet) {
+    if (isLinkedInstance(component.fields, FieldSet)) {
       return component.fields;
     }
     const query = component.query;
-    if (query instanceof FieldSet) {
+    if (isLinkedInstance(query, FieldSet)) {
       return query;
     }
     // QueryBuilder duck-type — has .fields() method
@@ -1167,7 +1168,7 @@ export class FieldSet<R = any, Source = any> {
       return [FieldSet.convertTraceResult(rootShape, traceResponse)];
     }
     // Single FieldSet sub-select — convert directly
-    if (traceResponse instanceof FieldSet && traceResponse.parentSegments !== undefined) {
+    if (isLinkedInstance(traceResponse, FieldSet) && traceResponse.parentSegments !== undefined) {
       return [FieldSet.convertTraceResult(rootShape, traceResponse)];
     }
     // Single SetSize
@@ -1194,3 +1195,5 @@ export class FieldSet<R = any, Source = any> {
   }
 
 }
+brandLinkedClass(FieldSet, '@_linked/core', 'FieldSet');
+

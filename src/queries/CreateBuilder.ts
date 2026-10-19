@@ -12,6 +12,7 @@ import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import {encodeNodeData, decodeNodeDataToRaw, type CreateMutationJSON} from './MutationSerialization.js';
 import type {CreateLowerSpec} from './mutationLowerSpec.js';
+import {brandLinkedClass} from '../utils/linkedError.js';
 
 /**
  * Internal state bag for CreateBuilder.
@@ -178,3 +179,5 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
     return resolveMutationDispatch('create', target).createQuery(this) as Promise<CreateResponse<U>>;
   }
 }
+brandLinkedClass(CreateBuilder, '@_linked/core', 'CreateBuilder');
+

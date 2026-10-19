@@ -3,6 +3,7 @@ import type {
   IRExpression,
 } from '../queries/IntermediateRepresentation.js';
 import {PendingQueryContext} from '../queries/QueryContext.js';
+import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
 
 export type ExpressionInput = ExpressionNode | string | number | boolean | Date | PendingQueryContext;
 
@@ -27,7 +28,7 @@ function validateRegexFlags(flags: string | undefined): void {
 }
 
 export function toIRExpression(input: ExpressionInput): IRExpression {
-  if (input instanceof ExpressionNode) return input.ir;
+  if (isLinkedInstance(input, ExpressionNode)) return input.ir;
   if (typeof input === 'string')
     return {kind: 'literal_expr', value: input};
   if (typeof input === 'number')
@@ -41,7 +42,7 @@ export function toIRExpression(input: ExpressionInput): IRExpression {
   // here made every date comparison silently match nothing.
   if (input instanceof Date) return {kind: 'literal_expr', value: input};
   // A live query-context reference → carry the name; `lower()` resolves it.
-  if (input instanceof PendingQueryContext)
+  if (isLinkedInstance(input, PendingQueryContext))
     return {kind: 'reference_expr', contextName: input.contextName};
   if (typeof input === 'object' && input !== null && 'id' in input)
     return {kind: 'reference_expr', value: (input as {id: string}).id};
@@ -75,7 +76,7 @@ export class ExpressionNode {
   private _derive(ir: IRExpression, ...others: ExpressionInput[]): ExpressionNode {
     const merged = new Map(this._refs);
     for (const other of others) {
-      if (other instanceof ExpressionNode) {
+      if (isLinkedInstance(other, ExpressionNode)) {
         for (const [k, v] of other._refs) merged.set(k, v);
       }
     }
@@ -372,6 +373,8 @@ export class ExpressionNode {
   sha256(): ExpressionNode { return this._wrap(fnExpr('SHA256', this.ir)); }
   sha512(): ExpressionNode { return this._wrap(fnExpr('SHA512', this.ir)); }
 }
+brandLinkedClass(ExpressionNode, '@_linked/core', 'ExpressionNode');
+
 
 // ---------------------------------------------------------------------------
 // Proxy tracing helpers
@@ -512,14 +515,14 @@ export class ExistsCondition {
   and(other: ExpressionInput | ExistsCondition): ExistsCondition {
     return new ExistsCondition(this.pathSegmentIds, this.predicate, this.negated, [
       ...this._chain,
-      {op: 'and', condition: other instanceof ExistsCondition ? other : other instanceof ExpressionNode ? other : new ExpressionNode(toIRExpression(other))},
+      {op: 'and', condition: isLinkedInstance(other, ExistsCondition) ? other : isLinkedInstance(other, ExpressionNode) ? other : new ExpressionNode(toIRExpression(other))},
     ]);
   }
 
   or(other: ExpressionInput | ExistsCondition): ExistsCondition {
     return new ExistsCondition(this.pathSegmentIds, this.predicate, this.negated, [
       ...this._chain,
-      {op: 'or', condition: other instanceof ExistsCondition ? other : other instanceof ExpressionNode ? other : new ExpressionNode(toIRExpression(other))},
+      {op: 'or', condition: isLinkedInstance(other, ExistsCondition) ? other : isLinkedInstance(other, ExpressionNode) ? other : new ExpressionNode(toIRExpression(other))},
     ]);
   }
 
@@ -527,12 +530,14 @@ export class ExistsCondition {
     return this._chain;
   }
 }
+brandLinkedClass(ExistsCondition, '@_linked/core', 'ExistsCondition');
+
 
 export function isExistsCondition(value: unknown): value is ExistsCondition {
-  return value instanceof ExistsCondition;
+  return isLinkedInstance(value, ExistsCondition);
 }
 
 /** Check if a value is an ExpressionNode. */
 export function isExpressionNode(value: unknown): value is ExpressionNode {
-  return value instanceof ExpressionNode;
+  return isLinkedInstance(value, ExpressionNode);
 }

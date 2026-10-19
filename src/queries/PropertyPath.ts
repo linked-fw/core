@@ -2,6 +2,7 @@ import type {PropertyShapeData, NodeShapeData} from '../shapes/SHACL.js';
 import {getPropertyShape} from '../shapes/nodeShapeData.js';
 import {getQueryShapeClass} from '../utils/ShapeClass.js';
 import {unresolvedValueShapeError} from '../utils/unresolvedShape.js';
+import {brandLinkedClass} from '../utils/linkedError.js';
 
 /**
  * A value object representing a sequence of property traversals from a root shape.
@@ -46,6 +47,8 @@ export class PropertyPath {
     return this.segments.every((s, i) => s.id === other.segments[i].id);
   }
 }
+brandLinkedClass(PropertyPath, '@_linked/core', 'PropertyPath');
+
 
 /**
  * Resolve a dot-separated property path string into a PropertyPath.

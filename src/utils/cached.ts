@@ -1,4 +1,5 @@
 import {Shape} from '../shapes/Shape.js';
+import {isLinkedInstance} from './linkedError.js';
 
 type CacheEntry = {timeout: number; value: any; isError: boolean};
 
@@ -25,7 +26,7 @@ export function cached(fn: () => any, args: any[], cacheTimeMs?: number,alsoCach
   if (cacheTimeMs !== 0) {
     const now = Date.now();
     const keyArgs = args.map((a) => {
-      if (a instanceof Shape) {
+      if (isLinkedInstance(a, Shape)) {
         return a.id ?? a.uri;
       } else if (a && typeof a === 'object' && 'id' in a) {
         return (a as {id: string}).id;

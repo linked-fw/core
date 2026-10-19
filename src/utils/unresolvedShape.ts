@@ -5,6 +5,7 @@
  */
 import type {NodeShapeData, PropertyShapeData} from '../shapes/nodeShapeData.js';
 import {getActiveShapeCatalog} from './ShapeClass.js';
+import {brandLinkedError} from './linkedError.js';
 
 /**
  * Where an unresolved shape was met: the shape IRI that could not be resolved and, when a
@@ -22,7 +23,9 @@ export interface UnresolvedShapeDetails {
 /**
  * The error core throws when a shape IRI does not resolve, carrying the IRIs as fields so a
  * host can map it without parsing the message. It stays a plain `Error` (`name` is
- * `'Error'`): only the message and the fields are added.
+ * `'Error'`): only the message and the fields are added. Match it with
+ * `isLinkedError(err, UnresolvedShapeError)`, which also recognises one thrown by another copy
+ * of core.
  */
 export class UnresolvedShapeError extends Error implements UnresolvedShapeDetails {
   readonly shapeIri: string;
@@ -40,6 +43,7 @@ export class UnresolvedShapeError extends Error implements UnresolvedShapeDetail
     if (details.catalog !== undefined) this.catalog = details.catalog;
   }
 }
+brandLinkedError(UnresolvedShapeError, '@_linked/core', 'UnresolvedShapeError');
 
 /**
  * The details for a property whose value shape does not resolve. The owner is the property's

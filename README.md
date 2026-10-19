@@ -1395,6 +1395,25 @@ module runner and once by Node) or twice in a browser. Two conventions make that
   if (isLinkedError(err, StoreError)) { /* … */ }
   ```
 
+- **Class checks on another package's values use `isLinkedInstance`.** `value instanceof Shape` is
+  false for a value another copy of core made. `isLinkedInstance(value, Cls)` also matches it, for
+  any class branded with `brandLinkedClass(Cls, '<pkg>', '<ClassName>')`, and falls back to
+  `instanceof` for one that is not. Core brands `Shape`, `ShapeSet`, `CoreSet`, the query builders
+  (`QueryBuilder`/`SelectBuilder`, `CreateBuilder`, `UpdateBuilder`, `DeleteBuilder`, `AskBuilder`,
+  `CountBuilder`), `PendingQueryContext`, `FieldSet`, `PropertyPath`, `ExpressionNode`,
+  `ExistsCondition` and the query-proxy classes. Pass `Sub.prototype` to ask whether `Sub` extends
+  `Cls`.
+
+  ```ts
+  import {isLinkedInstance, Shape} from '@_linked/core';
+  if (isLinkedInstance(input, Shape)) return input.id;
+  ```
+
+Core's own module state (query contexts and their listeners, `LinkedFileStorage`'s stores,
+`LinkedErrorLogging`'s logger, `Prefix`, the default page limit, ontology registrations, package
+publish roots, node-shape callbacks and catalog adapters) is kept with `sharedState`, so every copy
+sees the same values.
+
 The full convention, including what stays per copy and how React contexts are handled, is in
 [shared state and error brands](https://github.com/linked-fw/cli/blob/main/docs/architecture/shared-state-and-error-brands.md).
 

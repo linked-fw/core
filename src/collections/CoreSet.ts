@@ -4,6 +4,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import type {ICoreIterable} from '../interfaces/ICoreIterable.js';
+import {brandLinkedClass} from '../utils/linkedError.js';
 
 export class CoreSet<R> extends Set<R> implements ICoreIterable<R> {
   createNew(...args): this {
@@ -169,3 +170,5 @@ export class CoreSet<R> extends Set<R> implements ICoreIterable<R> {
     return this;
   }
 }
+brandLinkedClass(CoreSet, '@_linked/core', 'CoreSet');
+

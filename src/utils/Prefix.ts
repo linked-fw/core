@@ -3,9 +3,27 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
+import {sharedState} from './sharedState.js';
+
+/** The prefix maps, shared so a prefix registered through one copy of core serialises in all. */
+const prefixState = sharedState('@_linked/core', 'Prefix', () => ({
+  uriToPrefix: new Map<string, string>(),
+  prefixToUri: new Map<string, string>(),
+}));
+
 export class Prefix {
-  static uriToPrefix: Map<string, string> = new Map();
-  static prefixToUri: Map<string, string> = new Map();
+  static get uriToPrefix(): Map<string, string> {
+    return prefixState.uriToPrefix;
+  }
+  static set uriToPrefix(map: Map<string, string>) {
+    prefixState.uriToPrefix = map;
+  }
+  static get prefixToUri(): Map<string, string> {
+    return prefixState.prefixToUri;
+  }
+  static set prefixToUri(map: Map<string, string>) {
+    prefixState.prefixToUri = map;
+  }
 
   static getUriToPrefixMap() {
     return this.uriToPrefix;
