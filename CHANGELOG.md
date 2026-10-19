@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.36.4
+
+### Patch Changes
+
+- [#360](https://github.com/linked-fw/core/pull/360) [`ceefb2d`](https://github.com/linked-fw/core/commit/ceefb2de265036ff555aa7b07b950d40bfbf8b0a) Thanks [@flyon](https://github.com/flyon)! - Query building is back to 2.36.1 speed. A failed `isLinkedInstance` check no longer reads `Object.getPrototypeOf` and `Object.prototype` by their global names on every call, returns at once for plain objects, arrays and functions, and memoises per class; `FieldSet` checks query proxies before the `FieldSet` and `ExpressionNode` class checks. Values from another copy of core are still recognised everywhere they were.
+
 ## 2.36.3
 
 ### Patch Changes
