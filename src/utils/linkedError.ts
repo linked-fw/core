@@ -50,6 +50,7 @@ export function brandLinkedClass<C extends AnyClass<object>>(Cls: C, pkg: string
   const brand = linkedErrorBrand(pkg, name);
   Object.defineProperty(Cls, LINKED_ERROR_BRAND, {value: brand, configurable: true});
   Object.defineProperty(Cls.prototype, brand, {value: true, configurable: true});
+  brandsByPrototype = new WeakMap();
   return Cls;
 }
 
@@ -85,10 +86,34 @@ export function isLinkedInstance<T>(value: unknown, Cls: AnyClass<T>): value is 
   if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return false;
   if (!Object.prototype.hasOwnProperty.call(Cls, LINKED_ERROR_BRAND)) return false;
   const brand = (Cls as unknown as Record<symbol, symbol>)[LINKED_ERROR_BRAND];
-  for (let proto = Object.getPrototypeOf(value); proto; proto = Object.getPrototypeOf(proto)) {
-    if (Object.prototype.hasOwnProperty.call(proto, brand)) return true;
+  const proto = Object.getPrototypeOf(value);
+  return proto !== null && prototypeChainHasBrand(proto, brand);
+}
+
+/**
+ * Per prototype, whether its chain carries each brand asked about. Most checks are misses
+ * (`isLinkedInstance(x, PendingQueryContext)` on every value a builder sees), and walking the
+ * chain each time made query building measurably slower; with this a repeat check is one
+ * WeakMap and one Map lookup. A memo, so per copy of this module. Cleared whenever this copy
+ * brands a class, so a brand added after a lookup is never hidden by it.
+ */
+let brandsByPrototype = new WeakMap<object, Map<symbol, boolean>>();
+
+function prototypeChainHasBrand(proto: object, brand: symbol): boolean {
+  let known = brandsByPrototype.get(proto);
+  if (!known) brandsByPrototype.set(proto, (known = new Map()));
+  let has = known.get(brand);
+  if (has === undefined) {
+    has = false;
+    for (let p: object | null = proto; p; p = Object.getPrototypeOf(p)) {
+      if (Object.prototype.hasOwnProperty.call(p, brand)) {
+        has = true;
+        break;
+      }
+    }
+    known.set(brand, has);
   }
-  return false;
+  return has;
 }
 
 /** The brand symbol for a class: `Symbol.for('<pkg>:<name>')`. */
