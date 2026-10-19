@@ -122,6 +122,22 @@ classes (`UnresolvedShapeError`, `UnresolvedContextError`, `ShapeValidationError
 - **Cost of a failed check.** A failed `isLinkedInstance` costs about 68 ns, against about 3 ns for
   a failed `instanceof` (a pass is the `instanceof` fast path). That is fine once per query or per
   builder step; do not use it per result row.
+- **Query-building cost.** `src/tests/query-compile-timing.test.ts`, ms per 1000 queries, 10
+  alternating runs each (the timing file only, no Fuseki):
+
+  | Case | 2.36.1 (before) best / median | 2.36.2 (prototype walk) best / median | 2.36.3 (memo) best / median |
+  |---|---|---|---|
+  | select | 49.07 / 51.53 | 67.44 / 77.11 (+50%) | 55.01 / 60.28 (+17%) |
+  | create | 121.07 / 125.84 | 149.96 / 164.12 (+30%) | 137.21 / 151.14 (+20%) |
+
+  2.36.3 memoises the walk per prototype (`brandsByPrototype` in `utils/linkedError.ts`: a WeakMap
+  from prototype to the brands found on its chain, filled on the first walk, cleared whenever the
+  copy brands a class). That removes about two thirds of the slowdown. A select runs 19
+  `isLinkedInstance` calls and a create 66, mostly misses. A native `brand in proto` instead of the
+  memo measured the same. The rest is not the walk. With the class's static brand removed (each
+  miss then returns at the `hasOwnProperty` check), timing was back at 2.36.1. So what remains
+  comes from the miss path itself (the megamorphic static-brand read, `getPrototypeOf` and the
+  lookup). Making that path cheap is backlog 058.
 - **Test isolation.** `jest.resetModules` / `jest.isolateModules` no longer reset core's shared
   state: it lives on `globalThis`, which a module reset keeps. A test that needs clean state resets
   it explicitly (`LinkedFileStorage.resetForTests()`, `setQueryContext(name, null)`, assigning

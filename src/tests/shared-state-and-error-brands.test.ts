@@ -164,6 +164,17 @@ describe('isLinkedInstance', () => {
     expect(isLinkedInstance(guarded, mine.Base)).toBe(true);
   });
 
+  it('answers repeat checks from its memo, and a brand added later is still seen', () => {
+    class Brand {}
+    brandLinkedClass(Brand, '@_linked/test', 'LateBrand');
+    class Later {}
+    const value = Object.create(Later.prototype);
+    expect(isLinkedInstance(value, Brand)).toBe(false);
+    expect(isLinkedInstance(value, Brand)).toBe(false);
+    brandLinkedClass(Later, '@_linked/test', 'LateBrand');
+    expect(isLinkedInstance(value, Brand)).toBe(true);
+  });
+
   it('rejects primitives, null and plain objects', () => {
     const {Base} = defineClasses({brandLinkedClass});
     for (const value of [undefined, null, 0, 'Base', {}, Object.create(null), () => {}]) {
