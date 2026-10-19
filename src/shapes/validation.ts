@@ -46,6 +46,7 @@ import type {NodeShapeData, PropertyShapeData} from './nodeShapeData.js';
 import {getNodeShape, getShapeClass, isSubShapeOf} from '../utils/ShapeClass.js';
 import {isExpressionNode} from '../expressions/ExpressionNode.js';
 import {asContextRef} from '../queries/QueryContext.js';
+import {describeUnresolved, unresolvedValueShapeDetails} from '../utils/unresolvedShape.js';
 
 /**
  * Which constraints apply to the data being validated.
@@ -932,7 +933,7 @@ function runChecks(
           violation(
             propCtx,
             shacl.NodeConstraintComponent,
-            unresolvedValueShapeMessage(propCtx.propertyShape),
+            unresolvedValueShapeMessage(propCtx.propertyShape, propCtx.shape),
           ),
         );
         continue;
@@ -956,11 +957,12 @@ function runChecks(
  * that is not registered, or named none and the value did not carry one either.
  * Both are actionable, and they are fixed differently.
  */
-function unresolvedValueShapeMessage(ps: PropertyShapeData): string {
+function unresolvedValueShapeMessage(ps: PropertyShapeData, owner: NodeShapeData): string {
   const label = labelOf(ps);
   return ps.valueShape
-    ? `Cannot validate the value of '${label}': its shape '${ps.valueShape.id}' is not registered.`
-    : `Cannot validate the value of '${label}': the property declares no shape for its values. ` +
+    ? `Cannot validate the value of '${label}': its shape '${ps.valueShape.id}' does not resolve ` +
+        `(${describeUnresolved(unresolvedValueShapeDetails(ps, owner))}).`
+    : `Cannot validate the value of '${label}' of '${owner.id}': the property declares no shape for its values. ` +
         `Add a 'shape' to its @objectProperty decorator, or give the value a 'shape' key.`;
 }
 

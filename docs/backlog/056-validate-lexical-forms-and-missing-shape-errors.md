@@ -32,3 +32,8 @@ query building throw `Shape class not found for <shape>` (`SelectQuery.generateP
 the shape, nor the catalog (`catalog.name`). Wanted: `Property '<label>' of '<shape>' points at
 '<target>', which catalog '<name>' does not hold`, with the IRIs as fields on the error, so a host
 can map it without parsing the message.
+
+Done: every such error (select, `walkPropertyPath`, `FieldSet`, `fromJSON`, mutations, and
+`validate`'s violation message) names the property, its shape and the catalog, and is thrown as
+`UnresolvedShapeError` (still an `Error`) with `shapeIri`, `property`, `propertyIri`,
+`ownerShapeIri` and `catalog` fields. §1 stays open.
