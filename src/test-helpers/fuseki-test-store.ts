@@ -4,7 +4,8 @@
  * Provides utilities to:
  * - Ensure a Fuseki instance is running (auto-starts via Docker if needed)
  * - Check if a Fuseki instance is available, and whether this run requires one
- * - Create / delete an in-memory test dataset
+ * - Create / delete a test dataset (TDB2, so the inferring image infers over it)
+ * - Probe that the store infers, and reap datasets a killed run left behind
  * - Load N-Triples data
  * - Execute SPARQL queries and updates
  * - Clear all data
@@ -16,6 +17,17 @@ import {existsSync} from 'node:fs';
 import {basename, resolve} from 'node:path';
 
 export const FUSEKI_BASE_URL = process.env.FUSEKI_BASE_URL || 'http://localhost:3939';
+/**
+ * The compose project the test store runs under, so it never joins (or stops) another project's
+ * Fuseki. Set LINKED_CORE_TEST_COMPOSE_PROJECT to run a second store next to it.
+ */
+const COMPOSE_PROJECT = process.env.LINKED_CORE_TEST_COMPOSE_PROJECT || 'linked-core-test';
+/** The image the compose file runs when LINKED_FUSEKI_IMAGE is unset. */
+const DEFAULT_IMAGE = 'ghcr.io/linked-fw/fuseki:6.2.0-1';
+/** Every dataset a test file creates is named with this prefix (see `datasetName`). */
+export const TEST_DATASET_PREFIX = 'nashville-test-';
+/** The dataset global setup creates to check that the store infers, and drops again. */
+export const INFERENCE_PROBE_DATASET = 'linked-inference-probe';
 const FUSEKI_ADMIN_PASSWORD = process.env.FUSEKI_ADMIN_PASSWORD || 'admin';
 /**
  * One dataset per test file. Each live suite seeds and clears its whole dataset, so two files
@@ -26,8 +38,8 @@ const FUSEKI_ADMIN_PASSWORD = process.env.FUSEKI_ADMIN_PASSWORD || 'admin';
  */
 function datasetName(): string {
   const testPath = typeof expect === 'undefined' ? undefined : expect.getState().testPath;
-  if (testPath) return `nashville-test-${basename(testPath).replace(/\.test\.tsx?$/, '')}`;
-  return `nashville-test-${process.env.JEST_WORKER_ID ?? '1'}`;
+  if (testPath) return `${TEST_DATASET_PREFIX}${basename(testPath).replace(/\.test\.tsx?$/, '')}`;
+  return `${TEST_DATASET_PREFIX}${process.env.JEST_WORKER_ID ?? '1'}`;
 }
 export const DATASET_NAME = datasetName();
 
@@ -119,11 +131,15 @@ export async function ensureFuseki(): Promise<boolean> {
     return false;
   }
 
-  console.log('[ensureFuseki] Fuseki not running — starting via Docker...');
+  console.log(
+    `[ensureFuseki] Fuseki not running — starting ${process.env.LINKED_FUSEKI_IMAGE || DEFAULT_IMAGE} ` +
+      `via Docker (compose project ${COMPOSE_PROJECT})...`,
+  );
   try {
-    execSync(`docker compose -f "${composeFile}" up -d --wait`, {
+    execSync(`docker compose -p ${COMPOSE_PROJECT} -f "${composeFile}" up -d --wait`, {
       stdio: 'inherit',
-      timeout: 60_000,
+      timeout: 120_000,
+      env: composeEnv(),
     });
     startedByUs = true;
 
@@ -151,9 +167,10 @@ export async function stopFuseki(): Promise<void> {
   if (!composeFile) return;
 
   try {
-    execSync(`docker compose -f "${composeFile}" down`, {
+    execSync(`docker compose -p ${COMPOSE_PROJECT} -f "${composeFile}" down`, {
       stdio: 'inherit',
       timeout: 30_000,
+      env: composeEnv(),
     });
   } catch {
     // Best effort — don't fail the test suite on cleanup
@@ -161,38 +178,114 @@ export async function stopFuseki(): Promise<void> {
   startedByUs = false;
 }
 
+/** The compose file's variables: the port of FUSEKI_BASE_URL, the rest from the environment. */
+function composeEnv(): NodeJS.ProcessEnv {
+  const port = new URL(FUSEKI_BASE_URL).port || '3939';
+  return {...process.env, FUSEKI_TEST_PORT: process.env.FUSEKI_TEST_PORT || port};
+}
+
 /**
- * Create the in-memory test dataset on Fuseki.
- * Ignores 409 Conflict (dataset already exists).
+ * Create a dataset through the admin form. `tdb2`: on the inferring image only TDB2 datasets
+ * infer (`mem` stays plain), and they persist, so the run's teardown and the next run's setup
+ * delete them (`reapTestDatasets`). Ignores 409 Conflict (dataset already exists).
  */
-export async function createTestDataset(): Promise<void> {
+export async function createDataset(name: string): Promise<void> {
   const response = await fetch(`${FUSEKI_BASE_URL}/$/datasets`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       Authorization: adminAuth,
     },
-    body: `dbName=${DATASET_NAME}&dbType=mem`,
+    body: `dbName=${encodeURIComponent(name)}&dbType=tdb2`,
   });
   if (!response.ok && response.status !== 409) {
     throw new Error(
-      `Failed to create test dataset: ${response.status} ${response.statusText}`,
+      `Failed to create dataset ${name}: ${response.status} ${response.statusText}`,
     );
   }
 }
 
-/**
- * Delete the test dataset from Fuseki.
- */
-export async function deleteTestDataset(): Promise<void> {
+/** Delete a dataset (its TDB2 files too, on the image). Tolerates 404. */
+export async function deleteDataset(name: string): Promise<void> {
   const response = await fetch(
-    `${FUSEKI_BASE_URL}/$/datasets/${DATASET_NAME}`,
+    `${FUSEKI_BASE_URL}/$/datasets/${encodeURIComponent(name)}`,
     {method: 'DELETE', headers: {Authorization: adminAuth}},
   );
   if (!response.ok && response.status !== 404) {
     throw new Error(
-      `Failed to delete test dataset: ${response.status} ${response.statusText}`,
+      `Failed to delete dataset ${name}: ${response.status} ${response.statusText}`,
     );
+  }
+}
+
+/** Create this test file's dataset (`DATASET_NAME`). */
+export async function createTestDataset(): Promise<void> {
+  await createDataset(DATASET_NAME);
+}
+
+/** Delete this test file's dataset. */
+export async function deleteTestDataset(): Promise<void> {
+  await deleteDataset(DATASET_NAME);
+}
+
+/** The names of every dataset the server holds. */
+export async function listDatasets(): Promise<string[]> {
+  const response = await fetch(`${FUSEKI_BASE_URL}/$/datasets`, {
+    headers: {Authorization: adminAuth, Accept: 'application/json'},
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to list datasets: ${response.status} ${response.statusText}`);
+  }
+  const body = (await response.json()) as {datasets?: Array<{'ds.name'?: string}>};
+  return (body.datasets ?? [])
+    .map((d) => (d['ds.name'] ?? '').replace(/^\//, ''))
+    .filter(Boolean);
+}
+
+/**
+ * Delete every test dataset (`nashville-test-*`) and the inference probe. Run by global setup,
+ * for what a killed run left behind, and by global teardown, even when tests failed: TDB2
+ * datasets persist in the container.
+ */
+export async function reapTestDatasets(): Promise<string[]> {
+  const names = (await listDatasets()).filter(
+    (name) => name.startsWith(TEST_DATASET_PREFIX) || name === INFERENCE_PROBE_DATASET,
+  );
+  for (const name of names) await deleteDataset(name);
+  return names;
+}
+
+/**
+ * Whether the store infers `rdf:type` through `rdfs:subClassOf`: creates the probe dataset,
+ * stores `A ⊑ B` and `x a A`, asks for `x a B`, and drops the dataset again. A stock Fuseki
+ * answers false; so does a `mem` dataset on the image.
+ */
+export async function probeInference(): Promise<boolean> {
+  const name = INFERENCE_PROBE_DATASET;
+  await deleteDataset(name);
+  await createDataset(name);
+  try {
+    const ex = 'http://example.org/linked-inference-probe/';
+    const update = await fetch(`${FUSEKI_BASE_URL}/${name}/update`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/sparql-update'},
+      body:
+        `INSERT DATA { <${ex}A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <${ex}B> . ` +
+        `<${ex}x> a <${ex}A> . }`,
+    });
+    if (!update.ok) throw new Error(`probe insert: ${update.status} ${await update.text()}`);
+    const ask = await fetch(`${FUSEKI_BASE_URL}/${name}/sparql`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/sparql-query',
+        Accept: 'application/sparql-results+json',
+      },
+      body: `ASK { <${ex}x> a <${ex}B> }`,
+    });
+    if (!ask.ok) throw new Error(`probe ask: ${ask.status} ${await ask.text()}`);
+    return ((await ask.json()) as {boolean?: boolean}).boolean === true;
+  } finally {
+    await deleteDataset(name);
   }
 }
 
@@ -279,11 +372,10 @@ export async function readDatasetAsTurtle(): Promise<string> {
 }
 
 /**
- * The dataset the test image exposes a SHACL service on. `secoresearch/fuseki` defines one
- * dataset, `ds`, in its own assembler and uncomments its `fuseki:shacl` endpoint when the
- * container runs with `ENABLE_SHACL=true` (set in docker-compose.test.yml, together with
- * `ENABLE_DATA_WRITE` for the graph-store PUT below). A dataset created through the admin API
- * cannot have one: Fuseki refuses a service configuration uploaded to `/$/datasets`.
+ * The dataset the test image exposes a SHACL service on. The image keeps the base image's `ds`
+ * (now inferring, over TDB2) and its `fuseki:shacl` endpoint when the container runs with
+ * `ENABLE_SHACL=true` (set in docker-compose.test.yml, together with `ENABLE_DATA_WRITE` for the
+ * graph-store PUT below). Using `ds` keeps the SHACL suite independent of the per-file datasets.
  */
 const SHACL_DATASET = 'ds';
 
