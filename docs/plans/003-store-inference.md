@@ -698,7 +698,12 @@ constraint and the cycle walk rely on inference; tighten-only warnings (and
     as blank `rdf:List`s of shape IRIs, like the generated `sh:or`. The owned walk follows the new
     `contains` edges (`PropertyShape.properties` recursion, `languageIn` lists): the pinned branch
     counts become NodeShape 9 (was 8) and PropertyShape 7 (was 4); `owned-values.md` updated.
-  - [ ] Phase 4 — ontology sync
+  - [x] Phase 4 — ontology sync: `OntologySync` (built-in), `ClassAxioms`, `syncOntologies`,
+    `BUILT_IN_NAMES` six → eight, recording-store tests. `ClassAxioms` lives in
+    `src/shapes/ClassAxioms.ts` and is loaded by `shapes/index` (the build's shapes/index check
+    requires every declared shape there); its `subClassOf` names `Shape` as value shape (an update
+    of plain `{id}` values needs one), as the metamodel does for IRI values. Orphans pruned in one
+    run do not keep each other's triples.
   - [ ] Phase 5 — store phase (after F1 lands)
 - [ ] K2 — validate by class (report 043)
 - [ ] K3 — the workarounds go (report 044)

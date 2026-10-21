@@ -27,8 +27,10 @@ import {fromWire, isNodeShapeWire, type NodeShapeWire} from '../shapes/nodeShape
 import {getNodeShapeUri} from '../shapes/SHACL.js';
 import {warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
 import {getRegisteredShapeClass} from './ShapeClass.js';
-// Registers PathNode and PathList (PathNode imports PathList), two of the built-ins.
+// Registers PathNode and PathList (PathNode imports PathList) and OntologySync, built-ins that
+// are not part of the metamodel Package.ts registers.
 import '../shapes/PathNode.js';
+import '../shapes/OntologySync.js';
 
 export {
   withShapeCatalog,
@@ -54,6 +56,7 @@ const BUILT_IN_NAMES = [
   'PathNode',
   'PathList',
   'PropertyGroup',
+  'OntologySync',
 ];
 
 /** The IRIs of core's built-in shapes, which every catalog holds. */

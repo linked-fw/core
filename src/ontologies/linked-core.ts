@@ -65,6 +65,15 @@ const shapeHash = ns('shapeHash');
 // so the shape check does not report it as borrowing another shape's class.
 const sharedTargetClass = ns('sharedTargetClass');
 
+// Ontology sync (`syncOntologies`): one `core:OntologySync` node per package records the class
+// hierarchy it last wrote into the dataset (`core:ontologyTriples`, sorted N-Triples) and its
+// content hash (`core:ontologyHash`), so an unchanged package is skipped and a changed one is
+// replaced by a diff.
+const OntologySync = ns('OntologySync');
+const packageName = ns('packageName');
+const ontologyHash = ns('ontologyHash');
+const ontologyTriples = ns('ontologyTriples');
+
 export const coreOntology = {
   Package,
   ShapeClass,
@@ -82,4 +91,8 @@ export const coreOntology = {
   generatedShape,
   shapeHash,
   sharedTargetClass,
+  OntologySync,
+  packageName,
+  ontologyHash,
+  ontologyTriples,
 };

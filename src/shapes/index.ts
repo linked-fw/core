@@ -13,3 +13,5 @@ import './List.js';
 import './PathList.js';
 import './PathNode.js';
 import './PropertyGroup.js';
+import './OntologySync.js';
+import './ClassAxioms.js';

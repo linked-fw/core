@@ -46,6 +46,7 @@ import {builtInShapeIris} from '../utils/ShapeCatalog.js';
 import {getPackageMirrors, getRegisteredOntologies} from '../utils/Package.js';
 import {subClassClosure, type HierarchyTriple} from '../ontology/hierarchy.js';
 import {getPropertyShapes, type NodeShapeData} from './nodeShapeData.js';
+import {getNodeShapeUri} from './SHACL.js';
 import {collectPathUris} from '../paths/pathExprToSparql.js';
 import {
   inheritedSamePath,
@@ -165,7 +166,11 @@ export async function checkShapeHierarchy(options?: {
   const depsOf = dependencyClosure(options?.dependencies);
 
   const builtIns = new Set(builtInShapeIris());
-  const skipped = (shape: NodeShapeData) => builtIns.has(shape.id) || !!shape.generated;
+  // Core's built-ins, the shapes core generates at sync time, and the ontology sync's internal
+  // write shape (no targetClass by design) are not checked.
+  const internal = getNodeShapeUri('@_linked/core', 'ClassAxioms');
+  const skipped = (shape: NodeShapeData) =>
+    builtIns.has(shape.id) || !!shape.generated || shape.id === internal;
   const shapes = [...getAllNodeShapes().values()].filter((s) => !skipped(s));
   const clsOf = (shape: NodeShapeData) => getTargetClassId(shape);
   /** Super-shapes that are domain shapes: the framework `Shape` root and built-ins left out. */

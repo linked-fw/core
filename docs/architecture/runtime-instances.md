@@ -52,7 +52,7 @@ const rows = await withShapeCatalog(catalog, () => SelectBuilder.from(personIri)
   `getShapesForTargetClass`, `findPropertyShapeById`, …), else the global registry: one shared
   read and a null check. Inside a catalog `getAllNodeShapes()` is exactly the catalog's shapes
   plus core's built-ins (`Shape`, `NodeShape`, `PropertyShape`, `List`, `PathNode`,
-  `PathList`, `PropertyGroup`), always from core's code, as classes. `syncShapes` writes the built-ins into a
+  `PathList`, `PropertyGroup`, `OntologySync`), always from core's code, as classes. `syncShapes` writes the built-ins into a
   dataset like any package's shapes, but a catalog ignores those rows: the metamodel's cascades
   and routing pins never depend on how a catalog was read or which core version synced it.
   `getShapeClass` knows only the built-ins. A catalog is exhaustive and never falls back to the
