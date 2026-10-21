@@ -679,8 +679,72 @@ Event.image` gains `contains`. Changeset `core-042-ontology-sync-shape-check.md`
 
 ## K2 — validate by class
 
-Detail written when its wave starts. Master: [§Validate by class](#validate-by-class-provider-k2-consumers-apps-cn);
-tests with a subclass node validated against the superclass shape; report 043. Size: small.
+Master: [§Validate by class](#validate-by-class-provider-k2-consumers-apps-cn);
+tests with a subclass node validated against the superclass shape; report 043; changeset `minor`.
+Size: small, 1 phase. Depends on K1 phases 1-4 (landed, 944b6d0); not on K1's store phase.
+
+### Files
+
+Found at `store-inference` 944b6d0. Line numbers drift; search for the symbol.
+
+| File | What changes |
+|---|---|
+| `src/shapes/validation.ts` | `validateByClass` next to `validate` (`:727-744`) and `assertValid` (`:746-753`); reuses `validateNode` (`:768`) per shape and merges the results; `ValidateOptions` (`:123-128`) unchanged |
+| `src/index.ts` | re-export `validateByClass` beside `validate` (`:22`); `validation.ts` is in the browser entry, so it imports nothing server-only (no `ontology/hierarchy`, no `n3`) |
+| `src/utils/ShapeClass.ts` | read only: `getShapesForTargetClass` (`:720-736`, least-specific roots per class), `getSuperShapes` (`:506-549`), `getAllNodeShapes` (`:387`), `targetClassIdWithin` (`:625-651`) |
+| `src/tests/validate-by-class.test.ts` (new) | the tests below |
+| `docs/architecture/` (the validation doc, or `owned-values.md` if none) | one section: which shapes `validateByClass` picks |
+| `docs/reports/043-validate-by-class.md` (new), `.changeset/*.md` (new, `minor`) | the record |
+
+### Pitfalls
+
+- **The "in-memory closure" has no provider yet.** K1 left no synchronous class closure in core:
+  `subClassClosure` needs `hierarchyFromTurtle`, which is async and server-only (`n3`), and
+  `validation.ts` is in the browser entry. The shape tree (`getShapesForTargetClass` +
+  `getSuperShapes`) finds superclass shapes only when the node's own class has a shape; a class
+  without one whose superclass has a shape needs the class hierarchy. Which source K2 uses (shape
+  tree only, or a closure cached by `syncOntologies`/boot and set into core's shared state) is a
+  contract question for the master, settled before K2 starts; U1 and K3's walk safety net
+  (decision 22) need the same answer.
+- **Which shapes count.** Every registered shape whose effective targetClass is a type or a
+  superclass of one, not only the least-specific roots `getShapesForTargetClass` returns: a
+  sub-shape with its own targetClass `T` must run for a `T` node. A sub-shape that inherits its
+  targetClass runs once, through its own targetClass's shape, never twice. Shapes with
+  `sharedTargetClass` and `generated` shapes follow the same rule; say so in a test.
+- **Types from the data:** `rdf:type`/`type` may be a string IRI, `{id}`, or a list of either;
+  prefixed names are not expanded. No known type → `conforms: true`, `results: []`, and the
+  report says nothing was validated (an `sh:Info` result, so `conforms` is unaffected).
+- Results stay in deterministic order (shape id, then the per-shape order `validate` gives);
+  duplicate results from two shapes sharing an inherited property shape are kept once.
+- Data-only shapes registered from the store (`registerRuntimeShape`) are in the registry too and
+  are picked the same way.
+
+### Tests
+
+`validate-by-class.test.ts`: a subclass node validated against the superclass shape (violation
+reported with the superclass shape as `sourceShape`); a node with two types; a type with no
+shape; no type at all (the Info result); `types` option overriding the data; a sub-shape with
+its own targetClass. Existing `shape-validation-*` and `mutation-shape-validation` suites
+unchanged.
+
+Quick gate:
+
+```bash
+NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs \
+  src/tests/validate-by-class.test.ts src/tests/shape-validation-report.test.ts \
+  src/tests/shape-validation-constraints.test.ts src/tests/mutation-shape-validation.test.ts
+npm run typecheck
+```
+
+Full gate before landing (quote counts and timings in report 043; `two-copies-built` fails as on
+`main`, backlog 060):
+
+```bash
+node ~/web/wt/070/packages-local/_linked-cli/lib/esm/launch.js build
+npm test
+npm run check:dts
+REQUIRE_FUSEKI=1 npm run test:fuseki    # on the test store K1's store phase set up, if landed
+```
 
 ## K3 — the workarounds go (major, sensitive)
 

@@ -73,9 +73,10 @@ major.
 ## The registry
 
 Every `linkedOntology(terms, ns, prefix, loadData?, dataSource?)` records
-`{packageName, prefix, ns, load, files}` in core's shared state (`getRegisteredOntologies()` from
-`utils/Package`), keyed by package and prefix, so a module evaluated twice (Vite SSR) or seen by
-two copies of core registers once. A package may register several ontologies (dcmi registers
+`{packageName, prefix, ns, load, files, terms}` (`terms`: the module's exports, read by the
+mirror check) in core's shared state (`getRegisteredOntologies()` from `utils/Package`), keyed by
+package and prefix, so a module evaluated twice (Vite SSR) or seen by two copies of core
+registers once. A package may register several ontologies (dcmi registers
 three); the readers group them by package.
 
 ## The hierarchy reader
@@ -119,7 +120,7 @@ only that standard's terms, and declares the namespace(s) it mirrors:
 
 ```ts
 export const {linkedShape, linkedOntology} = linkedPackage('@_linked/schema', {
-  mirrors: 'https://schema.org/',
+  mirrors: 'http://schema.org/',
 });
 ```
 
