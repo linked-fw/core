@@ -5,3 +5,6 @@ packages/
 .agents/
 OLD
 tsconfig.tsbuildinfo
+
+# Installed-package fixtures ship their built layout
+!src/tests/fixtures/installed/*/lib/

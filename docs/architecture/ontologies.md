@@ -79,6 +79,29 @@ package and prefix, so a module evaluated twice (Vite SSR) or seen by two copies
 registers once. A package may register several ontologies (dcmi registers
 three); the readers group them by package.
 
+### Installed packages register explicitly
+
+A package registers from its `ontologies/<prefix>.register.js` modules, which its index and
+`shapes/index` import. An app that deep-imports one shape file
+(`@_linked/schema/shapes/Person`) never evaluates them, so the registry would lack that
+package's data. Whoever syncs or checks therefore registers the installed packages first:
+
+```ts
+import {registerInstalledOntologies} from '@_linked/core/ontology/registerInstalled'; // server only
+
+const names = await registerInstalledOntologies(packageDirs); // package roots
+```
+
+It imports `<dir>/lib/esm/ontologies/*.register.js` of each directory (the cli's build layout),
+in the order given and by file name within a package, and returns the names of the packages it
+registered. A directory without register modules is skipped silently, a directory given twice
+(also through a symlink) is imported once, and a register module that throws is warned about,
+naming the file, and its package left out. Registration is idempotent, so a package the app
+already imported is unaffected. The server's boot and `POST /admin/sync-shapes` call it with
+every linked package directory they discovered (transitively) before the ontology sync and the
+shape check; the cli's build check calls it with the package's own directory and its
+`@_linked/*` dependencies'.
+
 ## The hierarchy reader
 
 `@_linked/core/ontology/hierarchy` (server only; it imports `n3` dynamically):

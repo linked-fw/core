@@ -1,0 +1,74 @@
+import {afterEach, beforeEach, describe, expect, test} from '@jest/globals';
+import {symlinkSync, mkdtempSync, rmSync} from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {getRegisteredOntologies} from '../utils/Package';
+import {readPackageOntologies} from '../ontology/registryData';
+import {registerInstalledOntologies} from '../ontology/registerInstalled';
+
+const FIXTURES = path.resolve(process.cwd(), 'src/tests/fixtures/installed');
+const WITH = path.join(FIXTURES, 'with-ontology');
+const WITHOUT = path.join(FIXTURES, 'without-ontology');
+const BROKEN = path.join(FIXTURES, 'broken');
+const WITH_NAME = '@fixture/installed-with-ontology';
+
+const warned: string[] = [];
+const originalWarn = console.warn;
+beforeEach(() => {
+  warned.length = 0;
+  console.warn = (message: unknown) => warned.push(String(message));
+});
+afterEach(() => {
+  console.warn = originalWarn;
+});
+
+const registeredPrefixes = (packageName: string) =>
+  getRegisteredOntologies()
+    .filter((r) => r.packageName === packageName)
+    .map((r) => r.prefix);
+
+describe('registerInstalledOntologies', () => {
+  // Runs first: the deep import must happen before anything evaluated the register module.
+  test('a deep-imported shape registers nothing; registering the installed package then reads its data', async () => {
+    const shape = (await import(
+      pathToFileURL(path.join(WITH, 'lib/esm/shapes/Cat.js')).href
+    )) as {CatShape: {packageName: string; targetClass: {id: string}}};
+    expect(shape.CatShape.packageName).toBe(WITH_NAME);
+    expect(registeredPrefixes(WITH_NAME)).toEqual([]);
+
+    expect(await registerInstalledOntologies([WITH])).toEqual([WITH_NAME]);
+    expect(registeredPrefixes(WITH_NAME)).toEqual(['installed-pets']);
+
+    const {packages, skipped} = await readPackageOntologies({packages: [WITH_NAME]});
+    expect(skipped).toEqual([]);
+    expect(packages.get(WITH_NAME)?.triples).toEqual([
+      {s: 'http://example.org/installed-pets/Cat', o: 'http://example.org/installed-pets/Pet'},
+    ]);
+  });
+
+  test('a directory without register modules is skipped silently', async () => {
+    expect(await registerInstalledOntologies([WITHOUT])).toEqual([]);
+    expect(await registerInstalledOntologies([path.join(FIXTURES, 'does-not-exist')])).toEqual([]);
+    expect(warned).toEqual([]);
+  });
+
+  test('registering again is idempotent, and a directory given twice (also through a symlink) counts once', async () => {
+    const tmp = mkdtempSync(path.join(os.tmpdir(), 'register-installed-'));
+    try {
+      const link = path.join(tmp, 'linked-with');
+      symlinkSync(WITH, link, 'dir');
+      expect(await registerInstalledOntologies([WITHOUT, WITH, link, WITH])).toEqual([WITH_NAME]);
+      expect(registeredPrefixes(WITH_NAME)).toEqual(['installed-pets']);
+    } finally {
+      rmSync(tmp, {recursive: true, force: true});
+    }
+  });
+
+  test('a register module that throws is warned about, naming the file, and the rest still register', async () => {
+    expect(await registerInstalledOntologies([BROKEN, WITH])).toEqual([WITH_NAME]);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toMatch(/broken\.register\.js/);
+    expect(warned[0]).toMatch(/broken register module/);
+  });
+});
