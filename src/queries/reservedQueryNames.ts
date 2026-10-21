@@ -41,6 +41,7 @@ export const RESERVED_QUERY_DSL_NAMES: ReadonlySet<string> = new Set([
   'selectAll',
   'size',
   'some',
+  'str',
   'where',
   // instance fields — `in` sees these as well
   'originalValue',
