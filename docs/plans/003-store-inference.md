@@ -112,8 +112,8 @@ data `files`.
 
 ### Ontology sync (provider K1; consumers V1, C2, C3)
 
-- Registry: every `linkedOntology(...)` registers `{packageName, prefix, ns, load}`;
-  `getRegisteredOntologies()`; the sync groups by package (dcmi registers three, rdfs two).
+- Registry: every `linkedOntology(...)` registers `{packageName, prefix, ns, load, files, terms}`
+  (`terms`: the module's exports, read by the mirror check); `getRegisteredOntologies()`; the sync groups by package (dcmi registers three, rdfs two).
 - `syncOntologies(ds?: IDataset, options?: {force?: boolean; packages?: string[]; orphanScope?: 'none' | 'all'}):
   Promise<{written: string[]; skipped: string[]; pruned: string[]}>`.
 - Per package a sync node `https://linked.cm/ont/core/ontologySync/<encodeURIComponent(packageName)>`
