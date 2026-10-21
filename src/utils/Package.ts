@@ -48,6 +48,11 @@ export interface OntologyRegistration {
   load?: () => Promise<unknown>;
   /** The data files `load` reads, relative to the ontology module; names them in errors. */
   files: string[];
+  /**
+   * The ontology module's exports as registered (the namespace object of terms, `ns`, …). The
+   * shape check reads the `{id}` terms of a mirror package from it.
+   */
+  terms: Record<string, unknown>;
 }
 
 /**
@@ -132,6 +137,14 @@ export type ShapeConfig = {
    * (sh:ignoredProperties).
    */
   ignoredProperties?: NodeReferenceValue[];
+  /**
+   * This shape deliberately shares its targetClass with another shape that is not its
+   * super-shape (core's `PathList` and `List` both target `rdf:List`), or borrows its parent's
+   * class as a profile. Exempts the shape from the shape check's `borrowed-target-class` and
+   * from being a root of its class in `subclass-without-extends`. Persisted as
+   * `core:sharedTargetClass`, so a shape read back from a store keeps it.
+   */
+  sharedTargetClass?: boolean;
 };
 
 export type PackageMetadata = {
@@ -447,6 +460,10 @@ export function linkedPackage(
         {
           nodeShape.ignoredProperties = options.ignoredProperties;
         }
+        if (options.sharedTargetClass)
+        {
+          nodeShape.sharedTargetClass = true;
+        }
       }
 
       // also keep track of the reverse: nodeShape to typescript class
@@ -556,6 +573,7 @@ export function linkedPackage(
       prefix: prefixAndFileName,
       ns: nameSpace,
       files,
+      terms: exportsCopy,
     };
     if (loadData) registration.load = loadData;
     packageState.ontologyRegistry.set(`${packageName}\u0000${prefixAndFileName}`, registration);
@@ -971,6 +989,15 @@ createPropertyShape(
 createPropertyShape(
   {path: coreOntology.dependent, datatype: xsd.boolean, maxCount: 1},
   'dependent',
+  shacl.Literal,
+  NodeShape,
+);
+
+// NodeShape.sharedTargetClass (core:sharedTargetClass — `@linkedShape({sharedTargetClass: true})`:
+// the shape shares its targetClass on purpose; the shape check does not report it as borrowed).
+createPropertyShape(
+  {path: coreOntology.sharedTargetClass, datatype: xsd.boolean, maxCount: 1},
+  'sharedTargetClass',
   shacl.Literal,
   NodeShape,
 );

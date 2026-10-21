@@ -61,6 +61,10 @@ const generatedShape = ns('generatedShape');
 // hash equals the hash of what it would write.
 const shapeHash = ns('shapeHash');
 
+// A NodeShape that shares its targetClass on purpose (`@linkedShape({sharedTargetClass: true})`),
+// so the shape check does not report it as borrowing another shape's class.
+const sharedTargetClass = ns('sharedTargetClass');
+
 export const coreOntology = {
   Package,
   ShapeClass,
@@ -77,4 +81,5 @@ export const coreOntology = {
   generated,
   generatedShape,
   shapeHash,
+  sharedTargetClass,
 };

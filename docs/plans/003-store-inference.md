@@ -683,7 +683,14 @@ constraint and the cycle walk rely on inference; tighten-only warnings (and
   - [x] Phase 1 — ontology data plumbing: `n3`, the reader, the loader, the registry
     (`registryData.ts` groups and reads it for the sync and the check), `mirrors`,
     `autoLoadOntologyData` a no-op, JSDoc, `ontologies.md`
-  - [ ] Phase 2 — shape check and tighten-only
+  - [x] Phase 2 — shape check and tighten-only: `sharedTargetClass` (config, data, metamodel term,
+    `PathList`, `UP`), `checkShapeHierarchy` with the five kinds, `tightenOnly.ts` (the
+    comparison, shared by registration, data-only registration and the check), omitted-field
+    inheritance, `owned-values.md`. Additions within the contracts: the registry entry carries
+    `terms` (the module's exports, for the mirror check); `NodeShapeData.generated` (skipped by
+    the check); `contains: false` stated explicitly is the only `contains` warning for decorator
+    shapes (an omitted `contains` is inherited); a `[package, name]` value shape not registered
+    yet is compared when it registers.
   - [ ] Phase 3 — SHACL metamodel terms
   - [ ] Phase 4 — ontology sync
   - [ ] Phase 5 — store phase (after F1 lands)

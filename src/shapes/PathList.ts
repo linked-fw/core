@@ -21,9 +21,10 @@ import {rdf} from '../ontologies/rdf.js';
  * It is a separate shape from `List` on purpose. `List.first` also holds literals (`sh:in`), so it
  * cannot be declared node-only, and making `List.rest` blank-capable would turn the tail cells of
  * every list built without ids into blank nodes. Both shapes target `rdf:List`; `List` is
- * registered first, so a lookup by `rdf:List` still returns `List`.
+ * registered first, so a lookup by `rdf:List` still returns `List`. `PathList` declares
+ * `sharedTargetClass`, so the shape check does not report it as borrowing `List`'s class.
  */
-@linkedShape({name: 'PathList'})
+@linkedShape({name: 'PathList', sharedTargetClass: true})
 export class PathList extends Shape {
   static targetClass = rdf.List;
 

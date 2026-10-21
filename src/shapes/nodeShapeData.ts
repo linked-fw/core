@@ -78,6 +78,16 @@ export interface NodeShapeData {
   closed?: boolean;
   /** sh:ignoredProperties — extra properties permitted when the shape is closed. */
   ignoredProperties?: NodeReferenceValue[];
+  /**
+   * `core:sharedTargetClass` — the shape shares its targetClass on purpose
+   * (`@linkedShape({sharedTargetClass: true})`); the shape check does not report it as borrowed.
+   */
+  sharedTargetClass?: boolean;
+  /**
+   * `core:generated` — a shape core generated at sync time (a single-owner constraint), present
+   * on such a shape when it is read back from a store. The shape check skips it.
+   */
+  generated?: boolean;
   propertyShapes: PropertyShapeData[];
 }
 

@@ -86,6 +86,7 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
   if (nodeShape.description) d.description = nodeShape.description;
   if (nodeShape.extends) d.extends = nodeShape.extends;
   if (nodeShape.dependent) d.dependent = true;
+  if (nodeShape.sharedTargetClass) d.sharedTargetClass = true;
   if (nodeShape.closed !== undefined) d.closed = nodeShape.closed;
   if (nodeShape.ignoredProperties && nodeShape.ignoredProperties.length) {
     d.ignoredProperties = nodeShape.ignoredProperties;

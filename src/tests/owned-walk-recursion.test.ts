@@ -139,7 +139,7 @@ class PP extends PT {
   }
 }
 
-@linkedShape
+@linkedShape({sharedTargetClass: true})
 class UP extends PP {
   static targetClass = ex('PP');
 }

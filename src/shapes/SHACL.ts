@@ -7,7 +7,7 @@ import {type NodeReferenceValue, toNodeReference} from '../utils/NodeReference.j
 import {Shape, type ShapeConstructor} from './Shape.js';
 import {shacl} from '../ontologies/shacl.js';
 import {warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
-import {getShapeClass} from '../utils/ShapeClass.js';
+import {getShapeClass, getSuperShapes} from '../utils/ShapeClass.js';
 import {sharedState} from '../utils/sharedState.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
 import {normalizePropertyPath, type PropertyPathDecoratorInput} from '../paths/normalizePropertyPath.js';
@@ -19,6 +19,14 @@ import {
   type NodeShapeData,
   type PropertyShapeData,
 } from './nodeShapeData.js';
+import {
+  inheritedSamePath,
+  overrideWidenings,
+  samePathReason,
+  valueShapeNarrows,
+  warnOverrideOnce,
+  type OverrideField,
+} from './tightenOnly.js';
 
 // Metadata types now live in nodeShapeData.js (plain objects); re-exported here for
 // existing importers of `NodeShape`/`PropertyShape`-adjacent types.
@@ -310,12 +318,24 @@ export interface PropertyShapeConfig {
 const EXPLICIT_NODE_KIND_SYMBOL = Symbol('explicitNodeKind');
 const EXPLICIT_MIN_COUNT_SYMBOL = Symbol('explicitMinCount');
 const EXPLICIT_MAX_COUNT_SYMBOL = Symbol('explicitMaxCount');
+const EXPLICIT_VALUE_SHAPE_SYMBOL = Symbol('explicitValueShape');
+const EXPLICIT_NO_CONTAINS_SYMBOL = Symbol('explicitNoContains');
+const DEFERRED_BASE_SYMBOL = Symbol('deferredOverrideBase');
 
 /** Internal symbol-keyed flags on a PropertyShapeData object to track which fields were explicitly configured. */
 interface ExplicitFlags {
   [EXPLICIT_NODE_KIND_SYMBOL]?: boolean;
   [EXPLICIT_MIN_COUNT_SYMBOL]?: boolean;
   [EXPLICIT_MAX_COUNT_SYMBOL]?: boolean;
+  /** The config named a value shape (`shape`), which may be connected after registration. */
+  [EXPLICIT_VALUE_SHAPE_SYMBOL]?: boolean;
+  /** The config said `contains: false`. */
+  [EXPLICIT_NO_CONTAINS_SYMBOL]?: boolean;
+  /**
+   * The inherited property this override's value shape is compared with once the value shape
+   * is connected (it was not set up yet when the override registered).
+   */
+  [DEFERRED_BASE_SYMBOL]?: {shape: NodeShapeData; base: PropertyShapeData};
 }
 
 export interface ParameterConfig {
@@ -369,6 +389,7 @@ const connectValueShape = <
           shapeConfig,
           (nodeShape: NodeShapeData) => {
             property.valueShape = {id: nodeShape.id};
+            checkDeferredValueShape(property);
           },
           propertyKey,
         );
@@ -399,16 +420,13 @@ export function registerPropertyShape(
   const inherited = getPropertyShapeData(shape, propertyShape.label, true);
   const existing = getPropertyShapeData(shape, propertyShape.label, false);
   if (!existing && inherited) {
-    if (!(propertyShape as unknown as ExplicitFlags)[EXPLICIT_MIN_COUNT_SYMBOL]) {
-      propertyShape.minCount = inherited.minCount;
-    }
-    if (!(propertyShape as unknown as ExplicitFlags)[EXPLICIT_MAX_COUNT_SYMBOL]) {
-      propertyShape.maxCount = inherited.maxCount;
-    }
-    if (!(propertyShape as unknown as ExplicitFlags)[EXPLICIT_NODE_KIND_SYMBOL]) {
-      propertyShape.nodeKind = inherited.nodeKind;
-    }
+    inheritOmittedConstraints(inherited, propertyShape);
     validateOverrideTightening(shape, inherited, propertyShape);
+  } else if (!existing) {
+    const other = inheritedSamePath(getSuperShapes(shape), propertyShape);
+    if (other) {
+      warnOverrideOnce(shape, propertyShape.label, {field: 'path', reason: samePathReason(other)});
+    }
   }
   if (existing) {
     Object.assign(existing, propertyShape);
@@ -419,31 +437,46 @@ export function registerPropertyShape(
   return propertyShape;
 }
 
-const ATOMIC_NODE_KINDS = [
-  shacl.BlankNode.id,
-  shacl.IRI.id,
-  shacl.Literal.id,
-];
-
-const nodeKindToAtomics = (nodeKind?: NodeReferenceValue): Set<string> => {
-  if (!nodeKind?.id) {
-    return new Set();
+/**
+ * An override inherits every constraint it does not restate: the cardinality and node kind, and
+ * the datatype, class, value shape and `contains`. An override that restates only its cardinality
+ * must not widen the rest. A constraint of the other kind blocks the inheritance (an override
+ * naming a `class` does not inherit a `datatype`), so the override's own declaration decides.
+ */
+const inheritOmittedConstraints = (inherited: PropertyShapeData, override: PropertyShapeData) => {
+  const flags = override as unknown as ExplicitFlags;
+  if (!flags[EXPLICIT_MIN_COUNT_SYMBOL]) {
+    override.minCount = inherited.minCount;
   }
-  switch (nodeKind.id) {
-    case shacl.BlankNode.id:
-    case shacl.IRI.id:
-    case shacl.Literal.id:
-      return new Set([nodeKind.id]);
-    case shacl.BlankNodeOrIRI.id:
-      return new Set([shacl.BlankNode.id, shacl.IRI.id]);
-    case shacl.IRIOrLiteral.id:
-      return new Set([shacl.IRI.id, shacl.Literal.id]);
-    case shacl.BlankNodeOrLiteral.id:
-      return new Set([shacl.BlankNode.id, shacl.Literal.id]);
-    default:
-      return new Set(ATOMIC_NODE_KINDS);
+  if (!flags[EXPLICIT_MAX_COUNT_SYMBOL]) {
+    override.maxCount = inherited.maxCount;
+  }
+  if (!flags[EXPLICIT_NODE_KIND_SYMBOL]) {
+    override.nodeKind = inherited.nodeKind;
+  }
+  const namesValueShape = !!flags[EXPLICIT_VALUE_SHAPE_SYMBOL] || !!override.valueShape;
+  if (!override.datatype && !override.class && !namesValueShape && inherited.datatype) {
+    override.datatype = inherited.datatype;
+  }
+  if (!override.class && !override.datatype && inherited.class) {
+    override.class = inherited.class;
+  }
+  if (!namesValueShape && !override.datatype && inherited.valueShape) {
+    override.valueShape = inherited.valueShape;
+  }
+  if (!override.contains && !flags[EXPLICIT_NO_CONTAINS_SYMBOL] && inherited.contains) {
+    override.contains = true;
   }
 };
+
+/** The cases that throw at registration. The others warn until the next major. */
+const THROWING_FIELDS: ReadonlySet<OverrideField> = new Set(['minCount', 'maxCount', 'nodeKind']);
+const WARNING_FIELDS: ReadonlySet<OverrideField> = new Set([
+  'datatype',
+  'valueShape',
+  'contains',
+  'path',
+]);
 
 const throwOverrideError = (
   shape: NodeShapeData,
@@ -460,41 +493,36 @@ const validateOverrideTightening = (
   base: PropertyShapeData,
   override: PropertyShapeData,
 ) => {
-  if (
-    typeof base.minCount === 'number' &&
-    typeof override.minCount === 'number' &&
-    override.minCount < base.minCount
-  ) {
-    throwOverrideError(
-      shape,
-      override,
-      `minCount cannot be lowered (${base.minCount} -> ${override.minCount}).`,
-    );
+  const thrown = overrideWidenings(base, override, THROWING_FIELDS)[0];
+  if (thrown) {
+    throwOverrideError(shape, override, thrown.reason);
   }
-
-  if (
-    typeof base.maxCount === 'number' &&
-    typeof override.maxCount === 'number' &&
-    override.maxCount > base.maxCount
-  ) {
-    throwOverrideError(
-      shape,
-      override,
-      `maxCount cannot be increased (${base.maxCount} -> ${override.maxCount}).`,
-    );
+  for (const widening of overrideWidenings(base, override, WARNING_FIELDS)) {
+    warnOverrideOnce(shape, override.label, widening);
   }
-
-  if (base.nodeKind && override.nodeKind) {
-    const baseKinds = nodeKindToAtomics(base.nodeKind);
-    const overrideKinds = nodeKindToAtomics(override.nodeKind);
-    const widensNodeKind = [...overrideKinds].some((kind) => !baseKinds.has(kind));
-    if (widensNodeKind) {
-      throwOverrideError(
-        shape,
-        override,
-        `nodeKind cannot be widened (${base.nodeKind.id} -> ${override.nodeKind.id}).`,
-      );
+  // A value shape still being set up is compared once it is connected (connectValueShape).
+  const flags = override as unknown as ExplicitFlags;
+  if (
+    base.valueShape?.id &&
+    (flags[EXPLICIT_VALUE_SHAPE_SYMBOL] && !override.valueShape
+      || (override.valueShape && valueShapeNarrows(base.valueShape, override.valueShape) === undefined))
+  ) {
+    flags[DEFERRED_BASE_SYMBOL] = {shape, base};
+    // A `[package, name]` value shape not registered yet: compare when it registers.
+    if (override.valueShape?.id) {
+      addNodeShapeCallback(override.valueShape.id, () => checkDeferredValueShape(override));
     }
+  }
+};
+
+/** The deferred value-shape comparison of an override, run once its value shape is set up. */
+const checkDeferredValueShape = (override: PropertyShapeData) => {
+  const flags = override as unknown as ExplicitFlags;
+  const deferred = flags[DEFERRED_BASE_SYMBOL];
+  if (!deferred) return;
+  delete flags[DEFERRED_BASE_SYMBOL];
+  for (const widening of overrideWidenings(deferred.base, override, new Set(['valueShape']))) {
+    warnOverrideOnce(deferred.shape, override.label, widening);
   }
 };
 
@@ -554,7 +582,11 @@ export function createPropertyShape<
       );
     }
     propertyShape.contains = true;
+  } else if ((config as ObjectPropertyShapeConfig).contains === false) {
+    (propertyShape as unknown as ExplicitFlags)[EXPLICIT_NO_CONTAINS_SYMBOL] = true;
   }
+  (propertyShape as unknown as ExplicitFlags)[EXPLICIT_VALUE_SHAPE_SYMBOL] =
+    !!(config as ObjectPropertyShapeConfig).shape;
 
   if (config.equals) {
     propertyShape.equalsConstraint = toNodeReference(config.equals);
