@@ -44,7 +44,13 @@ import {xsd} from '../ontologies/xsd.js';
 import {isNodeReferenceValue, type NodeReferenceValue} from '../utils/NodeReference.js';
 import {getUniquePropertyShapes} from './nodeShapeData.js';
 import type {NodeShapeData, PropertyShapeData} from './nodeShapeData.js';
-import {getNodeShape, getShapeClass, isSubShapeOf} from '../utils/ShapeClass.js';
+import {
+  getNodeShape,
+  getShapeClass,
+  getShapesForTargetClass,
+  isSubShapeOf,
+} from '../utils/ShapeClass.js';
+import {superClassesOf} from '../ontology/classHierarchy.js';
 import {isExpressionNode} from '../expressions/ExpressionNode.js';
 import {asContextRef} from '../queries/QueryContext.js';
 import {describeUnresolved, unresolvedValueShapeDetails} from '../utils/unresolvedShape.js';
@@ -752,6 +758,122 @@ export function assertValid(
   if (!report.conforms) throw new ShapeValidationError(report);
 }
 
+const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+/** The keys a node's types are read from: the label `type` and the full `rdf:type` IRI. */
+const TYPE_KEYS = ['type', RDF_TYPE];
+
+/** The type IRIs of a node: strings, `{id}` references, or a list of either. Prefixed names stay as written. */
+function typesOf(data: unknown): string[] {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return [];
+  const out: string[] = [];
+  const take = (value: unknown) => {
+    if (Array.isArray(value)) value.forEach(take);
+    else if (typeof value === 'string') out.push(value);
+    else if (isNodeReferenceValue(value)) out.push(value.id);
+  };
+  for (const key of TYPE_KEYS) take((data as Record<string, unknown>)[key]);
+  return out;
+}
+
+/**
+ * Validate a node against every registered shape that targets one of its classes, superclasses
+ * included: the in-process counterpart of SHACL class targeting (`sh:targetClass C` selects
+ * every node whose type is C or a subclass of C).
+ *
+ * The types come from `options.types`, else from the data's `type` (or full `rdf:type` IRI)
+ * values: IRIs, `{id}` references, or a list of either. Their superclasses come from
+ * `superClassesOf` (`@_linked/core/ontology/classHierarchy`): the shape tree's edges always, the
+ * ontology data's once loaded. Per class the least specific shapes run
+ * (`getShapesForTargetClass`), so a sub-shape that inherits its class is covered by its root and
+ * runs once; a sub-shape with its own class runs for a node of that class.
+ *
+ * The node is described by all the selected shapes together: a property one of them declares is
+ * not undeclared for the others, and a property none declares is reported once. The type key is
+ * checked as the `{id}` references its strings stand for (every shape inherits `type` from
+ * `Shape`), or dropped when no selected shape declares it. Results come in shape-id order, each shape's
+ * in the order {@link validate} gives, without duplicates (an inherited property checked by two
+ * shapes reports once). With no type, or no shape for any of them, nothing is validated: the
+ * report conforms and carries one `sh:Info` result saying so.
+ *
+ * ```ts
+ * validateByClass({type: {id: ex.Dog.id}, name: 'Rex'}); // Dog's shapes and Animal's
+ * ```
+ */
+export function validateByClass(
+  data: unknown,
+  options: ValidateOptions & {types?: string[]} = {},
+): ValidationReport {
+  const {mode = 'complete', maxDepth = 10, types: givenTypes} = options;
+  const types = givenTypes ?? typesOf(data);
+  const shapes = new Map<string, NodeShapeData>();
+  for (const type of types) {
+    for (const cls of superClassesOf(type)) {
+      for (const shape of getShapesForTargetClass(cls)) shapes.set(shape.id, shape);
+    }
+  }
+  const selected = [...shapes.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const obj =
+    typeof data === 'object' && data !== null && !Array.isArray(data)
+      ? (data as Record<string, unknown>)
+      : undefined;
+  const focusNode =
+    typeof obj?.__id === 'string' ? obj.__id : typeof obj?.id === 'string' ? obj.id : undefined;
+
+  if (selected.length === 0) {
+    const info: ValidationResult = {
+      sourceConstraintComponent: shacl.ClassConstraintComponent,
+      resultSeverity: shacl.Info,
+      resultMessage:
+        types.length === 0
+          ? 'Nothing was validated: the node has no known type (pass `types`, or give the data a `type`).'
+          : `Nothing was validated: no registered shape targets ${types.join(', ')} or a superclass of ${types.length === 1 ? 'it' : 'them'}.`,
+    };
+    if (focusNode) info.focusNode = {id: focusNode};
+    return {conforms: true, results: [info]};
+  }
+
+  const declaredByAny = new Set<string>();
+  for (const shape of selected) {
+    for (const ps of getUniquePropertyShapes(shape)) declaredByAny.add(ps.label);
+  }
+  // The type key names IRIs: a string is one, so it is checked as the `{id}` it stands for, and
+  // a type key no selected shape declares is not a property at all.
+  let input: unknown = data;
+  if (obj && TYPE_KEYS.some((key) => key in obj)) {
+    const copy = {...obj};
+    const asReference = (value: unknown): unknown =>
+      typeof value === 'string' ? {id: value} : Array.isArray(value) ? value.map(asReference) : value;
+    for (const key of TYPE_KEYS) {
+      if (!(key in copy)) continue;
+      if (declaredByAny.has(key)) copy[key] = asReference(copy[key]);
+      else delete copy[key];
+    }
+    input = copy;
+  }
+
+  const seen = new Set<string>();
+  const results: ValidationResult[] = [];
+  selected.forEach((shape, index) => {
+    for (const result of validateNode(shape, input, {
+      mode,
+      maxDepth,
+      depth: 0,
+      prefix: '',
+      declaredByAny,
+      reportUndeclared: index === 0,
+    })) {
+      const key = JSON.stringify(result);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push(result);
+    }
+  });
+  return {
+    conforms: !results.some((r) => r.resultSeverity.id === shacl.Violation.id),
+    results,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Walk
 // ---------------------------------------------------------------------------
@@ -763,6 +885,13 @@ interface WalkContext {
   /** Dot-joined label path of the node being validated (`''` at the root). */
   prefix: string;
   focusNode?: string;
+  /**
+   * The root node is described by several shapes at once ({@link validateByClass}): keys one of
+   * them declares are not undeclared for the others, and a key none declares is reported by the
+   * first shape only (`reportUndeclared`). Never set for nested nodes.
+   */
+  declaredByAny?: ReadonlySet<string>;
+  reportUndeclared?: boolean;
 }
 
 function validateNode(
@@ -836,6 +965,7 @@ function validateNode(
     if (RESERVED_KEYS.has(key)) continue;
     const propertyShape = byLabel.get(key);
     if (!propertyShape) {
+      if (ctx.declaredByAny && (ctx.declaredByAny.has(key) || !ctx.reportUndeclared)) continue;
       results.push(
         nodeViolation(
           shape,
@@ -946,6 +1076,8 @@ function runChecks(
           depth: walk.depth + 1,
           prefix: propCtx.property,
           focusNode: undefined,
+          declaredByAny: undefined,
+          reportUndeclared: undefined,
         }),
       );
     }

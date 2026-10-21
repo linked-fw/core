@@ -111,6 +111,19 @@ whether or not it syncs. The shape check requires every shape edge in the ontolo
 server the union is the ontology closure. The closure is rebuilt when the shape registry or the
 triples change, and kept per catalog.
 
+### Validating by class
+
+`validateByClass(data, {types?, mode?, maxDepth?})` (`@_linked/core`, beside `validate`) is SHACL
+class targeting in process: it validates a node against every registered shape that targets one
+of its types or a superclass of one (`superClassesOf`). The types come from `types`, else from
+the data's `type` (or full `rdf:type` IRI) values. Per class the least specific shapes run
+(`getShapesForTargetClass`): a sub-shape that inherits its class is covered by its root, a
+sub-shape with its own class runs for nodes of that class; data-only shapes count the same. The
+node is described by all of them together, so a property one declares is not undeclared for the
+others; results are in shape-id order without duplicates. No known type, or no shape for any,
+validates nothing: the report conforms and carries one `sh:Info` result saying so. The store's
+SHACL validation stays the one that matters; this is for checking data before it is written.
+
 ## The ontology sync
 
 The store infers `rdf:type` through `rdfs:subClassOf`, so each app dataset must hold the class

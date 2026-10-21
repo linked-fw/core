@@ -19,7 +19,7 @@ export {serializePathToNodeData} from './shapes/serializePathToNodeData.js';
 // Core public API surface (documented as root imports in the README).
 export {Shape} from './shapes/Shape.js';
 // SHACL-aligned validation of plain data objects against a shape.
-export {validate, assertValid, ShapeValidationError} from './shapes/validation.js';
+export {validate, validateByClass, assertValid, ShapeValidationError} from './shapes/validation.js';
 export {UnresolvedShapeError, type UnresolvedShapeDetails} from './utils/unresolvedShape.js';
 export type {
   ValidationReport,
