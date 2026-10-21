@@ -19,7 +19,11 @@
  * - `subclass-without-extends`: `A ⊑* B` and B has a root shape sB, but sA does not extend it.
  *   An error when sB is B's only root shape and lives in sA's package or one of its
  *   dependencies; otherwise a warning. Meta classes (`rdfs:Resource`, `owl:Thing`, `rdfs:Class`,
- *   `rdf:Property`) are never B.
+ *   `rdf:Property`) are never B. Multiple inheritance: when sA already extends an in-scope shape
+ *   of a superclass, a sB that is not a sub-shape of the nearest one is off the extends chain
+ *   (`extends` cannot reach both), so it is a warning; a sB below it stays an error, since sA
+ *   could extend sB instead. CN's `Dataset` (`⊑ dcat:Dataset, schema:CreativeWork`) extends
+ *   `CreativeWork`, and dcat's `Resource` is a warning.
  * - `borrowed-target-class` (error): a shape that is not the least specific shape of its class
  *   (it borrowed its parent's), or one of several unrelated roots of a class. Exempt:
  *   `@linkedShape({sharedTargetClass: true})`.
@@ -229,6 +233,16 @@ export async function checkShapeHierarchy(options?: {
     if (!a) continue;
     const ancestors = ancestorsOf(shape);
     const pkg = packageOf(shape);
+    const inScopeOf = (other: NodeShapeData): boolean => {
+      const otherPkg = packageOf(other);
+      return !!pkg && !!otherPkg && (otherPkg === pkg || depsOf(pkg).has(otherPkg));
+    };
+    // The extends chain already satisfies direction I through its nearest in-scope ancestor of a
+    // real class; a superclass whose shape is off that chain needs multiple inheritance.
+    const anchor = ancestors.find((t) => {
+      const tc = clsOf(t);
+      return !!tc && !META_CLASSES.has(tc) && inScopeOf(t);
+    });
     for (const b of sup(a)) {
       if (META_CLASSES.has(b) || b === a) continue;
       const roots = shapesForClass(b).filter((r) => !sharesClass(r) && !skipped(r));
@@ -241,10 +255,22 @@ export async function checkShapeHierarchy(options?: {
         return !!tc && isSubClass(tc, b);
       });
       if (delegated) continue;
-      const rootPkg = roots.length === 1 ? packageOf(roots[0]) : undefined;
-      const inScope =
-        !!pkg && !!rootPkg && (rootPkg === pkg || depsOf(pkg).has(rootPkg));
+      const inScope = roots.length === 1 && inScopeOf(roots[0]);
       const rootNames = roots.map(label).join(', ');
+      if (inScope && anchor && !isSubShapeOf(roots[0], anchor)) {
+        findings.push({
+          kind: 'subclass-without-extends',
+          severity: 'warning',
+          shape: shape.id,
+          iri: b,
+          message:
+            `${label(shape)} targets ${a}, a subclass of ${b} as well as of ${clsOf(anchor)}; ` +
+            `it extends ${label(anchor)}, and ${rootNames} is not on that extends chain ` +
+            `(multiple inheritance, which extends cannot express), so ${label(shape)} does not ` +
+            `inherit ${rootNames}'s properties.`,
+        });
+        continue;
+      }
       findings.push({
         kind: 'subclass-without-extends',
         severity: inScope ? 'error' : 'warning',
