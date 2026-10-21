@@ -47,19 +47,32 @@ graph rule) are in the master only.
   :tdb a tdb2:DatasetTDB2 ; tdb2:location "/fuseki-base/databases/<name>" .
   ```
   It infers over every graph; its hierarchy is the closure of the stored `rdfs:subClassOf`
-  triples in the default graph, rebuilt after a commit that adds or removes one (and at start).
+  triples in the default graph. A commit that adds or removes one marks the hierarchy stale and
+  bumps a generation counter; the first transaction to begin afterwards rebuilds it once (other
+  starting readers wait), and each transaction keeps the hierarchy it began with. A burst of sync
+  commits costs one rebuild; a writer sees its own `subClassOf` change from its next transaction.
+- The image keeps the base image's `ds` dataset and its `shacl` endpoint under
+  `ENABLE_SHACL=true`, as `lf:DatasetRDFSLive` over TDB2 at `/fuseki-base/databases/ds` (the base
+  image's `ds` is TDB1 with a union default graph; its Lucene index and `ENABLE_*` handling are
+  kept). Core's SHACL tests validate through it.
+- The module rewrites `$FUSEKI_BASE/templates/config-tdb2` at start when it is missing or
+  different, with a warning (Fuseki copies its stock template only when the file is missing, so a
+  persisted volume would otherwise create plain datasets silently).
 - `templates/config-tdb2` (baked in) declares the service with the endpoints CN uses today
   (`""`/`sparql`/`query`, `""`/`update`, `""`/`data` GSP read-write, `upload`, `get`) over
-  `lf:DatasetRDFSLive`, plus `stored`. A form-created dataset (`POST $/datasets`,
-  `dbName`, `dbType=tdb2`) gets it.
-- `/<ds>/stored`: SPARQL query and GSP read over the stored triples only (every graph). *pending
-  F1:* whether one endpoint name serves both (an operation per content type) or two
-  (`stored` query, `stored-data` GSP).
+  `lf:DatasetRDFSLive`, plus `stored` and `shacl` (store validation, decision 23). A form-created dataset (`POST $/datasets`,
+  `dbName`, `dbType=tdb2`) gets it. **Only `dbType=tdb2` datasets infer**; `mem` (`config-mem`)
+  stays plain.
+- `/<ds>/stored`: one module operation (`lf:stored`) over the stored triples only (every graph),
+  run by TDB2's own query engine: a SPARQL query or a GSP read, chosen from the request; writes
+  answer 405.
+- **Backups and copies stream `GET /<ds>/stored` as N-Quads.** `POST $/backup` and `GET /<ds>`
+  dump the service's dataset, inferred triples included, so they are never used for these
+  datasets.
+- `DELETE $/datasets/<ds>` removes the TDB2 files too (a module filter finishes what Fuseki skips
+  for a wrapped dataset); a re-created name starts empty.
 - `arq:httpServiceAllowed=false` set by the module for every dataset.
-- *pending F1:* what `POST $/backup/<ds>` dumps through the view (stored or stored + inferred) and,
-  if the latter, the module makes it stored-only or backups use `/<ds>/stored`; whether
-  `DELETE $/datasets/<ds>` removes the TDB2 files of the wrapped dataset (Fuseki skips non-TDB2
-  datasets); whether `text:TextDataset` (pg-test) works over `lf:DatasetRDFSLive`.
+- *pending F1:* whether `text:TextDataset` (pg-test) works over `lf:DatasetRDFSLive`.
 
 ### Ontology data files and loader (provider K1 + L1; consumers N1, N2, P1, C2, C3, T1, every package)
 
@@ -76,8 +89,11 @@ graph rule) are in the master only.
   ```
   A package without data passes no `loadData`. A `loadData` that resolves to anything but strings
   (an unconverted JSON package) is skipped with one warning naming the package.
-- `npx linked build` copies `src/data/**/*.ttl` to `lib/esm/data/`; *pending L1:* how a
-  standalone app bundle keeps them reachable from the bundled module.
+- `npx linked build` copies `src/**/*.ttl` into `lib/esm/`, keeping `src`'s layout. A release
+  app build keeps every `@_linked/*` package external (it fails if one is compiled in), so their
+  data is read from the installed package; `build-app` copies the app's own `src/**/*.ttl` into
+  `lib/` the way it copies CSS. L1 verifies (its checks M1-M5, incl. `import.meta.url` under dev
+  SSR).
 
 ### Hierarchy reader (provider K1; consumers K1's sync, the shape check)
 
@@ -87,9 +103,12 @@ export const RDFS_SUBCLASSOF = 'http://www.w3.org/2000/01/rdf-schema#subClassOf'
 export interface HierarchyTriple { s: string; o: string }     // s rdfs:subClassOf o, IRIs only
 export function hierarchyFromTurtle(texts: string[]): Promise<HierarchyTriple[]>;  // deduped, sorted
 export function subClassClosure(triples: HierarchyTriple[]): Map<string, Set<string>>; // class → all superclasses
+export function definedTermsFromTurtle(texts: string[]): Promise<Set<string>>;     // every IRI subject in the data (mirror check)
+// hierarchyFromTurtle(texts, sources?: string[]) — sources name the files for parse errors
 ```
 Streams with N3.js; keeps `rdfs:subClassOf` between IRIs; drops everything else. A parse error
-names the package and file and fails that package only.
+names the package and file and fails that package only. The registry entry carries the package's
+data `files`.
 
 ### Ontology sync (provider K1; consumers V1, C2, C3)
 
@@ -100,11 +119,16 @@ names the package and file and fails that package only.
 - Per package a sync node `https://linked.cm/ont/core/ontologySync/<encodeURIComponent(packageName)>`
   of the built-in shape `OntologySync` (`rdf:type core:OntologySync`): `core:packageName`,
   `core:ontologyHash`, `core:ontologyTriples` (the kept triples as sorted N-Triples lines).
-  `OntologySync` joins `BUILT_IN_NAMES` (`src/utils/ShapeCatalog.ts:49-54`; its test asserts the
-  count).
+  `OntologySync` and `PropertyGroup` join `BUILT_IN_NAMES` (`src/utils/ShapeCatalog.ts:49-54`; 8
+  built-ins; core's test and CN's `projectShapeCatalogs.test.ts:148-153` assert the count, and
+  K1's landing updates CN's test). `PropertyShape.group` becomes a `PropertyGroup` IRI (a literal
+  today, `Package.ts:882`; no shape sets it).
 - Hash `sha256Hex('linked-ontology-sync/1\n' + ontologyTriples)`.
-- Algorithm: read every sync node's hash; per changed package (or `force`) one update inserting
-  new − old and deleting old − new except triples another package lists, and writing the node;
+- Algorithm: read every sync node's hash; per changed package (or `force`), one Linked Queries
+  update per subject class whose superclass set changed (`subClassOf: {add, remove}`; a Linked
+  Queries update has one subject), through a core-internal shape with no targetClass, removing
+  only triples no other package lists, then the sync node's upsert last; the store's view
+  rebuilds once on the next read. The N-Triples lines are joined with `\n`, no trailing newline;
   unchanged → no write (an unforked branch stays unforked). Orphans pruned only under
   `orphanScope: 'all'`. All through Linked Queries, default graph.
 - Runs before shape sync, at boot and in the control route.
@@ -117,20 +141,29 @@ export type ShapeCheckKind =
   | 'extends-without-subclass'   // decision 13, direction II
   | 'subclass-without-extends'   // decision 13, direction I (in scope; out of scope → severity 'warning')
   | 'borrowed-target-class'      // decision 15
-  | 'mirror-undefined-term';     // decision 16
+  | 'mirror-undefined-term'      // decision 16
+  | 'override-not-tightened';    // decision 14: a narrower class/value shape (needs the hierarchy) and every data-only shape
 export interface ShapeCheckFinding { kind: ShapeCheckKind; severity: 'error' | 'warning'; shape?: string; iri?: string; message: string }
-export function checkShapeHierarchy(options?: {hierarchy?: HierarchyTriple[]}): Promise<ShapeCheckFinding[]>;
+export function checkShapeHierarchy(options?: {
+  hierarchy?: HierarchyTriple[];
+  dependencies?: Record<string, string[]>;   // package → its dependencies, from package.json (L2, V1);
+}): Promise<ShapeCheckFinding[]>;            // without it, direction I's scope is the shape's own package
 ```
 Reads registered shapes, registered ontologies (parsed through the reader unless `hierarchy` is
 given) and `linkedPackage(..., {mirrors})`. `@linkedShape({sharedTargetClass: true})` exempts a
-shape from `borrowed-target-class`. Boot and sync log findings; `npx linked build` fails on any
+shape from `borrowed-target-class`; shape sync stores it as `core:sharedTargetClass` so data-only
+shapes keep it. Boot and sync log findings; `npx linked build` fails on any
 `error` (L2); CN's builder refuses or offers the fix (C3).
 
 ### Tighten-only (provider K1 warns, K3 refuses; consumers every package, C3)
 
-The override check of decision 14 at `registerPropertyShape` and for data-only shapes. K1 reports
-the new cases (datatype, class/value shape, `contains`, path) as warnings naming the shape and
-property; K3 makes them errors like the existing three.
+The override check of decision 14. At `registerPropertyShape` K1 reports the new cases
+(datatype, class/value shape, `contains`, path) as warnings; a narrower `sh:class` needs the
+hierarchy, so it is the shape check's `override-not-tightened`, which also carries every case for
+data-only shapes (they register at runtime from store data and never throw). An override that
+leaves out `datatype`, `class`, value shape or `contains` inherits it, as `minCount`, `maxCount`
+and `nodeKind` already do (`SHACL.ts:403-412`); report 042 lists the overrides whose generated
+SHACL changes. K3 makes the decorator cases errors; data-only shapes stay findings.
 
 ### Validate by class (provider K2; consumers apps, CN)
 
@@ -142,18 +175,18 @@ Validates against every registered shape whose targetClass is one of the node's 
 `types`, else the data's `rdf:type`/`type` values) or a superclass of one (in-memory closure).
 Without known types it validates nothing and says so in the report.
 
-### Contract clarifications this sub-plan proposes (to be settled in the master)
+### Contract clarifications this sub-plan proposed (adopted in the master plan)
 
-These came out of reading the code; each is listed with proposed text in K1's report to the
-master. Until the master settles them, K1 implements the proposal and says so in report 042.
+These came out of reading the code. All eleven are **adopted in the master plan** (its
+§Contracts, copied above); the reasoning is kept here.
 
 1. **The sync cannot write a package's diff in one Linked Queries update.** An IR `update` has one
    subject (`IntermediateRepresentation.ts:303`, `irToAlgebra.ts:2348`); a package's diff spans
    many subject classes (schema: ~800). Proposed text: *"per changed package, one `update` per
    subject class whose superclass set changed (`subClassOf: {add, remove}`), bounded concurrency
    (8), then the sync node's upsert last, so an interrupted sync leaves the old hash and the next
-   sync redoes the package."* Cost: one store commit, and so one view rebuild (F1), per changed
-   subject; measured in report 042 against F1's rebuild time. If that is too slow, the follow-up
+   sync redoes the package."* Cost: one store commit per changed subject (the master's lazy
+   rebuild makes a burst of them one view rebuild); measured in report 042 against F1's rebuild time. If that is too slow, the follow-up
    is a multi-subject mutation in core (backlog item), not raw SPARQL.
 2. **The direction-I scope needs package dependencies, which core does not know.** Proposed
    signature: `checkShapeHierarchy(options?: {hierarchy?: HierarchyTriple[]; dependencies?:
@@ -207,7 +240,7 @@ master. Until the master settles them, K1 implements the proposal and says so in
   `store-inference`: the image built locally as `linked-fuseki:dev` from
   `~/web/wt/070/packages-local/_linked-fuseki/server`
   (`docker build -t linked-fuseki:dev ~/web/wt/070/packages-local/_linked-fuseki/server`), and
-  the master's settled *pending F1* items (stored endpoint names, `DELETE $/datasets` removing
+  the master's settled *pending F1* items (the one stored endpoint, `DELETE $/datasets` removing
   TDB2 files, the `ds` SHACL dataset).
 
 ### Goal
@@ -509,13 +542,9 @@ datasets persist (unlike `mem`) and no live suite deletes its dataset today (13 
 - global teardown (`global-teardown.ts:5-8`) deletes every `nashville-test-*` dataset before
   `stopFuseki`, even when tests failed;
 - `deleteTestDataset` tolerates 404 as today.
-Whether `DELETE $/datasets/<ds>` also removes the TDB2 files of an `lf:DatasetRDFSLive` dataset is
-*pending F1*. If F1 reports it does not, the files stay inside the test container's
-`/fuseki-base/databases` until the container is removed (`stopFuseki` runs `compose down` for a
-container the run started; the compose file declares no named volume, so nothing outlives the
-container except an anonymous volume the base image may declare — report 042 states which, from
-`docker inspect`), and a re-created dataset of the same name must start empty: the probe and the
-suites `clearAllData()` after create, as they do now.
+`DELETE $/datasets/<ds>` also removes the TDB2 files of an `lf:DatasetRDFSLive` dataset (master
+§The image), so a re-created dataset of the same name starts empty; the probe and the suites
+still `clearAllData()` after create, as they do now.
 
 **Constraining docs:** master §Decisions 1, 10–16, 19; core's `docs/architecture/ontologies.md`
 (registration in a sibling module, terms as properties), `owned-values.md` (sub-shapes, profiles,
@@ -528,8 +557,7 @@ suites `clearAllData()` after create, as they do now.
   runs the live suites without inference. The global-setup probe (create `k1-probe` with
   `dbType=tdb2`, insert `A ⊑ B` and `x a A`, `ASK { x a B }`, drop it) must fail the run.
 - **`dbType=mem` does not infer** (clarification 9). TDB2 datasets persist in the container;
-  the reap and teardown under §Architecture (Test store) delete them (whether that removes files
-  is *pending F1*).
+  the reap and teardown under §Architecture (Test store) delete them (files included, master §The image).
 - **Build with the integration CLI** after L1 lands (master §Rules); `npx linked` in the layout is
   the main checkout's CLI.
 - **Compose must not name a local path for CI.** The committed file uses
@@ -562,10 +590,9 @@ suites `clearAllData()` after create, as they do now.
   `builtInShapeIris()`, so they stay hidden there.
 - **Cross-repository breakage:** CN's
   `src/backend/shapes/projectShapeCatalogs.test.ts:148-153` asserts six built-ins; it fails in the
-  `~/web/wt/070` CN worktree the moment K1 lands (Vite resolves core to the nested checkout). The
-  master pairs the CN fix (assert `builtInShapeIris().length` against the list, or 8) with K1's
-  landing — the first CN step to run the regular set after K1 (C1) — and the comment at
-  `src/backend/shapes/shapesOfInterest.ts:27-29`.
+  `~/web/wt/070` CN worktree the moment K1 lands (Vite resolves core to the nested checkout). K1's
+  landing updates CN's test (assert `builtInShapeIris().length` against the list, or 8) and the
+  comment at `src/backend/shapes/shapesOfInterest.ts:27-29` (master §Ontology sync).
 - **Tighten-only inheritance of omitted fields** changes generated SHACL for existing overrides
   across packages; K1 lists every affected shape in report 042 (run the check over the localized
   schema/org/dcat packages), so N1/N2/P1 see them.
