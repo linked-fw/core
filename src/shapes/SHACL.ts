@@ -288,7 +288,8 @@ export interface PropertyShapeConfig {
   name?: string;
   description?: string;
   order?: number;
-  group?: string;
+  /** `sh:group` — the `PropertyGroup` node (or its IRI) the property is shown in. */
+  group?: NodeReferenceValue | string;
   /**
    * Display importance, lower = more important (`core:displayRank`).
    * A renderer that can show only N properties shows the N lowest ranks.
@@ -633,7 +634,7 @@ export function createPropertyShape<
   // dropped and every renderer fell back to array position. Carried now, alongside
   // the two display terms.
   if (config.order !== undefined) propertyShape.order = config.order;
-  if (config.group !== undefined) propertyShape.group = config.group;
+  if (config.group !== undefined) propertyShape.group = toNodeReference(config.group);
   if (config.displayRank !== undefined) propertyShape.displayRank = config.displayRank;
   if (config.displayHidden !== undefined)
     propertyShape.displayHidden = config.displayHidden;

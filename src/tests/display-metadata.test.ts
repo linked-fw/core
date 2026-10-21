@@ -37,7 +37,7 @@ class Article extends Shape {
     required: true,
     displayRank: 1,
     order: 10,
-    group: 'basics',
+    group: 'https://example.org/display/basics',
   })
   get title(): string {
     return '';
@@ -90,7 +90,7 @@ describe('display metadata — decorator to shape', () => {
     // copied in createPropertyShape, so a declared sh:order never reached the shape
     // and every renderer silently fell back to array position.
     expect(propByLabel('title').order).toBe(10);
-    expect(propByLabel('title').group).toBe('basics');
+    expect(propByLabel('title').group).toEqual({id: 'https://example.org/display/basics'});
   });
 
   test('the terms live in the core ontology namespace, not the CN code vocab', () => {
@@ -110,7 +110,7 @@ describe('display metadata — over the wire', () => {
       wire.propertyShapes.find((p: {label: string}) => p.label === label);
     expect(byLabel('title').displayRank).toBe(1);
     expect(byLabel('title').order).toBe(10);
-    expect(byLabel('title').group).toBe('basics');
+    expect(byLabel('title').group).toEqual({id: 'https://example.org/display/basics'});
     expect(byLabel('internalNote').displayHidden).toBe(true);
   });
 

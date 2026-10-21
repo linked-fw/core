@@ -15,6 +15,7 @@ import {
 import {createNodeShapeData, type NodeShapeData} from '../shapes/nodeShapeData.js';
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
 import {List} from '../shapes/List.class.js';
+import {PropertyGroup} from '../shapes/PropertyGroup.class.js';
 import {Prefix} from './Prefix.js';
 import {sharedState} from './sharedState.js';
 import {coreOntology} from '../ontologies/linked-core.js';
@@ -696,6 +697,13 @@ corePackage.linkedShape({
 corePackage.linkedShape({
   name: 'List',
 })(List);
+// PropertyGroup is registered here for the same reason: PropertyShape.group below names it as
+// its value shape.
+corePackage.linkedShape({
+  name: 'PropertyGroup',
+  description:
+    'Represents a SHACL PropertyGroup: a labelled, ordered section of a shape that property shapes join through sh:group. (form section, grouping)',
+})(PropertyGroup);
 // ValidationReport / ValidationResult removed in core metadata rewrite
 
 //ALL the following is to support Shape having get/set methods with property shapes
@@ -948,7 +956,13 @@ createPropertyShape(
   shacl.Literal,
   PropertyShape,
 );
-createPropertyShape({path: shacl.group, maxCount: 1}, 'group', shacl.Literal, PropertyShape);
+// sh:group names a PropertyGroup node (an IRI), as SHACL defines it.
+createPropertyShape(
+  {path: shacl.group, shape: PropertyGroup, maxCount: 1},
+  'group',
+  shacl.IRI,
+  PropertyShape,
+);
 
 // PropertyShape.displayRank / displayHidden (core: display vocabulary).
 // These materialize onto the pure sh:NodeShape and so travel with an ejected app.
@@ -1065,4 +1079,82 @@ createPropertyShape(
   'orShapes',
   shacl.BlankNodeOrIRI,
   NodeShape,
+);
+
+// ---------------------------------------------------------------------------
+// The rest of the SHACL Core vocabulary of node and property shapes, so a shape authored
+// elsewhere (a builder, an imported SHACL file) round-trips through the metamodel. The
+// logical constraints use `andShapes`, `notShape` and `xoneShapes`: `and`, `or` and `not` are
+// reserved labels (DSL-JSON combinators).
+// ---------------------------------------------------------------------------
+
+/** Registers one property shape on each of NodeShape and PropertyShape. */
+const onBoth = (
+  config: Parameters<typeof createPropertyShape>[0],
+  label: string,
+  nodeKind: NodeReferenceValue,
+) => {
+  createPropertyShape({...config}, label, nodeKind, NodeShape);
+  createPropertyShape({...config}, label, nodeKind, PropertyShape);
+};
+
+// NodeShape.name (sh:name). The NodeShape's description stays rdfs:comment: SHACL defines
+// sh:name and sh:description for property shapes.
+createPropertyShape({path: shacl.name, maxCount: 1}, 'name', shacl.Literal, NodeShape);
+createPropertyShape(
+  {path: shacl.targetSubjectsOf, shape: Shape},
+  'targetSubjectsOf',
+  shacl.IRI,
+  NodeShape,
+);
+onBoth({path: shacl.deactivated, datatype: xsd.boolean, maxCount: 1}, 'deactivated', shacl.Literal);
+// One sh:message per language.
+onBoth({path: shacl.message}, 'message', shacl.Literal);
+onBoth({path: shacl.severity, shape: Shape, maxCount: 1}, 'severity', shacl.IRI);
+// sh:and / sh:xone hold an rdf:List of shapes; like `orShapes`, no fixed value shape.
+createPropertyShape(
+  {path: shacl.and, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI},
+  'andShapes',
+  shacl.BlankNodeOrIRI,
+  NodeShape,
+);
+createPropertyShape(
+  {path: shacl.xone, maxCount: 1, nodeKind: shacl.BlankNodeOrIRI},
+  'xoneShapes',
+  shacl.BlankNodeOrIRI,
+  NodeShape,
+);
+createPropertyShape(
+  {path: shacl.not, shape: NodeShape, maxCount: 1},
+  'notShape',
+  shacl.IRI,
+  NodeShape,
+);
+
+// PropertyShape.flags (the sh:pattern flags), languageIn (an owned rdf:List, as `in`),
+// uniqueLang, qualifiedMinCount and nested property shapes (sh:property, owned).
+createPropertyShape({path: shacl.flags, datatype: xsd.string, maxCount: 1}, 'flags', shacl.Literal, PropertyShape);
+createPropertyShape(
+  {path: shacl.languageIn, shape: List, maxCount: 1, contains: true},
+  'languageIn',
+  shacl.IRI,
+  PropertyShape,
+);
+createPropertyShape(
+  {path: shacl.uniqueLang, datatype: xsd.boolean, maxCount: 1},
+  'uniqueLang',
+  shacl.Literal,
+  PropertyShape,
+);
+createPropertyShape(
+  {path: shacl.qualifiedMinCount, datatype: xsd.integer, maxCount: 1},
+  'qualifiedMinCount',
+  shacl.Literal,
+  PropertyShape,
+);
+createPropertyShape(
+  {path: shacl.property, shape: PropertyShape, contains: true},
+  'properties',
+  shacl.IRI,
+  PropertyShape,
 );

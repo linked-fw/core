@@ -131,12 +131,20 @@ class RecordingDataset extends SparqlDataset {
 }
 
 describe('ShapeCatalog', () => {
-  test('from() adds core’s six built-ins from code when the data lacks them', () => {
+  test('from() adds core’s built-ins from code when the data lacks them', () => {
     const catalog = ShapeCatalog.from([shapeWire(PERSON, PERSON_CLASS, [{label: 'name', path: `${EX}name`}])]);
-    expect(builtInShapeIris()).toHaveLength(6);
+    expect(builtInShapeIris().map((iri) => iri.split('/').pop())).toEqual([
+      'Shape',
+      'NodeShape',
+      'PropertyShape',
+      'List',
+      'PathNode',
+      'PathList',
+      'PropertyGroup',
+    ]);
     for (const iri of builtInShapeIris()) expect(catalog.has(iri)).toBe(true);
     expect(catalog.get(SHAPE_IRI)).toBe(Shape.shape);
-    expect(catalog.size).toBe(7);
+    expect(catalog.size).toBe(builtInShapeIris().length + 1);
     withShapeCatalog(catalog, () => {
       expect([...getAllShapeClasses().keys()].sort()).toEqual(builtInShapeIris().sort());
       expect(getShapeClass(SHAPE_IRI)).toBe(Shape);
@@ -150,10 +158,10 @@ describe('ShapeCatalog', () => {
     ]);
     const catalog = ShapeCatalog.from([shapeRow]);
     expect(catalog.get(SHAPE_IRI)).toBe(Shape.shape);
-    expect(catalog.size).toBe(6);
+    expect(catalog.size).toBe(builtInShapeIris().length);
     withShapeCatalog(catalog, () => {
       expect(getShapeClass(SHAPE_IRI)).toBe(Shape);
-      expect(getAllShapeClasses().size).toBe(6);
+      expect(getAllShapeClasses().size).toBe(builtInShapeIris().length);
     });
   });
 
@@ -641,7 +649,7 @@ describeFuseki('core built-ins are synced; a catalog read back resolves them fro
     await clearAllData();
   });
 
-  test('a sync into an empty store writes the six; a second sync writes nothing; a catalog from the store resolves them from code', async () => {
+  test('a sync into an empty store writes the built-ins; a second sync writes nothing; a catalog from the store resolves them from code', async () => {
     const first = await syncShapes(store as unknown as IDataset);
     for (const run of first) await run();
     const stored = await (SelectBuilder.from(NodeShape).select([]) as any).exec(store);
@@ -652,13 +660,13 @@ describeFuseki('core built-ins are synced; a catalog read back resolves them fro
     expect(second).toHaveLength(0);
 
     const catalog = await readCatalog(store as unknown as IDataset);
-    // The rows are in the store, but inside the catalog the six resolve from core's code.
+    // The rows are in the store, but inside the catalog the built-ins resolve from core's code.
     const read = (await (SelectBuilder.from(NodeShape)
       .select((n: any) => [n.properties.select((p: any) => [p.label])])
       .for(SHAPE_IRI) as any).exec(store)) as {properties: Array<{label: string}>};
     expect(read.properties.map((p) => p.label).sort()).toEqual(['label', 'type']);
     withShapeCatalog(catalog, () => {
-      expect(getAllShapeClasses().size).toBe(6);
+      expect(getAllShapeClasses().size).toBe(builtInShapeIris().length);
       for (const iri of builtInShapeIris()) {
         expect(getShapeClass(iri)).toBeDefined();
         expect(catalog.get(iri)).toBe(getShapeClass(iri)!.shape);

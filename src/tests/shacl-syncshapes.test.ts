@@ -90,7 +90,7 @@ describe('syncShapes', () => {
     // orphan: delete only, no create
     expect(deletes).toContain(ORPHAN);
     expect(creates).not.toContain(ORPHAN);
-    // core's six built-ins are synced like any package's shapes, the base Shape included
+    // core's built-ins are synced like any package's shapes, the base Shape included
     for (const iri of builtInShapeIris()) expect(creates).toContain(iri);
     // other shapes declared with core's own linkedShape are not
     expect(creates.filter((id) => id.startsWith('https://linked.cm/shape/core/')).sort()).toEqual(

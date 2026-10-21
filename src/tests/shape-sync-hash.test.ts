@@ -59,7 +59,7 @@ class HProject extends Shape {
 }
 
 const ORPHAN = 'https://linked.cm/shape/shapehash-test/Gone';
-// Core's six built-ins are synced like any package's shapes.
+// Core's built-ins are synced like any package's shapes.
 const userIris = () => [HPerson.shape.id, HImage.shape.id, HProject.shape.id, ...builtInShapeIris()];
 
 type Call = {kind: 'create' | 'delete' | 'select'; id?: string};

@@ -294,8 +294,9 @@ describe('blank-node cascade', () => {
 
   test('a NodeShape delete removes the blank paths of the property shapes it deletes', () => {
     const sparql = nodeShapeDelete();
-    // The owner: a property shape the owned walk reaches through `sh:property` and deletes…
-    const owner = sparql.match(/\?c_w shacl:property \?(c_\d+_0) \./)![1];
+    // The owner: a property shape the owned walk reaches through `sh:property` (and the nested
+    // property shapes it owns in turn) and deletes…
+    const owner = sparql.match(/\?c_\d+_0e shacl:property\* \?(c_\d+_0) \./)![1];
     // …its blank values through the blank-capable `sh:path` (and `sh:qualifiedValueShape`)…
     const [, first, bn0] = sparql.match(new RegExp(`\\?${owner} (\\S+) \\?(c_\\d+_b_bn0) \\.`))!;
     expect(first).toContain('shacl:path');

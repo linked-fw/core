@@ -1266,7 +1266,7 @@ const received = fromJSON(json, {catalog: branch}); // the wire never carries a 
 
 A builder keeps the catalog it was made in (`catalogOf(query)`), through clones, `exists()`,
 `count()`, lowering, compile and live queries. Inside a scope every registry read sees the
-catalog's shapes plus core's six built-ins (always from code, though `syncShapes` writes them
+catalog's shapes plus core's built-ins (always from code, though `syncShapes` writes them
 into every dataset); a class the catalog does not hold keeps resolving
 globally. See [runtime instances](./docs/architecture/runtime-instances.md#shape-catalogs).
 

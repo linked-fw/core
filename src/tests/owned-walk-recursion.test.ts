@@ -505,8 +505,8 @@ describe('owned walk: branch counts', () => {
 // blank values and one branch per owned path (plus a blank branch per owned node with blank values).
 // RA: 2 + 1 + MAX_OWNED_RECURSION unrolled hops; SC: the replies closure and the unrolled fork hops.
 const BRANCHES: Record<string, number> = {
-  NodeShape: 8,
-  PropertyShape: 4,
+  NodeShape: 9,
+  PropertyShape: 7,
   List: 3,
   PathNode: 5,
   PathList: 5,

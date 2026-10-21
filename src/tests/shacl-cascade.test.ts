@@ -512,7 +512,9 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
       lower(DeleteBuilder.from(NodeShape, {id: `${C}Shape`})) as IRDeleteMutation,
     );
     expect(sparql).toContain(`<${C}Shape> core:generatedShape+ ?c_r .`);
-    expect(sparql).toMatch(/core:generatedShape\* \?c_w \.\s*\?c_w shacl:property \?c_0_0 \.\s*\?c_0_0 \?c_0_p \?c_0_o \./);
+    expect(sparql).toMatch(
+      /core:generatedShape\* \?c_w \.\s*\?c_w shacl:property \?c_0_0e \.\s*\?c_0_0e shacl:property\* \?c_0_0 \.\s*\?c_0_0 \?c_0_p \?c_0_o \./,
+    );
     expect(sparql).toMatch(/\?c_\d+_0 shacl:in \?c_\d+_1e \.\s*\?c_\d+_1e rdf:rest\* \?c_\d+_1 \./);
     // No type guards: ownership is the edge.
     expect(sparql).not.toMatch(/\?c_\w+ rdf:type/);

@@ -691,7 +691,13 @@ constraint and the cycle walk rely on inference; tighten-only warnings (and
     the check); `contains: false` stated explicitly is the only `contains` warning for decorator
     shapes (an omitted `contains` is inherited); a `[package, name]` value shape not registered
     yet is compared when it registers.
-  - [ ] Phase 3 — SHACL metamodel terms
+  - [x] Phase 3 — SHACL metamodel terms: the NodeShape/PropertyShape terms, `PropertyGroup`
+    (`PropertyGroup.class.ts` + public `PropertyGroup.ts`, a built-in from this phase),
+    `group` an IRI, data fields and sync writes; the golden unchanged. `PropertyShapeData.properties`
+    holds nested property shapes by IRI (`NodeReferenceValue[]`); `sh:and`/`sh:xone` are written
+    as blank `rdf:List`s of shape IRIs, like the generated `sh:or`. The owned walk follows the new
+    `contains` edges (`PropertyShape.properties` recursion, `languageIn` lists): the pinned branch
+    counts become NodeShape 9 (was 8) and PropertyShape 7 (was 4); `owned-values.md` updated.
   - [ ] Phase 4 — ontology sync
   - [ ] Phase 5 — store phase (after F1 lands)
 - [ ] K2 — validate by class (report 043)

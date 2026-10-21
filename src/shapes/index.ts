@@ -12,3 +12,4 @@ import './SHACL.js';
 import './List.js';
 import './PathList.js';
 import './PathNode.js';
+import './PropertyGroup.js';

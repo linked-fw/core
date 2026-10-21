@@ -77,8 +77,8 @@ asserts ownership. One UNION branch per path from the root.
 - **`rdf:nil`** is never deleted: every walk node and the replaced-value self-delete carry
   `FILTER(!sameTerm(?n, rdf:nil))`.
 - **Branch count:** no cap; lowering warns once per root shape above `OWNED_BRANCH_WARNING` (64)
-  branches. The core metamodel and `@_linked/schema` stay at ≤ 8; reducing wide DAGs is
-  [backlog 055](../backlog/055-owned-walk-branch-count.md).
+  branches. The core metamodel stays at ≤ 9 (nested property shapes and `sh:languageIn` lists)
+  and `@_linked/schema` at ≤ 8; reducing wide DAGs is [backlog 055](../backlog/055-owned-walk-branch-count.md).
 - **Memoized** per (root shape, registry version); lowering only instantiates variables.
 
 Invariants:
