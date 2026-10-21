@@ -183,3 +183,9 @@ non-inferring store until phase 5).
   schema.org measurement — this step, resumed after F1 lands (sub-plan 003, K1 phase 5).
 - `two-copies-built` not running: [backlog 060](../backlog/060-two-copies-built-jest-module-cache.md).
 - Tighten-only errors, `autoLoadOntologyData` removal: K3.
+- CN: `src/utils/shapeCatalogQuery.ts` (the catalog projection) writes a property's `group` as a
+  string; with `PropertyShapeData.group` a `NodeReferenceValue` it must write `{id}` once CN
+  compiles against this core (its typecheck reads the main checkout's core until then). Reported to
+  the plan's master for the CN step that raises core.
+- CN's `tests/integration/shape-catalog-scoping.spec.ts` (built-in count 8) was updated but not
+  run here: it needs a CN backend on the owner's Fuseki; CN's heavy set runs it.
