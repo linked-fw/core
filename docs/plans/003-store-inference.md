@@ -5,7 +5,7 @@ summary: >
   OntologySync shape, the shape check with `mirrors` and `sharedTargetClass`, tighten-only
   warnings, the SHACL metamodel's missing standard terms and PropertyGroup, the test store on the
   inferring image), then K2 (validate by class) and K3 (the no-inference workarounds go, major).
-status: Tasks
+status: Implementation
 packages: [core]
 ---
 
@@ -813,6 +813,18 @@ npm run check:dts
 REQUIRE_FUSEKI=1 npm run test:fuseki    # on the test store K1's store phase set up, if landed
 ```
 
+### Outcome
+
+Landed on `store-inference`; record: [report 043](../reports/043-class-hierarchy-and-validate-by-class.md).
+Three phases as above. Every contract item exists under its export path with its signature;
+`validateByClass` also settles two points within the contract (report 043): the closed check is
+over the union of the selected shapes, and type strings are checked as `{id}` references. Full
+gate: `npm test` 2425 passed / 120 skipped, only `two-copies-built` failing (backlog 060);
+`test:fuseki` 304 passed; `typecheck` and `check:dts` clean. Changeset
+`core-043-validate-by-class.md` (minor).
+
+---
+
 ## K3 — the workarounds go (major, sensitive)
 
 Detail written when its wave starts. Master §K3: the owned-link check, the single-owner
@@ -848,5 +860,8 @@ constraint and the cycle walk rely on inference; tighten-only warnings (and
     of plain `{id}` values needs one), as the metamodel does for IRI values. Orphans pruned in one
     run do not keep each other's triples.
   - [ ] Phase 5 — store phase (after F1 lands)
-- [ ] K2 — validate by class (report 043)
+- [x] K2 — validate by class (report 043)
+  - [x] Phase 1 — the class hierarchy in memory, `loadOntologyHierarchy`, called by the sync and the check
+  - [x] Phase 2 — `validateByClass`
+  - [x] Phase 3 — direction I with multiple inheritance (CN's `Dataset` case)
 - [ ] K3 — the workarounds go (report 044)
