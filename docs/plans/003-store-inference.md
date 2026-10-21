@@ -5,7 +5,7 @@ summary: >
   OntologySync shape, the shape check with `mirrors` and `sharedTargetClass`, tighten-only
   warnings, the SHACL metamodel's missing standard terms and PropertyGroup, the test store on the
   inferring image), then K2 (validate by class) and K3 (the no-inference workarounds go, major).
-status: Implementation
+status: Tasks
 packages: [core]
 ---
 
@@ -174,6 +174,24 @@ export function validateByClass(data: unknown, options?: ValidateOptions & {type
 Validates against every registered shape whose targetClass is one of the node's types (from
 `types`, else the data's `rdf:type`/`type` values) or a superclass of one (in-memory closure).
 Without known types it validates nothing and says so in the report.
+
+### Class hierarchy in memory (provider K2; consumers U1, K3, apps)
+
+No synchronous class closure existed after K1; `validateByClass`, bulk access and the owned-walk
+safety net (decision 22) need one.
+```ts
+// @_linked/core/ontology/classHierarchy   (browser-safe: no n3, no I/O)
+export function setOntologyHierarchy(triples: HierarchyTriple[]): void;
+export function superClassesOf(iri: string): ReadonlySet<string>;  // reflexive, transitive
+export function subClassesOf(iri: string): ReadonlySet<string>;    // reflexive, transitive
+// @_linked/core/ontology/hierarchy   (server only)
+export function loadOntologyHierarchy(): Promise<HierarchyTriple[]>; // parses the registered data, calls setOntologyHierarchy
+```
+The closure is the union of the shape tree's edges (`sC extends sD` gives `C ⊑ D`, always
+present, so a browser gets it) and the ontology triples once set. Direction II makes the shape
+edges a subset of the ontology closure, so on a server the union is the ontology closure.
+`syncOntologies` and `checkShapeHierarchy` call `loadOntologyHierarchy` (one parse per run);
+V1's boot calls it whether or not the sync runs.
 
 ### Contract clarifications this sub-plan proposed (adopted in the master plan)
 
@@ -679,9 +697,11 @@ Event.image` gains `contains`. Changeset `core-042-ontology-sync-shape-check.md`
 
 ## K2 — validate by class
 
-Master: [§Validate by class](#validate-by-class-provider-k2-consumers-apps-cn);
-tests with a subclass node validated against the superclass shape; report 043; changeset `minor`.
-Size: small, 1 phase. Depends on K1 phases 1-4 (landed, 944b6d0); not on K1's store phase.
+Master §K2: [§Class hierarchy in memory](#class-hierarchy-in-memory-provider-k2-consumers-u1-k3-apps)
+first (U1 lands on it), then [§Validate by class](#validate-by-class-provider-k2-consumers-apps-cn),
+then direction I with multiple inheritance (decision 13). Report 043; changeset `minor`.
+Size: small, **3 phases**. Depends on K1 phases 1-4 (landed, 944b6d0); not on K1's store phase.
+Phases run in order (2 reads phase 1's closure; 3 is independent of 2 but shares the files' tests).
 
 ### Files
 
@@ -718,6 +738,53 @@ Found at `store-inference` 944b6d0. Line numbers drift; search for the symbol.
   duplicate results from two shapes sharing an inherited property shape are kept once.
 - Data-only shapes registered from the store (`registerRuntimeShape`) are in the registry too and
   are picked the same way.
+
+### Phases
+
+**Phase 1 — class hierarchy in memory.**
+- `src/ontology/classHierarchy.ts` (new, browser-safe; imports only `ShapeClass`, `registryCache`,
+  `sharedState` and the `HierarchyTriple` type): ontology triples in `sharedState('@_linked/core',
+  'classHierarchy')` with a version; the closure cached in a `RegistryCache` (rebuilt when the
+  shape registry or the ontology version moves; one per catalog). Shape edges: every shape whose
+  class C differs from the class D of its nearest super-shape gives `C ⊑ D`. `superClassesOf` /
+  `subClassesOf` reflexive and transitive; an unknown IRI gives `{iri}`; cycles terminate.
+- `src/ontology/hierarchy.ts`: `loadOntologyHierarchy()` (dynamic import of `registryData`, which
+  imports this module) = `readPackageOntologies()`, union of the readable packages' triples,
+  deduped and sorted, `setOntologyHierarchy`.
+- `syncOntologies` sets the hierarchy from the parse it already does (one parse per run, through
+  the helper `loadOntologyHierarchy` uses); `checkShapeHierarchy` without `hierarchy` calls
+  `loadOntologyHierarchy`; with `hierarchy` it sets nothing.
+- `docs/architecture/ontologies.md`: a section "The class hierarchy in memory".
+- Tests `src/tests/class-hierarchy.test.ts`: closure from shape edges alone (A extends B extends
+  C shapes → `superClassesOf(A) = {A,B,C}`, `subClassesOf(C) ⊇ {A,B,C}`); a shape inheriting its
+  class adds no edge; after `setOntologyHierarchy([{s: X, o: A}])` `superClassesOf(X) = {X,A,B,C}`
+  and `subClassesOf(C)` gains X; replacing the triples drops the old edges; a registry change
+  after a read is seen; unknown IRI → `{iri}`; a cycle terminates; `loadOntologyHierarchy` with a
+  registered Turtle ontology sets and returns its triples; `syncOntologies` (recording store) and
+  `checkShapeHierarchy()` leave the hierarchy set.
+
+**Phase 2 — `validateByClass`.** `src/shapes/validation.ts` + `src/index.ts` export. Shapes: the
+union over `c ∈ ⋃ superClassesOf(type)` of `getShapesForTargetClass(c)` (least-specific roots of
+each class: a sub-shape inheriting its class is not selected, a sub-shape with its own class is),
+by id. The node is described by all of them at once, so the closed check (undeclared property)
+is over the union: a key no selected shape declares is reported once (by the first shape), a key
+some selected shape declares is not reported by the others; the type key (`type` or the
+`rdf:type` IRI) is not a property unless a selected shape declares that label. Results by shape
+id, deduped (an inherited property shape checked by two shapes reports once). No known type or no
+shape → `conforms: true` and one `sh:Info` result saying nothing was validated. Doc section in
+`ontologies.md`. Tests in `validate-by-class.test.ts` (below).
+
+**Phase 3 — direction I with multiple inheritance.** `checkShapeHierarchy`'s
+`subclass-without-extends`: when sA has an in-scope domain ancestor (its extends chain reaches a
+shape in sA's package or a dependency), a missing B whose root sB is not a sub-shape of sA's
+nearest such ancestor (sB is off the chain: `extends` cannot reach both) is a warning naming the
+multiple inheritance; a sB that is a sub-shape of it stays an error (sA could extend sB instead).
+With no in-scope ancestor every in-scope B stays an error. Tests in `shape-check.test.ts`: CN's
+`Dataset` case (`createNow:Dataset ⊑ dcat:Dataset, schema:CreativeWork`; `CreativeWork ⊑ Thing`;
+`dcat:Dataset ⊑ dcat:Resource`; dcat ships a `Resource` shape and no `Dataset` shape, as it
+does; shapes in three packages with the dependency map; Dataset extends CreativeWork) → no error,
+one warning for dcat's `Resource`; Dataset extending nothing → errors for both; a sB that is a
+sub-shape of the chain's ancestor → still an error. JSDoc of the module updated; report 043, changeset, Outcome.
 
 ### Tests
 
