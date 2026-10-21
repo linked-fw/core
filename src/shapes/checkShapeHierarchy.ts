@@ -141,7 +141,8 @@ const exportedTermIris = (terms: Record<string, unknown>): string[] => {
  * Check the registered shapes against the class hierarchy and the mirror rule.
  *
  * @param options.hierarchy the hierarchy to check against; by default, the union of every
- * registered package's ontology data (parsed through the hierarchy reader). The mirror check
+ * registered package's ontology data, parsed by `loadOntologyHierarchy`, which also sets it as
+ * the in-memory hierarchy. A given `hierarchy` is used as is and not set. The mirror check
  * always reads the mirror packages' data.
  * @param options.dependencies package name → the names of its direct `dependencies` and
  * `peerDependencies` (from `package.json`). Direction I's error scope is a shape's own package
@@ -156,9 +157,8 @@ export async function checkShapeHierarchy(options?: {
 
   let hierarchy = options?.hierarchy;
   if (!hierarchy) {
-    const {readPackageOntologies} = await import('../ontology/registryData.js');
-    const {packages} = await readPackageOntologies();
-    hierarchy = [...packages.values()].flatMap((p) => p.triples);
+    const {loadOntologyHierarchy} = await import('../ontology/hierarchy.js');
+    hierarchy = await loadOntologyHierarchy();
   }
   const closure = subClassClosure(hierarchy);
   const sup = (cls: string): Set<string> => closure.get(cls) ?? new Set();

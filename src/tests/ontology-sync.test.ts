@@ -17,6 +17,7 @@ import {
 import {getRegisteredOntologies} from '../utils/Package';
 import {OntologySync} from '../shapes/OntologySync';
 import {builtInShapeIris} from '../utils/ShapeCatalog';
+import {setOntologyHierarchy, superClassesOf} from '../ontology/classHierarchy';
 
 const NS = 'http://example.org/sync/';
 const SUB = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
@@ -92,6 +93,14 @@ describe('syncOntologies', () => {
     const last = ds.updates[2];
     expect(last).toContain(`<${ontologySyncNodeIri('sync-a')}> rdf:type core:OntologySync .`);
     expect(last).toContain(ontologySyncHash(`${line('A', 'B')}\n${line('B', 'C')}`));
+  });
+
+  test('the sync sets the in-memory hierarchy from its parse, also for a skipped package', async () => {
+    setOntologyHierarchy([]);
+    ds.nodes = [node('sync-a', [line('A', 'B'), line('B', 'C')])];
+    await syncOntologies(ds, {packages: ['sync-a']});
+    expect(superClassesOf(`${NS}A`)).toEqual(new Set([`${NS}A`, `${NS}B`, `${NS}C`]));
+    expect(superClassesOf(`${NS}X`)).toEqual(new Set([`${NS}X`, `${NS}Y`]));
   });
 
   test('an unchanged package writes nothing', async () => {

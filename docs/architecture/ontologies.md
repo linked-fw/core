@@ -93,6 +93,24 @@ three); the readers group them by package.
 Only the hierarchy leaves the file. Labels, comments and the rest of the vocabulary stay in the
 Turtle, for tools that read it directly.
 
+## The class hierarchy in memory
+
+`@_linked/core/ontology/classHierarchy` (browser-safe) answers class questions synchronously,
+for code that cannot ask the store:
+
+- `superClassesOf(iri)` / `subClassesOf(iri)` — reflexive and transitive; an unknown IRI gives
+  `{iri}`.
+- `setOntologyHierarchy(triples)` — replaces the ontology triples it uses.
+
+Its closure is the union of two sources. The shape tree is always there: a shape targeting C that
+extends a shape targeting D gives `C ⊑ D`, so a browser has these edges too. The ontology triples
+are there once set: `loadOntologyHierarchy()` (in `ontology/hierarchy`, server only) parses every
+registered package's data and sets their union. The ontology sync sets it from the parse it
+already does, the shape check loads it when not given a `hierarchy`, and an app's boot loads it
+whether or not it syncs. The shape check requires every shape edge in the ontology data, so on a
+server the union is the ontology closure. The closure is rebuilt when the shape registry or the
+triples change, and kept per catalog.
+
 ## The ontology sync
 
 The store infers `rdf:type` through `rdfs:subClassOf`, so each app dataset must hold the class

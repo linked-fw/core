@@ -28,7 +28,11 @@ import {sha256Hex} from '../utils/sha256.js';
 import {OntologySync} from '../shapes/OntologySync.js';
 import {ClassAxioms} from '../shapes/ClassAxioms.js';
 import {RDFS_SUBCLASSOF, type HierarchyTriple} from './hierarchy.js';
-import {readPackageOntologies, registrationsByPackage} from './registryData.js';
+import {
+  readPackageOntologies,
+  registrationsByPackage,
+  setHierarchyFromPackages,
+} from './registryData.js';
 
 export interface SyncOntologiesOptions {
   /** Write every package, even when its stored hash matches. */
@@ -149,6 +153,8 @@ export async function syncOntologies(
   // Every registered package is read, also outside `packages`: their new triples decide what a
   // changed package may remove.
   const {packages: parsed, skipped: unreadable} = await readPackageOntologies();
+  // The same parse fills the in-memory hierarchy (what `loadOntologyHierarchy` does).
+  setHierarchyFromPackages(parsed);
   const registered = new Set(registrationsByPackage().keys());
   const nextLines = new Map<string, Set<string>>();
   for (const [name, data] of parsed) {

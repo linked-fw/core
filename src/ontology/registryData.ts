@@ -13,6 +13,7 @@
 
 import {getRegisteredOntologies, type OntologyRegistration} from '../utils/Package.js';
 import {hierarchyFromTurtle, type HierarchyTriple} from './hierarchy.js';
+import {setOntologyHierarchy} from './classHierarchy.js';
 
 /** One package's ontology data: its Turtle texts, their file names and the parsed hierarchy. */
 export interface PackageOntologyData {
@@ -111,4 +112,27 @@ export async function readPackageOntologies(options?: {
     packages.set(packageName, {packageName, texts, sources, triples});
   }
   return {packages, skipped};
+}
+
+/**
+ * The union of the packages' triples, deduped and sorted, set as the in-memory hierarchy
+ * (`setOntologyHierarchy`) and returned. Shared by `loadOntologyHierarchy` and the ontology sync,
+ * so a sync parses the data once.
+ */
+export function setHierarchyFromPackages(
+  packages: Map<string, PackageOntologyData>,
+): HierarchyTriple[] {
+  const seen = new Set<string>();
+  const triples: HierarchyTriple[] = [];
+  for (const data of packages.values()) {
+    for (const triple of data.triples) {
+      const key = `${triple.s}\u0000${triple.o}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      triples.push(triple);
+    }
+  }
+  triples.sort((a, b) => (a.s < b.s ? -1 : a.s > b.s ? 1 : a.o < b.o ? -1 : a.o > b.o ? 1 : 0));
+  setOntologyHierarchy(triples);
+  return triples;
 }

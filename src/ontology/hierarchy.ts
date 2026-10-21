@@ -15,6 +15,7 @@
  *
  * Server only: the parse functions import `n3` dynamically, so a browser bundle that reaches this
  * module through a package's ontology module never carries the parser. `subClassClosure` is pure.
+ * `loadOntologyHierarchy` fills the in-memory hierarchy (`@_linked/core/ontology/classHierarchy`).
  *
  * @module @_linked/core/ontology/hierarchy
  */
@@ -156,4 +157,20 @@ export function subClassClosure(triples: HierarchyTriple[]): Map<string, Set<str
     closure.set(cls, reached);
   }
   return closure;
+}
+
+/**
+ * Parse the ontology data of every registered package and set the union of their
+ * `rdfs:subClassOf` triples as the in-memory hierarchy (`setOntologyHierarchy` in
+ * `@_linked/core/ontology/classHierarchy`), so `superClassesOf` and `subClassesOf` answer from
+ * the ontology and not only from the shape tree. Returns the triples, deduped and sorted. A
+ * package whose data cannot be read or parsed is left out, with the reader's warning.
+ *
+ * The ontology sync and the shape check call it (one parse per run); an app's boot calls it
+ * whether or not the sync runs.
+ */
+export async function loadOntologyHierarchy(): Promise<HierarchyTriple[]> {
+  const {readPackageOntologies, setHierarchyFromPackages} = await import('./registryData.js');
+  const {packages} = await readPackageOntologies();
+  return setHierarchyFromPackages(packages);
 }
