@@ -1,0 +1,5 @@
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex: <http://example.org/animals/> .
+
+ex:Pet rdfs:subClassOf ex:Animal .
+ex:Dog rdfs:subClassOf ex:Pet .

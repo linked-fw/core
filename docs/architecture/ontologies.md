@@ -1,5 +1,5 @@
 ---
-summary: Why core ships its own copies of rdf, rdfs, owl, shacl and xsd, how they differ from the ontologies in packages, and the rule for which kind you are writing.
+summary: Why core ships its own copies of rdf, rdfs, owl, shacl and xsd, how they differ from the ontologies in packages (Turtle data, the registry, the hierarchy reader, the ontology sync, mirror packages), and the rule for which kind you are writing.
 ---
 
 # Ontologies in core, and ontologies in packages
@@ -38,14 +38,95 @@ ontology is the complete vocabulary, and carries what core's shortcuts leave out
 | | core | a package |
 |---|---|---|
 | terms | only what core uses | the whole vocabulary |
-| data file | none | `src/data/<prefix>.json`, loaded lazily |
+| data file | none | `src/data/<name>.ttl` (Turtle), read on the server only |
 | `linkedOntology()` | not called | called, from a sibling module |
 | registered via | `Prefix.add` directly | `linkedOntology`, which also registers the prefix |
 
-A package ontology **always** has a data file and a `loadData` that imports it dynamically,
-even when that file is empty. The file being empty is fine; the function being absent is not,
-because consumers load ontology data on demand and an ontology that cannot be asked is a
-special case every caller then has to know about.
+## Ontology data is Turtle
+
+A package's vocabulary ships as Turtle under `src/data/`, one file per vocabulary, written by a
+deterministic writer (fixed prefix block, subjects sorted, `a` first, predicates sorted), with no
+blank nodes and no graphs. `linked build` copies `src/**/*.ttl` into `lib/esm/` with the same
+layout, so a module's relative path to its data holds in both trees.
+
+The ontology module reads it with `loadOntologyFiles`:
+
+```ts
+// src/ontologies/my-vocab.ts
+import {loadOntologyFiles} from '@_linked/core/ontology/loadOntologyFiles';
+export const dataFiles = ['../data/my-vocab.ttl'];
+export const loadData = () => loadOntologyFiles(import.meta.url, dataFiles);
+```
+
+`loadOntologyFiles(moduleUrl, files)` resolves each file against the module URL and reads it as
+text. Ontology modules are reachable from browser bundles, so the loader imports
+`node:fs/promises` dynamically through a variable specifier (kept out of bundles); calling it in
+a browser rejects. A missing file rejects, naming the file.
+
+An ontology without data passes no `loadData`. A `loadData` that resolves to anything other than
+a list of strings (a package whose data is still JSON) is skipped with one warning naming the
+package.
+
+Nothing loads the data at registration. `autoLoadOntologyData` is a no-op kept until the next
+major.
+
+## The registry
+
+Every `linkedOntology(terms, ns, prefix, loadData?, dataSource?)` records
+`{packageName, prefix, ns, load, files}` in core's shared state (`getRegisteredOntologies()` from
+`utils/Package`), keyed by package and prefix, so a module evaluated twice (Vite SSR) or seen by
+two copies of core registers once. A package may register several ontologies (dcmi registers
+three); the readers group them by package.
+
+## The hierarchy reader
+
+`@_linked/core/ontology/hierarchy` (server only; it imports `n3` dynamically):
+
+- `hierarchyFromTurtle(texts, sources?)` — every `rdfs:subClassOf` between two IRIs in the
+  default graph, deduped and sorted by subject then object. Blank-node superclasses (OWL
+  restrictions), literals, named graphs and every other predicate are dropped. A parse error
+  rejects naming the source; the callers skip only that package.
+- `subClassClosure(triples)` — class → every transitive superclass (pure).
+- `definedTermsFromTurtle(texts)` — every IRI subject: the terms the data defines.
+
+Only the hierarchy leaves the file. Labels, comments and the rest of the vocabulary stay in the
+Turtle, for tools that read it directly.
+
+## The ontology sync
+
+The store infers `rdf:type` through `rdfs:subClassOf`, so each app dataset must hold the class
+hierarchy of every package the app registers. `syncOntologies(ds?, {force, packages,
+orphanScope})` (`@_linked/core/ontology/syncOntologies`, server only) writes it:
+
+- per package, the kept triples (its hierarchy) as sorted N-Triples lines, hashed with SHA-256
+  (`linked-ontology-sync/1\n` + the lines);
+- the hash and the lines are stored on a sync node per package,
+  `https://linked.cm/ont/core/ontologySync/<encodeURIComponent(packageName)>`, of the built-in
+  shape `OntologySync`;
+- an unchanged hash writes nothing (an unforked branch stays unforked); a changed package is
+  updated one subject class at a time (`add` = new − old, `remove` = old − new minus the triples
+  another package lists), the sync node last, so an interrupted sync is redone by the next one;
+- triples a dataset held before its first sync are never removed by it; packages no longer
+  registered are pruned only under `orphanScope: 'all'`.
+
+It runs at app boot and through the app's control route, before shape sync. Everything goes
+through Linked Queries, in the default graph.
+
+## A package that mirrors a standard
+
+A package that mirrors a published vocabulary (`@_linked/schema`, `dcat`, `org`, `rdfs`, …) holds
+only that standard's terms, and declares the namespace(s) it mirrors:
+
+```ts
+export const {linkedShape, linkedOntology} = linkedPackage('@_linked/schema', {
+  mirrors: 'https://schema.org/',
+});
+```
+
+The shape check (`@_linked/core/shapes/checkShapeHierarchy`) then reports every IRI in a
+mirrored namespace that a shape or an exported term uses and the package's data does not define
+(`mirror-undefined-term`). Custom shapes and terms belong in their own package and namespace,
+optionally `rdfs:subClassOf` the standard class.
 
 ## Registration goes in a sibling module
 
@@ -62,9 +143,9 @@ So registration lives in `<prefix>.register.ts`, imported from the package entry
 ```ts
 import * as terms from './my-vocab.js';
 import {linkedOntology} from '../package.js';
-import {loadData, ns} from './my-vocab.js';
+import {dataFiles, loadData, ns} from './my-vocab.js';
 
-linkedOntology(terms, ns, 'my-vocab', loadData, '../data/my-vocab.json');
+linkedOntology(terms, ns, 'my-vocab', loadData, dataFiles);
 ```
 
 `linked create-ontology` scaffolds both files. Core's vocabularies need none of this, because

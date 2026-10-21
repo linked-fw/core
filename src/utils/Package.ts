@@ -34,12 +34,33 @@ declare var global;
 // var packageParsePromises: Map<string,Promise<any>> = new Map();
 // var loadedPackages: Set<NamedNode> = new Set();
 /**
+ * One `linkedOntology(...)` call, as the ontology registry records it. The ontology sync and the
+ * shape check read the registry through {@link getRegisteredOntologies}.
+ */
+export interface OntologyRegistration {
+  /** The npm name of the package that registered the ontology. */
+  packageName: string;
+  /** The ontology's prefix, which is also its module's file name. */
+  prefix: string;
+  /** The namespace function: `ns('Term')` is the term's `{id}` reference. */
+  ns: (term: string) => NodeReferenceValue;
+  /** Reads the package's Turtle data (`loadOntologyFiles`); absent for an ontology without data. */
+  load?: () => Promise<unknown>;
+  /** The data files `load` reads, relative to the ontology module; names them in errors. */
+  files: string[];
+}
+
+/**
  * Ontology registrations and package settings, shared by every copy of core in the runtime:
- * `autoLoadOntologyData(true)` through one copy loads ontologies another copy registered, and
- * `setDefaultPageLimit` through either sets the limit both read.
+ * an ontology registered through one copy is synced by another, and `setDefaultPageLimit`
+ * through either sets the limit both read.
  */
 const packageState = sharedState('@_linked/core', 'Package', () => ({
   ontologies: new Set<any>(),
+  /** Keyed by `packageName + prefix`, so a module evaluated twice registers once. */
+  ontologyRegistry: new Map<string, OntologyRegistration>(),
+  /** Package name → the namespaces it mirrors (`linkedPackage(name, {mirrors})`). */
+  packageMirrors: new Map<string, string[]>(),
   autoLoadOntologyData: false,
   defaultLimit: 12,
   /** One setter per copy of this module, keeping that copy's `DEFAULT_LIMIT` binding in step. */
@@ -48,7 +69,26 @@ const packageState = sharedState('@_linked/core', 'Package', () => ({
 // A container an older copy of core created lacks the fields added since.
 packageState.defaultLimit ??= 12;
 packageState.limitBindings ??= new Set();
+packageState.ontologyRegistry ??= new Map();
+packageState.packageMirrors ??= new Map();
 const ontologies = packageState.ontologies;
+
+/**
+ * Every ontology registered with `linkedOntology`, in registration order. Several entries may
+ * share a package (one per ontology module); the sync groups them by `packageName`.
+ */
+export function getRegisteredOntologies(): OntologyRegistration[] {
+  return [...packageState.ontologyRegistry.values()];
+}
+
+/**
+ * The namespaces each package declared it mirrors (`linkedPackage(name, {mirrors})`), by
+ * package name. Read by the shape check.
+ * @internal
+ */
+export function getPackageMirrors(): ReadonlyMap<string, string[]> {
+  return packageState.packageMirrors;
+}
 /**
  * a map of requested property shapes for specific nodes
  * The value is a promise if it's still loading, or true if it is fully loaded
@@ -144,49 +184,50 @@ export interface LinkedPackageObject
    */
   linkedUtil: (constructor: any) => any;
   /**
-   * Used to notify LINCD.js of an ontology.
-   * See also the [Ontology guides](/docs/guides/linked-code/ontologies).
+   * Registers an ontology of this package: its prefix (registered with `Prefix`), its terms
+   * (registered in the package tree under the prefix) and, when the package ships data, how to
+   * read it. The data is Turtle, one file per vocabulary under `src/data/`, read by
+   * `loadOntologyFiles` (`@_linked/core/ontology/loadOntologyFiles`). Nothing is loaded at
+   * registration: the ontology sync (`@_linked/core/ontology/syncOntologies`) reads the data,
+   * writes each package's class hierarchy into the store, and the store infers over it.
    *
-   * @param allFileExports - all the objects that are exported by the ontology file (use `import * as _this from "./path-to-this-file")`)
-   * @param nameSpace - the result of [createNameSpace](/docs/lincd.js/modules/utils_NameSpace#createnamespace). This allows consumers to generate NamedNodes that may not be listed in this ontology if needed
-   * @param prefixAndFileName - a suggested prefix chosen by you. Make sure the suggestedPrefix matches the file name and the name of the exported object that groups all entities together
-   * @param loadDataFunction - a method that loads _and parses_ the raw ontology data. This means the ontology will be loaded into the local graph. The returned result is mostly a JSONLDParsePromise (from lincd-jsonld/JSONLD, not bundled in LINCD.js)
-   * @param dataSource - the relative path to the raw data of the ontology
+   * Call it from a sibling `<prefix>.register.ts` module, never from the ontology module
+   * itself (a module cannot import its own namespace once a bundler is involved).
+   *
+   * @param allFileExports - every export of the ontology module (`import * as terms from './my-vocab.js'`)
+   * @param nameSpace - the namespace function (`createNameSpace`), so consumers can build terms the module does not list
+   * @param suggestedPrefixAndFileName - the prefix; it MUST match the ontology module's file name
+   * @param loadDataFunction - reads the Turtle data: `() => loadOntologyFiles(import.meta.url, files)`. Omit it for an ontology without data
+   * @param dataSource - the data file(s) `loadDataFunction` reads, relative to the ontology module (named in errors)
    * @example
-   * Example of an Ontology File that used linkedOntology()
-   * ```tsx
-   * import {NamedNode} from 'lincd/models';
-   * import {JSONLD} from 'lincd-jsonld/JSONLD';
-   * import {createNameSpace} from 'lincd/utils/NameSpace';
+   * ```ts
+   * // src/ontologies/my-vocab.ts
+   * import {createNameSpace} from '@_linked/core/utils/NameSpace';
+   * import {loadOntologyFiles} from '@_linked/core/ontology/loadOntologyFiles';
+   * import type {NodeReferenceValue} from '@_linked/core/utils/NodeReference';
+   *
+   * export const ns = createNameSpace('http://www.my-ontology.com/');
+   * export const _self: NodeReferenceValue = ns('');
+   * export const dataFiles = ['../data/my-vocab.ttl'];
+   * export const loadData = () => loadOntologyFiles(import.meta.url, dataFiles);
+   *
+   * const ExampleClass = ns('ExampleClass');
+   * const exampleProperty = ns('exampleProperty');
+   * export const myVocab = {ExampleClass, exampleProperty};
+   *
+   * // src/ontologies/my-vocab.register.ts
+   * import * as terms from './my-vocab.js';
+   * import {dataFiles, loadData, ns} from './my-vocab.js';
    * import {linkedOntology} from '../package.js';
-   * import * as _this from './my.js-ontology';
    *
-   * let dataFile = '../data/my.js-ontology.json';
-   * export var loadData = () => JSONLD.parsePromise(import(dataFile));
-   *
-   * export var ns = createNameSpace('http://www.my-ontology.com/');
-   *
-   * export var _self: NamedNode = ns('');
-   *
-   * // Classes
-   * export var ExampleClass: NamedNode = ns('ExampleClass');
-   *
-   * // Properties
-   * export var exampleProperty: NamedNode = ns('exampleProperty');
-   *
-   * export const myOntology = {
-   *   ExampleClass,
-   *   exampleProperty,
-   * };
-   *
-   * linkedOntology(_this, ns, 'myOntology', loadData, dataFile);
+   * linkedOntology(terms, ns, 'my-vocab', loadData, dataFiles);
    * ```
    */
   linkedOntology: (
     allFileExports,
     nameSpace: (term: string) => NodeReferenceValue,
     suggestedPrefixAndFileName: string,
-    loadDataFunction?: () => Promise<any>,
+    loadDataFunction?: () => Promise<unknown>,
     dataSource?: string | string[],
   ) => void;
   /**
@@ -244,27 +285,31 @@ export function getDefaultPageLimit(): number
   return packageState.defaultLimit;
 }
 
+/**
+ * No effect. Ontology data is no longer loaded into the process: the class hierarchy of every
+ * registered ontology is synced into the store by `syncOntologies`
+ * (`@_linked/core/ontology/syncOntologies`), and the store infers over it.
+ *
+ * @deprecated Removed in the next major.
+ */
 export function autoLoadOntologyData(value: boolean)
 {
   packageState.autoLoadOntologyData = value;
-  //this may be set to true after some ontologies have already indexed,
-  if (value)
-  {
-    // so in that case we load all data of ontologies that are already indexed
-    ontologies.forEach((ontologyExport) => {
-      //see linkedOntology() where we store the data loading method under the _load key
-      if (ontologyExport['_load'])
-      {
-        ontologyExport['_load']();
-      }
-    });
-  }
 }
 
 
 export function linkedPackage(
   packageName: string,
-  options?: {baseUri?: string},
+  options?: {
+    baseUri?: string;
+    /**
+     * The namespace(s) of a published standard this package mirrors (`@_linked/schema` mirrors
+     * `https://schema.org/`). Such a package holds only the standard's own terms: the shape
+     * check reports every IRI in a mirrored namespace that a shape or an exported term uses and
+     * the package's ontology data does not define.
+     */
+    mirrors?: string | string[];
+  },
 ): LinkedPackageObject
 {
   // Declare the package's publish root before any shape/metadata IRI is built.
@@ -272,6 +317,10 @@ export function linkedPackage(
   // injects a workspace-scoped root for private packages, first-party packages
   // default to linked.cm.
   setPackagePublishConfig(packageName, options);
+  if (options?.mirrors) {
+    const mirrors = Array.isArray(options.mirrors) ? options.mirrors : [options.mirrors];
+    packageState.packageMirrors.set(packageName, mirrors);
+  }
   let packageMetadata = registerPackageMetadata(packageName);
   let packageTreeObject = registerPackageInTree(packageName);
 
@@ -465,17 +514,20 @@ export function linkedPackage(
   }
 
   /**
+   * Registers an ontology module: its prefix, its namespace, its exported terms and, when the
+   * package ships data, how to read it. See {@link LinkedPackageObject.linkedOntology}.
    *
-   * @param exports all exports of the file, simply provide "this" as value!
-   * @param dataSource the path leading to the ontology's data file
-   * @param nameSpace the base URI of the ontology
-   * @param prefixAndFileName the file name MUST match the prefix for this ontology
+   * @param exports all exports of the ontology module (`import * as terms from './x.js'`)
+   * @param nameSpace the namespace function of the ontology
+   * @param prefixAndFileName the prefix, which MUST match the module's file name
+   * @param loadData reads the ontology's Turtle data: `() => loadOntologyFiles(import.meta.url, files)`
+   * @param dataSource the data file(s) `loadData` reads, relative to the ontology module
    */
   let linkedOntology = function(
     exports,
     nameSpace: (term: string) => NodeReferenceValue,
     prefixAndFileName: string,
-    loadData?,
+    loadData?: () => Promise<unknown>,
     dataSource?: string | string[],
   ) {
     let exportsCopy = {...exports};
@@ -495,19 +547,18 @@ export function linkedPackage(
     ontologies.add(exportsCopy);
     //register all the exports under the prefix. NOTE: this means the file name HAS to match the prefix
     registerInPackageTree(prefixAndFileName,exportsCopy);
-    // });
 
-    if (packageState.autoLoadOntologyData)
-    {
-      loadData().catch((err) => {
-        console.warn(
-          'Could not load ontology data. Do you need to rebuild the module of the ' +
-          prefixAndFileName +
-          ' ontology?',
-          err,
-        );
-      });
-    }
+    // The registry the ontology sync and the shape check read. Keyed by package and prefix:
+    // a module Vite evaluates twice, or two copies of core, register the ontology once.
+    const files = dataSource === undefined ? [] : Array.isArray(dataSource) ? dataSource : [dataSource];
+    const registration: OntologyRegistration = {
+      packageName,
+      prefix: prefixAndFileName,
+      ns: nameSpace,
+      files,
+    };
+    if (loadData) registration.load = loadData;
+    packageState.ontologyRegistry.set(`${packageName}\u0000${prefixAndFileName}`, registration);
   };
 
   /**

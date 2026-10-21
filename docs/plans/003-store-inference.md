@@ -5,7 +5,7 @@ summary: >
   OntologySync shape, the shape check with `mirrors` and `sharedTargetClass`, tighten-only
   warnings, the SHACL metamodel's missing standard terms and PropertyGroup, the test store on the
   inferring image), then K2 (validate by class) and K3 (the no-inference workarounds go, major).
-status: Plan
+status: Implementation
 packages: [core]
 ---
 
@@ -680,5 +680,12 @@ constraint and the cycle walk rely on inference; tighten-only warnings (and
 ## Progress
 
 - [ ] K1 — ontology data, sync and the shape check (report 042)
+  - [x] Phase 1 — ontology data plumbing: `n3`, the reader, the loader, the registry
+    (`registryData.ts` groups and reads it for the sync and the check), `mirrors`,
+    `autoLoadOntologyData` a no-op, JSDoc, `ontologies.md`
+  - [ ] Phase 2 — shape check and tighten-only
+  - [ ] Phase 3 — SHACL metamodel terms
+  - [ ] Phase 4 — ontology sync
+  - [ ] Phase 5 — store phase (after F1 lands)
 - [ ] K2 — validate by class (report 043)
 - [ ] K3 — the workarounds go (report 044)
