@@ -681,7 +681,7 @@ one more):
    "ontology data as Turtle, ontology sync, the shape check, tighten-only warnings, SHACL
    metamodel terms").
 
-### Outcome (phases 1–4)
+### Outcome
 
 Landed on `store-inference`; record: [report 042](../reports/042-store-inference-ontology-sync-and-shape-check.md).
 Every K1 contract item exists under its export path with its signature (plus the registry entry's
@@ -691,7 +691,12 @@ on `main` ([backlog 060](../backlog/060-two-copies-built-jest-module-cache.md));
 passed, none skipped; `typecheck` and `check:dts` clean; `n3` only in `lib/esm/ontology/hierarchy.js`,
 dynamically. Overrides whose SHACL changes across the localized packages: `@_linked/schema
 Event.image` gains `contains`. Changeset `core-042-ontology-sync-shape-check.md` (minor). Phase 5
-(the store phase) follows F1's landing.
+(the store phase): core's live tests run on the inferring image (`linked-fuseki:dev` until the
+image is published), `tdb2` datasets, a probe that fails the run on a non-inferring Fuseki;
+`npm test` 2427 passed (two-copies-built as above), `test:fuseki` 306 passed, none skipped; the
+owned-walk, owned-link-check and single-owner suites unchanged and green on the inferring store.
+First schema.org ontology sync: 907 updates, 1,991 ms alone (17,973 ms inside the loaded parallel
+run), second sync skipped in 58 ms with no write.
 
 ---
 
@@ -834,7 +839,7 @@ constraint and the cycle walk rely on inference; tighten-only warnings (and
 
 ## Progress
 
-- [ ] K1 — ontology data, sync and the shape check (report 042)
+- [x] K1 — ontology data, sync and the shape check (report 042)
   - [x] Phase 1 — ontology data plumbing: `n3`, the reader, the loader, the registry
     (`registryData.ts` groups and reads it for the sync and the check), `mirrors`,
     `autoLoadOntologyData` a no-op, JSDoc, `ontologies.md`
@@ -859,7 +864,10 @@ constraint and the cycle walk rely on inference; tighten-only warnings (and
     requires every declared shape there); its `subClassOf` names `Shape` as value shape (an update
     of plain `{id}` values needs one), as the metamodel does for IRI values. Orphans pruned in one
     run do not keep each other's triples.
-  - [ ] Phase 5 — store phase (after F1 lands)
+  - [x] Phase 5 — store phase: compose on the image (own compose project, port from
+    `FUSEKI_BASE_URL`, databases on a tmpfs), `tdb2` datasets through the admin form, reap and
+    teardown, the inference probe (`linked-inference-probe`, no step label), the live sync test
+    and the schema.org measurement.
 - [x] K2 — validate by class (report 043)
   - [x] Phase 1 — the class hierarchy in memory, `loadOntologyHierarchy`, called by the sync and the check
   - [x] Phase 2 — `validateByClass`

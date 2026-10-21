@@ -3,8 +3,8 @@ summary: >
   Ontology data as Turtle (loader, registry, hierarchy reader), the ontology sync with the built-in
   OntologySync shape, the shape check (`checkShapeHierarchy`, five kinds, `mirrors`,
   `sharedTargetClass`), tighten-only warnings with inheritance of omitted constraints, and the rest
-  of the SHACL Core terms plus PropertyGroup in the metamodel. Step K1 of CN plan 070, phases 1-4;
-  the store phase (core's tests on the inferring image) follows once the image lands.
+  of the SHACL Core terms plus PropertyGroup in the metamodel, and core's live tests on the
+  inferring Fuseki image (TDB2 datasets, an inference probe). Step K1 of CN plan 070.
 packages: [core]
 ---
 
@@ -12,8 +12,8 @@ packages: [core]
 
 Source: CN plan 070 (`create-now/docs/plans/070-store-inference-and-ontology-data.md`), step K1;
 sub-plan [003](../plans/003-store-inference.md). Design: the master's §Decisions 1, 10-16, 19.
-Phases 1-4 of 5 are done; phase 5 (the store phase) waits for the image (step F1) and is recorded
-here when it lands.
+All five phases are done; the store phase (phase 5) landed after the image (step F1, fuseki
+`store-inference` 112f09f).
 
 ## What was built
 
@@ -70,6 +70,19 @@ field when set; `sh:and`/`sh:xone` as blank `rdf:List`s of shape IRIs. Core's bu
 Docs: `docs/architecture/ontologies.md` (Turtle data, loader, registry, reader, sync, mirror
 packages), `owned-values.md` (`sharedTargetClass` profiles, the `contains` override rule, branch
 counts), `runtime-instances.md` (built-in list).
+
+**Test store on the image** (phase 5) — `src/tests/docker-compose.test.yml` runs
+`${LINKED_FUSEKI_IMAGE:-ghcr.io/linked-fw/fuseki:6.2.0-1}` on the port of `FUSEKI_BASE_URL`
+(`FUSEKI_TEST_PORT`, default 3939), under its own compose project (`linked-core-test`, or
+`LINKED_CORE_TEST_COMPOSE_PROJECT`), with the databases directory on a tmpfs.
+`fuseki-test-store.ts` creates every dataset through the admin form with `dbType=tdb2`
+(`createDataset`, `deleteDataset`, `listDatasets`), and adds `reapTestDatasets` and
+`probeInference`. Global setup reaps `nashville-test-*` and the probe dataset, then probes
+(`linked-inference-probe`: `A ⊑ B`, `x a A`, `ASK { x a B }`) and fails the run on a Fuseki that
+does not infer, naming the image; global teardown reaps before stopping the container. AGENTS.md
+says so. New live suite `ontology-sync-fuseki.test.ts` (fixture
+`fixtures/ontology-data/schema-hierarchy.ttl`: the 952 `rdfs:subClassOf` of `@_linked/schema`'s
+`schema.ttl`, extracted with the hierarchy reader).
 
 ## Effect on what shape sync writes
 
@@ -147,7 +160,7 @@ Quick gates (phase test files plus `shape-catalog`, `shacl-syncshapes`,
 | 3 | full jest: `Tests: 120 skipped, 2393 passed, 2513 total` (only `two-copies-built` failing); typecheck clean | 17.2 s |
 | 4 | full jest: `Tests: 120 skipped, 2404 passed, 2524 total` (only `two-copies-built` failing); typecheck clean | 26.2 s |
 
-Full gate before landing (Fuseki: the existing test store on 3939; the image comes with phase 5):
+Full gate of phases 1-4 (Fuseki: the stock test store on 3939, before the image):
 
 ```
 node ~/web/wt/070/packages-local/_linked-cli/lib/esm/launch.js build
@@ -176,11 +189,68 @@ grep -rn "ontology/" lib/esm/index.js               → nothing
 The owned-walk, owned-link-check and single-owner suites are unchanged and green (on the current,
 non-inferring store until phase 5).
 
+### Store phase
+
+On the image (`linked-fuseki:dev`, built from fuseki `store-inference` 112f09f), own compose
+project `linked-core-k1`, port 3949 (another step's stock store kept running on 3939), after a
+rebase onto `store-inference` def5cd9:
+
+```
+node ~/web/wt/070/packages-local/_linked-cli/lib/esm/launch.js build
+✔ Build successful            (5.5 s)
+
+FUSEKI_BASE_URL=http://localhost:3949 LINKED_CORE_TEST_COMPOSE_PROJECT=linked-core-k1 \
+LINKED_FUSEKI_IMAGE=linked-fuseki:dev REQUIRE_FUSEKI=1 npm test
+[ensureFuseki] Fuseki not running — starting linked-fuseki:dev via Docker (compose project linked-core-k1)...
+[ensureFuseki] Fuseki is ready
+[fuseki] live tests: 306 total — 306 passed, 0 failed, 0 skipped
+Test Suites: 1 failed, 4 skipped, 119 passed, 120 of 124 total   (two-copies-built, backlog 060)
+Tests:       120 skipped, 2427 passed, 2547 total
+Time:        49.15 s
+
+npm run typecheck             clean (3.5 s)
+
+(same env) npm run test:fuseki
+[fuseki] live tests: 306 total — 306 passed, 0 failed, 0 skipped
+Tests:       2280 skipped, 306 passed, 2586 total
+Time:        27.909 s
+
+npm run check:dts             clean (1.8 s)
+n3: only lib/esm/ontology/hierarchy.js, no static import; nothing under ontology/ in lib/esm/index.js
+```
+
+The owned-walk (`owned-walk-recursion`), `owned-link-check`, single-owner
+(`sparql-fuseki-shape-sync`), `shacl-cascade`, `sparql-fuseki*` and `property-path-fuseki` suites
+pass unchanged on the inferring store; the SHACL suite validates through the image's `ds`.
+
+Probe by hand on the image: create `dbType=tdb2` → 200; insert `A ⊑ B`, `x a A` → 204;
+`ASK { x a B }` on `/sparql` → `true`, on `/stored` → `false`; delete → 200. The failure path:
+globalSetup against a stock `secoresearch/fuseki:6.2.0` (own project, port 3959) stops the run
+with `[globalSetup] The Fuseki at http://localhost:3959 does not infer rdf:type through
+rdfs:subClassOf, …`.
+
+**Measurement** (the first `syncOntologies` of schema.org's hierarchy into an empty TDB2 dataset
+on the image, `ontology-sync-fuseki.test.ts`):
+
+| Run | First sync | Updates | Second (skipped) sync |
+|---|---|---|---|
+| the suite alone | 1,991 ms | 907 (906 subject classes + the sync node) | 58 ms, 0 updates |
+| inside the full `test:fuseki` run (14 suites in parallel, host load average ~40) | 17,973 ms | 907 | 70 ms, 0 updates |
+
+About 2.2 ms per class update alone, so the per-subject update of the contract (clarification 1)
+stays; a multi-subject mutation is not needed for now.
+
+**Test-store timing.** TDB2 commits on the container's filesystem cost ~80-190 ms each against
+~30 ms for `mem`, which timed out hooks in the shape-sync and cascade suites under parallel load;
+the compose file puts `/fuseki-base/databases` on a tmpfs (~56 ms per small update), after which
+three consecutive `test:fuseki` runs were green (10.6 s, 14.9 s, 14.1 s).
+
 ## Follow-ups
 
-- Phase 5 (store phase): compose on `linked-fuseki:dev`/`ghcr.io/linked-fw/fuseki`, `tdb2`
-  datasets, the inference probe, reap and teardown, `ontology-sync-fuseki.test.ts` and the
-  schema.org measurement — this step, resumed after F1 lands (sub-plan 003, K1 phase 5).
+- CI runs the live suites on `ghcr.io/linked-fw/fuseki:6.2.0-1`, so the image must be published
+  before core's release PR (master step R, fuseki first).
+- A Fuseki left on 3939 that does not infer now fails core's run (by design): a stock store
+  started for older branches must be stopped, or `FUSEKI_BASE_URL` pointed elsewhere.
 - `two-copies-built` not running: [backlog 060](../backlog/060-two-copies-built-jest-module-cache.md).
 - Tighten-only errors, `autoLoadOntologyData` removal: K3.
 - CN: `src/utils/shapeCatalogQuery.ts` (the catalog projection) writes a property's `group` as a
