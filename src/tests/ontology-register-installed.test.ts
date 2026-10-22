@@ -11,7 +11,9 @@ const FIXTURES = path.resolve(process.cwd(), 'src/tests/fixtures/installed');
 const WITH = path.join(FIXTURES, 'with-ontology');
 const WITHOUT = path.join(FIXTURES, 'without-ontology');
 const BROKEN = path.join(FIXTURES, 'broken');
+const SOURCE = path.join(FIXTURES, 'source-only');
 const WITH_NAME = '@fixture/installed-with-ontology';
+const SOURCE_NAME = '@fixture/installed-source-only';
 
 const warned: string[] = [];
 const originalWarn = console.warn;
@@ -70,5 +72,43 @@ describe('registerInstalledOntologies', () => {
     expect(warned).toHaveLength(1);
     expect(warned[0]).toMatch(/broken\.register\.js/);
     expect(warned[0]).toMatch(/broken register module/);
+  });
+
+  describe('a source package (no built register modules)', () => {
+    test('is skipped without importModule', async () => {
+      expect(await registerInstalledOntologies([SOURCE])).toEqual([]);
+      expect(registeredPrefixes(SOURCE_NAME)).toEqual([]);
+      expect(warned).toEqual([]);
+    });
+
+    test('registers its src/ontologies/*.register.ts through importModule, which built packages do not use', async () => {
+      const imported: string[] = [];
+      const importModule = async (file: string) => {
+        imported.push(file);
+        return import(pathToFileURL(file).href);
+      };
+      expect(await registerInstalledOntologies([WITH, SOURCE, WITHOUT], {importModule})).toEqual([
+        WITH_NAME,
+        SOURCE_NAME,
+      ]);
+      expect(imported).toEqual([path.join(SOURCE, 'src/ontologies/birds.register.ts')]);
+      expect(registeredPrefixes(SOURCE_NAME)).toEqual(['source-birds']);
+
+      const {packages, skipped} = await readPackageOntologies({packages: [SOURCE_NAME]});
+      expect(skipped).toEqual([]);
+      expect(packages.get(SOURCE_NAME)?.triples).toEqual([
+        {s: 'http://example.org/source-birds/Owl', o: 'http://example.org/source-birds/Bird'},
+      ]);
+    });
+
+    test('an importModule that throws is warned about, naming the file', async () => {
+      const importModule = async () => {
+        throw new Error('loader failed');
+      };
+      expect(await registerInstalledOntologies([SOURCE, WITH], {importModule})).toEqual([WITH_NAME]);
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toMatch(/birds\.register\.ts/);
+      expect(warned[0]).toMatch(/loader failed/);
+    });
   });
 });

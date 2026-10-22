@@ -34,6 +34,18 @@ async function nodeModule<T>(specifier: string): Promise<T> {
 /** Where the cli's build puts a package's ontology modules, relative to the package root. */
 const ONTOLOGIES_DIR = ['lib', 'esm', 'ontologies'];
 const REGISTER_SUFFIX = '.register.js';
+/** Where an unbuilt (source) package keeps them, relative to the package root. */
+const SOURCE_ONTOLOGIES_DIR = ['src', 'ontologies'];
+const SOURCE_REGISTER_SUFFIX = '.register.ts';
+
+export type RegisterInstalledOptions = {
+  /**
+   * Imports a source register module (`src/ontologies/*.register.ts`, absolute path) of a package
+   * directory that has no built ones, e.g. Vite's `ssrLoadModule` in dev. Without it such a
+   * directory is skipped.
+   */
+  importModule?: (file: string) => Promise<unknown>;
+};
 
 /**
  * Import `<dir>/lib/esm/ontologies/*.register.js` of each of `packageDirs` (package roots), in
@@ -43,10 +55,17 @@ const REGISTER_SUFFIX = '.register.js';
  * a directory given twice (also through a symlink) is imported once. A register module that
  * throws is reported in one warning naming the file, and its package is left out of the result.
  *
+ * A directory without built register modules but with `src/ontologies/*.register.ts` (a
+ * workspace package in dev, never built) is imported through `options.importModule` when given,
+ * and skipped otherwise.
+ *
  * Registration is idempotent (keyed by package and prefix), so a package the app already
  * imported registers again without effect.
  */
-export async function registerInstalledOntologies(packageDirs: string[]): Promise<string[]> {
+export async function registerInstalledOntologies(
+  packageDirs: string[],
+  options: RegisterInstalledOptions = {},
+): Promise<string[]> {
   const fs = await nodeModule<Fs>('node:fs/promises');
   const path = await nodeModule<Path>('node:path');
   const {pathToFileURL} = await nodeModule<Url>('node:url');
@@ -63,12 +82,14 @@ export async function registerInstalledOntologies(packageDirs: string[]): Promis
     if (seen.has(dir)) continue;
     seen.add(dir);
 
-    const ontologiesDir = path.join(dir, ...ONTOLOGIES_DIR);
-    let files: string[];
-    try {
-      files = (await fs.readdir(ontologiesDir)).filter((f) => f.endsWith(REGISTER_SUFFIX)).sort();
-    } catch {
-      continue;
+    let ontologiesDir = path.join(dir, ...ONTOLOGIES_DIR);
+    let files = await registerFiles(fs, ontologiesDir, REGISTER_SUFFIX);
+    let load = (filePath: string): Promise<unknown> =>
+      import(/* @vite-ignore */ /* webpackIgnore: true */ pathToFileURL(filePath).href);
+    if (files.length === 0 && options.importModule) {
+      ontologiesDir = path.join(dir, ...SOURCE_ONTOLOGIES_DIR);
+      files = await registerFiles(fs, ontologiesDir, SOURCE_REGISTER_SUFFIX);
+      load = options.importModule;
     }
     if (files.length === 0) continue;
 
@@ -76,7 +97,7 @@ export async function registerInstalledOntologies(packageDirs: string[]): Promis
     for (const file of files) {
       const filePath = path.join(ontologiesDir, file);
       try {
-        await import(/* @vite-ignore */ /* webpackIgnore: true */ pathToFileURL(filePath).href);
+        await load(filePath);
       } catch (error) {
         console.warn(
           `[linked] Could not import the ontology register module ${filePath}; its package's ` +
@@ -88,6 +109,14 @@ export async function registerInstalledOntologies(packageDirs: string[]): Promis
     if (ok) registered.push(await packageName(fs, path, dir));
   }
   return registered;
+}
+
+async function registerFiles(fs: Fs, dir: string, suffix: string): Promise<string[]> {
+  try {
+    return (await fs.readdir(dir)).filter((f) => f.endsWith(suffix)).sort();
+  } catch {
+    return [];
+  }
 }
 
 async function packageName(fs: Fs, path: Path, dir: string): Promise<string> {

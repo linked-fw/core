@@ -96,7 +96,18 @@ in the order given and by file name within a package, and returns the names of t
 registered. A directory without register modules is skipped silently, a directory given twice
 (also through a symlink) is imported once, and a register module that throws is warned about,
 naming the file, and its package left out. Registration is idempotent, so a package the app
-already imported is unaffected. The server's boot and `POST /admin/sync-shapes` call it with
+already imported is unaffected.
+
+A workspace package in dev has no `lib/` (nothing builds it), only
+`src/ontologies/*.register.ts`. For such a directory the helper imports those source modules
+through `options.importModule` (absolute file path), when given; without it the directory is
+skipped as before. The server passes Vite's `ssrLoadModule` in dev:
+
+```ts
+await registerInstalledOntologies(packageDirs, {importModule: (file) => vite.ssrLoadModule(file)});
+```
+
+The server's boot and `POST /admin/sync-shapes` call it with
 every linked package directory they discovered (transitively) before the ontology sync and the
 shape check; the cli's build check calls it with the package's own directory and its
 `@_linked/*` dependencies'.
