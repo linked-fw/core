@@ -59,6 +59,9 @@ const node = (pkg: string, lines: string[]): Row => {
   return {id: ontologySyncNodeIri(pkg), packageName: pkg, ontologyHash: ontologySyncHash(text), ontologyTriples: text};
 };
 
+/** The hash fields of a node that lists `lines`. */
+const hashOf = (lines: string[]) => ({ontologyHash: ontologySyncHash([...lines].sort().join('\n'))});
+
 let ds: Recording;
 beforeEach(() => {
   ds = new Recording();
@@ -68,6 +71,9 @@ beforeEach(() => {
 
 const updatesFor = (subject: string) =>
   ds.updates.filter((u) => !u.includes('ontologySync/') && u.includes(`<${NS}${subject}> `));
+/** The updates whose triples have `subject` as their subject (not as their object). */
+const updatesOn = (subject: string) =>
+  ds.updates.filter((u) => !u.includes('ontologySync/') && u.includes(`<${NS}${subject}> rdfs:subClassOf`));
 const nodeWrites = () => ds.updates.filter((u) => u.includes('ontologySync/'));
 
 describe('syncOntologies', () => {
@@ -110,13 +116,29 @@ describe('syncOntologies', () => {
     expect(ds.updates).toEqual([]);
   });
 
-  test('force rewrites an unchanged package', async () => {
+  test('force re-inserts every listed triple of an unchanged package, then the sync node', async () => {
     ds.nodes = [node('sync-a', [line('A', 'B'), line('B', 'C')])];
     const result = await syncOntologies(ds, {packages: ['sync-a'], force: true});
     expect(result.written).toEqual(['sync-a']);
-    // Nothing to add or remove: only the sync node.
-    expect(ds.updates).toHaveLength(1);
+    // Diffed against an empty stored set: one insert per subject class, nothing removed.
+    expect(ds.updates).toHaveLength(3);
+    expect(updatesOn('A')[0]).toContain(`<${NS}A> rdfs:subClassOf <${NS}B> .`);
+    expect(updatesOn('B')[0]).toContain(`<${NS}B> rdfs:subClassOf <${NS}C> .`);
+    for (const update of ds.updates.slice(0, 2)) expect(update).not.toMatch(/DELETE \{[^}]*subClassOf/);
     expect(nodeWrites()).toHaveLength(1);
+    expect(ds.updates[2]).toContain('ontologySync/sync-a');
+  });
+
+  test('force still removes the stored lines the package no longer lists', async () => {
+    // Stored: A ⊑ B and B ⊑ C; the package now lists only A ⊑ B, under the same hash as stored
+    // (the dataset was edited by hand), so only force writes.
+    ds.nodes = [{...node('sync-a', [line('A', 'B'), line('B', 'C')]), ...hashOf([line('A', 'B')])}];
+    data['sync-a'] = ttl(['A', 'B']);
+    const result = await syncOntologies(ds, {packages: ['sync-a'], force: true});
+    expect(result.written).toEqual(['sync-a']);
+    expect(updatesOn('A')[0]).toContain(`<${NS}A> rdfs:subClassOf <${NS}B> .`);
+    expect(updatesOn('B')).toHaveLength(1);
+    expect(updatesOn('B')[0]).toMatch(/DELETE \{[^}]*<http:\/\/example\.org\/sync\/B> rdfs:subClassOf <http:\/\/example\.org\/sync\/C>/);
   });
 
   test('a changed package removes old − new, adds new − old, and keeps what another package lists', async () => {

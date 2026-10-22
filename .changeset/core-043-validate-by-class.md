@@ -4,6 +4,8 @@
 
 The class hierarchy in memory, `validateByClass`, and multiple inheritance in the shape check.
 
+No breaking changes.
+
 - `@_linked/core/ontology/classHierarchy` (browser-safe): `superClassesOf(iri)` and
   `subClassesOf(iri)`, reflexive and transitive, over the shape tree's edges (a shape targeting C
   that extends one targeting D gives `C ⊑ D`) plus the ontology triples set with

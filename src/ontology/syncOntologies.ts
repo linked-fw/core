@@ -11,8 +11,11 @@
  * Skipped by a content hash per package, stored with the triples on a sync node
  * (`OntologySync`, one per package): an unchanged package writes nothing, and a changed one is
  * replaced by a diff — the triples it no longer lists are removed unless another package lists
- * them, the new ones are added. Triples a dataset held before a package's first sync are never
- * removed. Everything goes through Linked Queries, in the default graph.
+ * them, the new ones are added. Only triples a package's sync node lists are ever removed: a
+ * triple no stored node lists (written by hand, or by an earlier tool) stays, while one a
+ * package listed is removed when the package drops it, even if the dataset held it before the
+ * package's first sync. `force` inserts every listed triple again, repairing a dataset that lost
+ * them. Everything goes through Linked Queries, in the default graph.
  *
  * Runs at app boot and through the app's control route, before shape sync. Server only (the
  * hierarchy reader loads `n3`).
@@ -35,7 +38,11 @@ import {
 } from './registryData.js';
 
 export interface SyncOntologiesOptions {
-  /** Write every package, even when its stored hash matches. */
+  /**
+   * Write every package, even when its stored hash matches, as if nothing were stored: every
+   * triple the package lists is inserted again, and the stored lines it no longer lists are
+   * removed. Repairs a dataset whose triples were removed while its sync nodes stayed.
+   */
   force?: boolean;
   /** Only these packages (npm names). */
   packages?: string[];
@@ -99,13 +106,15 @@ async function runBounded(tasks: Array<() => Promise<unknown>>, limit: number): 
 
 /**
  * The per-class updates that turn the stored lines `old` into `next`, never removing a line in
- * `keep`: one update per subject class whose superclass set changes.
+ * `keep`: one update per subject class whose superclass set changes. With `addAll`, every line of
+ * `next` is added, also those already in `old` (the dataset may have lost them).
  */
 function diffUpdates(
   old: Set<string>,
   next: Set<string>,
   keep: Set<string>,
   ds?: IDataset,
+  addAll = false,
 ): Array<() => Promise<unknown>> {
   const bySubject = new Map<string, {add: string[]; remove: string[]}>();
   const entry = (s: string) => {
@@ -114,7 +123,7 @@ function diffUpdates(
     return e;
   };
   for (const line of next) {
-    if (old.has(line)) continue;
+    if (!addAll && old.has(line)) continue;
     const t = fromNTriplesLine(line);
     if (t) entry(t.s).add.push(t.o);
   }
@@ -207,7 +216,15 @@ export async function syncOntologies(
       result.skipped.push(name);
       continue;
     }
-    const updates = diffUpdates(previous?.lines ?? new Set(), next, listedElsewhere(name), ds);
+    // `force` adds against an empty stored set, so lines the dataset lost come back; it still
+    // removes the stored lines the package no longer lists.
+    const updates = diffUpdates(
+      previous?.lines ?? new Set(),
+      next,
+      listedElsewhere(name),
+      ds,
+      options?.force === true,
+    );
     await runBounded(updates, 8);
     await (OntologySync.upsert({
       packageName: name,

@@ -222,14 +222,16 @@ export interface ObjectPropertyShapeConfig extends PropertyShapeConfig {
    * - Deleting the subject (by id or in bulk) deletes its owned subtree (recursion other than a
    *   shape owning its own kind stops after `MAX_OWNED_RECURSION` re-entries): the values
    *   of its `contains` properties, the values their shapes own in turn, and the extra `contains`
-   *   values of registered sub-shapes (followed only from nodes of the sub-shape's class).
+   *   values of registered sub-shapes (followed only from nodes of the sub-shape's class, read
+   *   through the store's inferred types).
    * - Linking an existing node by `{id}` is class-checked: it is refused when the node is typed
-   *   and none of its types is the shape's class, a registered sub-shape's, or `sh:class`.
+   *   and none of its types (the store infers the superclasses of its asserted ones) is the
+   *   value shape's `targetClass` or `sh:class`.
    *
    * Shape sync also persists a generated SHACL shape for this property (at its property shape's
    * IRI plus `.singleOwner`, written by the declaring class only) that limits each value of the
-   * predicate to one owner of the declaring class or a registered sub-shape's class. It is not
-   * enforced on write.
+   * predicate to one owner of the declaring class (`sh:class`, so subclass instances count). It is
+   * not enforced on write.
    */
   contains?: boolean;
 }

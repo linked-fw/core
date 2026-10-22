@@ -209,8 +209,7 @@ sync persists one generated NodeShape (`src/shapes/singleOwnerConstraint.ts`):
   `rdf:type/rdfs:subClassOf*` and the store infers through the synced ontology hierarchy, so the
   instances of every subclass (`ex:Project ⊑ schema:Thing`) count. A plain reference from another
   class conforms. A declaring shape without `targetClass` gets no constraint; sync warns once per
-  shape. Versions before this one listed every registered sub-shape's class in an `sh:or`;
-  `SHAPE_HASH_VERSION` 2 rewrites the constraint at the next sync.
+  shape.
 - **Metamodel:** `PropertyShape.qualifiedValueShape` (value shape `NodeShape`),
   `PropertyShape.qualifiedMaxCount`, `NodeShape.class`, all in `src/utils/Package.ts`. The
   qualified shape is a blank node.
@@ -218,8 +217,7 @@ sync persists one generated NodeShape (`src/shapes/singleOwnerConstraint.ts`):
 The inverse path is an untyped blank node with exactly one triple. An IRI there would be read by
 every SHACL validator as a predicate path (SHACL §2.3.1), which is what versions before 2.30
 wrote (`sh:path <…/owners/inv>`, `<…/owners/inv> a core:PathNode`): Jena reported such a
-constraint as conforming whatever the data. Versions before this one wrote `sh:maxCount 1`
-(every subject counted); the next sync rewrites the constraint.
+constraint as conforming whatever the data.
 
 - **IRI:** `${propertyShapeIri}.singleOwner` (`singleOwnerShapeIri`), derived from the stable
   shape IRI, so every runtime computes the same one. Subclasses inherit the property but write no

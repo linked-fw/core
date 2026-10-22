@@ -176,8 +176,13 @@ orphanScope})` (`@_linked/core/ontology/syncOntologies`, server only) writes it:
 - an unchanged hash writes nothing (an unforked branch stays unforked); a changed package is
   updated one subject class at a time (`add` = new − old, `remove` = old − new minus the triples
   another package lists), the sync node last, so an interrupted sync is redone by the next one;
-- triples a dataset held before its first sync are never removed by it; packages no longer
-  registered are pruned only under `orphanScope: 'all'`.
+- `force` writes every package as if nothing were stored: it inserts every kept triple (so it
+  repairs a dataset whose triples were removed while its sync nodes stayed) and removes the stored
+  lines the package no longer lists;
+- only triples a sync node lists are ever removed: a triple no package listed stays, while one a
+  package listed goes when the package drops it (and no other package lists it), even if the
+  dataset held it before that package's first sync; packages no longer registered are pruned only
+  under `orphanScope: 'all'`.
 
 It runs at app boot and through the app's control route, before shape sync. Everything goes
 through Linked Queries, in the default graph.

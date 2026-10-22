@@ -1,6 +1,7 @@
 /*
  * The ontology sync on the inferring store: after a sync, a superclass select returns subclass
- * instances; a resync without the axiom removes them again. Plus the measurement of a first sync
+ * instances; a resync without the axiom removes them again; `force` restores an axiom removed
+ * behind the sync node's back. Plus the measurement of a first sync
  * of schema.org's class hierarchy (952 rdfs:subClassOf), and of the second, skipped one.
  */
 import {afterAll, beforeAll, expect, test} from '@jest/globals';
@@ -103,6 +104,31 @@ describeFuseki('ontology sync on the inferring store', () => {
     // The store holds no stray axiom.
     const ask = await executeSparqlQuery(`ASK { <${EX}Dog> <http://www.w3.org/2000/01/rdf-schema#subClassOf> ?c }`);
     expect(ask.boolean).toBe(false);
+  });
+
+  test('force repairs a dataset whose triples were removed while its sync node stayed', async () => {
+    const SUB = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
+    await executeSparqlUpdate(`INSERT DATA { <${EX}fido> a <${EX}Dog> ; <${EX}name> "Fido" . }`);
+    liveData = `@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n<${EX}Dog> rdfs:subClassOf <${EX}Animal> .\n`;
+    await syncOntologies(store, {packages: ['ontology-sync-live-test']});
+    expect(await animalNames()).toContain('Fido');
+
+    // The axiom goes, the sync node stays: a plain sync sees the stored hash and skips.
+    await executeSparqlUpdate(`DELETE DATA { <${EX}Dog> <${SUB}> <${EX}Animal> . }`);
+    expect(await animalNames()).not.toContain('Fido');
+    const plain = await syncOntologies(store, {packages: ['ontology-sync-live-test']});
+    expect(plain.skipped).toEqual(['ontology-sync-live-test']);
+    expect(await animalNames()).not.toContain('Fido');
+
+    const forced = await syncOntologies(store, {packages: ['ontology-sync-live-test'], force: true});
+    expect(forced.written).toEqual(['ontology-sync-live-test']);
+    expect(await animalNames()).toContain('Fido');
+    const ask = await executeSparqlQuery(`ASK { <${EX}Dog> <${SUB}> <${EX}Animal> }`);
+    expect(ask.boolean).toBe(true);
+
+    liveData = '';
+    await syncOntologies(store, {packages: ['ontology-sync-live-test']});
+    await executeSparqlUpdate(`DELETE WHERE { <${EX}fido> ?p ?o }`);
   });
 
   test("measure: the first sync of schema.org's hierarchy, and the second", async () => {

@@ -387,9 +387,7 @@ allowed. For `Thing.image`:
 
 `sh:class` follows `rdf:type/rdfs:subClassOf*`, so with the ontology hierarchy synced an
 `ex:Project ⊑ schema:Thing` subject counts as an owner. A declaring shape without `targetClass`
-gets no constraint (sync logs it once). Earlier versions wrote `sh:maxCount 1` (every subject
-counted) or listed every registered sub-shape's class in an `sh:or`; the next sync rewrites the
-constraint.
+gets no constraint (sync logs it once).
 
 The inverse path is stored as an untyped blank node, as is every complex `sh:path` shape sync
 writes (inverse, alternative, sequence, `*`/`+`/`?`): an IRI in `sh:path` is a predicate path to a
