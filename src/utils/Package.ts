@@ -298,6 +298,15 @@ export function getDefaultPageLimit(): number
   return packageState.defaultLimit;
 }
 
+/**
+ * Does nothing. Ontology data is synced into the store by the server's ontology sync
+ * (`syncOntologies`, `@_linked/core/ontology/syncOntologies`), and the store infers over it.
+ * Kept so servers built against earlier core versions keep loading.
+ *
+ * @deprecated Ontology data is synced by the server's ontology sync; this call does nothing.
+ */
+export function autoLoadOntologyData(_enabled?: boolean): void {}
+
 
 export function linkedPackage(
   packageName: string,
