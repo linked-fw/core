@@ -116,7 +116,7 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
   if (nodeShape.deactivated !== undefined) d.deactivated = nodeShape.deactivated;
   if (nodeShape.message && nodeShape.message.length) d.message = nodeShape.message;
   if (nodeShape.severity) d.severity = nodeShape.severity;
-  // sh:and / sh:xone are rdf:Lists of shapes, written blank like `sh:or` (singleOwnerConstraint).
+  // sh:and / sh:xone are rdf:Lists of shapes, written as blank nodes.
   if (nodeShape.andShapes && nodeShape.andShapes.length) d.andShapes = shapeList(nodeShape.andShapes);
   if (nodeShape.xoneShapes && nodeShape.xoneShapes.length) d.xoneShapes = shapeList(nodeShape.xoneShapes);
   if (nodeShape.notShape) d.notShape = nodeShape.notShape;

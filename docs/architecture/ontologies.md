@@ -67,7 +67,7 @@ An ontology without data passes no `loadData`. A `loadData` that resolves to any
 a list of strings (a package whose data is still JSON) is skipped with one warning naming the
 package.
 
-Nothing loads the data at registration (`autoLoadOntologyData`, which once did, is removed).
+Registration does not load the data.
 
 ## The registry
 
