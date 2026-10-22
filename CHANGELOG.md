@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.37.2
+
+### Patch Changes
+
+- [#367](https://github.com/linked-fw/core/pull/367) [`04b9532`](https://github.com/linked-fw/core/commit/04b953216dfb92812c55479c1f2758a2400b187a) Thanks [@flyon](https://github.com/flyon)! - Ship the ontology data files `core.ttl` and `npm.ttl`, which 2.37.0 and 2.37.1 left out.
+
 ## 2.37.1
 
 ### Patch Changes
