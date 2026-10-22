@@ -879,6 +879,19 @@ class inference and the ontology hierarchy synced"). Size: medium, **2 phases**.
   RDFS class inference and the hierarchy synced), `ontologies.md`.
 - Report 044, changeset major, this Outcome.
 
+### Outcome
+
+Landed on `store-inference`; record: [report 044](../reports/044-the-no-inference-workarounds-go.md).
+Two phases as above. Within the section: the walk cache keys on the hierarchy's version
+(`ontologyHierarchyVersion`, `@internal`); the metamodel terms were all registered since K1, what
+was missing was the typed accessor surface, now on `NodeShape`/`PropertyShape`; test fixtures
+that widened an inherited property (`Employee.name`'s path, nine `label` accessors on their own
+predicate) now keep it. Changeset `core-044-store-inference-required.md`, **minor** (the owner's
+decision, overriding the master's "major"). Full gate: `npm test` 2454 passed / 120 skipped, only
+`two-copies-built` failing (backlog 060); `test:fuseki` 317 passed; `typecheck`, `check:dts`
+clean. Consumers: schema, server-utils (`test:calls`), server, CN `typecheck:gate` and vitest
+green. Found: webid.email's `Passkey.label` (own predicate) throws at load (report 044).
+
 ### Gates
 
 Quick gate after each phase: the touched suites plus `npm run typecheck`. Full gate before
@@ -922,4 +935,8 @@ server-utils and schema tests against this core; CN `typecheck:gate` and vitest.
   - [x] Phase 1 — the class hierarchy in memory, `loadOntologyHierarchy`, called by the sync and the check
   - [x] Phase 2 — `validateByClass`
   - [x] Phase 3 — direction I with multiple inheritance (CN's `Dataset` case)
-- [ ] K3 — the workarounds go (report 044)
+- [x] K3 — the workarounds go (report 044)
+  - [x] Phase 1 — the workarounds go, the safety net, live fixtures load their hierarchy, one live
+    test per inference feature
+  - [x] Phase 2 — tighten-only errors, `autoLoadOntologyData` and xsd `Bytes` removed, typed
+    metamodel accessors, docs, report, changeset (minor, the owner's decision)
