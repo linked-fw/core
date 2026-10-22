@@ -67,8 +67,7 @@ An ontology without data passes no `loadData`. A `loadData` that resolves to any
 a list of strings (a package whose data is still JSON) is skipped with one warning naming the
 package.
 
-Nothing loads the data at registration. `autoLoadOntologyData` is a no-op kept until the next
-major.
+Nothing loads the data at registration (`autoLoadOntologyData`, which once did, is removed).
 
 ## The registry
 
@@ -150,7 +149,12 @@ SHACL validation stays the one that matters; this is for checking data before it
 ## The ontology sync
 
 The store infers `rdf:type` through `rdfs:subClassOf`, so each app dataset must hold the class
-hierarchy of every package the app registers. `syncOntologies(ds?, {force, packages,
+hierarchy of every package the app registers. Core relies on it (README, Store requirements):
+class-scoped reads and bulk mutations, the owned-link check (it accepts the value shape's class
+and `sh:class`, and a subclass instance through its inferred type), the owned walk's cycle hops
+(`?n a <C>`) and the single-owner constraint (one `sh:class`) carry no list of subclasses of
+their own. The owned walk also reads the in-memory hierarchy (`subClassesOf`) to find every shape
+its guards match. `syncOntologies(ds?, {force, packages,
 orphanScope})` (`@_linked/core/ontology/syncOntologies`, server only) writes it:
 
 - per package, the kept triples (its hierarchy) as sorted N-Triples lines, hashed with SHA-256

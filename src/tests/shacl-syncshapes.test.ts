@@ -39,7 +39,7 @@ class TUser extends Shape {
 class TOther extends Shape {
   static targetClass = ex('Other');
   @literalProperty({path: ex('label'), maxCount: 1})
-  get label(): string {
+  get caption(): string {
     return '';
   }
 }

@@ -415,8 +415,8 @@ const isFiniteNumber = (v: unknown) => typeof v === 'number' && Number.isFinite(
  * it from the declared datatype so it is written `"10:30:00"^^xsd:time` rather than as a plain
  * literal.
  *
- * Datatypes with no obvious JS counterpart (`xsd:duration`, `xsd:gYear`,
- * `xsd:Bytes`) are not checked.
+ * Datatypes with no obvious JS counterpart (`xsd:duration`, `xsd:gYear`, `xsd:base64Binary`)
+ * are not checked.
  */
 /**
  * `HH:MM:SS` with optional milliseconds and optional timezone.

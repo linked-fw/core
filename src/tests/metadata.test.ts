@@ -104,8 +104,8 @@ describe('Package & Shape Metadata Registration', () => {
       class TightMinBase extends Shape {
         static targetClass = type('TightMinBase');
 
-        @literalProperty({path: prop('label'), minCount: 2})
-        get label(): string {
+        @literalProperty({path: prop('code'), minCount: 2})
+        get code(): string {
           return '';
         }
       }
@@ -114,8 +114,8 @@ describe('Package & Shape Metadata Registration', () => {
       class TightMinChild extends TightMinBase {
         static targetClass = type('TightMinChild');
 
-        @literalProperty({path: prop('label'), minCount: 1})
-        get label(): string {
+        @literalProperty({path: prop('code'), minCount: 1})
+        get code(): string {
           return '';
         }
       }

@@ -10,11 +10,12 @@
  * super-shape, so a value the override admits must be one the base admits.
  *
  * This module holds the comparison. Its callers decide what a widening costs:
- * `registerPropertyShape` throws for the three original cases (minCount, maxCount, nodeKind) and
- * warns for the others; a shape that exists only as data is warned for every case (it is
- * registered from store data at runtime, which must never stop a running app); the shape check
- * (`checkShapeHierarchy`) reports them as `override-not-tightened` and adds the class
- * comparison, which needs the class hierarchy.
+ * `registerPropertyShape` throws for every case (a decorated shape is code, so the author hears it
+ * at load and `linked build` fails); a shape that exists only as data is warned for every case
+ * (it is registered from store data at runtime, which must never stop a running app); the shape
+ * check (`checkShapeHierarchy`) reports them as `override-not-tightened` and adds the class
+ * comparison, which needs the class hierarchy: an error for a decorated shape, a warning for a
+ * data-only one.
  *
  * @internal
  */
@@ -204,11 +205,11 @@ export function inheritedSamePath(
 
 const warned = new Set<string>();
 
-/** The warning text of an override that widens its inherited property. */
+/** The warning text of an override of a data-only shape that widens its inherited property. */
 export function overrideWarningText(shapeLabel: string, label: string, reason: string): string {
   return (
     `[linked] Override ${shapeLabel}.${label} widens the inherited property: ${reason} ` +
-    `This becomes an error in the next major.`
+    `The shape exists only as data, so it is registered anyway; fix the stored shape.`
   );
 }
 

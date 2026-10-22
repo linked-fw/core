@@ -30,8 +30,10 @@
  * - `mirror-undefined-term` (error): a package that mirrors a standard
  *   (`linkedPackage(name, {mirrors})`) uses an IRI in the mirrored namespace that its data does
  *   not define — a shape (any package) or an exported term uses it.
- * - `override-not-tightened` (warning): an override whose `sh:class` is not the inherited class
- *   or a subclass of it, and, for a shape known only as data, every other tighten-only case.
+ * - `override-not-tightened`: an override whose `sh:class` is not the inherited class or a
+ *   subclass of it (an error for a decorated shape), and, for a shape known only as data, that
+ *   and every other tighten-only case (warnings: data-only shapes are registered at runtime and
+ *   never refused; a decorated shape's other cases throw at registration).
  *
  * Server side when it reads the ontology data (the reader loads `n3`); a caller passing
  * `hierarchy` and with no mirror package registered never loads it.
@@ -398,7 +400,7 @@ export async function checkShapeHierarchy(options?: {
       for (const reason of reasons) {
         findings.push({
           kind: 'override-not-tightened',
-          severity: 'warning',
+          severity: dataOnly ? 'warning' : 'error',
           shape: shape.id,
           iri: property.id || undefined,
           message: `Override ${label(shape)}.${property.label} widens the inherited property: ${reason}`,

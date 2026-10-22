@@ -222,12 +222,12 @@ describe('borrowed-target-class', () => {
 });
 
 describe('override-not-tightened', () => {
-  test('a narrower class passes, an unrelated class warns', () => {
+  test('a narrower class passes, an unrelated class is an error for a decorated shape', () => {
     expect(about(findings, id(CatShelter))).toEqual([]);
     expect(about(findings, id(Garage))).toEqual([
       expect.objectContaining({
         kind: 'override-not-tightened',
-        severity: 'warning',
+        severity: 'error',
         message: expect.stringMatching(/Garage\.resident .*class .*Vehicle is not .*Animal/),
       }),
     ]);
@@ -251,10 +251,12 @@ describe('override-not-tightened', () => {
     const all = await checkShapeHierarchy({
       hierarchy: [...HIERARCHY, sub('LooseShelter', 'Shelter')],
     });
-    const messages = about(all, `${NS}shape/LooseShelter`).map((f) => `${f.kind} ${f.message}`);
-    expect(messages).toEqual([
+    const mine = about(all, `${NS}shape/LooseShelter`);
+    expect(mine.map((f) => `${f.kind} ${f.message}`)).toEqual([
       expect.stringMatching(/^override-not-tightened .*path cannot change/),
     ]);
+    // Data-only shapes are registered at runtime and never refused: a warning.
+    expect(mine.map((f) => f.severity)).toEqual(['warning']);
   });
 });
 

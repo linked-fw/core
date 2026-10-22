@@ -1,6 +1,5 @@
 import {afterEach, beforeEach, describe, expect, test} from '@jest/globals';
 import {
-  autoLoadOntologyData,
   getPackageMirrors,
   getRegisteredOntologies,
   linkedPackage,
@@ -57,16 +56,6 @@ describe('the ontology registry', () => {
     const own = getRegisteredOntologies().filter((r) => r.packageName === 'ontology-registry-test-idem');
     expect(own).toHaveLength(1);
     expect(own[0].load).toBe(second);
-  });
-
-  test('autoLoadOntologyData(true) loads nothing', () => {
-    let calls = 0;
-    const pkg = linkedPackage('ontology-registry-test-auto');
-    pkg.linkedOntology(terms, ns, 'auto', async () => (calls++, ['']), '../data/auto.ttl');
-    autoLoadOntologyData(true);
-    pkg.linkedOntology(terms, ns, 'auto2', async () => (calls++, ['']), '../data/auto2.ttl');
-    autoLoadOntologyData(false);
-    expect(calls).toBe(0);
   });
 
   test('linkedPackage records the namespaces a package mirrors', () => {

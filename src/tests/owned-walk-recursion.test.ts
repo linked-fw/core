@@ -98,7 +98,7 @@ class SCSub extends SC {
 class HPlain extends Shape {
   static targetClass = ex('HPlain');
   @literalProperty({path: ex('label'), maxCount: 1})
-  get label(): string {
+  get caption(): string {
     return null;
   }
 }

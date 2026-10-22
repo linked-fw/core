@@ -21,6 +21,23 @@ Linked gives you a schema-parameterized query language and SHACL-driven Shape cl
 npm install @_linked/core
 ```
 
+### Store requirements
+
+Core requires a SPARQL store with **RDFS class inference** over the stored `rdfs:subClassOf`
+triples, and the ontology hierarchy synced into each dataset:
+
+- **Inference:** a node stored as `ex:Project` must also answer as every superclass
+  (`schema:CreativeWork`, `schema:Thing`). Class-scoped selects, counts, asks and `EXISTS`, bulk
+  mutations (`deleteAll`, `deleteWhere`, `update().forAll()` / `.where()`), the owned-link class
+  check, the owned walk's cycle hops and the single-owner SHACL constraint all rely on it. With
+  Fuseki, run the inferring image `ghcr.io/linked-fw/fuseki` (its `tdb2` datasets infer; see
+  `@_linked/fuseki`). Without inference these silently miss or refuse subclass instances.
+- **The hierarchy:** `syncOntologies` (`@_linked/core/ontology/syncOntologies`) writes every
+  registered package's `rdfs:subClassOf` triples into the dataset; `@_linked/server` runs it at
+  boot. See [ontologies](./docs/architecture/ontologies.md).
+
+Only classes are inferred: `rdfs:subPropertyOf`, `rdfs:domain` and `rdfs:range` are not.
+
 ## Repository setup (contributors)
 
 After cloning this repository, run:
@@ -1070,9 +1087,19 @@ export class Employee extends Person {
 Override behavior:
 
 - `getUniquePropertyShapes(SomeShape.shape)` returns one property shape per label, with subclass overrides taking precedence.
-- Overrides must be tighten-only for `minCount`, `maxCount`, and `nodeKind` (widening is rejected at registration time).
-- If an override omits `minCount`, `maxCount`, or `nodeKind`, inherited values are kept.
-- Current scope: compatibility checks for `datatype`, `class`, and `pattern` are not enforced yet.
+- Overrides are tighten-only, and a widening throws at registration: `minCount` may not go down,
+  `maxCount` may not go up, `nodeKind` may not widen, `datatype` may not change, a value `shape`
+  must be the inherited one or a sub-shape of it, `contains` may not be dropped
+  (`contains: false`), and the path may not change. A new label whose path an inherited property
+  already declares is refused too (redeclare it under the inherited label).
+- A narrower `class` needs the class hierarchy, so the shape check (`checkShapeHierarchy`, run by
+  `linked build`) reports an override whose `class` is not the inherited class or a subclass of it
+  as an `override-not-tightened` error.
+- A shape known only as data (registered from a store at runtime) is never refused: every case is
+  a warning there, and an `override-not-tightened` warning in the shape check.
+- An override that omits `minCount`, `maxCount`, `nodeKind`, `datatype`, `class`, value `shape` or
+  `contains` keeps the inherited value.
+- `pattern` and the other value constraints are not compared.
 
 ## Dynamic Query Building
 

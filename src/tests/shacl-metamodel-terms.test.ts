@@ -178,3 +178,35 @@ describe('a data-only shape keeps them across the wire', () => {
     expect(fromWire(toWire(registered))).toEqual(registered);
   });
 });
+
+describe('typed metamodel accessors', () => {
+  const labelsOf = (shape: {shape: NodeShapeData}) =>
+    (shape.shape.propertyShapes ?? []).map((ps) => ps.label);
+
+  test('every accessor of NodeShape and PropertyShape is a registered metamodel property', () => {
+    const accessors = (cls: object) =>
+      Object.getOwnPropertyNames((cls as {prototype: object}).prototype).filter((k) => k !== 'constructor');
+    const nodeLabels = new Set(labelsOf(NodeShape));
+    const propertyLabels = new Set(labelsOf(PropertyShape));
+    expect(accessors(NodeShape).filter((k) => !nodeLabels.has(k) && !getPropertyShape(NodeShape.shape, k, true))).toEqual([]);
+    expect(accessors(PropertyShape).filter((k) => !propertyLabels.has(k) && !getPropertyShape(PropertyShape.shape, k, true))).toEqual([]);
+    // Owner answer 2's terms are typed.
+    for (const k of ['name', 'targetSubjectsOf', 'deactivated', 'message', 'severity', 'andShapes', 'notShape', 'xoneShapes']) {
+      expect(accessors(NodeShape)).toContain(k);
+    }
+    for (const k of ['flags', 'languageIn', 'uniqueLang', 'qualifiedMinCount', 'deactivated', 'message', 'severity', 'properties']) {
+      expect(accessors(PropertyShape)).toContain(k);
+    }
+  });
+
+  test('a select reads them typed', () => {
+    expect(() =>
+      NodeShape.select((s) => [
+        s.name,
+        s.deactivated,
+        s.targetSubjectsOf,
+        s.properties.select((p) => [p.flags, p.uniqueLang, p.qualifiedMinCount, p.group.order]),
+      ]).toJSON(),
+    ).not.toThrow();
+  });
+});

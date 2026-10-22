@@ -86,8 +86,9 @@ asserts ownership. One UNION branch per path from the root.
   a cycle would not). Only simple paths of a sharer are checked: a plain use of the predicate
   inside a sharer's complex path does not block. A sub-shape redeclaring an inherited `contains` property without
   `contains` inherits it (an override inherits every constraint it does not restate); declaring
-  `contains: false` warns (tighten-only, an error in the next major) and still does not remove the
-  inherited ownership (`getPropertyShapes` keeps both).
+  `contains: false` is refused at registration (tighten-only). A shape known only as data that
+  drops `contains` is warned and does not remove the inherited ownership (`getPropertyShapes`
+  keeps both).
 - **`rdf:nil`** is never deleted: every walk node and the replaced-value self-delete carry
   `FILTER(!sameTerm(?n, rdf:nil))`.
 - **Branch count:** no cap; lowering warns once per root shape above `OWNED_BRANCH_WARNING` (64)

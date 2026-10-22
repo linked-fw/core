@@ -1,8 +1,7 @@
 /*
  * Tighten-only: an override (a property a sub-shape redeclares under an inherited label) may only
- * narrow the inherited property. The three original cases still throw; datatype, value shape,
- * contains and path warn (once); omitted constraints are inherited; data-only shapes warn for
- * every case.
+ * narrow the inherited property. Every widening of a decorated shape throws at registration;
+ * omitted constraints are inherited; data-only shapes warn for every case.
  */
 import {afterEach, beforeEach, describe, expect, jest, test} from '@jest/globals';
 import {linkedPackage} from '../utils/Package';
@@ -52,7 +51,7 @@ class TUnrelated extends Shape {
   static targetClass = ex('TUnrelated');
 }
 
-describe('the three original cases still throw', () => {
+describe('every widening throws at registration', () => {
   test('minCount lowered, maxCount raised, nodeKind widened', () => {
     expect(() => {
       @linkedShape
@@ -75,36 +74,32 @@ describe('the three original cases still throw', () => {
       return TKind;
     }).toThrow(/nodeKind cannot be widened/);
   });
-});
 
-describe('the new cases warn once', () => {
   test('datatype changed', () => {
-    @linkedShape
-    class TDatatype extends TBase {
-      @literalProperty({path: ex('count'), datatype: xsd.string})
-      get count(): number {
-        return 0;
+    expect(() => {
+      @linkedShape
+      class TDatatype extends TBase {
+        @literalProperty({path: ex('count'), datatype: xsd.string})
+        get count(): number {
+          return 0;
+        }
       }
-    }
-    expect(warnings()).toEqual([
-      expect.stringMatching(
-        /^\[linked\] Override TDatatype\.count widens the inherited property: datatype cannot change .*This becomes an error in the next major\.$/,
-      ),
-    ]);
-    expect(TDatatype).toBeDefined();
+      return TDatatype;
+    }).toThrow(/^Invalid override for TDatatype\.count: datatype cannot change /);
+    expect(warnings()).toEqual([]);
   });
 
   test('value shape that is not a sub-shape', () => {
-    @linkedShape
-    class TValue extends TBase {
-      @objectProperty({path: ex('part'), shape: TUnrelated, contains: true})
-      get part(): TBase {
-        return null;
+    expect(() => {
+      @linkedShape
+      class TValue extends TBase {
+        @objectProperty({path: ex('part'), shape: TUnrelated, contains: true})
+        get part(): TBase {
+          return null;
+        }
       }
-    }
-    expect(warnings()).toHaveLength(1);
-    expect(warnings()[0]).toMatch(/TValue\.part .*value shape .*TUnrelated is not .*TBase or a sub-shape/);
-    expect(TValue).toBeDefined();
+      return TValue;
+    }).toThrow(/TValue\.part: value shape .*TUnrelated is not .*TBase or a sub-shape/);
   });
 
   test('a sub-shape value shape passes', () => {
@@ -128,60 +123,56 @@ describe('the new cases warn once', () => {
         return null;
       }
     }
-    expect(warnings()).toEqual([]);
-    @linkedShape
-    class TLater extends Shape {
-      @literalProperty({path: ex('note')})
-      get note(): string {
-        return '';
+    expect(TDeferred).toBeDefined();
+    expect(() => {
+      @linkedShape
+      class TLater extends Shape {
+        @literalProperty({path: ex('note')})
+        get note(): string {
+          return '';
+        }
       }
-    }
-    expect(warnings()).toHaveLength(1);
-    expect(warnings()[0]).toMatch(/TDeferred\.part .*value shape .*TLater is not/);
-    expect([TDeferred, TLater]).toHaveLength(2);
+      return TLater;
+    }).toThrow(/TDeferred\.part: value shape .*TLater is not/);
   });
 
   test('contains: false drops ownership', () => {
-    @linkedShape
-    class TNoContains extends TBase {
-      @objectProperty({path: ex('part'), shape: TBase, contains: false})
-      get part(): TBase {
-        return null;
+    expect(() => {
+      @linkedShape
+      class TNoContains extends TBase {
+        @objectProperty({path: ex('part'), shape: TBase, contains: false})
+        get part(): TBase {
+          return null;
+        }
       }
-    }
-    expect(warnings()).toEqual([expect.stringMatching(/TNoContains\.part .*contains cannot be dropped/)]);
-    expect(getPropertyShape(TNoContains.shape, 'part')?.contains).toBeUndefined();
+      return TNoContains;
+    }).toThrow(/TNoContains\.part: contains cannot be dropped/);
   });
 
-  test('a changed path, and an inherited path under a new label', () => {
-    @linkedShape
-    class TPath extends TBase {
-      @literalProperty({path: ex('otherCount'), maxCount: 1})
-      get count(): number {
-        return 0;
+  test('a changed path', () => {
+    expect(() => {
+      @linkedShape
+      class TPath extends TBase {
+        @literalProperty({path: ex('otherCount'), maxCount: 1})
+        get count(): number {
+          return 0;
+        }
       }
-      @literalProperty({path: ex('count')})
-      get amount(): number {
-        return 0;
-      }
-    }
-    expect(warnings()).toHaveLength(2);
-    expect(warnings()[0]).toMatch(/TPath\.count .*path cannot change/);
-    expect(warnings()[1]).toMatch(/TPath\.amount .*already declared as the inherited property 'count'/);
-    expect(TPath).toBeDefined();
+      return TPath;
+    }).toThrow(/TPath\.count: path cannot change/);
   });
 
-  test('the same warning is given once per shape and property', () => {
-    @linkedShape
-    class TOnce extends TBase {
-      @literalProperty({path: ex('count'), datatype: xsd.string})
-      get count(): number {
-        return 0;
+  test('an inherited path under a new label', () => {
+    expect(() => {
+      @linkedShape
+      class TPathLabel extends TBase {
+        @literalProperty({path: ex('count')})
+        get amount(): number {
+          return 0;
+        }
       }
-    }
-    // Re-registering the property (a module evaluated twice) does not warn again.
-    linkedShape(class TOnce2 extends TOnce {});
-    expect(warnings().filter((w) => w.includes('TOnce.count'))).toHaveLength(1);
+      return TPathLabel;
+    }).toThrow(/TPathLabel\.amount: the path .* is already declared as the inherited property 'count'/);
   });
 
   test('a differing class is left to the shape check', () => {

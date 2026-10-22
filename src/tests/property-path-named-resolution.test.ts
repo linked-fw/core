@@ -64,7 +64,7 @@ class NamedLeafShape extends Shape {
   }
 
   @literalProperty({path: prop('label'), maxCount: 1})
-  get label(): string {
+  get caption(): string {
     return '';
   }
 }
@@ -156,7 +156,7 @@ describe('named structured-path resolution → SPARQL (fallback resolver)', () =
   });
 
   test('(b) sequence [a,b] emits <a>/<b>', async () => {
-    const sparql = await fallbackSelect(() => OrgShape.select((p) => p.memberRoles.label));
+    const sparql = await fallbackSelect(() => OrgShape.select((p) => p.memberRoles.caption));
     expect(sparql).toContain(`<${P_member}>/<${P_role}>`);
   });
 
@@ -235,7 +235,7 @@ describeFuseki('named structured-path resolution — execution (Fuseki)', () => 
   });
 
   test('(b) sequence returns the two-hop rows', async () => {
-    const sparql = await fallbackSelect(() => OrgShape.select((p) => p.memberRoles.label));
+    const sparql = await fallbackSelect(() => OrgShape.select((p) => p.memberRoles.caption));
     const values = allLiteralValues(await executeSparqlQuery(sparql));
     expect(values).toContain('Admin');
   });

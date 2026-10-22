@@ -77,8 +77,8 @@ class TBag extends Shape {
 @linkedShape
 class TPlainCell extends Shape {
   static targetClass = ex('TPlainCell');
-  @objectProperty({path: ex('label'), maxCount: 1})
-  get label(): string {
+  @literalProperty({path: ex('label'), maxCount: 1})
+  get caption(): string {
     return null;
   }
 }
@@ -400,7 +400,7 @@ describe('owned values: keep list, value-shape rule and subject delete', () => {
 
   test('nested create with the current id is a full rewrite', () => {
     const sparql = updateSparqlOf(
-      UpdateBuilder.from(TCard).for(`${C}card1`).set({holds: {id: `${C}plain1`, label: 'x'}} as any),
+      UpdateBuilder.from(TCard).for(`${C}card1`).set({holds: {id: `${C}plain1`, caption: 'x'}} as any),
     );
     expect(sparql).not.toContain('NOT IN');
     expect(deleteBlockOf(sparql)).toMatch(/\?old_holds \?\w+ \?\w+ \./);

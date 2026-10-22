@@ -67,7 +67,6 @@ const packageState = sharedState('@_linked/core', 'Package', () => ({
   ontologyRegistry: new Map<string, OntologyRegistration>(),
   /** Package name → the namespaces it mirrors (`linkedPackage(name, {mirrors})`). */
   packageMirrors: new Map<string, string[]>(),
-  autoLoadOntologyData: false,
   defaultLimit: 12,
   /** One setter per copy of this module, keeping that copy's `DEFAULT_LIMIT` binding in step. */
   limitBindings: new Set<(limit: number) => void>(),
@@ -297,18 +296,6 @@ export function setDefaultPageLimit(limit: number)
 export function getDefaultPageLimit(): number
 {
   return packageState.defaultLimit;
-}
-
-/**
- * No effect. Ontology data is no longer loaded into the process: the class hierarchy of every
- * registered ontology is synced into the store by `syncOntologies`
- * (`@_linked/core/ontology/syncOntologies`), and the store infers over it.
- *
- * @deprecated Removed in the next major.
- */
-export function autoLoadOntologyData(value: boolean)
-{
-  packageState.autoLoadOntologyData = value;
 }
 
 

@@ -1179,7 +1179,7 @@ SELECT DISTINCT ?a0 ?a0_name ?a0_bestFriend ?a0_department ?a0_hobby ?a0_nickNam
 WHERE {
   ?a0 rdf:type <${ET}> .
   OPTIONAL {
-    ?a0 <${PROP}employeeName> ?a0_name .
+    ?a0 <${PROP}name> ?a0_name .
   }
   OPTIONAL {
     ?a0 <${PROP}bestFriend> ?a0_bestFriend .
