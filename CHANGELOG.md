@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.37.1
+
+### Patch Changes
+
+- [#365](https://github.com/linked-fw/core/pull/365) [`121b2f9`](https://github.com/linked-fw/core/commit/121b2f9e33026107520eef9f915ad141e91fe580) Thanks [@flyon](https://github.com/flyon)! - Restore `autoLoadOntologyData` as a deprecated no-op so servers built against earlier core versions keep loading.
+
 ## 2.37.0
 
 ### Minor Changes
