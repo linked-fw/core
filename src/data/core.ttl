@@ -11,7 +11,7 @@ core:
     a owl:Ontology ;
     dcterms:description "The framework vocabulary of @_linked/core: package and shape metadata, containment, display hints and sync records."@en ;
     dcterms:title "Linked core"@en ;
-    owl:versionInfo "2.36.4" .
+    owl:versionInfo "2.37.0" .
 
 core:OntologySync
     a owl:Class ;
