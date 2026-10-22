@@ -1,5 +1,139 @@
 # Changelog
 
+## 2.37.0
+
+### Minor Changes
+
+- [#363](https://github.com/linked-fw/core/pull/363) [`96eb886`](https://github.com/linked-fw/core/commit/96eb8864198fa0c5b2c47ee3d601f9b25f7491da) Thanks [@flyon](https://github.com/flyon)! - Ontology data as Turtle, ontology sync, the shape check, tighten-only overrides, SHACL metamodel
+  terms.
+  
+  Breaking changes:
+  
+  - Ontology data is Turtle only. A package's `loadData()` returns `string[]` (the Turtle text of
+    each data file); JSON(-LD) ontology data is no longer loaded: it is skipped with one warning.
+  - `autoLoadOntologyData` is removed. Nothing loads ontology data at registration; the ontology
+    sync writes the hierarchy into the store.
+  - `PropertyShapeData.group` is a `NodeReferenceValue` (`sh:group` is an IRI to a
+    `PropertyGroup`), no longer a literal.
+  - Core's built-in shapes are now eight (`OntologySync` and `PropertyGroup` join them); code that
+    counts or lists them sees two more.
+  
+  Added:
+  
+  - `@_linked/core/ontology/loadOntologyFiles`: a package's `loadData` reads its Turtle data
+    (`src/data/<name>.ttl`) relative to the ontology module. `linkedOntology` records every
+    ontology in a registry (`getRegisteredOntologies()`); `loadData` is optional.
+  - `@_linked/core/ontology/hierarchy`: `hierarchyFromTurtle`, `subClassClosure`,
+    `definedTermsFromTurtle` (server only, `n3` loaded on demand).
+  - `@_linked/core/ontology/syncOntologies`: writes each package's `rdfs:subClassOf` triples into a
+    dataset, skipped by a content hash stored on a built-in `OntologySync` node per package.
+    `force` re-inserts every listed triple, repairing a dataset that lost them.
+  - `@_linked/core/shapes/checkShapeHierarchy`: shape `extends` against the class hierarchy,
+    borrowed target classes, mirror packages (`linkedPackage(name, {mirrors})`) and overrides that
+    widen the inherited class. `@linkedShape({sharedTargetClass: true})` exempts a shape that shares
+    its class on purpose (`PathList`).
+  - Tighten-only: an override inherits the datatype, class, value shape and `contains` it does not
+    restate, so its generated SHACL gains them. A decorated override that widens what it inherits
+    throws at registration (the cases are listed with the store requirement); shapes known only as
+    data warn for every case.
+  - The SHACL metamodel gains `sh:name`, `sh:targetSubjectsOf`, `sh:deactivated`, `sh:message`,
+    `sh:severity`, `sh:and`/`sh:xone`/`sh:not` (node shapes), `sh:flags`, `sh:languageIn`,
+    `sh:uniqueLang`, `sh:qualifiedMinCount` and nested `sh:property` (property shapes), and the
+    built-in `PropertyGroup`.
+
+- [#363](https://github.com/linked-fw/core/pull/363) [`def5cd9`](https://github.com/linked-fw/core/commit/def5cd98b5b7441e121cfd1f8863161f7d5b4de5) Thanks [@flyon](https://github.com/flyon)! - The class hierarchy in memory, `validateByClass`, and multiple inheritance in the shape check.
+  
+  No breaking changes.
+  
+  - `@_linked/core/ontology/classHierarchy` (browser-safe): `superClassesOf(iri)` and
+    `subClassesOf(iri)`, reflexive and transitive, over the shape tree's edges (a shape targeting C
+    that extends one targeting D gives `C ⊑ D`) plus the ontology triples set with
+    `setOntologyHierarchy(triples)`.
+  - `@_linked/core/ontology/hierarchy`: `loadOntologyHierarchy()` parses every registered package's
+    ontology data and sets it. `syncOntologies` sets it from its own parse; `checkShapeHierarchy()`
+    without a `hierarchy` loads it.
+  - `validateByClass(data, {types?, mode?, maxDepth?})`: validates a node against every registered
+    shape that targets one of its types or a superclass of one, the in-process counterpart of SHACL
+    class targeting. No known type, or no shape, validates nothing and says so (`sh:Info`).
+  - The shape check's `subclass-without-extends`: when a shape already extends an in-scope shape of
+    a superclass, a superclass shape off that extends chain (multiple inheritance) is a warning, not
+    an error.
+
+- [#363](https://github.com/linked-fw/core/pull/363) [`114c938`](https://github.com/linked-fw/core/commit/114c938cf9dd06fd9ee72bc401519aff74229e16) Thanks [@flyon](https://github.com/flyon)! - Core requires a store with RDFS class inference and the ontology hierarchy synced
+  (`syncOntologies`; with Fuseki, the inferring image `ghcr.io/linked-fw/fuseki`).
+  
+  Breaking changes:
+  
+  - The store requirement: class-scoped reads and bulk mutations, the owned-link check, the owned
+    walk and the single-owner constraint rely on the store inferring `rdf:type` through
+    `rdfs:subClassOf`. On a store without inference, subclass instances are no longer found
+    through their superclass, and a link to one is refused.
+  - Tighten-only overrides throw (see "New errors" below), and a `label` accessor on any predicate
+    other than `rdfs:label` throws at load.
+  - `SHAPE_HASH_VERSION` 2: the next shape sync rewrites every stored shape once.
+  - xsd `Bytes` is removed (not an XSD term).
+  
+  Changes:
+  
+  - The owned-link check accepts the value shape's `targetClass` and the property's `sh:class`; a
+    subclass instance passes through its inferred type (registered sub-shapes are no longer listed).
+  - The generated single-owner constraint names one `sh:class` (the declaring class) instead of an
+    `sh:or` of every registered sub-shape's class. `SHAPE_HASH_VERSION` 2: the next shape sync
+    rewrites every stored shape once.
+  - Owned-walk cycle hops are typed `?n a <C>`. A sub-shape's guarded edge is not followed when a
+    shape on a subclass of its class (from the in-memory hierarchy) holds the predicate as a plain
+    property; an edge already followed under a more general guard is not repeated.
+  - Bulk mutations are documented as polymorphic, like select and count.
+  - New errors (tighten-only): a decorated override that changes its `datatype`, names a value
+    `shape` that is not the inherited one or a sub-shape of it, declares `contains: false` over an
+    owning property, or changes its path, and a new label redeclaring an inherited path, now throw
+    at registration. The shape check's `override-not-tightened` (a class that is not
+    the inherited class or a subclass of it) is an error for a decorated shape; data-only shapes
+    stay warnings. Every shape inherits the base `Shape`'s `label` (`rdfs:label`), so a `label`
+    accessor on any other predicate is a changed path and now throws at load: use `rdfs:label`, or
+    name the accessor differently.
+  - A refused override found while another shape registers (its value shape, named by
+    `[package, name]`) no longer leaves that shape half-registered: every pending callback runs and
+    the first error is thrown at the end.
+  - `NodeShape` and `PropertyShape` carry typed accessors for every metamodel property
+    (`sh:name`, `sh:targetSubjectsOf`, `sh:deactivated`, `sh:message`, `sh:severity`, …), so a
+    select over them type-checks.
+
+- [#363](https://github.com/linked-fw/core/pull/363) [`d0624fc`](https://github.com/linked-fw/core/commit/d0624fcdc90a6df1e3b02ddbd69e906810a9ca5b) Thanks [@flyon](https://github.com/flyon)! - `@_linked/core/ontology/registerInstalled` (server only): `registerInstalledOntologies(packageDirs)`
+  imports `<dir>/lib/esm/ontologies/*.register.js` of each package directory and returns the names
+  of the packages it registered, so an app that deep-imports a package's shape files still syncs and
+  checks that package's ontology data. A directory without register modules is skipped silently; a
+  register module that throws is warned about and its package left out.
+  
+  No breaking changes.
+
+- [#363](https://github.com/linked-fw/core/pull/363) [`fc93c9f`](https://github.com/linked-fw/core/commit/fc93c9f5d7fce75b2d3867070f7830b3d392fec3) Thanks [@flyon](https://github.com/flyon)! - Lists can page by subject. `.orderBy((p) => p)` (already emitted as `ORDER BY ?subject`) now
+  survives the DSL-JSON wire: the subject sorts as the empty path `{"": "ASC"}`, which `fromJSON`
+  used to reject. A node in a query gains `str()` (SPARQL `STR`), so a page continues after the last
+  IRI it returned: `.where((p) => p.str().gt(lastId)).orderBy((p) => p).limit(n)`. `str` joins the
+  reserved query names (a property labelled `str` is warned about at registration).
+  
+  Breaking change: a property labelled `str` is no longer reachable through the query builder
+  (`str` answers the DSL method); rename its accessor.
+
+- [#363](https://github.com/linked-fw/core/pull/363) [`4730d09`](https://github.com/linked-fw/core/commit/4730d090bcfd9b79984d7186d5a793d2b8edff4d) Thanks [@flyon](https://github.com/flyon)! - `registerInstalledOntologies(packageDirs, options?)` takes `options.importModule`: a package
+  directory without built register modules (`lib/esm/ontologies/*.register.js`) but with
+  `src/ontologies/*.register.ts` (a workspace package in dev) registers through it, e.g. Vite's
+  `ssrLoadModule`. Without the option such a directory is skipped, as before.
+  
+  No breaking changes.
+
+- [#363](https://github.com/linked-fw/core/pull/363) [`45f7b56`](https://github.com/linked-fw/core/commit/45f7b56304259862c1b9efc2c81da05de782aa46) Thanks [@flyon](https://github.com/flyon)! - Ontology data: labels, descriptions and types for every term.
+  
+  - Core registers its own vocabulary (`core:`, `https://linked.cm/ont/core/`) and `npm:`
+    (`http://purl.org/on/npm/`) with `linkedOntology`, from `ontologies/linked-core.register` and
+    `ontologies/npm.register`, which core's index imports. Each module exports `dataFiles` and
+    `loadData`.
+  - `src/data/core.ttl` (20 terms) and `src/data/npm.ttl` (2 terms), copied into `lib/esm/data/`:
+    the ontology node (`dcterms:title`, `dcterms:description`, `owl:versionInfo`) and every term
+    typed (`owl:Class`, `owl:ObjectProperty` or `owl:DatatypeProperty`) with an English label and
+    comment, in the deterministic Turtle form. The ontology sync now records `@_linked/core`.
+
 ## 2.36.4
 
 ### Patch Changes
