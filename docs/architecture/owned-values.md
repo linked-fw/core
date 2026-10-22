@@ -76,7 +76,10 @@ asserts ownership. One UNION branch per path from the root.
   it declares the predicate as a plain property (following it would delete that shape's
   references) — warned once with the cause. The subclasses come from the in-memory hierarchy
   (`subClassesOf`: the shape tree plus the registered ontology data once loaded), a safety net
-  for a shape on an ontology subclass that does not extend the guarded shape. A
+  for a shape on an ontology subclass that does not extend the guarded shape. The walk trusts
+  that the store infers every edge of that hierarchy: on a dataset without the synced hierarchy,
+  or for a data-only shape whose `extends` the ontology does not state, a skipped (covered) edge
+  or a cycle hop leaves owned values behind as orphans (never deletes a reference). A
   sharer without the predicate does not block it. A sub-shape adding nothing beyond its direct
   super-shape with its class or none (a profile, a data-only copy) is skipped silently. A profile
   that keeps its parent's class declares `@linkedShape({sharedTargetClass: true})`, so the shape

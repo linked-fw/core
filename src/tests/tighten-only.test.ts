@@ -9,6 +9,7 @@ import {Shape} from '../shapes/Shape';
 import {literalProperty, objectProperty} from '../shapes/SHACL';
 import {getPropertyShape, type NodeShapeData} from '../shapes/nodeShapeData';
 import {registerRuntimeShape} from '../shapes/registerRuntimeShape';
+import {getAllNodeShapes} from '../utils/ShapeClass';
 import {xsd} from '../ontologies/xsd';
 import {shacl} from '../ontologies/shacl';
 
@@ -124,16 +125,59 @@ describe('every widening throws at registration', () => {
       }
     }
     expect(TDeferred).toBeDefined();
+    // A later override waiting on TLater too, which narrows correctly.
+    @linkedShape
+    class TDeferredOk extends TBase {
+      @objectProperty({path: ex('part'), shape: ['tighten-only-test', 'TLater'], contains: true})
+      get part(): TBase {
+        return null;
+      }
+    }
+    let later: typeof Shape | undefined;
     expect(() => {
       @linkedShape
-      class TLater extends Shape {
+      class TLater extends TBase {
+        static targetClass = ex('TLater');
         @literalProperty({path: ex('note')})
         get note(): string {
           return '';
         }
       }
-      return TLater;
-    }).toThrow(/TDeferred\.part: value shape .*TLater is not/);
+      later = TLater;
+    }).not.toThrow();
+    // TLater extends TBase, so both narrow: nothing thrown, both connected.
+    expect(getPropertyShape(TDeferredOk.shape, 'part')?.valueShape).toEqual({id: later!.shape.id});
+
+    @linkedShape
+    class TDeferredBad extends TBase {
+      @objectProperty({path: ex('part'), shape: ['tighten-only-test', 'TLaterBad'], contains: true})
+      get part(): TBase {
+        return null;
+      }
+    }
+    @linkedShape
+    class TDeferredBadOk extends TBase {
+      @objectProperty({path: ex('part'), shape: ['tighten-only-test', 'TLaterBad']})
+      get part(): TBase {
+        return null;
+      }
+    }
+    expect(() => {
+      @linkedShape
+      class TLaterBad extends Shape {
+        static targetClass = ex('TLaterBad');
+        @literalProperty({path: ex('note')})
+        get note(): string {
+          return '';
+        }
+      }
+      return TLaterBad;
+    }).toThrow(/TDeferredBad\.part: value shape .*TLaterBad is not/);
+    // The value shape that triggered the comparison still registers completely.
+    const laterBad = [...getAllNodeShapes().values()].find((n) => n.label === 'TLaterBad');
+    expect(laterBad?.targetClass).toEqual(ex('TLaterBad'));
+    expect(getPropertyShape(TDeferredBad.shape, 'part')?.valueShape).toEqual({id: laterBad?.id});
+    expect(TDeferredBadOk).toBeDefined();
   });
 
   test('contains: false drops ownership', () => {

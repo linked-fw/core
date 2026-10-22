@@ -281,6 +281,7 @@ describe('shapeSyncHash', () => {
     const digest = createHash('sha256').update(canonical, 'utf8').digest('hex');
     const pinned: Record<number, string> = {
       1: '39faa2449c092aca0bd6d3f11ac0b85a898b67491c3611f10903206bb6653800',
+      2: '2bba76066dff5c588e767062cf02bd7c4a0c5ed368633f8ea667b91f83708338',
     };
     if (pinned[SHAPE_HASH_VERSION]) expect(digest).toBe(pinned[SHAPE_HASH_VERSION]);
     expect(shapeSyncHash(data(), 'https://s/T')).toBe(digest);

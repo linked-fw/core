@@ -19,7 +19,12 @@ Core requires a store with RDFS class inference and the ontology hierarchy synce
   owning property, or changes its path, and a new label redeclaring an inherited path, now throw
   at registration (they warned). The shape check's `override-not-tightened` (a class that is not
   the inherited class or a subclass of it) is an error for a decorated shape; data-only shapes
-  stay warnings.
+  stay warnings. Every shape inherits the base `Shape`'s `label` (`rdfs:label`), so a `label`
+  accessor on any other predicate is a changed path and now throws at load: use `rdfs:label`, or
+  name the accessor differently.
+- A refused override found while another shape registers (its value shape, named by
+  `[package, name]`) no longer leaves that shape half-registered: every pending callback runs and
+  the first error is thrown at the end.
 - Removed: `autoLoadOntologyData` (a no-op since the ontology sync); xsd `Bytes` (not an XSD term).
 - `NodeShape` and `PropertyShape` carry typed accessors for every metamodel property
   (`sh:name`, `sh:targetSubjectsOf`, `sh:deactivated`, `sh:message`, `sh:severity`, …), so a

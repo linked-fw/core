@@ -2897,7 +2897,7 @@ function ownedEdges(shapeId: string): OwnedEdge[] {
       // that super-shape is this walk's shape itself (no other entry covers it, so warn).
       const sameKind = !sub.targetClass?.id || sub.targetClass.id === parent?.targetClass?.id;
       if (sameKind && inherited.has(ps.id) && parent?.id !== shapeId) continue;
-      const key = `${sub.id} ${ps.id}`;
+      const key = `${sub.id} ${ps.id} ${reason}`;
       if (warnedUnguardable.has(key)) continue;
       warnedUnguardable.add(key);
       console.warn(

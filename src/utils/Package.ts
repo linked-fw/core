@@ -385,6 +385,7 @@ export function linkedPackage(
       throw new Error('Constructor is undefined, skipping registration: '+constructor?.toString().substring(0,100)+' '+JSON.stringify(options));
       return;
     }
+    const callbackErrors: unknown[] = [];
     // add the component class of this module to the global tree
     registerPackageExport(constructor);
 
@@ -469,17 +470,22 @@ export function linkedPackage(
       }
       
 
-      // run deferred callbacks from property decorators
+      // run deferred callbacks from property decorators. A callback that throws (a refused
+      // override, possibly another shape's, compared once this one registered) does not stop
+      // the others or the rest of this registration: the first error is rethrown at the end.
       if (constructor['shapeCallbacks'])
       {
-        constructor['shapeCallbacks'].forEach((callback) => {
-          callback(nodeShape);
-        });
+        const run = (callback: (shape: NodeShapeData) => void) => {
+          try {
+            callback(nodeShape);
+          } catch (error) {
+            callbackErrors.push(error);
+          }
+        };
+        constructor['shapeCallbacks'].forEach(run);
         const nodeCallbacks = getAndClearCallbacks(nodeShape.id);
         if(nodeCallbacks) {
-          nodeCallbacks.forEach((callback) => {
-            callback(nodeShape);
-          });
+          nodeCallbacks.forEach(run);
         }
         delete constructor['shapeCallbacks'];
       }
@@ -493,6 +499,7 @@ export function linkedPackage(
     {
       (constructor.shape as NodeShapeData).targetClass = constructor.targetClass;
     }
+    if (callbackErrors.length > 0) throw callbackErrors[0];
 
     // return the original class without modifications
     // return constructor;

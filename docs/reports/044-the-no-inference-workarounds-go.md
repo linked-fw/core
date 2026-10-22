@@ -51,7 +51,10 @@ stored shape once.
 widening of a decorated override throws at registration: minCount, maxCount, nodeKind (as before),
 datatype, value shape (also when compared later, for a `[package, name]` value shape registered
 after the override), `contains: false`, a changed path, and a new label redeclaring an inherited
-path. Data-only shapes stay warnings (the text no longer promises an error). The shape check's
+path. A refused override found while another shape registers (the deferred value-shape
+comparison runs as that shape's callback) no longer leaves that shape half-registered:
+`applyLinkedShape` runs every pending callback, finishes the registration (`targetClass`), then
+throws the first error (review finding). Data-only shapes stay warnings (the text no longer promises an error). The shape check's
 `override-not-tightened` is an `error` for a decorated shape, a `warning` for a data-only one.
 
 **Removed:** `autoLoadOntologyData` (export and state); xsd `Bytes` from core's
@@ -92,7 +95,7 @@ mutations, single owner, override rules), `owned-values.md`, `ontologies.md`.
 Phase 1 (quick gate: full jest + typecheck): 2453 passed / 120 skipped, only `two-copies-built`
 failing; `[fuseki] live tests: 317 total — 317 passed`; jest 1:16 wall, typecheck 4.0 s.
 
-Full gate before landing (store: `LINKED_FUSEKI_IMAGE=linked-fuseki:dev`,
+Full gate before landing, after the review fixes (store: `LINKED_FUSEKI_IMAGE=linked-fuseki:dev`,
 `FUSEKI_BASE_URL=http://localhost:3988`, compose project `linked-core-k3`):
 
 ```
@@ -100,14 +103,14 @@ npm test
 Test Suites: 1 failed, 4 skipped, 122 passed, 123 of 127 total
 Tests:       120 skipped, 2454 passed, 2574 total
 [fuseki] live tests: 317 total — 317 passed, 0 failed, 0 skipped
-npm test  59.17s user 11.98s system 238% cpu 29.807 total        (the failure: two-copies-built, backlog 060)
+npm test  101.14s user 25.68s system 304% cpu 41.627 total        (the failure: two-copies-built, backlog 060)
 
 REQUIRE_FUSEKI=1 npm run test:fuseki
 Tests:       2295 skipped, 317 passed, 2612 total
-REQUIRE_FUSEKI=1 npm run test:fuseki  42.71s user 8.72s system 207% cpu 24.818 total
+REQUIRE_FUSEKI=1 npm run test:fuseki  41.91s user 8.08s system 233% cpu 21.376 total
 
-npm run typecheck    7.50s user 0.37s system 212% cpu 3.705 total   (clean)
-npm run check:dts    3.81s user 0.20s system 238% cpu 1.685 total   (clean)
+npm run typecheck    6.87s user 0.27s system 222% cpu 3.205 total   (clean)
+npm run check:dts    3.59s user 0.16s system 250% cpu 1.495 total   (clean)
 node …/_linked-cli/lib/esm/launch.js build   ✔ Build successful (5.9 s)
 ```
 
