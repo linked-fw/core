@@ -135,3 +135,13 @@ CN npx vitest run                          Test Files 273 passed | 1 skipped (27
   synced hierarchy; a dataset without it under-counts owners and refuses subclass instances.
 - CN's catalog read (`getCatalogNodeShapes`) can become a typed `CatalogNodeShape` select (C6's
   note); not done here (CN).
+- Follow-up from the review, recorded as [backlog 061](../backlog/061-value-shape-callbacks-need-own-properties.md):
+  callbacks waiting on a `[package, name]` value shape run only when that shape has decorated
+  properties of its own (older behaviour, not changed here).
+
+## Review
+
+An independent read-only review of the diff against §K3, §Contracts and decisions 20-23 found
+one medium (a deferred refusal left the triggering value shape half-registered; fixed in the
+fourth commit) and lows/nits (addressed, or argued: the SHACL rows validate through `ds`, whose
+view takes its hierarchy from the data graph). Its re-review: "No open medium or high findings".

@@ -155,10 +155,11 @@ describe('every widening throws at registration', () => {
         return null;
       }
     }
+    // Another shape waiting on TLaterBad, not an override: its link must still be connected.
     @linkedShape
-    class TDeferredBadOk extends TBase {
-      @objectProperty({path: ex('part'), shape: ['tighten-only-test', 'TLaterBad']})
-      get part(): TBase {
+    class TWaiter extends Shape {
+      @objectProperty({path: ex('waitsFor'), shape: ['tighten-only-test', 'TLaterBad']})
+      get waitsFor(): unknown {
         return null;
       }
     }
@@ -177,7 +178,7 @@ describe('every widening throws at registration', () => {
     const laterBad = [...getAllNodeShapes().values()].find((n) => n.label === 'TLaterBad');
     expect(laterBad?.targetClass).toEqual(ex('TLaterBad'));
     expect(getPropertyShape(TDeferredBad.shape, 'part')?.valueShape).toEqual({id: laterBad?.id});
-    expect(TDeferredBadOk).toBeDefined();
+    expect(getPropertyShape(TWaiter.shape, 'waitsFor')?.valueShape).toEqual({id: laterBad?.id});
   });
 
   test('contains: false drops ownership', () => {
