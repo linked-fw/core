@@ -17,6 +17,7 @@ import type {
   IRTraversePattern,
 } from '../queries/IntermediateRepresentation.js';
 import {RegistryCache} from '../utils/registryCache.js';
+import {ontologyHierarchyVersion, subClassesOf, superClassesOf} from '../ontology/classHierarchy.js';
 import {findPropertyShapeById, getPropertyShapes} from '../shapes/nodeShapeData.js';
 import type {NodeShapeData, PropertyShapeData} from '../shapes/nodeShapeData.js';
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
@@ -2758,13 +2759,15 @@ function subjectBlankCascade(
 // walk starts at the root's shape and follows only the `contains` properties the reached
 // shapes declare (own and inherited), so a plain property on a predicate that another shape
 // declares `contains` is never followed. A registered sub-shape that adds `contains`
-// properties contributes hops guarded by its concrete class (`?n a <SubClass>`). Every node
-// the walk reaches loses its own triples and its blank values; `dependent` plays no part.
+// properties contributes hops guarded by its class (`?n a <SubClass>`), which the store's
+// RDFS inference also matches on the nodes of every subclass. Every node the walk reaches loses
+// its own triples and its blank values; `dependent` plays no part.
 //
 // Recursion: a shape that owns itself through an unguarded edge (`List.rest`) is followed with
 // a closure (`rdf:rest*`), since every such edge from one of its nodes is its own. Any other
 // recursion (a cycle through several shapes, a sub-shape's edge back into the walk) is unrolled
-// into typed hops, up to `MAX_OWNED_RECURSION` repeated shapes per path; deeper values are left.
+// into hops typed `?n a <C>` with the declaring shape's class (subclass nodes match through
+// inference), up to `MAX_OWNED_RECURSION` repeated shapes per path; deeper values are left.
 // ---------------------------------------------------------------------------
 
 /**
@@ -2811,15 +2814,23 @@ const classHoldersCache = new RegistryCache<string, string[]>((holders) => {
   }
 });
 
-/** Every registered shape id per `targetClass` (memoized per registry version, or per catalog). */
+/**
+ * Every registered shape whose nodes `?n a <classId>` matches: the shapes targeting the class or
+ * any subclass of it in the in-memory hierarchy (the shape tree plus the ontology data once
+ * loaded), since the store infers the superclass types. The hierarchy is a safety net here: it
+ * also finds a shape on an ontology subclass that does not extend the class's shape.
+ */
 function classHolders(classId: string): string[] {
-  return classHoldersCache.get().get(classId) ?? [];
+  const byClass = classHoldersCache.get();
+  const out: string[] = [];
+  for (const cls of subClassesOf(classId)) out.push(...(byClass.get(cls) ?? []));
+  return out;
 }
 
 /**
  * Why the added `contains` property `ps` of the sub-shape `sub` cannot be followed from nodes of
  * the sub-shape's class, or null when it can. The guard `?n a <C>` also matches the nodes of
- * every other shape targeting `C`, so it is refused when one of them is a super-shape of `sub`
+ * every other shape targeting `C` or a subclass of it, so it is refused when one of them is a super-shape of `sub`
  * (its own nodes would match) or declares the same predicate as a plain property (following it
  * would delete that shape's references). A holder that does not declare the predicate, or owns
  * it too, does not block it.
@@ -2835,7 +2846,12 @@ function blockedGuard(sub: NodeShapeData, ps: PropertyShapeData): string | null 
     const plain = holder && getPropertyShapes(holder, true).some(
       (q) => !q.contains && getSimplePathId(q.path) === predicate,
     );
-    if (plain) return `shares its targetClass with '${id}', which holds <${predicate}> as a plain property`;
+    if (!plain) continue;
+    const holderClass = holder?.targetClass?.id;
+    if (holderClass && holderClass !== cls) {
+      return `its targetClass's subclass <${holderClass}> is held by '${id}', which holds <${predicate}> as a plain property`;
+    }
+    return `shares its targetClass with '${id}', which holds <${predicate}> as a plain property`;
   }
   return null;
 }
@@ -2844,8 +2860,9 @@ const warnedUnguardable = new Set<string>();
 
 /**
  * The owned edges of a shape: its own and inherited `contains` properties, then, per registered
- * sub-shape, the `contains` properties it adds, guarded by its `targetClass` (a node carries only
- * its concrete class's `rdf:type`, so each sub-shape lists its full extra set). An added property
+ * sub-shape, the `contains` properties it adds, guarded by its `targetClass`. The store infers a
+ * node's superclass types, so a guard also matches the nodes of every subclass: an edge whose
+ * predicate and target are already followed under a superclass's guard is not added again. An added property
  * whose guard cannot tell the sub-shape's nodes apart (`blockedGuard`) is not followed and is
  * warned once, unless the sub-shape is a profile or data-only copy of its direct super-shape (same
  * class or none, the property inherited from that super-shape), which is skipped silently: that
@@ -2880,7 +2897,7 @@ function ownedEdges(shapeId: string): OwnedEdge[] {
       // that super-shape is this walk's shape itself (no other entry covers it, so warn).
       const sameKind = !sub.targetClass?.id || sub.targetClass.id === parent?.targetClass?.id;
       if (sameKind && inherited.has(ps.id) && parent?.id !== shapeId) continue;
-      const key = `${sub.id} ${ps.id}`;
+      const key = `${sub.id} ${ps.id} ${reason}`;
       if (warnedUnguardable.has(key)) continue;
       warnedUnguardable.add(key);
       console.warn(
@@ -2890,24 +2907,56 @@ function ownedEdges(shapeId: string): OwnedEdge[] {
       );
     }
   }
-  return [...edges.values()];
+  return withoutCoveredEdges([...edges.values()]);
 }
 
-/** The classes a node of `shapeId` may carry: its targetClass and every registered sub-shape's. */
+/**
+ * The edges minus those another kept edge already follows: same predicate and target, unguarded
+ * or guarded by a superclass of the edge's guard (`?n a <Super>` matches every subclass node).
+ * Unguarded and more general guards are kept first, so a class cycle keeps one of its guards.
+ */
+function withoutCoveredEdges(edges: OwnedEdge[]): OwnedEdge[] {
+  const depth = (e: OwnedEdge) => (e.guard ? superClassesOf(e.guard).size : 0);
+  const ordered = edges.map((e, i) => ({e, i, d: depth(e)})).sort((a, b) => a.d - b.d || a.i - b.i);
+  const kept: OwnedEdge[] = [];
+  for (const {e} of ordered) {
+    const covered = kept.some(
+      (k) =>
+        k.predicate === e.predicate &&
+        k.target === e.target &&
+        (!k.guard || (!!e.guard && superClassesOf(e.guard).has(k.guard))),
+    );
+    if (!covered) kept.push(e);
+  }
+  return edges.filter((e) => kept.includes(e));
+}
+
+/**
+ * The classes a cycle hop into `shapeId` is typed with: its targetClass, whose `?n a <C>` matches
+ * every subclass node through inference. A shape without one takes the most general classes of
+ * its registered sub-shapes.
+ */
 function shapeClasses(shapeId: string): string[] {
   const nodeShape = shapeById(shapeId);
+  if (!nodeShape) return [];
+  if (nodeShape.targetClass?.id) return [nodeShape.targetClass.id];
   const classes = new Set<string>();
-  for (const shape of nodeShape ? [nodeShape, ...getSubShapes(shapeId)] : []) {
+  for (const shape of getSubShapes(shapeId)) {
     if (shape.targetClass?.id) classes.add(shape.targetClass.id);
   }
-  return [...classes];
+  const general = [...classes].filter(
+    (c) => ![...classes].some((other) => other !== c && superClassesOf(c).has(other)),
+  );
+  // A class cycle among them leaves none most general: keep them all.
+  return general.length > 0 ? general : [...classes];
 }
 
-const ownedWalkCache = new RegistryCache<string, OwnedWalk>();
+/** Walks per root shape, for one shape-registry version (or catalog) and one hierarchy version. */
+const ownedWalkCache = new RegistryCache<string, {hierarchy: number; walk: OwnedWalk}>();
 const warnedBranches = new Set<string>();
 
 /**
- * The owned subtree of a root shape, as hops (memoized per registry version; read-only).
+ * The owned subtree of a root shape, as hops (memoized per registry and hierarchy version; read-only).
  *
  * One target per path from the root. A self-loop (`S` owns `S` through an unguarded edge) is a
  * closure, exact because every such edge from an `S` node is `S`'s own. Every other edge is an
@@ -2917,8 +2966,9 @@ const warnedBranches = new Set<string>();
  */
 function ownedWalk(rootShapeId: string): OwnedWalk {
   const cache = ownedWalkCache.get();
+  const hierarchy = ontologyHierarchyVersion();
   const cached = cache.get(rootShapeId);
-  if (cached) return cached;
+  if (cached && cached.hierarchy === hierarchy) return cached.walk;
 
   const edgesOf = new Map<string, OwnedEdge[]>();
   const pending = [rootShapeId];
@@ -3006,7 +3056,7 @@ function ownedWalk(rootShapeId: string): OwnedWalk {
     rootBlankProps: blankCapableProperties(rootShapeId),
     targets,
   };
-  cache.set(rootShapeId, walk);
+  cache.set(rootShapeId, {hierarchy, walk});
   return walk;
 }
 

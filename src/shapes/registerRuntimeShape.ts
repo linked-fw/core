@@ -24,7 +24,13 @@
  * only the shapes that have a real authored class.
  */
 
-import {assertNoActiveCatalog, getShapeClass, registerNodeShape} from '../utils/ShapeClass.js';
+import {
+  assertNoActiveCatalog,
+  getShapeClass,
+  getSuperShapes,
+  registerNodeShape,
+} from '../utils/ShapeClass.js';
+import {warnDataOnlyOverrides} from './tightenOnly.js';
 import {warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
 import type {NodeShapeData} from './nodeShapeData.js';
 import {fromWire, isNodeShapeWire, type NodeShapeWire} from './nodeShapeWire.js';
@@ -54,6 +60,12 @@ export function registerRuntimeShape(
     warnOnReservedPropertyLabel(ps.label, data.label, data.id);
   }
   registerNodeShape(data);
+  // Tighten-only for a shape that exists only as data: every case is a warning, because the
+  // data comes from a store at runtime and must never stop a running app. Compared against the
+  // registered parents (`registerRuntimeShapes` registers parents first).
+  if (data.extends?.id) {
+    warnDataOnlyOverrides(data, getSuperShapes(data));
+  }
   return true;
 }
 

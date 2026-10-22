@@ -1,0 +1,114 @@
+@prefix core: <https://linked.cm/ont/core/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix schema: <http://schema.org/> .
+
+core:
+    a owl:Ontology ;
+    dcterms:description "The framework vocabulary of @_linked/core: package and shape metadata, containment, display hints and sync records."@en ;
+    dcterms:title "Linked core"@en ;
+    owl:versionInfo "2.37.0" .
+
+core:OntologySync
+    a owl:Class ;
+    rdfs:comment "What ontology sync last wrote into a dataset for one package: its rdfs:subClassOf triples and their hash."@en ;
+    rdfs:label "ontology sync"@en .
+
+core:Package
+    a owl:Class ;
+    rdfs:comment "A Linked package as core's package registry records it (getPackageMetadata), typed so on the package's metadata node."@en ;
+    rdfs:label "package"@en .
+
+core:PathNode
+    a owl:Class ;
+    rdfs:comment "An operator node of a SHACL property path that is not a plain predicate or sequence, such as an inverse, alternative or repeated path."@en ;
+    rdfs:label "path node"@en .
+
+core:ShapeClass
+    a owl:Class ;
+    rdfs:comment "The class of shape classes, from core's earlier package metadata model."@en ;
+    rdfs:label "shape class"@en .
+
+core:contains
+    a owl:DatatypeProperty ;
+    rdfs:comment "Marks a property shape whose subject owns its values (composition), so the owned walk follows it and deleting the subject deletes them."@en ;
+    rdfs:label "contains"@en .
+
+core:definesShape
+    a owl:ObjectProperty ;
+    rdfs:comment "Links a package to a shape it defines, from core's earlier package metadata model."@en ;
+    rdfs:label "defines shape"@en .
+
+core:dependent
+    a owl:DatatypeProperty ;
+    rdfs:comment "A deprecated node-shape flag that has no effect and is only kept so older shapes still load."@en ;
+    rdfs:label "dependent"@en .
+
+core:displayHidden
+    a owl:DatatypeProperty ;
+    rdfs:comment "Removes a property from generic rendering without changing its cardinality or meaning."@en ;
+    rdfs:label "display hidden"@en .
+
+core:displayRank
+    a owl:DatatypeProperty ;
+    rdfs:comment "The rank of a property among its shape's properties for display, lower meaning more important, from which every truncated view derives."@en ;
+    rdfs:label "display rank"@en .
+
+core:editInline
+    a owl:DatatypeProperty ;
+    rdfs:comment "Marks a property whose value is edited inline rather than on its own page."@en ;
+    rdfs:label "edit inline"@en .
+
+core:generated
+    a owl:DatatypeProperty ;
+    rdfs:comment "Marks a node shape that core generated at sync time from another shape's code, so catalog readers skip it."@en ;
+    rdfs:label "generated"@en .
+
+core:generatedShape
+    a owl:ObjectProperty ;
+    rdfs:comment "Links a node shape to a shape core generated from it at sync time (the single-owner constraint of a contains property), which it owns."@en ;
+    rdfs:label "generated shape"@en .
+
+core:isExtending
+    a owl:ObjectProperty ;
+    rdfs:comment "Links a node shape to the node shape its shape class extends, a pointer core keeps beside the flat copy of inherited property shapes."@en ;
+    rdfs:label "extends"@en .
+
+core:module
+    a owl:ObjectProperty ;
+    rdfs:comment "Links a package to a module it contains, from core's earlier package metadata model."@en ;
+    rdfs:label "module"@en .
+
+core:ontologyHash
+    a owl:DatatypeProperty ;
+    rdfs:comment "The content hash of the class hierarchy ontology sync last wrote for a package."@en ;
+    rdfs:label "ontology hash"@en .
+
+core:ontologyTriples
+    a owl:DatatypeProperty ;
+    rdfs:comment "The class hierarchy ontology sync last wrote for a package, as sorted N-Triples lines."@en ;
+    rdfs:label "ontology triples"@en .
+
+core:packageName
+    a owl:DatatypeProperty ;
+    rdfs:comment "The npm name of the package an ontology sync record is for."@en ;
+    rdfs:label "package name"@en .
+
+core:shapeHash
+    a owl:DatatypeProperty ;
+    rdfs:comment "The content hash of everything shape sync wrote for a node shape, so a later sync can skip an unchanged shape."@en ;
+    rdfs:label "shape hash"@en .
+
+core:sharedTargetClass
+    a owl:DatatypeProperty ;
+    rdfs:comment "Marks a node shape that shares its target class on purpose, so the shape check does not report it as borrowing another shape's class."@en ;
+    rdfs:label "shared target class"@en .
+
+core:usesShapeClass
+    a owl:ObjectProperty ;
+    rdfs:comment "Links a node to the shape class it uses, from core's earlier package metadata model."@en ;
+    rdfs:label "uses shape class"@en .

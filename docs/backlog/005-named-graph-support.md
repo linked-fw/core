@@ -100,4 +100,4 @@ The `SparqlGraph` node wraps the inner BGP/join/optional pattern and is serializ
 
 - Should the graph be configurable at the store level (all queries go to a default graph)?
 - Should cross-graph queries be supported (e.g., join data from two different graphs)?
-- How does this interact with SPARQL datasets (FROM / FROM NAMED)?
+- How does this interact with SPARQL datasets (FROM / FROM NAMED)? Core needs portable IRIs for the default and union graphs; see backlog 025 §Portable default-graph and union-graph IRIs.

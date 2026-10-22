@@ -6,10 +6,7 @@
 import {getPropertyShapes, type NodeShapeData, type PropertyShapeData} from './nodeShapeData.js';
 import {getSimplePathId} from '../paths/normalizePropertyPath.js';
 import {serializePathToNodeData} from './serializePathToNodeData.js';
-import {getSubShapes} from '../utils/ShapeClass.js';
 import {NodeShape} from './SHACL.js';
-import {PathList} from './PathList.js';
-import {rdf} from '../ontologies/rdf.js';
 
 /**
  * The single-owner SHACL constraints generated from `contains` properties.
@@ -18,7 +15,7 @@ import {rdf} from '../ontologies/rdf.js';
  * plain property on the same predicate is a reference. For every such property, shape sync
  * writes one generated NodeShape stating the matching store-side rule: every object of the
  * property's predicate has at most one subject pointing at it through that predicate *that is
- * an instance of the declaring class or of a registered sub-shape's class*.
+ * an instance of the declaring class* (subclass instances included).
  *
  * ```turtle
  * <…/Thing/image.singleOwner> a sh:NodeShape ;
@@ -27,21 +24,19 @@ import {rdf} from '../ontologies/rdf.js';
  *     sh:property <…/Thing/image.singleOwner/owners> .
  * <…/Thing/image.singleOwner/owners> a sh:PropertyShape ;
  *     sh:path [ sh:inversePath schema:image ] ;
- *     sh:qualifiedValueShape [ sh:or ( [ sh:class schema:Thing ] [ sh:class ex:Project ] ) ] ;
+ *     sh:qualifiedValueShape [ sh:class schema:Thing ] ;
  *     sh:qualifiedMaxCount 1 .
  * ```
  *
- * The owner classes are enumerated rather than left to `sh:class` alone, because `sh:class`
- * matches a subclass instance only through `rdfs:subClassOf` triples, which a dataset without
- * inference does not have. With one class the qualified shape is `[ sh:class C ]`. Sub-shapes
- * registered only in another process are missing until a process that knows them syncs.
+ * `sh:class` follows `rdf:type/rdfs:subClassOf*`, and the store infers through the synced
+ * ontology hierarchy, so a subclass instance (`ex:Project ⊑ schema:Thing`) counts as an owner.
  *
  * One constraint per accessor, written only by the class that declares it: subclasses inherit
  * the property and are counted as owners, but add no constraint. A declaring shape without a
  * `targetClass` gets none (its owners cannot be named). The declaring shape owns its
  * constraints through `core:generatedShape` (`NodeShape.generatedShapes`, `contains`): shape sync
  * writes them nested in the shape's create and deletes them with the shape; their qualified
- * shape and `sh:or` list are blank nodes, deleted with the property shape that holds them.
+ * shape is a blank node, deleted with the property shape that holds it.
  *
  * Ownership through two different `contains` predicates is not counted (a documented
  * limitation). The shapes are built only at sync time and are never registered in the
@@ -72,24 +67,9 @@ export function singleOwnerProperties(nodeShape: NodeShapeData): PropertyShapeDa
   );
 }
 
-/** The classes whose instances own through the shape's properties: its own and every sub-shape's. */
-function ownerClasses(nodeShape: NodeShapeData): string[] {
-  const classes = new Set<string>();
-  for (const shape of [nodeShape, ...getSubShapes(nodeShape)]) {
-    if (shape.targetClass?.id) classes.add(shape.targetClass.id);
-  }
-  return [...classes].sort();
-}
-
-/** `[ sh:class C ]`, or `[ sh:or ( [ sh:class A ] … ) ]` for several classes. Blank once written. */
-function ownerShapeData(classes: string[]): Record<string, unknown> {
-  const classShape = (id: string) => ({shape: NodeShape, class: {id}});
-  if (classes.length === 1) return classShape(classes[0]);
-  const list = classes.reduceRight<unknown>(
-    (rest, id) => ({shape: PathList, first: classShape(id), rest}),
-    {id: rdf.nil.id},
-  );
-  return {shape: NodeShape, orShapes: list};
+/** `[ sh:class C ]`: the owners are the instances of the declaring class. Blank once written. */
+function ownerShapeData(classId: string): Record<string, unknown> {
+  return {shape: NodeShape, class: {id: classId}};
 }
 
 const warnedWithoutTargetClass = new Set<string>();
@@ -117,7 +97,7 @@ export function buildSingleOwnerConstraints(
     }
     return [];
   }
-  const owners = ownerShapeData(ownerClasses(nodeShape));
+  const owners = ownerShapeData(nodeShape.targetClass.id);
   return properties.flatMap((ps) => {
     // Always set: `singleOwnerProperties` keeps simple paths only. The guard narrows the type.
     const predicate = getSimplePathId(ps.path);

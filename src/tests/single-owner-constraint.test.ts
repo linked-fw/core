@@ -195,22 +195,16 @@ describe('single-owner constraint data', () => {
     expect((attachments.data as any).properties[0].path.inversePath).toEqual({id: `${EX}attachments`});
   });
 
-  test('owners: the declaring class and every registered sub-shape\'s, sorted, as sh:or', () => {
+  test('owners: one sh:class, the declaring class, even with a registered sub-shape', () => {
+    // SubProject's owners count through the store's inference (SubProject ⊑ Project).
     const [image] = buildSingleOwnerConstraints(Project.shape, iriOf(Project));
-    const owners = (image.data as any).properties[0].qualifiedValueShape;
-    expect(owners.shape).toBe(NodeShape);
-    expect(owners.__id).toBeUndefined();
-    const classes: string[] = [];
-    for (let cell = owners.orShapes; cell.id !== `${RDF}nil`; cell = cell.rest) {
-      expect(cell.shape).toBe(PathList);
-      expect(cell.__id).toBeUndefined();
-      expect(cell.first.shape).toBe(NodeShape);
-      classes.push(cell.first.class.id);
-    }
-    expect(classes).toEqual([`${EX}Project`, `${EX}SubProject`]);
+    expect((image.data as any).properties[0].qualifiedValueShape).toEqual({
+      shape: NodeShape,
+      class: {id: `${EX}Project`},
+    });
   });
 
-  test('owners: one class is a plain sh:class, without sh:or', () => {
+  test('owners: a shape without sub-shapes is a plain sh:class too', () => {
     const [image] = buildSingleOwnerConstraints(Workspace.shape, iriOf(Workspace));
     expect((image.data as any).properties[0].qualifiedValueShape).toEqual({
       shape: NodeShape,

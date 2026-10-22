@@ -7,6 +7,9 @@
 import './shapes/index.js';
 // Registers the live-query store so `query.live()` works (side effects only).
 import './live.js';
+// Registers core's own ontologies (`core:`, `npm:`) and their data (side effects only).
+import './ontologies/linked-core.register.js';
+import './ontologies/npm.register.js';
 export {syncShapes, syncShape} from './shapes/syncShapes.js';
 export type {SyncShapesOptions, SyncShapeOptions} from './shapes/syncShapes.js';
 export {
@@ -19,7 +22,7 @@ export {serializePathToNodeData} from './shapes/serializePathToNodeData.js';
 // Core public API surface (documented as root imports in the README).
 export {Shape} from './shapes/Shape.js';
 // SHACL-aligned validation of plain data objects against a shape.
-export {validate, assertValid, ShapeValidationError} from './shapes/validation.js';
+export {validate, validateByClass, assertValid, ShapeValidationError} from './shapes/validation.js';
 export {UnresolvedShapeError, type UnresolvedShapeDetails} from './utils/unresolvedShape.js';
 export type {
   ValidationReport,

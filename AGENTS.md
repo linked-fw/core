@@ -6,7 +6,7 @@ Single-package repository for `@_linked/core` (query DSL, SHACL shape decorators
 
 Tests: `npm test`
 
-Live Fuseki tests: wrap them in `describeFuseki` (`src/test-helpers/fuseki-live.ts`), never an early `return`. jest globalSetup starts Fuseki (Docker, port 3939); without it the live blocks are skipped locally and the run fails under `CI` or `REQUIRE_FUSEKI=1`. `npm run test:fuseki` runs only the live blocks.
+Live Fuseki tests: wrap them in `describeFuseki` (`src/test-helpers/fuseki-live.ts`), never an early `return`. jest globalSetup starts Fuseki (Docker, port 3939, compose project `linked-core-test`) on the inferring image `ghcr.io/linked-fw/fuseki` (locally, until it is published: `LINKED_FUSEKI_IMAGE=linked-fuseki:dev`), deletes test datasets a killed run left, and fails the run when the Fuseki on the port does not infer `rdf:type` through `rdfs:subClassOf` (a stock Fuseki). Another port: `FUSEKI_BASE_URL=http://localhost:<port>` (with `LINKED_CORE_TEST_COMPOSE_PROJECT` for a second store). Without Fuseki the live blocks are skipped locally and the run fails under `CI` or `REQUIRE_FUSEKI=1`. `npm run test:fuseki` runs only the live blocks.
 
 ## Agent docs (`docs/`)
 

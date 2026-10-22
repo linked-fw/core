@@ -78,7 +78,7 @@ class UBox extends Shape {
     return [];
   }
   @literalProperty({path: ex('label'), maxCount: 1})
-  get label(): string {
+  get caption(): string {
     return null;
   }
 }
@@ -164,7 +164,7 @@ describe('mutation WHERE — algebra', () => {
 
   test('update of one property keeps its single OPTIONAL', () => {
     const sparql = updateToSparql(
-      lower(UpdateBuilder.from(UBox).for(`${U}b1`).set({label: 'x'})) as IRUpdateMutation,
+      lower(UpdateBuilder.from(UBox).for(`${U}b1`).set({caption: 'x'})) as IRUpdateMutation,
     );
     const where = sparql.slice(sparql.indexOf('WHERE'));
     expect(where).not.toContain('UNION');

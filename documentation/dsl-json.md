@@ -95,6 +95,11 @@ other value-tag) is what frees property labels: a property literally named `path
 `list`, … never collides with a value-tag, because the tags are `@path` / `@id` / `@date` / … (see
 Reserved words).
 
+The **empty path** `""` is the subject itself. `"sortBy": [ { "": "ASC" } ]` orders by the
+subject IRI (`.orderBy((p) => p)`), and `{ "@path": "" }` is the subject as an operand:
+`[">", ["STR", { "@path": "" }], "https://ex.org/p2"]` is `.where((p) => p.str().gt(…))`, the
+cursor of a list paged by subject.
+
 A path that crosses a **plural** relation in a condition is an **implicit `some`** (existential):
 `{ "friends.name": "Moa" }` means *"has some friend named Moa"*. Use an explicit quantifier for
 compound predicates or for `every`/`none` (see Conditions).

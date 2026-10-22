@@ -1,0 +1,24 @@
+@prefix npm: <http://purl.org/on/npm/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix schema: <http://schema.org/> .
+
+npm:
+    a owl:Ontology ;
+    dcterms:description "Terms for npm packages, as @_linked/core names them: a package name and a version."@en ;
+    dcterms:title "npm"@en ;
+    owl:versionInfo "2.37.0" .
+
+npm:packageName
+    a owl:DatatypeProperty ;
+    rdfs:comment "An npm package name."@en ;
+    rdfs:label "package name"@en .
+
+npm:version
+    a owl:DatatypeProperty ;
+    rdfs:comment "A package version."@en ;
+    rdfs:label "version"@en .

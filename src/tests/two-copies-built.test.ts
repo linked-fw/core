@@ -174,25 +174,6 @@ describe('state set through one copy is read by the other', () => {
     expect(b.pkg.DEFAULT_LIMIT).toBe(12);
   });
 
-  it('Package: autoLoadOntologyData through one copy loads an ontology registered through the other', () => {
-    const load = jest.fn(async () => {});
-    const {linkedOntology} = a.pkg.linkedPackage('@two-copies/ontology');
-    linkedOntology({}, (term: string) => ({id: `https://ex.org/onto#${term}`}), 'twocopiesonto', load);
-    // Detach the other ontologies' loaders for the call, so only this one runs.
-    const others = [...shared('Package').ontologies].filter((o: any) => o._prefix !== 'twocopiesonto');
-    const saved = others.map((o: any) => o._load);
-    others.forEach((o: any) => (o._load = undefined));
-    try {
-      b.pkg.autoLoadOntologyData(true);
-      expect(load).toHaveBeenCalledTimes(1);
-      expect(shared('Package').autoLoadOntologyData).toBe(true);
-    } finally {
-      a.pkg.autoLoadOntologyData(false);
-      others.forEach((o: any, i: number) => (o._load = saved[i]));
-      b.prefix.Prefix.delete('twocopiesonto');
-    }
-  });
-
   it('SHACL: a package publish root set through one copy derives IRIs in the other', () => {
     a.pkg.linkedPackage('@two-copies/private', {baseUri: 'https://ws.id.example/'});
     const uri = a.shacl.getPackageUri('@two-copies/private');

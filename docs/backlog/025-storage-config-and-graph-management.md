@@ -47,6 +47,51 @@ The dispatch registry provides a natural interception point. Two viable approach
 
 The SPARQL conversion utilities (Decision 4 in plan 001) currently take an optional `defaultGraph` in `SparqlOptions`. Once this storage config is designed, that option will be driven by the config rather than manually passed by each store. For now, SPARQL conversion generates no GRAPH wrapping by default.
 
+## Portable default-graph and union-graph IRIs
+
+Once core addresses graphs, a query must be able to say "the stored default graph" and "the
+union of the named graphs". Stores spell these differently (Jena: `urn:x-arq:DefaultGraph`,
+`urn:x-arq:UnionGraph`; other engines have their own names or none), so core should not emit a
+store's spelling. Proposal: core defines its own IRIs in its namespace, for example
+`core:graph/default` and `core:graph/union` (`https://linked.cm/ont/core/graph/default`, `…/union`),
+uses them in the IR and algebra (`GRAPH`, `FROM`, `FROM NAMED`, `.from()` / `.into()` of backlog
+005), and each store implementation replaces them in the SPARQL it sends (the Fuseki store maps
+them to the `urn:x-arq:` names). A store that cannot express one refuses the query rather than
+guessing. Writes to either IRI are refused: they are read-only views.
+
+### What Jena/Fuseki does (measured on Fuseki 6.2.0, TDB2, October 2026)
+
+Dataset: stored default graph `{:a :p 1}`, named graphs `:g1 {:b :p 2}`, `:g2 {:c :p 3}`.
+
+| Query | `unionDefaultGraph` off | `tdb2:unionDefaultGraph true` |
+|---|---|---|
+| `{ ?s :p ?o }` (no `GRAPH`) | `:a` (stored default only) | `:b :c` (union of named graphs; stored default hidden) |
+| `GRAPH ?g { … }` | `:g1 :b`, `:g2 :c` (never the default graph) | unchanged |
+| `GRAPH <urn:x-arq:DefaultGraph> { … }` | `:a` | `:a` (the only way back to the stored default) |
+| `GRAPH <urn:x-arq:UnionGraph> { … }` | `:b :c` (named graphs only) | `:b :c` |
+| `FROM :g1 FROM :g2` / `default-graph-uri` | `:b :c` | unchanged (the flag is skipped for dynamic datasets) |
+
+- **The flag changes reads only, including the WHERE of an update.** `INSERT DATA { :d :p 4 }`
+  still lands in the stored default graph, which the flag hides, so the write vanishes from every
+  later query without `GRAPH`. `DELETE WHERE { :b :p 2 }` matches through the union and deletes
+  from the stored default graph: 200, nothing deleted.
+- **The flag is read only by TDB2's own query engine** (`QueryEngineTDB`, context symbol
+  `TDB2.symUnionDefaultGraph`). A wrapping dataset, such as Jena's query-time RDFS view
+  (`DatasetGraphRDFS`), runs on the generic engine, and the flag has no effect there in any form
+  tried (on the TDB2 dataset, on the endpoint, on the RDFS dataset). Through such a wrapper
+  `GRAPH <urn:x-arq:UnionGraph>`, `FROM <urn:x-arq:UnionGraph>` and `GRAPH ?g` all work, with
+  inference. CN serves every dataset through that view (CN plan 070), so the flag is not an option
+  there: queries address graphs explicitly.
+- **`urn:x-arq:UnionGraph` is not protected as a write target.** `INSERT DATA { GRAPH
+  <urn:x-arq:UnionGraph> { … } }` succeeds and creates a real named graph with that name. Another
+  reason core speaks its own IRIs and the store refuses writes to them.
+- **The same triple in two graphs** is returned once by a union read; a triple-level delete must
+  name every graph that holds it, or it reappears.
+- **Cost:** about 950k triples over 100 named graphs read through the inferred union graph cost
+  5-25% more than the same data in the default graph; `GRAPH ?g` with inference about 2x.
+
+For CN today: the flag stays off and core keeps reading and writing the default graph only.
+
 ## Prior art
 
 The OLD implementation used `SPARQLStore.setDefaultGraph(graphIRI)` — a single global graph for all queries. The new design should support per-shape and per-query graph resolution.

@@ -40,7 +40,7 @@ class RoleShape extends Shape {
   static targetClass = cls('Role');
 
   @literalProperty({path: labelProp, maxCount: 1})
-  get label(): string {
+  get caption(): string {
     return '';
   }
 }
@@ -134,7 +134,7 @@ describe('property path integration — decorator to SPARQL', () => {
 
   test('sequence path with nested property selection', async () => {
     const sparql = await goldenSelect(() =>
-      OrgShape.select((p) => p.memberRoles.label),
+      OrgShape.select((p) => p.memberRoles.caption),
     );
     // Should have the complex path for the memberRoles traversal
     expect(sparql).toContain(`<${testBase}member>/<${testBase}role>`);
@@ -170,8 +170,8 @@ describe('property path integration — decorator to SPARQL', () => {
 
   test('sortBy with complex path intermediate step', async () => {
     const sparql = await goldenSelect(() =>
-      OrgShape.select((p) => p.memberRoles.label).orderBy(
-        (p) => p.memberRoles.label,
+      OrgShape.select((p) => p.memberRoles.caption).orderBy(
+        (p) => p.memberRoles.caption,
       ),
     );
     // The complex path should be used in the traversal, not the raw propertyShapeId
@@ -182,7 +182,7 @@ describe('property path integration — decorator to SPARQL', () => {
   test('where filter on complex-path property', async () => {
     const sparql = await goldenSelect(() =>
       OrgShape.select((p) =>
-        p.memberRoles.where((r) => r.label.equals('Admin')),
+        p.memberRoles.where((r) => r.caption.equals('Admin')),
       ),
     );
     // Complex path in traversal

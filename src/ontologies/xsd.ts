@@ -22,7 +22,6 @@ const time = ns('time');
 const duration = ns('duration');
 const decimal = ns('decimal');
 const gYear = ns('gYear');
-const Bytes = ns('Bytes');
 const long = ns('long');
 const dateTime = ns('dateTime');
 
@@ -41,7 +40,6 @@ export const xsd = {
   duration,
   decimal,
   gYear,
-  Bytes,
   long,
   dateTime,
 };

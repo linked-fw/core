@@ -16,7 +16,7 @@ const prop = (name: string) => ({id: `https://example.org/flags#${name}`});
 @linkedShape({dependent: true})
 class OwnedThing extends Shape {
   @literalProperty({path: prop('label'), maxCount: 1})
-  get label(): string {
+  get caption(): string {
     return '';
   }
 }

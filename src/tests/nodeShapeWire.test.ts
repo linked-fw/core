@@ -57,7 +57,7 @@ function richShape(): NodeShapeData {
     name: 'Name',
     description: 'Full name',
     order: 3,
-    group: 'basics',
+    group: {id: 'https://example.org/basics'},
     minLength: 2,
     maxLength: 64,
     pattern: /^[A-Z][a-z]+$/i,

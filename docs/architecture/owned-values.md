@@ -38,6 +38,13 @@ Everything is read from the live shape registry, so no vocabulary is hardcoded.
 | Delete by id | the subject, incoming references, the subject's blank values, its owned subtree |
 | Bulk delete (`.all()`, `.where()`) | as delete by id, minus incoming references |
 
+Bulk mutations are polymorphic, like select and count: a bulk delete or update of a shape
+(`deleteAll`, `deleteWhere`, `update().forAll()` / `.where()`) is scoped by `?s a <C>`, which the
+store's inference matches on every instance of a subclass of `C`. Each matched subject loses the
+owned subtree its shape's walk reaches (the root shape's walk, with its sub-shapes' guarded
+edges). A server that exposes bulk mutations checks access on the root shape and every
+registered shape of a subclass (`@_linked/server-utils` `QueryAccess`).
+
 **The owned subtree** (`ownedWalk` / `ownedSubtreeBlocks` in `src/sparql/irToAlgebra.ts`) is
 shape-directed. From the root's shape (the deleted subject's shape, or the replaced property's
 value shape) it follows that shape's own and inherited `contains` properties with a simple path
@@ -51,30 +58,45 @@ asserts ownership. One UNION branch per path from the root.
   `core:generatedShape*`): every such edge from an `S` node is `S`'s own. The root's self-loop
   adds one branch `<root> (r…)+ ?n` for its other nodes.
 - **Other recursion is unrolled.** A cycle through several shapes, or a sub-shape edge back into
-  the walk, becomes explicit hops, each typed with the declaring shape's class or a registered
-  sub-shape's (`?n a ?t FILTER(?t IN (…))`, one class: `?n a <C>`), so no node is walked through
-  a predicate its own shape does not own. A path stops after `MAX_OWNED_RECURSION` (4) hops into
+  the walk, becomes explicit hops, each typed with the declaring shape's class, `?n a <C>`: the
+  store infers the superclass types, so the nodes of every subclass match (a declaring shape
+  without a `targetClass` types the hop with the most general classes of its sub-shapes,
+  `?n a ?t FILTER(?t IN (…))`). No node is walked through a predicate its own shape does not
+  own. A path stops after `MAX_OWNED_RECURSION` (4) hops into
   a shape already on it; deeper values are left (orphans, the safe direction), as is anything
   behind an untyped node on such a cycle.
 - **Sub-shapes.** For every registered descendant of a reached shape, each added `contains`
   property is followed from nodes of the sub-shape's class only (`?n a <SubClass> . ?n <c> ?m`);
-  guarded edges never join a closure. Core writes the concrete class's `rdf:type` on create, so no
-  inference is needed. Per edge (`blockedGuard`, registry-wide), it is not followed when the
-  sub-shape has no `targetClass`, when one of its super-shapes holds the class (their own nodes
-  would match), or when another shape holding the class declares the predicate as a plain
-  property (following it would delete that shape's references) — warned once with the cause. A
+  guarded edges never join a closure. Core writes the concrete class's `rdf:type` on create and
+  the store infers the superclasses, so the guard also matches the nodes of every subclass of
+  `SubClass`: an edge a deeper sub-shape inherits from a guarded one (same predicate and target)
+  is followed once, under the more general guard. Per edge (`blockedGuard`, registry-wide), it is
+  not followed when the sub-shape has no `targetClass`, when one of its super-shapes holds the
+  class (their own nodes would match), or when another shape holding the class or a subclass of
+  it declares the predicate as a plain property (following it would delete that shape's
+  references) — warned once with the cause. The subclasses come from the in-memory hierarchy
+  (`subClassesOf`: the shape tree plus the registered ontology data once loaded), a safety net
+  for a shape on an ontology subclass that does not extend the guarded shape. The walk trusts
+  that the store infers every edge of that hierarchy: on a dataset without the synced hierarchy,
+  or for a data-only shape whose `extends` the ontology does not state, a skipped (covered) edge
+  or a cycle hop leaves owned values behind as orphans (never deletes a reference). A
   sharer without the predicate does not block it. A sub-shape adding nothing beyond its direct
-  super-shape with its class or none (a profile, a data-only copy) is skipped silently.
-  Recursion typing accepts the declaring shape's class and every registered descendant's, so
-  inside a cycle a plain sharer of a descendant's class does not block (as an untyped hop outside
+  super-shape with its class or none (a profile, a data-only copy) is skipped silently. A profile
+  that keeps its parent's class declares `@linkedShape({sharedTargetClass: true})`, so the shape
+  check (`checkShapeHierarchy`) does not report it as borrowing the class.
+  Recursion typing matches the declaring shape's class and, through inference, every
+  descendant's, so inside a cycle a plain sharer of a descendant's class does not block (as an untyped hop outside
   a cycle would not). Only simple paths of a sharer are checked: a plain use of the predicate
-  inside a sharer's complex path does not block. A sub-shape redeclaring an inherited `contains` property as plain does not remove the
-  inherited ownership (`getPropertyShapes` keeps both).
+  inside a sharer's complex path does not block. A sub-shape redeclaring an inherited `contains` property without
+  `contains` inherits it (an override inherits every constraint it does not restate); declaring
+  `contains: false` is refused at registration (tighten-only). A shape known only as data that
+  drops `contains` is warned and does not remove the inherited ownership (`getPropertyShapes`
+  keeps both).
 - **`rdf:nil`** is never deleted: every walk node and the replaced-value self-delete carry
   `FILTER(!sameTerm(?n, rdf:nil))`.
 - **Branch count:** no cap; lowering warns once per root shape above `OWNED_BRANCH_WARNING` (64)
-  branches. The core metamodel and `@_linked/schema` stay at ≤ 8; reducing wide DAGs is
-  [backlog 055](../backlog/055-owned-walk-branch-count.md).
+  branches. The core metamodel stays at ≤ 9 (nested property shapes and `sh:languageIn` lists)
+  and `@_linked/schema` at ≤ 8; reducing wide DAGs is [backlog 055](../backlog/055-owned-walk-branch-count.md).
 - **Memoized** per (root shape, registry version); lowering only instantiates variables.
 
 Invariants:
@@ -153,8 +175,10 @@ before the update:
 
 - A field is checked when its property is `contains`, has a simple path and declares a `shape`
   whose `targetClass` resolves. A plain property on the same predicate is not checked.
-- Accepted classes: the value shape's `targetClass`, every registered sub-shape's, and the
-  property's `sh:class`. The store's `rdfs:subClassOf` is not consulted.
+- Accepted classes: the value shape's `targetClass` and the property's `sh:class`. The type
+  query reads the store's inferred types, so an instance of any subclass (with or without a
+  shape) carries the accepted class and passes; core requires a store with RDFS class inference
+  and the ontology hierarchy synced.
 - A node is refused only when it has at least one `rdf:type` and none is accepted. Untyped and
   absent ids (`rdf:nil`, upload-then-attach) pass; `rdf:nil` is skipped statically.
 - Links are collected from single values, array items and set `add` items, at any nesting depth,
@@ -177,26 +201,23 @@ sync persists one generated NodeShape (`src/shapes/singleOwnerConstraint.ts`):
 <…/Thing/image.singleOwner/owners> a sh:PropertyShape ;
     rdfs:label "owners" ;
     sh:path [ sh:inversePath schema:image ] ;
-    sh:qualifiedValueShape [ sh:or ( [ sh:class schema:Thing ] [ sh:class ex:Project ] ) ] ;
+    sh:qualifiedValueShape [ sh:class schema:Thing ] ;
     sh:qualifiedMaxCount 1 .
 ```
 
-- **Owners counted:** subjects of the declaring `targetClass` and of every registered
-  sub-shape's, enumerated at sync time (sorted) because `sh:class` matches a subclass instance
-  only through `rdfs:subClassOf`, which datasets without inference lack. One class →
-  `[ sh:class C ]`, no `sh:or`. A plain reference from another class conforms. Sub-shapes
-  registered only in another process are missing until a process that knows them syncs. A
-  declaring shape without `targetClass` gets no constraint; sync warns once per shape.
+- **Owners counted:** instances of the declaring `targetClass`, one `sh:class`. SHACL follows
+  `rdf:type/rdfs:subClassOf*` and the store infers through the synced ontology hierarchy, so the
+  instances of every subclass (`ex:Project ⊑ schema:Thing`) count. A plain reference from another
+  class conforms. A declaring shape without `targetClass` gets no constraint; sync warns once per
+  shape.
 - **Metamodel:** `PropertyShape.qualifiedValueShape` (value shape `NodeShape`),
-  `PropertyShape.qualifiedMaxCount`, `NodeShape.class`, `NodeShape.orShapes` (`sh:or`; `or` is
-  a reserved label; no value shape, like `sh:path`, its cells are `PathList`s), all in
-  `src/utils/Package.ts`. The qualified shape, the list and its members are blank nodes.
+  `PropertyShape.qualifiedMaxCount`, `NodeShape.class`, all in `src/utils/Package.ts`. The
+  qualified shape is a blank node.
 
 The inverse path is an untyped blank node with exactly one triple. An IRI there would be read by
 every SHACL validator as a predicate path (SHACL §2.3.1), which is what versions before 2.30
 wrote (`sh:path <…/owners/inv>`, `<…/owners/inv> a core:PathNode`): Jena reported such a
-constraint as conforming whatever the data. Versions before this one wrote `sh:maxCount 1`
-(every subject counted); the next sync rewrites the constraint.
+constraint as conforming whatever the data.
 
 - **IRI:** `${propertyShapeIri}.singleOwner` (`singleOwnerShapeIri`), derived from the stable
   shape IRI, so every runtime computes the same one. Subclasses inherit the property but write no
@@ -209,8 +230,7 @@ constraint as conforming whatever the data. Versions before this one wrote `sh:m
 - **Markers:** `core:generated true` and no `sh:targetClass`, so catalog readers can skip them.
   They are never registered in the in-memory registry.
 - **Unchanged shapes are skipped:** the create also stores `core:shapeHash` on the NodeShape, a
-  SHA-256 of the canonical create data of the shape *including* its generated shapes (whose owner
-  classes come from the registered sub-shapes). `syncShapes` reads the stored hashes of all code
+  SHA-256 of the canonical create data of the shape *including* its generated shapes. `syncShapes` reads the stored hashes of all code
   shapes in one select and writes only the shapes whose hash is missing or differs; `syncShape`
   does the same read inside its thunk. `force: true` rewrites regardless. The hash records what
   sync last wrote, not what the store holds: a subtree edited or partly deleted by another writer

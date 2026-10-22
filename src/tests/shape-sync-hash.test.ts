@@ -59,7 +59,7 @@ class HProject extends Shape {
 }
 
 const ORPHAN = 'https://linked.cm/shape/shapehash-test/Gone';
-// Core's six built-ins are synced like any package's shapes.
+// Core's built-ins are synced like any package's shapes.
 const userIris = () => [HPerson.shape.id, HImage.shape.id, HProject.shape.id, ...builtInShapeIris()];
 
 type Call = {kind: 'create' | 'delete' | 'select'; id?: string};
@@ -279,9 +279,11 @@ describe('shapeSyncHash', () => {
       '],"targetClass":{"id":"https://example.org/h#T"}},"iri":"https://s/T"}';
     const {createHash} = await import('node:crypto');
     const digest = createHash('sha256').update(canonical, 'utf8').digest('hex');
-    if (SHAPE_HASH_VERSION === 1) {
-      expect(digest).toBe('39faa2449c092aca0bd6d3f11ac0b85a898b67491c3611f10903206bb6653800');
-    }
+    const pinned: Record<number, string> = {
+      1: '39faa2449c092aca0bd6d3f11ac0b85a898b67491c3611f10903206bb6653800',
+      2: '2bba76066dff5c588e767062cf02bd7c4a0c5ed368633f8ea667b91f83708338',
+    };
+    if (pinned[SHAPE_HASH_VERSION]) expect(digest).toBe(pinned[SHAPE_HASH_VERSION]);
     expect(shapeSyncHash(data(), 'https://s/T')).toBe(digest);
   });
 });

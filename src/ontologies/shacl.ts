@@ -36,6 +36,15 @@ const targetNode = ns('targetNode');
 const targetObjectsOf = ns('targetObjectsOf');
 const qualifiedValueShape = ns('qualifiedValueShape');
 const qualifiedMaxCount = ns('qualifiedMaxCount');
+const qualifiedMinCount = ns('qualifiedMinCount');
+const targetSubjectsOf = ns('targetSubjectsOf');
+const and = ns('and');
+const not = ns('not');
+const xone = ns('xone');
+const flags = ns('flags');
+const deactivated = ns('deactivated');
+const severity = ns('severity');
+const PropertyGroup = ns('PropertyGroup');
 const or = ns('or');
 const node = ns('node');
 const nodeKind = ns('nodeKind');
@@ -135,7 +144,16 @@ export const shacl = {
   targetObjectsOf,
   qualifiedValueShape,
   qualifiedMaxCount,
+  qualifiedMinCount,
+  targetSubjectsOf,
   or,
+  and,
+  not,
+  xone,
+  flags,
+  deactivated,
+  severity,
+  PropertyGroup,
   BlankNode,
   IRI,
   Literal,

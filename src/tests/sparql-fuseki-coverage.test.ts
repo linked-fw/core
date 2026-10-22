@@ -111,11 +111,11 @@ const BASE_DATA = `
 <${ENT}d1> <${RDF_TYPE}> <${PETT}> .
 <${ENT}d1> <${PROP}guardDogLevel> "5"^^<${XSD}integer> .
 <${ENT}e1> <${RDF_TYPE}> <${ET}> .
-<${ENT}e1> <${PROP}employeeName> "Alice" .
+<${ENT}e1> <${PROP}name> "Alice" .
 <${ENT}e1> <${PROP}employeeDepartment> "Engineering" .
 <${ENT}e1> <${PROP}bestFriend> <${ENT}e2> .
 <${ENT}e2> <${RDF_TYPE}> <${ET}> .
-<${ENT}e2> <${PROP}employeeName> "Bob" .
+<${ENT}e2> <${PROP}name> "Bob" .
 <${ENT}e2> <${PROP}employeeDepartment> "Sales" .
 <${ENT}m1> <${RDF_TYPE}> <${MT}> .
 <${ENT}m1> <${PROP}metricScore> "3.14"^^<${XSD}decimal> .
@@ -259,6 +259,21 @@ describeFuseki('coverage §5 — builder features', () => {
     // names asc: Jinx, Maximilian, Moa, Quinn, Semmy → offset(1).limit(2)
     expect(await names(Person.select((p: any) => p.name).orderBy((p: any) => p.name).offset(1).limit(2)))
       .toEqual(['Maximilian', 'Moa']);
+  });
+
+  test('paging by subject: each page continues after the last IRI, without overlap', async () => {
+    const pageAfter = (lastId?: string) => {
+      let q = Person.select((p: any) => p.name);
+      if (lastId) q = q.where((p: any) => p.str().gt(lastId));
+      return store.selectQuery(q.orderBy((p: any) => p).limit(2)) as Promise<Row[]>;
+    };
+    const seen: string[] = [];
+    let rows = await pageAfter();
+    while (rows.length) {
+      seen.push(...rows.map((r) => r.id));
+      rows = await pageAfter(rows[rows.length - 1].id);
+    }
+    expect(seen.map((id) => id.replace(ENT, ''))).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
   });
 });
 

@@ -14,6 +14,8 @@ import {Shape} from './Shape.js';
 import {DeleteBuilder} from '../queries/DeleteBuilder.js';
 import type {IDataset} from '../interfaces/IDataset.js';
 import {rdfList} from './List.js';
+import {PathList} from './PathList.js';
+import {rdf} from '../ontologies/rdf.js';
 import {serializePathToNodeData} from './serializePathToNodeData.js';
 import {buildSingleOwnerConstraints} from './singleOwnerConstraint.js';
 import {QueryBuilder} from '../queries/QueryBuilder.js';
@@ -21,7 +23,7 @@ import {sha256Hex} from '../utils/sha256.js';
 import {builtInShapeIris} from '../utils/ShapeCatalog.js';
 
 /**
- * The npm scope of core's shapes. Only its six built-ins (`builtInShapeIris`) are synced; any
+ * The npm scope of core's shapes. Only its built-ins (`builtInShapeIris`) are synced; any
  * other shape declared with core's own `linkedShape` (core's test fixtures) is not.
  */
 const FRAMEWORK_PACKAGE = '@_linked/core';
@@ -76,7 +78,23 @@ export function buildPropertyShapeData(ps: PropertyShapeData, shapeIri: string):
   if (ps.hasValueConstraint !== undefined) d.hasValue = ps.hasValueConstraint;
   if (ps.valueShape) d.valueShape = ps.valueShape;
   if (ps.contains) d.contains = true;
+  if (ps.flags) d.flags = ps.flags;
+  if (ps.languageIn) d.languageIn = rdfList(ps.languageIn, {base: `${psIri}/languageIn`});
+  if (ps.uniqueLang !== undefined) d.uniqueLang = ps.uniqueLang;
+  if (typeof ps.qualifiedMinCount === 'number') d.qualifiedMinCount = ps.qualifiedMinCount;
+  if (ps.deactivated !== undefined) d.deactivated = ps.deactivated;
+  if (ps.message && ps.message.length) d.message = ps.message;
+  if (ps.severity) d.severity = ps.severity;
+  if (ps.properties && ps.properties.length) d.properties = ps.properties;
   return d;
+}
+
+/** An `rdf:List` of shape references, its cells blank once written (`PathList` cells). */
+function shapeList(shapes: {id: string}[]): unknown {
+  return shapes.reduceRight<unknown>(
+    (rest, shape) => ({shape: PathList, first: {id: shape.id}, rest}),
+    {id: rdf.nil.id},
+  );
 }
 
 /** Build the create-pipeline data object for a NodeShape and its (flattened) property shapes. */
@@ -86,10 +104,22 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
   if (nodeShape.description) d.description = nodeShape.description;
   if (nodeShape.extends) d.extends = nodeShape.extends;
   if (nodeShape.dependent) d.dependent = true;
+  if (nodeShape.sharedTargetClass) d.sharedTargetClass = true;
   if (nodeShape.closed !== undefined) d.closed = nodeShape.closed;
   if (nodeShape.ignoredProperties && nodeShape.ignoredProperties.length) {
     d.ignoredProperties = nodeShape.ignoredProperties;
   }
+  if (nodeShape.name) d.name = nodeShape.name;
+  if (nodeShape.targetSubjectsOf && nodeShape.targetSubjectsOf.length) {
+    d.targetSubjectsOf = nodeShape.targetSubjectsOf;
+  }
+  if (nodeShape.deactivated !== undefined) d.deactivated = nodeShape.deactivated;
+  if (nodeShape.message && nodeShape.message.length) d.message = nodeShape.message;
+  if (nodeShape.severity) d.severity = nodeShape.severity;
+  // sh:and / sh:xone are rdf:Lists of shapes, written as blank nodes.
+  if (nodeShape.andShapes && nodeShape.andShapes.length) d.andShapes = shapeList(nodeShape.andShapes);
+  if (nodeShape.xoneShapes && nodeShape.xoneShapes.length) d.xoneShapes = shapeList(nodeShape.xoneShapes);
+  if (nodeShape.notShape) d.notShape = nodeShape.notShape;
   // Flatten: emit own + inherited property shapes (deduped by label) under this shape.
   d.properties = getUniquePropertyShapes(nodeShape).map((ps) =>
     buildPropertyShapeData(ps, shapeIri),
@@ -116,7 +146,7 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
  *
  * @internal Exported for tests only — not part of the public API.
  */
-export const SHAPE_HASH_VERSION = 1;
+export const SHAPE_HASH_VERSION = 2;
 
 /**
  * A canonical string for create-pipeline data: equal for equal data, independent of object key
@@ -292,7 +322,7 @@ function shapeNamespace(iri: string): string {
 
 /**
  * Plan an idempotent sync of all code-registered NodeShapes into the store as SHACL data — the
- * forward (code → graph) materialization of arch-05 "code is canonical". Core's six built-in
+ * forward (code → graph) materialization of arch-05 "code is canonical". Core's built-in
  * shapes are included, like any package's; other shapes in the core package are not.
  *
  * Returns built-but-unexecuted thunks; the caller controls execution and batching:
@@ -339,8 +369,8 @@ export async function syncShapes(
   options?: SyncShapesOptions,
 ): Promise<Array<() => Promise<void>>> {
   const orphanScope = options?.orphanScope ?? 'none';
-  // 1. Enumerate code-registered shapes: every package's, and core's six built-ins (`Shape`,
-  //    `NodeShape`, `PropertyShape`, `List`, `PathNode`, `PathList`), so a dataset is a complete
+  // 1. Enumerate code-registered shapes: every package's, and core's built-ins
+  //    (`builtInShapeIris()`: the SHACL metamodel and its lists), so a dataset is a complete
   //    shape catalog on its own. Other core-package shapes and classes with no package are skipped.
   const builtIns = new Set(builtInShapeIris());
   const userShapes: Array<{iri: string; nodeShape: NodeShapeData}> = [];

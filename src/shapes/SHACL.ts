@@ -7,9 +7,12 @@ import {type NodeReferenceValue, toNodeReference} from '../utils/NodeReference.j
 import {Shape, type ShapeConstructor} from './Shape.js';
 import {shacl} from '../ontologies/shacl.js';
 import {warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
-import {getShapeClass} from '../utils/ShapeClass.js';
+import {getShapeClass, getSuperShapes} from '../utils/ShapeClass.js';
 import {sharedState} from '../utils/sharedState.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
+import type {ShapeSet} from '../collections/ShapeSet.js';
+import type {List} from './List.class.js';
+import type {PropertyGroup} from './PropertyGroup.class.js';
 import {normalizePropertyPath, type PropertyPathDecoratorInput} from '../paths/normalizePropertyPath.js';
 import {
   createPropertyShapeData,
@@ -19,6 +22,12 @@ import {
   type NodeShapeData,
   type PropertyShapeData,
 } from './nodeShapeData.js';
+import {
+  inheritedSamePath,
+  overrideWidenings,
+  samePathReason,
+  valueShapeNarrows,
+} from './tightenOnly.js';
 
 // Metadata types now live in nodeShapeData.js (plain objects); re-exported here for
 // existing importers of `NodeShape`/`PropertyShape`-adjacent types.
@@ -213,14 +222,16 @@ export interface ObjectPropertyShapeConfig extends PropertyShapeConfig {
    * - Deleting the subject (by id or in bulk) deletes its owned subtree (recursion other than a
    *   shape owning its own kind stops after `MAX_OWNED_RECURSION` re-entries): the values
    *   of its `contains` properties, the values their shapes own in turn, and the extra `contains`
-   *   values of registered sub-shapes (followed only from nodes of the sub-shape's class).
+   *   values of registered sub-shapes (followed only from nodes of the sub-shape's class, read
+   *   through the store's inferred types).
    * - Linking an existing node by `{id}` is class-checked: it is refused when the node is typed
-   *   and none of its types is the shape's class, a registered sub-shape's, or `sh:class`.
+   *   and none of its types (the store infers the superclasses of its asserted ones) is the
+   *   value shape's `targetClass` or `sh:class`.
    *
    * Shape sync also persists a generated SHACL shape for this property (at its property shape's
    * IRI plus `.singleOwner`, written by the declaring class only) that limits each value of the
-   * predicate to one owner of the declaring class or a registered sub-shape's class. It is not
-   * enforced on write.
+   * predicate to one owner of the declaring class (`sh:class`, so subclass instances count). It is
+   * not enforced on write.
    */
   contains?: boolean;
 }
@@ -280,7 +291,8 @@ export interface PropertyShapeConfig {
   name?: string;
   description?: string;
   order?: number;
-  group?: string;
+  /** `sh:group` — the `PropertyGroup` node (or its IRI) the property is shown in. */
+  group?: NodeReferenceValue | string;
   /**
    * Display importance, lower = more important (`core:displayRank`).
    * A renderer that can show only N properties shows the N lowest ranks.
@@ -310,12 +322,24 @@ export interface PropertyShapeConfig {
 const EXPLICIT_NODE_KIND_SYMBOL = Symbol('explicitNodeKind');
 const EXPLICIT_MIN_COUNT_SYMBOL = Symbol('explicitMinCount');
 const EXPLICIT_MAX_COUNT_SYMBOL = Symbol('explicitMaxCount');
+const EXPLICIT_VALUE_SHAPE_SYMBOL = Symbol('explicitValueShape');
+const EXPLICIT_NO_CONTAINS_SYMBOL = Symbol('explicitNoContains');
+const DEFERRED_BASE_SYMBOL = Symbol('deferredOverrideBase');
 
 /** Internal symbol-keyed flags on a PropertyShapeData object to track which fields were explicitly configured. */
 interface ExplicitFlags {
   [EXPLICIT_NODE_KIND_SYMBOL]?: boolean;
   [EXPLICIT_MIN_COUNT_SYMBOL]?: boolean;
   [EXPLICIT_MAX_COUNT_SYMBOL]?: boolean;
+  /** The config named a value shape (`shape`), which may be connected after registration. */
+  [EXPLICIT_VALUE_SHAPE_SYMBOL]?: boolean;
+  /** The config said `contains: false`. */
+  [EXPLICIT_NO_CONTAINS_SYMBOL]?: boolean;
+  /**
+   * The inherited property this override's value shape is compared with once the value shape
+   * is connected (it was not set up yet when the override registered).
+   */
+  [DEFERRED_BASE_SYMBOL]?: {shape: NodeShapeData; base: PropertyShapeData};
 }
 
 export interface ParameterConfig {
@@ -333,6 +357,128 @@ export interface ParameterConfig {
  */
 export class NodeShape extends Shape {
   static targetClass = shacl.NodeShape;
+
+  // Typed accessors for the metamodel's property shapes (registered in `utils/Package.ts`), so a
+  // select or a subclass reads them typed. Never called: a NodeShape is never instantiated.
+  /** `rdfs:label` — the shape's name in code. */
+  get label(): string {
+    return null;
+  }
+
+  /** `rdfs:comment` — what the shape describes (SHACL's `sh:description` is for property shapes). */
+  get description(): string {
+    return null;
+  }
+
+  /** `sh:name` — a human-readable name. */
+  get name(): string {
+    return null;
+  }
+
+  /** `sh:property` — the property shapes. */
+  get properties(): ShapeSet<PropertyShape> {
+    return null;
+  }
+
+  /** `sh:targetClass`. */
+  get targetClass(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:targetNode`. */
+  get targetNode(): ShapeSet<Shape> {
+    return null;
+  }
+
+  /** `sh:targetObjectsOf`. */
+  get targetObjectsOf(): ShapeSet<Shape> {
+    return null;
+  }
+
+  /** `sh:targetSubjectsOf`. */
+  get targetSubjectsOf(): ShapeSet<Shape> {
+    return null;
+  }
+
+  /** `core:isExtending` — the shape this one extends. */
+  get extends(): ShapeSet<NodeShape> {
+    return null;
+  }
+
+  /** `sh:closed`. */
+  get closed(): boolean {
+    return null;
+  }
+
+  /** `sh:ignoredProperties`. */
+  get ignoredProperties(): ShapeSet<Shape> {
+    return null;
+  }
+
+  /** `sh:deactivated`. */
+  get deactivated(): boolean {
+    return null;
+  }
+
+  /** `sh:message` — one per language. */
+  get message(): string[] {
+    return null;
+  }
+
+  /** `sh:severity`. */
+  get severity(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:class` (a node shape used as a value or qualified shape). */
+  get class(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:or` — an `rdf:List` of shapes. */
+  get orShapes(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:and` — an `rdf:List` of shapes. */
+  get andShapes(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:xone` — an `rdf:List` of shapes. */
+  get xoneShapes(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:not`. */
+  get notShape(): NodeShape {
+    return null;
+  }
+
+  /** `core:dependent` (deprecated, no effect). */
+  get dependent(): boolean {
+    return null;
+  }
+
+  /** `core:sharedTargetClass` — exempt from the borrowed-target-class check. */
+  get sharedTargetClass(): boolean {
+    return null;
+  }
+
+  /** `core:generated` — a shape core generates at sync time. */
+  get generated(): boolean {
+    return null;
+  }
+
+  /** `core:generatedShape` — the generated shapes this shape owns. */
+  get generatedShapes(): ShapeSet<NodeShape> {
+    return null;
+  }
+
+  /** `core:shapeHash` — the content hash shape sync stored. */
+  get shapeHash(): string {
+    return null;
+  }
 }
 
 /**
@@ -344,6 +490,203 @@ export class NodeShape extends Shape {
  */
 export class PropertyShape extends Shape {
   static targetClass = shacl.PropertyShape;
+
+  // Typed accessors for the metamodel's property shapes (registered in `utils/Package.ts`).
+  // Never called: a PropertyShape is never instantiated.
+  /** `rdfs:label` — the accessor name. */
+  get label(): string {
+    return null;
+  }
+
+  /** `sh:path` — a predicate IRI, or a blank path node. */
+  get path(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:name`. */
+  get name(): string {
+    return null;
+  }
+
+  /** `sh:description`. */
+  get description(): string {
+    return null;
+  }
+
+  /** `sh:node` — the value shape. */
+  get valueShape(): NodeShape {
+    return null;
+  }
+
+  /** `sh:nodeKind`. */
+  get nodeKind(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:datatype`. */
+  get datatype(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:class`. */
+  get class(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:minCount`. */
+  get minCount(): number {
+    return null;
+  }
+
+  /** `sh:maxCount`. */
+  get maxCount(): number {
+    return null;
+  }
+
+  /** `sh:in` — an `rdf:List` of allowed values. */
+  get in(): List {
+    return null;
+  }
+
+  /** `sh:equals`. */
+  get equalsConstraint(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:disjoint`. */
+  get disjoint(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:lessThan`. */
+  get lessThan(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:lessThanOrEquals`. */
+  get lessThanOrEquals(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `sh:hasValue` (a literal; an IRI value reads as its IRI). */
+  get hasValue(): string {
+    return null;
+  }
+
+  /** `sh:defaultValue`. */
+  get defaultValue(): string {
+    return null;
+  }
+
+  /** `sh:minInclusive`. */
+  get minInclusive(): number {
+    return null;
+  }
+
+  /** `sh:maxInclusive`. */
+  get maxInclusive(): number {
+    return null;
+  }
+
+  /** `sh:minExclusive`. */
+  get minExclusive(): number {
+    return null;
+  }
+
+  /** `sh:maxExclusive`. */
+  get maxExclusive(): number {
+    return null;
+  }
+
+  /** `sh:minLength`. */
+  get minLength(): number {
+    return null;
+  }
+
+  /** `sh:maxLength`. */
+  get maxLength(): number {
+    return null;
+  }
+
+  /** `sh:pattern`. */
+  get pattern(): string {
+    return null;
+  }
+
+  /** `sh:flags` — the `sh:pattern` flags. */
+  get flags(): string {
+    return null;
+  }
+
+  /** `sh:languageIn` — an `rdf:List` of language tags. */
+  get languageIn(): List {
+    return null;
+  }
+
+  /** `sh:uniqueLang`. */
+  get uniqueLang(): boolean {
+    return null;
+  }
+
+  /** `sh:order`. */
+  get order(): number {
+    return null;
+  }
+
+  /** `sh:group`. */
+  get group(): PropertyGroup {
+    return null;
+  }
+
+  /** `sh:qualifiedValueShape`. */
+  get qualifiedValueShape(): NodeShape {
+    return null;
+  }
+
+  /** `sh:qualifiedMinCount`. */
+  get qualifiedMinCount(): number {
+    return null;
+  }
+
+  /** `sh:qualifiedMaxCount`. */
+  get qualifiedMaxCount(): number {
+    return null;
+  }
+
+  /** `sh:property` — nested property shapes. */
+  get properties(): ShapeSet<PropertyShape> {
+    return null;
+  }
+
+  /** `sh:deactivated`. */
+  get deactivated(): boolean {
+    return null;
+  }
+
+  /** `sh:message` — one per language. */
+  get message(): string[] {
+    return null;
+  }
+
+  /** `sh:severity`. */
+  get severity(): NodeReferenceValue {
+    return null;
+  }
+
+  /** `core:displayRank`. */
+  get displayRank(): number {
+    return null;
+  }
+
+  /** `core:displayHidden`. */
+  get displayHidden(): boolean {
+    return null;
+  }
+
+  /** `core:contains` — the subject owns the value. */
+  get contains(): boolean {
+    return null;
+  }
 }
 
 const connectValueShape = <
@@ -369,6 +712,7 @@ const connectValueShape = <
           shapeConfig,
           (nodeShape: NodeShapeData) => {
             property.valueShape = {id: nodeShape.id};
+            checkDeferredValueShape(property);
           },
           propertyKey,
         );
@@ -399,16 +743,13 @@ export function registerPropertyShape(
   const inherited = getPropertyShapeData(shape, propertyShape.label, true);
   const existing = getPropertyShapeData(shape, propertyShape.label, false);
   if (!existing && inherited) {
-    if (!(propertyShape as unknown as ExplicitFlags)[EXPLICIT_MIN_COUNT_SYMBOL]) {
-      propertyShape.minCount = inherited.minCount;
-    }
-    if (!(propertyShape as unknown as ExplicitFlags)[EXPLICIT_MAX_COUNT_SYMBOL]) {
-      propertyShape.maxCount = inherited.maxCount;
-    }
-    if (!(propertyShape as unknown as ExplicitFlags)[EXPLICIT_NODE_KIND_SYMBOL]) {
-      propertyShape.nodeKind = inherited.nodeKind;
-    }
+    inheritOmittedConstraints(inherited, propertyShape);
     validateOverrideTightening(shape, inherited, propertyShape);
+  } else if (!existing) {
+    const other = inheritedSamePath(getSuperShapes(shape), propertyShape);
+    if (other) {
+      throwOverrideError(shape, propertyShape, samePathReason(other));
+    }
   }
   if (existing) {
     Object.assign(existing, propertyShape);
@@ -419,82 +760,86 @@ export function registerPropertyShape(
   return propertyShape;
 }
 
-const ATOMIC_NODE_KINDS = [
-  shacl.BlankNode.id,
-  shacl.IRI.id,
-  shacl.Literal.id,
-];
-
-const nodeKindToAtomics = (nodeKind?: NodeReferenceValue): Set<string> => {
-  if (!nodeKind?.id) {
-    return new Set();
+/**
+ * An override inherits every constraint it does not restate: the cardinality and node kind, and
+ * the datatype, class, value shape and `contains`. An override that restates only its cardinality
+ * must not widen the rest. A constraint of the other kind blocks the inheritance (an override
+ * naming a `class` does not inherit a `datatype`), so the override's own declaration decides.
+ */
+const inheritOmittedConstraints = (inherited: PropertyShapeData, override: PropertyShapeData) => {
+  const flags = override as unknown as ExplicitFlags;
+  if (!flags[EXPLICIT_MIN_COUNT_SYMBOL]) {
+    override.minCount = inherited.minCount;
   }
-  switch (nodeKind.id) {
-    case shacl.BlankNode.id:
-    case shacl.IRI.id:
-    case shacl.Literal.id:
-      return new Set([nodeKind.id]);
-    case shacl.BlankNodeOrIRI.id:
-      return new Set([shacl.BlankNode.id, shacl.IRI.id]);
-    case shacl.IRIOrLiteral.id:
-      return new Set([shacl.IRI.id, shacl.Literal.id]);
-    case shacl.BlankNodeOrLiteral.id:
-      return new Set([shacl.BlankNode.id, shacl.Literal.id]);
-    default:
-      return new Set(ATOMIC_NODE_KINDS);
+  if (!flags[EXPLICIT_MAX_COUNT_SYMBOL]) {
+    override.maxCount = inherited.maxCount;
+  }
+  if (!flags[EXPLICIT_NODE_KIND_SYMBOL]) {
+    override.nodeKind = inherited.nodeKind;
+  }
+  const namesValueShape = !!flags[EXPLICIT_VALUE_SHAPE_SYMBOL] || !!override.valueShape;
+  if (!override.datatype && !override.class && !namesValueShape && inherited.datatype) {
+    override.datatype = inherited.datatype;
+  }
+  if (!override.class && !override.datatype && inherited.class) {
+    override.class = inherited.class;
+  }
+  if (!namesValueShape && !override.datatype && inherited.valueShape) {
+    override.valueShape = inherited.valueShape;
+  }
+  if (!override.contains && !flags[EXPLICIT_NO_CONTAINS_SYMBOL] && inherited.contains) {
+    override.contains = true;
   }
 };
 
-const throwOverrideError = (
+/**
+ * Tighten-only: an override (a property redeclared under an inherited label) may only narrow the
+ * inherited property, and a new label may not redeclare an inherited path. Every widening is
+ * refused at registration (see `tightenOnly.ts` for the cases).
+ */
+function throwOverrideError(
   shape: NodeShapeData,
   propertyShape: PropertyShapeData,
   message: string,
-) => {
+): never {
   throw new Error(
     `Invalid override for ${shape.label}.${propertyShape.label}: ${message}`,
   );
-};
+}
 
 const validateOverrideTightening = (
   shape: NodeShapeData,
   base: PropertyShapeData,
   override: PropertyShapeData,
 ) => {
-  if (
-    typeof base.minCount === 'number' &&
-    typeof override.minCount === 'number' &&
-    override.minCount < base.minCount
-  ) {
-    throwOverrideError(
-      shape,
-      override,
-      `minCount cannot be lowered (${base.minCount} -> ${override.minCount}).`,
-    );
+  const widening = overrideWidenings(base, override)[0];
+  if (widening) {
+    throwOverrideError(shape, override, widening.reason);
   }
-
+  // A value shape still being set up is compared once it is connected (connectValueShape).
+  const flags = override as unknown as ExplicitFlags;
   if (
-    typeof base.maxCount === 'number' &&
-    typeof override.maxCount === 'number' &&
-    override.maxCount > base.maxCount
+    base.valueShape?.id &&
+    (flags[EXPLICIT_VALUE_SHAPE_SYMBOL] && !override.valueShape
+      || (override.valueShape && valueShapeNarrows(base.valueShape, override.valueShape) === undefined))
   ) {
-    throwOverrideError(
-      shape,
-      override,
-      `maxCount cannot be increased (${base.maxCount} -> ${override.maxCount}).`,
-    );
-  }
-
-  if (base.nodeKind && override.nodeKind) {
-    const baseKinds = nodeKindToAtomics(base.nodeKind);
-    const overrideKinds = nodeKindToAtomics(override.nodeKind);
-    const widensNodeKind = [...overrideKinds].some((kind) => !baseKinds.has(kind));
-    if (widensNodeKind) {
-      throwOverrideError(
-        shape,
-        override,
-        `nodeKind cannot be widened (${base.nodeKind.id} -> ${override.nodeKind.id}).`,
-      );
+    flags[DEFERRED_BASE_SYMBOL] = {shape, base};
+    // A `[package, name]` value shape not registered yet: compare when it registers.
+    if (override.valueShape?.id) {
+      addNodeShapeCallback(override.valueShape.id, () => checkDeferredValueShape(override));
     }
+  }
+};
+
+/** The deferred value-shape comparison of an override, run once its value shape is set up. */
+const checkDeferredValueShape = (override: PropertyShapeData) => {
+  const flags = override as unknown as ExplicitFlags;
+  const deferred = flags[DEFERRED_BASE_SYMBOL];
+  if (!deferred) return;
+  delete flags[DEFERRED_BASE_SYMBOL];
+  const widening = overrideWidenings(deferred.base, override, new Set(['valueShape']))[0];
+  if (widening) {
+    throwOverrideError(deferred.shape, override, widening.reason);
   }
 };
 
@@ -554,7 +899,11 @@ export function createPropertyShape<
       );
     }
     propertyShape.contains = true;
+  } else if ((config as ObjectPropertyShapeConfig).contains === false) {
+    (propertyShape as unknown as ExplicitFlags)[EXPLICIT_NO_CONTAINS_SYMBOL] = true;
   }
+  (propertyShape as unknown as ExplicitFlags)[EXPLICIT_VALUE_SHAPE_SYMBOL] =
+    !!(config as ObjectPropertyShapeConfig).shape;
 
   if (config.equals) {
     propertyShape.equalsConstraint = toNodeReference(config.equals);
@@ -601,7 +950,7 @@ export function createPropertyShape<
   // dropped and every renderer fell back to array position. Carried now, alongside
   // the two display terms.
   if (config.order !== undefined) propertyShape.order = config.order;
-  if (config.group !== undefined) propertyShape.group = config.group;
+  if (config.group !== undefined) propertyShape.group = toNodeReference(config.group);
   if (config.displayRank !== undefined) propertyShape.displayRank = config.displayRank;
   if (config.displayHidden !== undefined)
     propertyShape.displayHidden = config.displayHidden;

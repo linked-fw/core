@@ -8,7 +8,7 @@
  */
 
 import type {NodeShapeData} from '../shapes/SHACL.js';
-import {walkPropertyPath} from './PropertyPath.js';
+import {PropertyPath, walkPropertyPath} from './PropertyPath.js';
 import type {WherePath, SortByPath} from './SelectQuery.js';
 import type {RawMinusEntry, PropertyPathSegment} from './IRDesugar.js';
 import {
@@ -85,9 +85,13 @@ export function deserializeSortByPath(
   shape: NodeShapeData,
   json: SortByPathJSON,
 ): SortByPath {
-  // Per-path directions: each `{path: dir}` entry keeps its own direction.
+  // Per-path directions: each `{path: dir}` entry keeps its own direction. The empty
+  // path is the subject itself (`orderBy((p) => p)` serializes to `{"": dir}`).
   return {
-    paths: json.map((e) => walkPropertyPath(shape, Object.keys(e)[0])),
+    paths: json.map((e) => {
+      const path = Object.keys(e)[0];
+      return path === '' ? new PropertyPath(shape, []) : walkPropertyPath(shape, path);
+    }),
     directions: json.map((e) => Object.values(e)[0]) as ('ASC' | 'DESC')[],
   };
 }

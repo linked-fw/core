@@ -450,11 +450,13 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
   // The persisted shapes, read back out of the store, validated by Jena SHACL. Before
   // complex paths were blank nodes, `sh:path <…/owners/inv>` was read as a predicate path
   // that matches nothing, and this report said `sh:conforms true`. The owners are typed with
-  // the sub-shape's class only: the dataset has no `rdfs:subClassOf`, so the constraint must
-  // name every owner class itself.
+  // the sub-shape's class only: the constraint names the declaring class, and the data's
+  // `rdfs:subClassOf` (the ontology sync's triple) makes them its instances.
   const IMG = 'https://example.org/e2e#img1';
   const RDF_TYPE = `<${RDF}type>`;
+  const hierarchy = `<${ex('SubProject').id}> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <${ex('Project').id}> .\n`;
   const twoOwners =
+    hierarchy +
     `<${ex('p1').id}> ${RDF_TYPE} <${ex('SubProject').id}> ; <${schemaImage.id}> <${IMG}> .\n` +
     `<${ex('p2').id}> ${RDF_TYPE} <${ex('SubProject').id}> ; <${schemaImage.id}> <${IMG}> .\n`;
 
@@ -482,25 +484,25 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
     await runSync();
     const report = await validateWithJenaShacl(
       await readDatasetAsTurtle(),
-      `<${ex('p1').id}> ${RDF_TYPE} <${ex('SubProject').id}> ; <${schemaImage.id}> <${IMG}> .\n` +
+      hierarchy +
+        `<${ex('p1').id}> ${RDF_TYPE} <${ex('SubProject').id}> ; <${schemaImage.id}> <${IMG}> .\n` +
         `<${ex('r1').id}> ${RDF_TYPE} <${ex('Other').id}> ; <${schemaImage.id}> <${IMG}> .\n`,
     );
     expect(report).toMatch(/sh:conforms\s+true/);
   }, LIVE_FUSEKI_TIMEOUT);
 
-  test('the qualified owner shape is blank, names both classes, and a re-sync leaves no blank node behind', async () => {
+  test('the qualified owner shape is blank, names the declaring class only, and a re-sync leaves no blank node behind', async () => {
     await runSync();
     const owners = `<${IMAGE()}/owners>`;
     expect(await has(`${owners} <${SH}qualifiedMaxCount> 1`)).toBe(true);
     expect(await has(`${owners} <${SH}maxCount> ?m`)).toBe(false);
-    for (const cls of ['Project', 'SubProject']) {
-      expect(
-        await has(
-          `${owners} <${SH}qualifiedValueShape> ?q . FILTER(isBlank(?q)) ` +
-            `?q <${SH}or>/<${RDF}rest>*/<${RDF}first> ?c . ?c <${SH}class> <${ex(cls).id}> . FILTER(isBlank(?c))`,
-        ),
-      ).toBe(true);
-    }
+    expect(
+      await has(
+        `${owners} <${SH}qualifiedValueShape> ?q . FILTER(isBlank(?q)) ?q <${SH}class> <${ex('Project').id}>`,
+      ),
+    ).toBe(true);
+    expect(await has(`${owners} <${SH}qualifiedValueShape> ?q . ?q <${SH}or> ?l`)).toBe(false);
+    expect(await has(`${owners} <${SH}qualifiedValueShape> ?q . ?q <${SH}class> <${ex('SubProject').id}>`)).toBe(false);
     const blanks = await count('?b ?p ?o . FILTER(isBlank(?b))');
     await runSync({force: true});
     expect(await count('?b ?p ?o . FILTER(isBlank(?b))')).toBe(blanks);

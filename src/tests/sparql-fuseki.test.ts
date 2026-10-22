@@ -126,11 +126,11 @@ const TEST_DATA = `
 <${ENT}dog2> <${RDF_TYPE}> <${DT}> .
 <${ENT}dog2> <${RDF_TYPE}> <${PETT}> .
 <${ENT}e1> <${RDF_TYPE}> <${ET}> .
-<${ENT}e1> <${PROP}employeeName> "Alice" .
+<${ENT}e1> <${PROP}name> "Alice" .
 <${ENT}e1> <${PROP}employeeDepartment> "Engineering" .
 <${ENT}e1> <${PROP}bestFriend> <${ENT}e2> .
 <${ENT}e2> <${RDF_TYPE}> <${ET}> .
-<${ENT}e2> <${PROP}employeeName> "Bob" .
+<${ENT}e2> <${PROP}name> "Bob" .
 <${ENT}e2> <${PROP}employeeDepartment> "Sales" .
 `.trim();
 

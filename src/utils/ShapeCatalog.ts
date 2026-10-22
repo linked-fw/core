@@ -27,8 +27,10 @@ import {fromWire, isNodeShapeWire, type NodeShapeWire} from '../shapes/nodeShape
 import {getNodeShapeUri} from '../shapes/SHACL.js';
 import {warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
 import {getRegisteredShapeClass} from './ShapeClass.js';
-// Registers PathNode and PathList (PathNode imports PathList), two of the built-ins.
+// Registers PathNode and PathList (PathNode imports PathList) and OntologySync, built-ins that
+// are not part of the metamodel Package.ts registers.
 import '../shapes/PathNode.js';
+import '../shapes/OntologySync.js';
 
 export {
   withShapeCatalog,
@@ -46,9 +48,18 @@ export {
  * (`NodeShape`, `PropertyShape`, their `sh:in` lists and complex paths) is how a shape
  * sync reads and writes shapes.
  */
-const BUILT_IN_NAMES = ['Shape', 'NodeShape', 'PropertyShape', 'List', 'PathNode', 'PathList'];
+const BUILT_IN_NAMES = [
+  'Shape',
+  'NodeShape',
+  'PropertyShape',
+  'List',
+  'PathNode',
+  'PathList',
+  'PropertyGroup',
+  'OntologySync',
+];
 
-/** The IRIs of core's six built-in shapes, which every catalog holds. */
+/** The IRIs of core's built-in shapes, which every catalog holds. */
 export function builtInShapeIris(): string[] {
   return BUILT_IN_NAMES.map((name) => getNodeShapeUri('@_linked/core', name));
 }
@@ -83,7 +94,7 @@ export class ShapeCatalog {
    * global registry, a row for an IRI that has a compiled class elsewhere is kept: inside a
    * catalog the data is the authority.
    *
-   * Core's six built-in shapes always come from core's code, with their classes. `syncShapes`
+   * Core's built-in shapes always come from core's code, with their classes. `syncShapes`
    * writes them into datasets too, but a row for one of their IRIs is ignored here: the
    * metamodel (its cascades, its routing pins) must not depend on how faithfully a catalog was
    * read, or on which core version last synced the dataset.

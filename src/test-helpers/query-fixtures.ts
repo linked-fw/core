@@ -44,7 +44,6 @@ export const personClass = type('Person');
 export const employeeClass = type('Employee');
 export const petClass = type('Pet');
 export const dogClass = type('Dog');
-export const employeeName = prop('employeeName');
 export const employeeDepartment = prop('employeeDepartment');
 
 @linkedShape
@@ -222,7 +221,8 @@ export class PathNode extends Shape {
 export class Employee extends Person {
   static targetClass = employeeClass;
 
-  @literalProperty({path: employeeName, maxCount: 1})
+  // An override keeps the inherited path (tighten-only); it may only narrow the constraints.
+  @literalProperty({path: name, maxCount: 1})
   get name(): string {
     return '';
   }

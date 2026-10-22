@@ -26,7 +26,8 @@ export interface PropertyShapeData {
   name?: string;
   description?: string;
   order?: number;
-  group?: string;
+  /** `sh:group` — the `PropertyGroup` node the property is shown in. */
+  group?: NodeReferenceValue;
   /**
    * `core:displayRank` — a single linear importance rank, lower = more
    * important. Truncated display contexts ("the top 3 properties") derive from it.
@@ -57,6 +58,22 @@ export interface PropertyShapeData {
   valueShape?: NodeReferenceValue;
   /** Composition marker: the value(s) of this property are owned by the subject. */
   contains?: boolean;
+  /** `sh:flags` — the regular-expression flags of `sh:pattern`. */
+  flags?: string;
+  /** `sh:languageIn` — the language tags a literal value may carry. */
+  languageIn?: string[];
+  /** `sh:uniqueLang` — at most one value per language tag. */
+  uniqueLang?: boolean;
+  /** `sh:qualifiedMinCount` — the minimum number of values conforming to `sh:qualifiedValueShape`. */
+  qualifiedMinCount?: number;
+  /** `sh:deactivated` — the constraint is switched off. */
+  deactivated?: boolean;
+  /** `sh:message` — the validation message(s), one per language. */
+  message?: string[];
+  /** `sh:severity` — `sh:Violation`, `sh:Warning` or `sh:Info`. */
+  severity?: NodeReferenceValue;
+  /** `sh:property` — property shapes nested under this one, by IRI. */
+  properties?: NodeReferenceValue[];
   parentNodeShape?: NodeShapeData;
 }
 
@@ -78,6 +95,32 @@ export interface NodeShapeData {
   closed?: boolean;
   /** sh:ignoredProperties — extra properties permitted when the shape is closed. */
   ignoredProperties?: NodeReferenceValue[];
+  /** `sh:name` — a display name for the shape. */
+  name?: string;
+  /** `sh:targetSubjectsOf` — the shape targets every subject of these predicates. */
+  targetSubjectsOf?: NodeReferenceValue[];
+  /** `sh:deactivated` — the shape is switched off. */
+  deactivated?: boolean;
+  /** `sh:message` — the validation message(s), one per language. */
+  message?: string[];
+  /** `sh:severity` — `sh:Violation`, `sh:Warning` or `sh:Info`. */
+  severity?: NodeReferenceValue;
+  /** `sh:and` — every one of these shapes must hold. */
+  andShapes?: NodeReferenceValue[];
+  /** `sh:xone` — exactly one of these shapes must hold. */
+  xoneShapes?: NodeReferenceValue[];
+  /** `sh:not` — this shape must not hold. */
+  notShape?: NodeReferenceValue;
+  /**
+   * `core:sharedTargetClass` — the shape shares its targetClass on purpose
+   * (`@linkedShape({sharedTargetClass: true})`); the shape check does not report it as borrowed.
+   */
+  sharedTargetClass?: boolean;
+  /**
+   * `core:generated` — a shape core generated at sync time (a single-owner constraint), present
+   * on such a shape when it is read back from a store. The shape check skips it.
+   */
+  generated?: boolean;
   propertyShapes: PropertyShapeData[];
 }
 
@@ -98,7 +141,7 @@ export interface PropertyShapeResult {
   name?: string;
   description?: string;
   order?: number;
-  group?: string;
+  group?: NodeReferenceValue;
   class?: NodeReferenceValue;
   in?: (NodeReferenceValue | string | number | boolean)[];
   equals?: NodeReferenceValue;

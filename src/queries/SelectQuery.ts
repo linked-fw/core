@@ -1259,6 +1259,15 @@ export class QueryShape<
     return self.eq(arg as any);
   }
 
+  /**
+   * The node's IRI as a string (SPARQL `STR`), so a node can be compared by its IRI:
+   * `.where((p) => p.str().gt(lastId))` is the cursor of a list paged by subject
+   * (`.orderBy((p) => p)`).
+   */
+  str(): ExpressionNode {
+    return toExpressionNode(this).str();
+  }
+
   oneOf(values: (NodeReferenceValue | QShape<any>)[]): ExpressionNode {
     return toExpressionNode(this).oneOf(
       values.map((v) => (isLinkedInstance(v, QueryBuilderObject) ? toExpressionNode(v) : v)) as any,

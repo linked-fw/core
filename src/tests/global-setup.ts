@@ -5,18 +5,39 @@
  * workers, and records the answer for `describeFuseki` (see `test-helpers/fuseki-live.ts`).
  * When the run requires Fuseki (`CI`, or `REQUIRE_FUSEKI`), an unreachable Fuseki aborts the
  * whole run here — a CI run must never report the live suites green without running them.
+ *
+ * A reachable Fuseki must infer `rdf:type` through `rdfs:subClassOf` (core relies on it): a
+ * probe checks it, and a store that does not infer — a stock Fuseki left on the port — fails
+ * the run, naming the image to run. Datasets a killed run left behind are deleted first.
  */
 import {
   ensureFuseki,
   fusekiRequired,
   FUSEKI_BASE_URL,
   FUSEKI_LIVE_ENV,
+  probeInference,
+  reapTestDatasets,
 } from '../test-helpers/fuseki-test-store';
 
 export default async function globalSetup() {
   const available = await ensureFuseki();
   process.env[FUSEKI_LIVE_ENV] = available ? '1' : '0';
-  if (available) return;
+  if (available) {
+    const reaped = await reapTestDatasets();
+    if (reaped.length) {
+      console.log(`[globalSetup] deleted ${reaped.length} dataset(s) a previous run left behind`);
+    }
+    if (!(await probeInference())) {
+      throw new Error(
+        `[globalSetup] The Fuseki at ${FUSEKI_BASE_URL} does not infer rdf:type through ` +
+          `rdfs:subClassOf, which core's live tests rely on. Run the inferring image ` +
+          `(ghcr.io/linked-fw/fuseki, or linked-fuseki:dev built from linked-fw/fuseki's ` +
+          `server/Dockerfile, through LINKED_FUSEKI_IMAGE), not a stock Fuseki: stop the ` +
+          `container on that port, or point FUSEKI_BASE_URL at another one.`,
+      );
+    }
+    return;
+  }
 
   if (fusekiRequired()) {
     throw new Error(

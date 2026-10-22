@@ -1,6 +1,13 @@
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
 import {createNameSpace} from '../utils/NameSpace.js';
 import {Prefix} from '../utils/Prefix.js';
+import {loadOntologyFiles} from '../ontology/loadOntologyFiles.js';
+
+/** This ontology's data, relative to this module (Turtle, copied into `lib/` by the build). */
+export const dataFiles = ['../data/core.ttl'];
+
+/** Reads this ontology's data (server only). */
+export const loadData = () => loadOntologyFiles(import.meta.url, dataFiles);
 
 // The @_linked/core framework vocabulary. First-party ontology IRIs follow Create Now
 // arch-02 §"Public ontology namespace":
@@ -61,6 +68,19 @@ const generatedShape = ns('generatedShape');
 // hash equals the hash of what it would write.
 const shapeHash = ns('shapeHash');
 
+// A NodeShape that shares its targetClass on purpose (`@linkedShape({sharedTargetClass: true})`),
+// so the shape check does not report it as borrowing another shape's class.
+const sharedTargetClass = ns('sharedTargetClass');
+
+// Ontology sync (`syncOntologies`): one `core:OntologySync` node per package records the class
+// hierarchy it last wrote into the dataset (`core:ontologyTriples`, sorted N-Triples) and its
+// content hash (`core:ontologyHash`), so an unchanged package is skipped and a changed one is
+// replaced by a diff.
+const OntologySync = ns('OntologySync');
+const packageName = ns('packageName');
+const ontologyHash = ns('ontologyHash');
+const ontologyTriples = ns('ontologyTriples');
+
 export const coreOntology = {
   Package,
   ShapeClass,
@@ -77,4 +97,9 @@ export const coreOntology = {
   generated,
   generatedShape,
   shapeHash,
+  sharedTargetClass,
+  OntologySync,
+  packageName,
+  ontologyHash,
+  ontologyTriples,
 };
