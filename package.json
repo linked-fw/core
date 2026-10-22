@@ -67,7 +67,7 @@
     "test:fuseki": "REQUIRE_FUSEKI=1 NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --testNamePattern='\\[fuseki\\]'"
   },
   "devDependencies": {
-    "@_linked/cli": "^1.45.5",
+    "@_linked/cli": "^1.54.0",
     "@changesets/changelog-github": "^1.0.0",
     "@changesets/cli": "^3.0.0",
     "@jest/globals": "^30.0.0",
