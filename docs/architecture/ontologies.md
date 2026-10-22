@@ -9,7 +9,7 @@ There are two kinds, and they are not the same thing wearing different names.
 ## Core's vocabularies are shortcuts
 
 `src/ontologies/` here holds `rdf`, `rdfs`, `owl`, `shacl`, `xsd`, `npm` and `linked-core`.
-These are **shortcuts core needs without depending on the packages that carry the full
+`rdf`, `rdfs`, `owl`, `shacl` and `xsd` are **shortcuts core needs without depending on the packages that carry the full
 ontologies**. Core cannot import `@_linked/xsd` to know what `xsd:string` is — that package
 depends on core.
 
@@ -23,6 +23,10 @@ They are not a smaller version of the real thing and should not grow into one. I
 itself wanting a term it does not have, the question is whether core should be reaching for
 that term at all.
 
+`linked-core` (`core:`) and `npm` are different: they are registered like a package's ontology
+(`linked-core.register.ts`, `npm.register.ts`, imported by core's index), with Turtle data in
+`src/data/core.ttl` and `src/data/npm.ttl` that types, labels and describes every term.
+
 `linked-core` is core's own vocabulary: the terms of its SHACL meta-model extensions, such as
 `core:contains`, `core:dependent`, `core:displayHidden`, and `core:generated` /
 `core:generatedShape` (the marker and ownership edge of the shapes shape sync generates, see
@@ -35,7 +39,7 @@ writes, e.g. `sh:targetObjectsOf` for those generated shapes.
 Everywhere else — `@_linked/xsd`, `@_linked/schema`, `@_linked/sioc` and the rest — an
 ontology is the complete vocabulary, and carries what core's shortcuts leave out:
 
-| | core | a package |
+| | core's shortcuts | a package |
 |---|---|---|
 | terms | only what core uses | the whole vocabulary |
 | data file | none | `src/data/<name>.ttl` (Turtle), read on the server only |

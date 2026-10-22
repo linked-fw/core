@@ -7,6 +7,9 @@
 import './shapes/index.js';
 // Registers the live-query store so `query.live()` works (side effects only).
 import './live.js';
+// Registers core's own ontologies (`core:`, `npm:`) and their data (side effects only).
+import './ontologies/linked-core.register.js';
+import './ontologies/npm.register.js';
 export {syncShapes, syncShape} from './shapes/syncShapes.js';
 export type {SyncShapesOptions, SyncShapeOptions} from './shapes/syncShapes.js';
 export {
