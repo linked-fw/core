@@ -172,13 +172,12 @@ describe('collectOwnedLinks', () => {
     ]);
   });
 
-  test('accepted classes include registered sub-shapes', () => {
+  test('accepted classes: the value shape\'s class only; a sub-shape instance carries it inferred', () => {
     const [link] = collectOwnedLinks(
       lower(UpdateBuilder.from(TAlbum).for(`${O}al1`).set({cover: {id: `${O}a`}})) as any,
     );
     expect(link.expectedClass).toBe(`${O}Photo`);
-    expect(link.acceptedClasses).toEqual(expect.arrayContaining([`${O}Photo`, `${O}Panorama`]));
-    expect(link.acceptedClasses).not.toContain(`${O}Person`);
+    expect(link.acceptedClasses).toEqual([`${O}Photo`]);
     expect(link.shape).toBe(TAlbum.shape.id);
   });
 
@@ -233,7 +232,9 @@ describe('SparqlDataset owned-link check (stub store)', () => {
   const types = {
     [alice]: [`${O}Person`],
     [`${O}p1`]: [`${O}Photo`],
-    [`${O}pano`]: [`${O}Panorama`],
+    // As an inferring store answers: Panorama ⊑ Photo gives the node both types.
+    [`${O}pano`]: [`${O}Panorama`, `${O}Photo`],
+    [`${O}panoStored`]: [`${O}Panorama`],
     [`${O}multi`]: [`${O}Person`, `${O}Photo`],
   };
 
@@ -268,6 +269,13 @@ describe('SparqlDataset owned-link check (stub store)', () => {
     const ds = new StubDataset(types);
     await UpdateBuilder.from(TScrapbook).for(`${O}sb1`).set({cover: {id: alice}}).exec(ds);
     expect(ds.updates).toHaveLength(1);
+  });
+
+  test('without its inferred superclass type a sub-shape instance is refused', async () => {
+    const ds = new StubDataset(types);
+    await expect(
+      UpdateBuilder.from(TAlbum).for(`${O}al1`).set({cover: {id: `${O}panoStored`}}).exec(ds),
+    ).rejects.toThrow('Cannot link');
   });
 
   test('a sub-shape class, an untyped id and one matching type of several pass', async () => {
@@ -324,6 +332,16 @@ describeFuseki('SparqlDataset owned-link check — live Fuseki', () => {
 
     await UpdateBuilder.from(TAlbum).for(`${O}album1`).set({cover: {id: `${O}p1`}}).exec(store);
     expect(await coverOf(`${O}album1`)).toEqual([`${O}p1`]);
+  });
+
+  test('a subclass instance is linked through its inferred type', async () => {
+    // The ontology sync's triple; the store infers <pano> a <Photo>.
+    await executeSparqlUpdate(
+      `${RDF}INSERT DATA { <${O}Panorama> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <${O}Photo> . ` +
+        `<${O}pano> rdf:type <${O}Panorama> . }`,
+    );
+    await UpdateBuilder.from(TAlbum).for(`${O}album1`).set({cover: {id: `${O}pano`}}).exec(store);
+    expect(await coverOf(`${O}album1`)).toEqual([`${O}pano`]);
   });
 
   test('a plain property on a contains predicate links without a check, and deletes nothing', async () => {

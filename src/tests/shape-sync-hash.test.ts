@@ -279,9 +279,10 @@ describe('shapeSyncHash', () => {
       '],"targetClass":{"id":"https://example.org/h#T"}},"iri":"https://s/T"}';
     const {createHash} = await import('node:crypto');
     const digest = createHash('sha256').update(canonical, 'utf8').digest('hex');
-    if (SHAPE_HASH_VERSION === 1) {
-      expect(digest).toBe('39faa2449c092aca0bd6d3f11ac0b85a898b67491c3611f10903206bb6653800');
-    }
+    const pinned: Record<number, string> = {
+      1: '39faa2449c092aca0bd6d3f11ac0b85a898b67491c3611f10903206bb6653800',
+    };
+    if (pinned[SHAPE_HASH_VERSION]) expect(digest).toBe(pinned[SHAPE_HASH_VERSION]);
     expect(shapeSyncHash(data(), 'https://s/T')).toBe(digest);
   });
 });

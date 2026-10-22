@@ -832,10 +832,60 @@ gate: `npm test` 2425 passed / 120 skipped, only `two-copies-built` failing (bac
 
 ## K3 — the workarounds go (major, sensitive)
 
-Detail written when its wave starts. Master §K3: the owned-link check, the single-owner
-constraint and the cycle walk rely on inference; tighten-only warnings (and
-`override-not-tightened`) become errors; `autoLoadOntologyData` removed; report 044; changeset
-**major**.
+Master §K3: the owned-link check, the single-owner constraint and the cycle walk rely on
+inference; tighten-only warnings (and `override-not-tightened`) become errors;
+`autoLoadOntologyData` removed; report 044; changeset **major** ("core requires a store with RDFS
+class inference and the ontology hierarchy synced"). Size: medium, **2 phases**. Found at
+`store-inference` fc93c9f; line numbers drift, search for the symbol.
+
+### Phase 1 — the workarounds go
+
+- `src/sparql/ownedLinkCheck.ts` `buildRule`: accepted classes are the value shape's targetClass
+  plus `ps.class`; the store's inferred `rdf:type`s (the types query reads the view) accept a
+  subclass instance. Header, `OwnedLink.acceptedClasses` doc and the error text updated.
+- `src/shapes/singleOwnerConstraint.ts`: the qualified shape is `[ sh:class <declaring class> ]`,
+  one class; `ownerClasses`/`sh:or` go; header rewritten. `SHAPE_HASH_VERSION` 1 → 2, golden of
+  `shape-sync-output-equivalence.test.ts` regenerated, ledger entry appended.
+- `src/sparql/irToAlgebra.ts`: a cycle hop is typed with one class, `?n a <C>` (the declaring
+  shape's targetClass; a shape without one keeps the least classes of its registered sub-shapes);
+  the section comment and the `ownedEdges` doc (a node carries its superclasses' types) corrected.
+  Decision 22's safety net: `classHolders(C)` is every shape whose targetClass is in
+  `subClassesOf(C)` (the guard `?n a <C>` now matches them all), so `blockedGuard` sees a shape on
+  an ontology subclass that does not extend the guarded one. A sub-shape's added edge already
+  followed under a superclass's guard (same predicate and target) is not added again (the guard
+  matches its nodes). `blockedGuard` itself and `blankCapableProperties` unchanged.
+- Tests: live fixtures that rely on a subclass instance load their hierarchy (insert the
+  `rdfs:subClassOf` triples, as the ontology sync would); unit expectations of the enumerated
+  classes updated; new `inference-features-fuseki.test.ts`, one `[fuseki]` test per row of master
+  §Features that depend on inference (owned-link check; single-owner constraint through the store's
+  SHACL endpoint; owned-cycle walk on a subclass node; class-scoped select/count/ask/EXISTS;
+  bulk delete/update polymorphic and the delete type guard; instance count of a superclass;
+  SHACL `sh:targetClass` reaching a subclass instance).
+- Docs: `owned-values.md` (owned walk, single owner), README (owned links, single owner).
+
+### Phase 2 — the breaking API
+
+- Tighten-only: `registerPropertyShape` throws for all seven cases (datatype, value shape,
+  `contains: false`, path under a new label join minCount, maxCount, nodeKind), the deferred
+  value-shape comparison too; data-only shapes stay warnings (text no longer promises an error).
+  `checkShapeHierarchy`: `override-not-tightened` is an `error` for a class-backed shape, a
+  `warning` for a data-only one.
+- `autoLoadOntologyData` removed (`Package.ts` export and state, its tests, `ontologies.md`).
+- `src/ontologies/xsd.ts` drops `Bytes`.
+- Metamodel: core's `NodeShape`/`PropertyShape` classes carry a typed accessor for every
+  metamodel property (owner answer 2's terms included: `sh:name`, `targetSubjectsOf`, …), so a
+  select or a subclass (CN's `CatalogNodeShape`) reads them typed; registration unchanged.
+- Docs: polymorphic bulk mutations (README, `owned-values.md`), README requirements (a store with
+  RDFS class inference and the hierarchy synced), `ontologies.md`.
+- Report 044, changeset major, this Outcome.
+
+### Gates
+
+Quick gate after each phase: the touched suites plus `npm run typecheck`. Full gate before
+landing: `npm test`, `REQUIRE_FUSEKI=1 npm run test:fuseki` (with `LINKED_FUSEKI_IMAGE=linked-fuseki:dev`,
+`FUSEKI_BASE_URL=http://localhost:3988`, `LINKED_CORE_TEST_COMPOSE_PROJECT=linked-core-k3`),
+`npm run check:dts`; `two-copies-built` fails as on `main` (backlog 060). Consumers: server,
+server-utils and schema tests against this core; CN `typecheck:gate` and vitest.
 
 ## Progress
 

@@ -294,8 +294,9 @@ replaced, removed, or when the owner is deleted.
 
 Because of that, core checks the class of every id linked into a `contains` property that
 declares a `shape`. A link is refused, and nothing is written, when the store already types the
-node and none of its types is the shape's `targetClass`, a registered sub-shape's `targetClass`, or
-the property's `sh:class`:
+node and none of its types (stored or inferred) is the shape's `targetClass` or the property's
+`sh:class`. A subclass instance carries its superclasses' types through the store's inference, so
+it is accepted:
 
 ```
 Cannot link <https://my.app/alice> into the contains property "avatar" of <…/shape/my-pkg/Person>:
@@ -304,10 +305,7 @@ it is typed <https://example.org/Person>, but "avatar" only owns instances of <h
 
 Ids that do not exist yet, or have no `rdf:type`, are allowed, so upload-then-attach works in
 either write order. The check runs in `SparqlDataset` (one `SELECT` per mutation that links owned
-ids, none otherwise). Plain references are never checked. A node
-whose type comes from a subclass that has no registered shape is refused unless the store also
-holds the expected type (an RDFS-inferring store adds it); register a shape for that class, or
-declare `sh:class`, to accept it.
+ids, none otherwise). Plain references are never checked.
 
 Two limits: an id linked while it is untyped, and typed as something else later, is not caught.
 Nor is a node typed by another request between the check's `SELECT` and the `UPDATE` that
@@ -320,11 +318,12 @@ replace or set-remove does the same below the old value. The walk follows the sh
 predicates: from the owner's shape it follows that shape's `contains` properties to their value
 shapes, then those shapes' `contains` properties. When a value is typed with a registered
 sub-shape of the declared value shape, the `contains` properties the sub-shape adds are followed
-too, but only from nodes of that sub-shape's class (`?img a ex:Photo . ?img ex:thumbnail ?t`).
+too, but only from nodes of that sub-shape's class (`?img a ex:Photo . ?img ex:thumbnail ?t`,
+which the store's inference also matches on the nodes of a subclass of `ex:Photo`).
 The class must tell those nodes apart: an added property is not followed through the parent
 (core warns once) when the sub-shape has no `targetClass`, shares it with one of its
-super-shapes, or shares it with another shape that holds the same predicate as a plain property
-(through a simple path). Another shape that merely shares the class, without that predicate,
+super-shapes, or shares it (or a subclass of it) with another shape that holds the same predicate
+as a plain property (through a simple path). Another shape that merely shares the class, without that predicate,
 changes nothing. A copy of a sub-shape that adds nothing of its own, with the same class (a
 "profile") or with no `targetClass` at all, is skipped silently: its parent's entry covers it.
 When a sub-shape redeclares an inherited `contains` property without `contains`, the inherited
@@ -338,7 +337,9 @@ re-entries per path; values deeper than that are left in place, and so is anythi
 untyped node on such a cycle. `rdf:nil`, the end of every list, is never deleted.
 
 The bulk deletes (`.all()`, `.where(...)`) remove the same subtree for every matched subject; they
-do not delete incoming references to the subjects, which a delete by id does.
+do not delete incoming references to the subjects, which a delete by id does. Bulk mutations are
+polymorphic, like select and count: `Thing.deleteAll()` or `Thing.update(...).forAll()` matches
+`?s a schema:Thing`, so it changes the instances of every subclass of `Thing` too.
 
 Non-owning references to an owned node, through other properties or from other subjects, are
 allowed. They are not cleaned up: after the owner is deleted they dangle. The same holds when two
@@ -350,9 +351,9 @@ one generated SHACL NodeShape per `contains` property (simple paths only). It is
 the class that declares the property, at the property shape's IRI plus `.singleOwner`:
 `Thing.image` gets one constraint at `Thing`, not one per subclass. It is marked `core:generated
 true` and has no `sh:targetClass`, so catalog readers can skip it, and it is never registered in
-memory. It counts only subjects of the declaring class and of every registered sub-shape's class,
-so a plain reference through the same predicate from another class is allowed. For `Thing.image`,
-with a registered `Project extends Thing`:
+memory. It counts only instances of the declaring class (subclass instances included, through
+the store's inference), so a plain reference through the same predicate from another class is
+allowed. For `Thing.image`:
 
 ```turtle
 <…/shape/my-pkg/Thing/image.singleOwner> a sh:NodeShape ;
@@ -363,16 +364,15 @@ with a registered `Project extends Thing`:
 <…/Thing/image.singleOwner/owners> a sh:PropertyShape ;
     rdfs:label "owners" ;
     sh:path [ sh:inversePath schema:image ] ;
-    sh:qualifiedValueShape [ sh:or ( [ sh:class schema:Thing ] [ sh:class ex:Project ] ) ] ;
+    sh:qualifiedValueShape [ sh:class schema:Thing ] ;
     sh:qualifiedMaxCount 1 .
 ```
 
-The classes are listed because `sh:class` matches a subclass instance only through
-`rdfs:subClassOf` triples, which a dataset without inference lacks. With one class the qualified
-shape is `[ sh:class C ]`. Sub-shapes registered only in another process are missing until a
-process that knows them syncs; a declaring shape without `targetClass` gets no constraint (sync
-logs it once). Versions before this one wrote `sh:maxCount 1` (every subject counted); the next
-sync rewrites the constraint.
+`sh:class` follows `rdf:type/rdfs:subClassOf*`, so with the ontology hierarchy synced an
+`ex:Project ⊑ schema:Thing` subject counts as an owner. A declaring shape without `targetClass`
+gets no constraint (sync logs it once). Earlier versions wrote `sh:maxCount 1` (every subject
+counted) or listed every registered sub-shape's class in an `sh:or`; the next sync rewrites the
+constraint.
 
 The inverse path is stored as an untyped blank node, as is every complex `sh:path` shape sync
 writes (inverse, alternative, sequence, `*`/`+`/`?`): an IRI in `sh:path` is a predicate path to a

@@ -113,6 +113,16 @@ export function setOntologyHierarchy(triples: HierarchyTriple[]): void {
 }
 
 /**
+ * A number that changes whenever the ontology triples are set. A cache derived from the closure
+ * (the owned walk's) keys on it together with the shape registry's version.
+ *
+ * @internal
+ */
+export function ontologyHierarchyVersion(): number {
+  return ontologyState.version ?? 0;
+}
+
+/**
  * `iri` and every class it is a subclass of, transitively, through the shape tree and the
  * ontology triples set. An unknown IRI gives `{iri}`.
  */

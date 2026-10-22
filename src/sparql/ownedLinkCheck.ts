@@ -14,7 +14,10 @@
  *
  * A field is checked when it owns its value by the same rule the replace delete applies: the
  * property itself is `contains`, declares a value shape and has a simple path. A plain property
- * on a predicate another shape declares `contains` owns nothing and is not checked. A node is
+ * on a predicate another shape declares `contains` owns nothing and is not checked. The accepted
+ * classes are the value shape's targetClass and the property's `sh:class`: the store infers
+ * `rdf:type` through `rdfs:subClassOf`, so a subclass instance carries the expected class among
+ * its types (core requires an inferring store with the ontology hierarchy synced). A node is
  * refused only when the store holds at least one `rdf:type` for it and none of them is accepted;
  * an id that does not exist yet, or has no type, is allowed (`rdf:nil`, a node another request
  * creates, an untyped IRI). Collecting the links is a pure walk over the lowered IR; the dataset sends
@@ -32,7 +35,6 @@ import {findPropertyShapeById, type PropertyShapeData} from '../shapes/nodeShape
 import {
   catalogOf,
   getActiveShapeCatalog,
-  getSubShapes,
   getTargetClassId,
   withShapeCatalog,
 } from '../utils/ShapeClass.js';
@@ -53,7 +55,7 @@ export type OwnedLink = {
   shape: string;
   /** The value shape's targetClass — the class the message names. */
   expectedClass: string;
-  /** `expectedClass`, every registered sub-shape's targetClass, and `sh:class` if declared. */
+  /** `expectedClass`, and `sh:class` if declared. A subclass instance matches through its inferred types. */
   acceptedClasses: string[];
 };
 
@@ -108,10 +110,6 @@ function buildRule(ps: PropertyShapeData | undefined, fallbackShape: string): Ow
   const expectedClass = getTargetClassId(ps.valueShape.id);
   if (!expectedClass) return null;
   const accepted = new Set<string>([expectedClass]);
-  for (const sub of getSubShapes(ps.valueShape.id)) {
-    const subClass = getTargetClassId(sub);
-    if (subClass) accepted.add(subClass);
-  }
   if (ps.class?.id) accepted.add(ps.class.id);
   return {
     property: ps.id,
@@ -198,12 +196,12 @@ export function assertOwnedLinkTypes(
     const typed = [...types].map((t) => `<${t}>`).join(', ');
     const others = link.acceptedClasses.filter((c) => c !== link.expectedClass);
     const alsoAccepted = others.length
-      ? ` (or of ${others.map((c) => `<${c}>`).join(', ')}, a registered sub-shape or sh:class)`
+      ? ` (or of ${others.map((c) => `<${c}>`).join(', ')}, its sh:class)`
       : '';
     messages.push(
       `Cannot link <${link.id}> into the contains property "${link.label}" of <${link.shape}>: ` +
         `it is typed ${typed}, but "${link.label}" only owns instances of ` +
-        `<${link.expectedClass}>${alsoAccepted}. An owner deletes what it contains when the ` +
+        `<${link.expectedClass}>${alsoAccepted} and their subclasses. An owner deletes what it contains when the ` +
         'value is replaced or removed, or when the owner is deleted.',
     );
   }

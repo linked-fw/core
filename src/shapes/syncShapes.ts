@@ -146,7 +146,7 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
  *
  * @internal Exported for tests only — not part of the public API.
  */
-export const SHAPE_HASH_VERSION = 1;
+export const SHAPE_HASH_VERSION = 2;
 
 /**
  * A canonical string for create-pipeline data: equal for equal data, independent of object key

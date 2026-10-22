@@ -11,7 +11,7 @@
  * `sh:in` list (IRI cells). Blank labels are compared normalized.
  *
  * The second change (per-property ownership): the single-owner `owners` property shape counts
- * only owners of the declaring class or of a registered sub-shape's class. 2.30.0 wrote `sh:maxCount 1`; it is now
+ * only owners of the declaring class (subclass instances through the store's inference). 2.30.0 wrote `sh:maxCount 1`; it is now
  * `sh:qualifiedValueShape [ sh:class fx:Fixture ] ; sh:qualifiedMaxCount 1`, and its blank labels
  * follow on from the path's.
  *
@@ -212,6 +212,9 @@ const GOLDEN_SYNC_OUTPUT = `INSERT DATA {
  */
 const SHAPE_HASH_LEDGER: ReadonlyArray<{version: number; goldenDigest: string}> = [
   {version: 1, goldenDigest: '745c0583dff0d2a757431a8ab45eb3fc84db0375c5ef9b41b9370147a9a887d0'},
+  // The single-owner constraint names one sh:class where it listed every sub-shape's class in an
+  // sh:or; this fixture has no sub-shape, so its golden is unchanged.
+  {version: 2, goldenDigest: '745c0583dff0d2a757431a8ab45eb3fc84db0375c5ef9b41b9370147a9a887d0'},
 ];
 
 const insertDataOf = (updates: string[]) => {

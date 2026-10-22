@@ -16,6 +16,7 @@ import {
   clearAllData,
 } from '../test-helpers/fuseki-test-store';
 import {describeFuseki} from '../test-helpers/fuseki-live';
+import {insertClassHierarchy} from '../test-helpers/class-hierarchy-fixture';
 import {linkedPackage} from '../utils/Package';
 import {Shape} from '../shapes/Shape';
 import {literalProperty, NodeShape, objectProperty, PropertyShape} from '../shapes/SHACL';
@@ -35,6 +36,7 @@ import {lower} from '../queries/lower';
 import {ShapeCatalog, withShapeCatalog} from '../utils/ShapeCatalog';
 import type {NodeShapeWire} from '../shapes/nodeShapeWire';
 import {shacl} from '../ontologies/shacl';
+import {setOntologyHierarchy} from '../ontology/classHierarchy';
 
 const PKG = 'owned-walk-recursion-test';
 const {linkedShape} = linkedPackage(PKG);
@@ -250,7 +252,7 @@ class LOwner extends Shape {
 }
 
 // A grandchild with a class of its own (QL), shared with a shape (QSharer) holding the predicate
-// its parent (QM) owns as a plain property; beside it a class-less copy (QC) and a same-class copy
+// its parent (QM) owns as a plain property (a borrowed class the shape check reports); beside it a class-less copy (QC) and a same-class copy
 // (QS) of QM, which add nothing.
 @linkedShape
 class QV extends Shape {
@@ -293,6 +295,70 @@ class QR extends Shape {
   static targetClass = ex('QR');
   @objectProperty({path: ex('qv'), shape: QV, maxCount: 1, contains: true})
   get qv(): QV {
+    return null;
+  }
+}
+
+// A sub-shape DM adding `dp`, and its sub-shape DG (class DG ⊑ DM) inheriting it: the guard
+// `?n a <DM>` already matches DG nodes through inference.
+@linkedShape
+class DV extends Shape {
+  static targetClass = ex('DV');
+}
+
+@linkedShape
+class DM extends DV {
+  static targetClass = ex('DM');
+  @objectProperty({path: ex('dp'), shape: HPlain, maxCount: 1, contains: true})
+  get dp(): HPlain {
+    return null;
+  }
+}
+
+@linkedShape
+class DG extends DM {
+  static targetClass = ex('DG');
+}
+
+@linkedShape
+class DR extends Shape {
+  static targetClass = ex('DR');
+  @objectProperty({path: ex('dv'), shape: DV, maxCount: 1, contains: true})
+  get dv(): DV {
+    return null;
+  }
+}
+
+// The safety net: SY's class is a subclass of SM's only in the ontology data (SY does not extend
+// SM), and SY holds the predicate SM owns as a plain property.
+@linkedShape
+class SV extends Shape {
+  static targetClass = ex('SV');
+}
+
+@linkedShape
+class SM extends SV {
+  static targetClass = ex('SM');
+  @objectProperty({path: ex('sp'), shape: HPlain, maxCount: 1, contains: true})
+  get sp(): HPlain {
+    return null;
+  }
+}
+
+@linkedShape
+class SY extends Shape {
+  static targetClass = ex('SY');
+  @objectProperty({path: ex('sp'), shape: HPlain, maxCount: 1})
+  get sp(): HPlain {
+    return null;
+  }
+}
+
+@linkedShape
+class SR extends Shape {
+  static targetClass = ex('SR');
+  @objectProperty({path: ex('sv'), shape: SV, maxCount: 1, contains: true})
+  get sv(): SV {
     return null;
   }
 }
@@ -345,6 +411,29 @@ const deleteOf = (shape: any, id: string) =>
 const branches = (sparql: string) => sparql.slice(sparql.indexOf('WHERE')).split(/\n\s*UNION\n/).length;
 
 describe('owned walk: recursion', () => {
+  test('an edge a sub-shape inherits from a guarded sub-shape is followed once, under the more general guard', () => {
+    const sparql = deleteOf(DR, `${W}r1`);
+    expect(sparql).toMatch(/\?c_\w+ rdf:type <http:\/\/example\.org\/w#DM> \.\s*\?c_\w+ <http:\/\/example\.org\/w#dp>/);
+    expect(sparql).not.toContain(`<${W}DG>`);
+    expect(sparql.match(new RegExp(`<${W}dp>`, 'g'))).toHaveLength(1);
+  });
+
+  test('safety net: a guard whose class has an ontology subclass held by a plain holder is not followed', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(deleteOf(SR, `${W}r1`)).toContain(`<${W}sp>`);
+      setOntologyHierarchy([{s: `${W}SY`, o: `${W}SM`}]);
+      expect(deleteOf(SR, `${W}r1`)).not.toContain(`<${W}sp>`);
+      const mine = warn.mock.calls.filter((c) => String(c[0]).includes(`'${SM.shape.id}' adds`));
+      expect(mine).toHaveLength(1);
+      expect(String(mine[0][0])).toContain(`its targetClass's subclass <${W}SY> is held by '${SY.shape.id}'`);
+    } finally {
+      setOntologyHierarchy([]);
+      warn.mockRestore();
+    }
+    expect(deleteOf(SR, `${W}r1`)).toContain(`<${W}sp>`);
+  });
+
   test('a cycle through two shapes is unrolled into typed hops, never one closure', () => {
     const sparql = deleteOf(RA, `${W}a1`);
     expect(sparql).not.toMatch(/\(<http:\/\/example\.org\/w#to[AB]>\|/);
@@ -415,16 +504,21 @@ describe('owned walk: recursion', () => {
     }
   });
 
-  test('a grandchild with a class of its own that cannot be guarded is warned; copies of its parent are not', () => {
+  test('a guard whose subclass a plain holder of the predicate takes is not followed; copies of its parent are not warned', () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const sparql = deleteOf(QR, `${W}r1`);
-      // `qp` is followed only from QM nodes, never under the shared class QL.
-      expect(sparql).toMatch(/\?c_\w+ rdf:type <http:\/\/example\.org\/w#QM> \.\s*\?c_\w+ <http:\/\/example\.org\/w#qp>/);
+      // `?n a <QM>` also matches QL nodes (QL ⊑ QM, inferred), QSharer's among them: `qp` is
+      // followed neither under QM nor under QL.
+      expect(sparql).not.toContain(`<${W}qp>`);
       expect(sparql).not.toContain(`<${W}QL>`);
       deleteOf(QR, `${W}r2`);
       const adds = (shape: {shape: {id: string}}) =>
         warn.mock.calls.filter((c) => String(c[0]).includes(`'${shape.shape.id}' adds`));
+      expect(adds(QM)).toHaveLength(1);
+      expect(String(adds(QM)[0][0])).toContain(
+        `its targetClass's subclass <${W}QL> is held by '${QSharer.shape.id}'`,
+      );
       expect(adds(QL)).toHaveLength(1);
       expect(String(adds(QL)[0][0])).toContain(`shares its targetClass with '${QSharer.shape.id}'`);
       expect(adds(QC)).toEqual([]);
@@ -531,6 +625,7 @@ describeFuseki('owned walk: recursion — live Fuseki', () => {
   });
   beforeEach(async () => {
     await clearAllData();
+    await insertClassHierarchy();
   });
 
   test('a two-shape cycle keeps a node held through a plain property on an owned predicate', async () => {
