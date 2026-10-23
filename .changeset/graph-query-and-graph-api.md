@@ -7,6 +7,7 @@ Named graphs: whole-graph operations with automatic records in a graph registry.
 - `IDataset.graphQuery(query)` runs `graph_create`, `graph_replace`, `graph_patch` and `graph_drop`; `SparqlDataset` implements it as one SPARQL update per query (body and registry record in one transaction).
 - `NamedGraph`, `OntologyGraph`, `ShapesGraph` and `DraftGraph` (`@_linked/core/shapes/NamedGraph`, built-in shapes): `OntologyGraph.create({id, package, version}).withContent(c)`, `NamedGraph.replaceContent(iri, c)`, `NamedGraph.patchContent(iri, {insert, delete})`, `OntologyGraph.update(iri).set({...})` (optionally `.replaceContent(c)` / `.patchContent(p)`), `OntologyGraph.delete(iri)`, `OntologyGraph.iriFor(pkg)`; `select()` reads the registry. Server-only.
 - Portable graph names in `@_linked/core/ontologies/graphs`: `graphs.default`, `graphs.union`, `graphs.allOntologies`, `graphs.allShapes`, `graphs.registry`; writes to them are refused.
+- `SparqlDataset` refuses store-reserved graph names through the protected `isReservedGraphName(iri)` (default: `urn:x-arq:`).
 - Typed refusals: `GraphQueryError` with `code` `unsupported-query-kind`, `graph-not-registered`, `graph-name-read-only`, `graph-exists` (`isGraphQueryError`); `parseGraphQuery` checks a graph query that arrived as JSON.
 - Terms: `core:OntologyGraph`, `core:ShapesGraph`, `core:DraftGraph`, `core:contentHash`, `core:feedsHierarchy`, `core:package`, `core:version`; `sd:NamedGraph`, `sd:name` (`@_linked/core/ontologies/sd`).
 - `deleteInsertPlanToSparql` honours `plan.graph` (emits `WITH <g>`).
