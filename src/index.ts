@@ -59,6 +59,22 @@ export {
 export {subscribeQueryDispatch} from './queries/queryDispatch.js';
 export type {QueryDispatchEvent, QueryDispatchListener} from './queries/queryDispatch.js';
 export {
+  GraphQueryError,
+  isGraphQueryError,
+  isGraphQueryKind,
+  parseGraphQuery,
+  unsupportedGraphQuery,
+  GRAPH_QUERY_KINDS,
+} from './queries/graphQuery.js';
+export type {
+  GraphContent,
+  GraphQuery,
+  GraphQueryErrorCode,
+  GraphQueryKind,
+  GraphResult,
+} from './queries/graphQuery.js';
+export {graphs} from './ontologies/graphs.js';
+export {
   CONTEXT_REF_KEY,
   encodeContextRef,
   isContextRefJSON,
