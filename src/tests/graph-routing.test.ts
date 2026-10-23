@@ -8,7 +8,7 @@
  * Graph routing: the per-dataset routes and their forms (`'own'`, `dataGraph()`, IRIs), routed
  * reads (one golden query per form), routed writes, `.into()`, and the graphs live queries carry.
  */
-import {afterEach, describe, expect, jest, test} from '@jest/globals';
+import {afterEach, beforeEach, describe, expect, jest, test} from '@jest/globals';
 import {Dog, Employee, Person, Pet} from '../test-helpers/query-fixtures';
 import {lower} from '../queries/lower';
 import {countToSparql, selectToSparql} from '../sparql/irToAlgebra';
@@ -28,6 +28,7 @@ import {readsWrittenGraph, selectInstances, type LiveIndexes} from '../live/matc
 import type {Instance, Template} from '../live/LiveQueryStore';
 import {LinkedStorage} from '../utils/LinkedStorage';
 import {
+  dataRootOf,
   getShapeGraphs,
   graphRoutingFor,
   setShapeGraphs,
@@ -35,7 +36,8 @@ import {
 } from '../utils/graphRouting';
 import {parseDatasetsConfig} from '../utils/parseDatasetsConfig';
 import {loadStores} from '../utils/loadStores';
-import {graphs} from '../ontologies/graphs';
+import {dataGraph, graphs, OWN_GRAPH} from '../ontologies/graphs';
+import {RFArticle, RFNewsArticle, RFStoryShape} from '../test-helpers/graph-route-forms-fixtures';
 import type {IDataset} from '../interfaces/IDataset';
 
 import '../ontologies/rdf';
@@ -191,6 +193,119 @@ describe('LinkedStorage.setDatasetForShapes', () => {
     LinkedStorage.setDatasetForShapes(ds, [Person], {graph: G_PEOPLE});
     LinkedStorage.unsetDatasetForShape(Person);
     expect(getShapeGraphs(ds)).toEqual({});
+  });
+});
+
+describe('route forms: own and dataGraph resolve under the store data root', () => {
+  const ROOT = 'https://acme.example/data';
+  let savedEnv: string | undefined;
+  beforeEach(() => {
+    savedEnv = process.env.DATA_ROOT;
+    delete process.env.DATA_ROOT;
+  });
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = savedEnv;
+  });
+
+  test("golden IRIs: 'own' is {root}/graph/{package slug}/{shape name}; dataGraph is {root}/graph/{slug}", () => {
+    const store = new CaptureStore({dataRoot: ROOT});
+    setShapeGraphs(store, {
+      [RFArticle.shape.id]: 'own',
+      [RFStoryShape.shape.id]: 'own',
+      [GRPhoto.shape.id]: OWN_GRAPH,
+      [Person.shape.id]: 'own',
+      [GRAlbum.shape.id]: dataGraph('albums'),
+      [Pet.shape.id]: dataGraph('pets/archive-2026'),
+    });
+    expect(getShapeGraphs(store)).toEqual({
+      // `@acme/News_Site`: scope dropped, `_` → `-`, lower-cased; the shape name keeps its case.
+      [RFArticle.shape.id]: `${ROOT}/graph/news-site/RFArticle`,
+      // An explicit `@linkedShape({name})` is the shape name, not the class name.
+      [RFStoryShape.shape.id]: `${ROOT}/graph/news-site/Story`,
+      [GRPhoto.shape.id]: `${ROOT}/graph/graph-routing-test/GRPhoto`,
+      [Person.shape.id]: `${ROOT}/graph/core/Person`,
+      [GRAlbum.shape.id]: `${ROOT}/graph/albums`,
+      [Pet.shape.id]: `${ROOT}/graph/pets/archive-2026`,
+    });
+    const routing = graphRoutingFor(store)!;
+    // An unrouted sub-shape lives in its routed super-shape's own graph.
+    expect(routing.graphForShape(RFNewsArticle.shape.id)).toBe(`${ROOT}/graph/news-site/RFArticle`);
+    expect(routing.readGraphsForShape(GRAlbum.shape.id)).toEqual([`${ROOT}/graph/albums`]);
+  });
+
+  test("the root: the store's dataRoot, else DATA_ROOT; trimmed of trailing slashes; read when the routing is", () => {
+    process.env.DATA_ROOT = 'https://env.example/data/';
+    const fromEnv = fakeDataset();
+    setShapeGraphs(fromEnv, {[GRAlbum.shape.id]: dataGraph('albums')});
+    expect(dataRootOf(fromEnv)).toBe('https://env.example/data');
+    expect(getShapeGraphs(fromEnv)).toEqual({[GRAlbum.shape.id]: 'https://env.example/data/graph/albums'});
+
+    const own = new CaptureStore({dataRoot: `${ROOT}//`});
+    expect(own.dataRoot()).toBe(`${ROOT}//`);
+    expect(dataRootOf(own)).toBe(ROOT);
+
+    // A root the store learns later (CN resolves an app's root lazily) is the one used.
+    let late: string | undefined;
+    const lazy = {dataRoot: () => late} as unknown as IDataset;
+    setShapeGraphs(lazy, {[GRAlbum.shape.id]: dataGraph('albums')});
+    expect(getShapeGraphs(lazy)).toEqual({[GRAlbum.shape.id]: 'https://env.example/data/graph/albums'});
+    late = 'https://app.example/root';
+    expect(graphRoutingFor(lazy)!.graphForShape(GRAlbum.shape.id)).toBe('https://app.example/root/graph/albums');
+  });
+
+  test('no root: the route is recorded, and resolving it is refused with the shape named', () => {
+    const ds = fakeDataset();
+    setShapeGraphs(ds, {[GRAlbum.shape.id]: dataGraph('albums'), [Person.shape.id]: G_PEOPLE});
+    expect(() => graphRoutingFor(ds)).toThrow(
+      new RegExp(`dataGraph\\('albums'\\) of <${GRAlbum.shape.id}>.*data root`),
+    );
+    expect(() => getShapeGraphs(ds)).toThrow(/SparqlOptions\.dataRoot.*DATA_ROOT/);
+    // Full IRIs need no root.
+    const iriOnly = fakeDataset();
+    setShapeGraphs(iriOnly, {[Person.shape.id]: G_PEOPLE});
+    expect(getShapeGraphs(iriOnly)).toEqual({[Person.shape.id]: G_PEOPLE});
+  });
+
+  test("refused when the route is set: 'own' for a shape no package registered, a bad slug", () => {
+    const ds = fakeDataset();
+    expect(() => setShapeGraphs(ds, {'https://example.org/unregistered/Thing': 'own'})).toThrow(
+      /'own' of <https:\/\/example\.org\/unregistered\/Thing> needs a shape class registered by a package/,
+    );
+    for (const bad of ['Articles', 'my articles', 'a//b', '/a', 'a/', '-a', 'a--b', '', 'é']) {
+      expect(() => dataGraph(bad)).toThrow(/dataGraph\(\) takes a slug/);
+    }
+    // A route that arrives as plain data is checked too.
+    expect(() => setShapeGraphs(ds, {[Person.shape.id]: {dataGraph: '../x'}})).toThrow(/invalid dataGraph slug/);
+    expect(() => setShapeGraphs(ds, {[Person.shape.id]: 'mine'})).toThrow(/'own', dataGraph\('slug'\) or an absolute graph IRI/);
+    expect(getShapeGraphs(ds)).toEqual({});
+    expect(Object.isFrozen(dataGraph('a'))).toBe(true);
+  });
+
+  test("setDatasetForShapes with {graph: 'own'}: writes, reads and .into() use the resolved IRI", async () => {
+    const store = new CaptureStore({dataRoot: ROOT, mapGraphName: jena});
+    const own = `${ROOT}/graph/graph-routing-test/GRAlbum`;
+    pinnedForms.push(GRAlbum, GRPhoto);
+    LinkedStorage.setDatasetForShapes(store, [GRAlbum], {graph: 'own'});
+    LinkedStorage.setDatasetForShapes(store, [GRPhoto], {graph: dataGraph('photos')});
+    expect(LinkedStorage.getDatasetForShapeClass(GRAlbum)).toBe(store);
+    expect(getShapeGraphs(store)).toEqual({
+      [GRAlbum.shape.id]: own,
+      [GRPhoto.shape.id]: `${ROOT}/graph/photos`,
+    });
+    await GRAlbum.create({title: 'A'}).exec(store);
+    expect(store.updates[store.updates.length - 1]).toMatch(
+      new RegExp(`^INSERT DATA \\{\\n  GRAPH <${own}> \\{`, 'm'),
+    );
+    await GRAlbum.select((a) => a.title).exec(store);
+    expect(store.last()).toContain(`GRAPH <${own}>`);
+    await GRAlbum.create({title: 'B'}).into(own).exec(store);
+    expect(store.updates[store.updates.length - 1]).toContain(`GRAPH <${own}>`);
+  });
+
+  const pinnedForms: Function[] = [];
+  afterEach(() => {
+    for (const shape of pinnedForms.splice(0)) LinkedStorage.unsetDatasetForShape(shape);
   });
 });
 

@@ -18,6 +18,7 @@ import {
 } from './ShapeClass.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import {setShapeGraphs, unsetShapeGraph} from './graphRouting.js';
+import type {GraphRoute} from '../ontologies/graphs.js';
 
 // plan-011 — count physical evaluations of THIS module on the one shared
 // global object. With the single-loader fix there should be exactly one copy;
@@ -125,8 +126,10 @@ export abstract class LinkedStorage {
    *
    * - `setDatasetForShapes(dataset, [ShapeA, ShapeB], {graph})`: the shapes route to `dataset`,
    *   and their instances live in `graph` there (see `graphRouting.ts`: a shape's graph covers its
-   *   unrouted sub-shapes, and a read of a shape covers its sub-shapes' graphs). Without `graph`,
-   *   the default graph, as before routing existed.
+   *   unrouted sub-shapes, and a read of a shape covers its sub-shapes' graphs). `graph` states
+   *   intent: `'own'` (each shape in its own graph, `{DATA_ROOT}/graph/{package slug}/{shape
+   *   name}`), `dataGraph('slug')` (`{DATA_ROOT}/graph/{slug}`), or an absolute graph IRI. Without
+   *   `graph`, the default graph, as before routing existed.
    * - `setDatasetForShapes(dataset, ShapeA, ShapeB)` or an array without `graph`: the same pins,
    *   leaving any graph route the shapes already have in `dataset` as it is (a new pin is in the
    *   default graph). `{graph: graphs.default}` removes a route.
@@ -134,7 +137,7 @@ export abstract class LinkedStorage {
   static setDatasetForShapes(
     dataset: IDataset,
     shapes: Function[],
-    options?: {graph?: string},
+    options?: {graph?: GraphRoute},
   ): void;
   static setDatasetForShapes(dataset: IDataset, ...shapeClasses: Function[]): void;
   static setDatasetForShapes(dataset: IDataset, ...args: unknown[]): void {
@@ -142,10 +145,10 @@ export abstract class LinkedStorage {
       ? (args[0] as Function[])
       : (args as Function[]);
     const graph = Array.isArray(args[0])
-      ? (args[1] as {graph?: string} | undefined)?.graph
+      ? (args[1] as {graph?: GraphRoute} | undefined)?.graph
       : undefined;
     if (graph !== undefined) {
-      const shapeGraphs: Record<string, string> = {};
+      const shapeGraphs: Record<string, GraphRoute> = {};
       for (const shapeClass of shapeClasses) {
         const uri = shapeUriOf(shapeClass);
         if (!uri) {

@@ -31,6 +31,13 @@ export interface IDataset {
   init?(): Promise<any>;
 
   /**
+   * The data root this dataset's data lives under (`DATA_ROOT`): ids it mints and graph routes
+   * stated as `'own'` or `dataGraph()` resolve under it (see `utils/graphRouting.ts`). Optional;
+   * without it (or when it returns `undefined`) the process's `DATA_ROOT` is used.
+   */
+  dataRoot?(): string | undefined;
+
+  /**
    * Answer a select query — **and a count query**, which arrives here too.
    *
    * A count is not a query form of its own the way an ask is. An ask is

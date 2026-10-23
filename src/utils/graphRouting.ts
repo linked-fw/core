@@ -8,11 +8,24 @@
  * Graph routing: which named graph of a dataset holds the instances of a shape.
  *
  * Storage rules pick the graph, per app, the way they pick the dataset (`LinkedStorage`): a route
- * maps a shape IRI to one graph IRI of one dataset, so ordinary code never names a graph. Routes
- * come from `LinkedStorage.setDatasetForShapes(dataset, shapes, {graph})`, from the datasets
- * config's per-alias `graphs` key (`loadStores`), or from {@link setShapeGraphs} directly (a
- * composite dataset registers them on the store it forwards to). A shape without a route, and
- * without a routed super-shape, lives in the default graph, as before routing existed.
+ * maps a shape IRI to one graph of one dataset, so ordinary code never names a graph. Routes live
+ * in the app's code: `LinkedStorage.setDatasetForShapes(dataset, shapes, {graph})`, or
+ * {@link setShapeGraphs} directly (a composite dataset registers them on the store it forwards
+ * to). A shape without a route, and without a routed super-shape, lives in the default graph, as
+ * before routing existed.
+ *
+ * A route states intent; the graph IRI lives under the store's data root (`DATA_ROOT`, see
+ * {@link dataRootOf}), joined whenever the routing is read, so a root the store learns later is
+ * the one used:
+ *
+ * - `'own'` → `{DATA_ROOT}/graph/{package slug}/{shape name}`. The package is the one the shape
+ *   class was registered by (`linkedPackage(name)`), slugged by `packageNameToSlug` (npm scope
+ *   dropped, every run of other characters than ASCII letters and digits → `-`, leading and
+ *   trailing `-` trimmed, lower-cased: `@acme/news-site` → `news-site`). The shape name is the
+ *   shape IRI's last path segment, case kept (`@linkedShape({name})`, else the class name:
+ *   `Article`). So `Article` of `@acme/news-site` → `{DATA_ROOT}/graph/news-site/Article`.
+ * - `dataGraph('slug')` → `{DATA_ROOT}/graph/{slug}`.
+ * - An absolute graph IRI, as given (advanced use).
  *
  * - **A shape's graph** (where its instances are written): its own route, else its nearest routed
  *   super-shape's, else the default graph.
@@ -26,26 +39,44 @@
  * twice in a process, and a shape's IRI is the identity every copy agrees on.
  */
 import type {IDataset} from '../interfaces/IDataset.js';
-import {graphs, PORTABLE_GRAPH_NAMES} from '../ontologies/graphs.js';
-import {getAllNodeShapes, getSubShapes, getSuperShapes} from './ShapeClass.js';
+import {
+  DATA_GRAPH_SLUG,
+  graphs,
+  isDataGraphRoute,
+  OWN_GRAPH,
+  PORTABLE_GRAPH_NAMES,
+  type GraphRoute,
+} from '../ontologies/graphs.js';
+import {getAllNodeShapes, getRegisteredShapeClass, getSubShapes, getSuperShapes} from './ShapeClass.js';
 import {getPropertyShapes} from '../shapes/nodeShapeData.js';
+import {packageNameToSlug} from '../shapes/SHACL.js';
 
 const routingGlobal: any = typeof globalThis !== 'undefined' ? globalThis : ({} as any);
 
-/** Dataset → (shape IRI → graph IRI). */
-const routes: WeakMap<object, Map<string, string>> = (routingGlobal.__linkedGraphRouting ??=
-  new WeakMap<object, Map<string, string>>());
+/**
+ * One stored route: an absolute graph IRI, or a path under the data root (`graph/…`) that
+ * {@link graphRoutingFor} joins with the dataset's root.
+ */
+type StoredRoute = {iri: string} | {underRoot: string; form: string};
+
+/** Dataset → (shape IRI → route). */
+const routes: WeakMap<object, Map<string, StoredRoute>> = (routingGlobal.__linkedGraphRoutes ??=
+  new WeakMap<object, Map<string, StoredRoute>>());
 
 /** Absolute IRI with a scheme and none of the characters that end an IRIREF. */
 const IRI_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"{}|^`\\]*$/;
 
-function checkRoute(shape: string, graph: string): void {
+function checkShape(shape: string): void {
   if (typeof shape !== 'string' || !IRI_PATTERN.test(shape)) {
     throw new Error(`A graph route needs a shape IRI; got ${JSON.stringify(shape)}.`);
   }
+}
+
+function checkGraphIri(shape: string, graph: string): void {
   if (typeof graph !== 'string' || !IRI_PATTERN.test(graph)) {
     throw new Error(
-      `The graph route of <${shape}> must name an absolute graph IRI; got ${JSON.stringify(graph)}.`,
+      `The graph route of <${shape}> must be 'own', dataGraph('slug') or an absolute graph IRI; ` +
+        `got ${JSON.stringify(graph)}.`,
     );
   }
   if (PORTABLE_GRAPH_NAMES.has(graph) && graph !== graphs.default) {
@@ -57,27 +88,119 @@ function checkRoute(shape: string, graph: string): void {
   }
 }
 
+/** The last path segment of a shape IRI (after the last `/` or `#`). */
+function shapeLocalName(shape: string): string {
+  return shape.slice(Math.max(shape.lastIndexOf('/'), shape.lastIndexOf('#')) + 1);
+}
+
 /**
- * Route shapes of `dataset` to graphs: `{<shape IRI>: <graph IRI>}`. Adds to (and overrides) the
- * dataset's existing routes. A route to `graphs.default` removes the shape's route.
+ * The path under the data root of a shape's own graph: `graph/{package slug}/{shape name}`
+ * (module comment). Refused for a shape no package registered.
  */
-export function setShapeGraphs(dataset: IDataset | object, shapeGraphs: Record<string, string>): void {
-  const entries = Object.entries(shapeGraphs ?? {});
-  for (const [shape, graph] of entries) checkRoute(shape, graph);
+export function ownGraphPath(shape: string): string {
+  const packageName = (getRegisteredShapeClass(shape) as {packageName?: string} | undefined)
+    ?.packageName;
+  const slug = packageName ? packageNameToSlug(packageName) : '';
+  const name = shapeLocalName(shape);
+  if (!slug || !name) {
+    throw new Error(
+      `The graph route 'own' of <${shape}> needs a shape class registered by a package ` +
+        `(linkedPackage(name).linkedShape); route it with dataGraph('slug') or a graph IRI instead.`,
+    );
+  }
+  return `graph/${slug}/${name}`;
+}
+
+/** A route as stored: `undefined` for the default graph (no route). */
+function storedRoute(shape: string, route: GraphRoute): StoredRoute | undefined {
+  checkShape(shape);
+  if (route === OWN_GRAPH) return {underRoot: ownGraphPath(shape), form: `'own'`};
+  if (isDataGraphRoute(route)) {
+    // Re-checked: a route may arrive as plain data rather than from dataGraph().
+    const {dataGraph: slug} = route;
+    if (typeof slug !== 'string' || !DATA_GRAPH_SLUG.test(slug)) {
+      throw new Error(`The graph route of <${shape}> has an invalid dataGraph slug ${JSON.stringify(slug)}.`);
+    }
+    return {underRoot: `graph/${slug}`, form: `dataGraph('${slug}')`};
+  }
+  checkGraphIri(shape, route as string);
+  return route === graphs.default ? undefined : {iri: route as string};
+}
+
+/**
+ * The data root graph routes of `dataset` resolve under: the dataset's own (`IDataset.dataRoot()`;
+ * a `SparqlDataset` returns its `SparqlOptions.dataRoot`, the root it mints ids under), else the
+ * process's `DATA_ROOT`; trimmed, without trailing slashes. `undefined` when neither is set.
+ */
+export function dataRootOf(dataset: IDataset | object | undefined): string | undefined {
+  const own =
+    dataset && typeof (dataset as IDataset).dataRoot === 'function'
+      ? (dataset as IDataset).dataRoot!()
+      : undefined;
+  const env = typeof process !== 'undefined' ? process.env?.DATA_ROOT : undefined;
+  const root = (own || env || '').trim().replace(/\/+$/, '');
+  return root || undefined;
+}
+
+/**
+ * Route shapes of `dataset` to graphs: `{<shape IRI>: 'own' | dataGraph('slug') | <graph IRI>}`.
+ * Adds to (and overrides) the dataset's existing routes. A route to `graphs.default` removes the
+ * shape's route. Every route is checked before any is recorded.
+ */
+export function setShapeGraphs(
+  dataset: IDataset | object,
+  shapeGraphs: Record<string, GraphRoute>,
+): void {
+  const entries = Object.entries(shapeGraphs ?? {}).map(
+    ([shape, route]) => [shape, storedRoute(shape, route)] as const,
+  );
   let table = routes.get(dataset);
   if (!table) {
     table = new Map();
     routes.set(dataset, table);
   }
-  for (const [shape, graph] of entries) {
-    if (graph === graphs.default) table.delete(shape);
-    else table.set(shape, graph);
+  for (const [shape, stored] of entries) {
+    if (stored) table.set(shape, stored);
+    else table.delete(shape);
   }
 }
 
-/** The routes of `dataset` (shape IRI → graph IRI), a copy; empty when it has none. */
+/** The graph IRI of one stored route of `dataset`. */
+function resolveStored(
+  shape: string,
+  stored: StoredRoute,
+  root: () => string | undefined,
+): string {
+  if ('iri' in stored) return stored.iri;
+  const base = root();
+  if (!base) {
+    throw new Error(
+      `The graph route ${stored.form} of <${shape}> resolves under the store's data root, and ` +
+        `this store has none: give it one (SparqlOptions.dataRoot) or set DATA_ROOT.`,
+    );
+  }
+  const graph = `${base}/${stored.underRoot}`;
+  checkGraphIri(shape, graph);
+  return graph;
+}
+
+/** The resolved routes of `dataset` (shape IRI → graph IRI), resolved with its data root. */
+function resolvedTable(dataset: IDataset | object): Map<string, string> | undefined {
+  const table = routes.get(dataset);
+  if (!table || table.size === 0) return undefined;
+  let cachedRoot: string | undefined | null = null;
+  const root = () => (cachedRoot === null ? (cachedRoot = dataRootOf(dataset)) : cachedRoot);
+  const out = new Map<string, string>();
+  for (const [shape, stored] of table) out.set(shape, resolveStored(shape, stored, root));
+  return out;
+}
+
+/**
+ * The routes of `dataset` (shape IRI → graph IRI, `'own'` and `dataGraph()` resolved under its
+ * data root), a copy; empty when it has none. Throws when a route needs a root the dataset lacks.
+ */
 export function getShapeGraphs(dataset: IDataset | object): Record<string, string> {
-  return Object.fromEntries(routes.get(dataset) ?? []);
+  return Object.fromEntries(resolvedTable(dataset) ?? []);
 }
 
 /** Drop the graph route of `shape` in `dataset`. */
@@ -100,12 +223,14 @@ export interface ShapeGraphRouting {
 
 /**
  * The routing of `dataset`, or `undefined` when it has no routes (its reads and writes are then
- * exactly what they were before routing: everything in the default graph).
+ * exactly what they were before routing: everything in the default graph). Routes stated as
+ * `'own'` or `dataGraph()` are resolved here, under the dataset's data root ({@link dataRootOf});
+ * a route that needs a root the dataset lacks throws.
  */
 export function graphRoutingFor(dataset: IDataset | object | undefined): ShapeGraphRouting | undefined {
   if (!dataset) return undefined;
-  const table = routes.get(dataset);
-  if (!table || table.size === 0) return undefined;
+  const table = resolvedTable(dataset);
+  if (!table) return undefined;
   const graphForShape = (shapeId: string): string => {
     const own = table.get(shapeId);
     if (own) return own;

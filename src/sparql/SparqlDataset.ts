@@ -141,6 +141,14 @@ export abstract class SparqlDataset implements IDataset {
   }
 
   /**
+   * The data root this store mints ids under (`SparqlOptions.dataRoot`); graph routes stated as
+   * `'own'` or `dataGraph()` resolve under it too. `undefined` → the process's `DATA_ROOT`.
+   */
+  dataRoot(): string | undefined {
+    return this.options?.dataRoot || undefined;
+  }
+
+  /**
    * The graph routing this store compiles with: the routes registered for this instance (see
    * `utils/graphRouting.ts`), or `undefined` when it has none, in which case every read and write
    * is exactly what it was before graph routing. A store that takes its routes from elsewhere
