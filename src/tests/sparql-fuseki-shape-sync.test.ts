@@ -381,8 +381,8 @@ describeFuseki('single-owner constraint e2e (Fuseki)', () => {
     expect(await orphanBlankNodes()).toBe(0);
     // The predicate IRI the constraint pointed at, and its own description, are untouched.
     expect(await has(`<${schemaImage.id}> <${RDFS}label> "image"`)).toBe(true);
-    // E2ESubProject (a separate shape) still references the same predicate in its own paths.
-    expect(await has(`<${E2ESubProject.shape.id}/image> <${SH}path> <${schemaImage.id}>`)).toBe(true);
+    // E2ESubProject (a separate shape, stored as declared) keeps its own triples.
+    expect(await has(`<${E2ESubProject.shape.id}> <${SH}targetClass> <${E2ESubProject.targetClass.id}>`)).toBe(true);
 
     await syncShape(E2EProject)();
     expect(await generatedUnder(E2EProject.shape.id)).toBe(2);

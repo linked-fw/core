@@ -19,6 +19,10 @@
  * wrote (so the next sync can skip an unchanged shape). It is the last triple of the create and is
  * checked separately, then removed before the comparison.
  *
+ * The fourth change: shapes are written as declared. 2.30.0 copied the inherited property shapes
+ * (here the root Shape's `label` and `type`) under every shape; they are no longer written (a
+ * reader follows `core:isExtending`, and a data-only shape inherits the root's).
+ *
  * The golden is paired with SHAPE_HASH_VERSION in SHAPE_HASH_LEDGER below. Sync skips a stored
  * shape whose hash is unchanged, so a change to the SHACL it writes must bump the version, or
  * existing stores keep the old triples. The ledger test fails when the golden changed but the
@@ -178,18 +182,6 @@ const GOLDEN_SYNC_OUTPUT = `INSERT DATA {
   <https://linked.cm/shape/sync-fixture/Fixture/status/in/2> rdf:type rdf:List .
   <https://linked.cm/shape/sync-fixture/Fixture/status/in/2> rdf:first <https://example.org/fx#Other> .
   <https://linked.cm/shape/sync-fixture/Fixture/status/in/2> rdf:rest rdf:nil .
-  <https://linked.cm/shape/sync-fixture/Fixture> shacl:property <https://linked.cm/shape/sync-fixture/Fixture/label> .
-  <https://linked.cm/shape/sync-fixture/Fixture/label> rdf:type shacl:PropertyShape .
-  <https://linked.cm/shape/sync-fixture/Fixture/label> shacl:path rdfs:label .
-  <https://linked.cm/shape/sync-fixture/Fixture/label> rdfs:label "label" .
-  <https://linked.cm/shape/sync-fixture/Fixture/label> shacl:nodeKind shacl:Literal .
-  <https://linked.cm/shape/sync-fixture/Fixture/label> shacl:maxCount "1"^^xsd:integer .
-  <https://linked.cm/shape/sync-fixture/Fixture> shacl:property <https://linked.cm/shape/sync-fixture/Fixture/type> .
-  <https://linked.cm/shape/sync-fixture/Fixture/type> rdf:type shacl:PropertyShape .
-  <https://linked.cm/shape/sync-fixture/Fixture/type> shacl:path rdf:type .
-  <https://linked.cm/shape/sync-fixture/Fixture/type> rdfs:label "type" .
-  <https://linked.cm/shape/sync-fixture/Fixture/type> shacl:nodeKind shacl:IRI .
-  <https://linked.cm/shape/sync-fixture/Fixture/type> shacl:node <https://linked.cm/shape/core/Shape> .
   <https://linked.cm/shape/sync-fixture/Fixture> core:generatedShape <https://linked.cm/shape/sync-fixture/Fixture/image.singleOwner> .
   <https://linked.cm/shape/sync-fixture/Fixture/image.singleOwner> rdf:type shacl:NodeShape .
   <https://linked.cm/shape/sync-fixture/Fixture/image.singleOwner> core:generated "true"^^xsd:boolean .
@@ -215,6 +207,8 @@ const SHAPE_HASH_LEDGER: ReadonlyArray<{version: number; goldenDigest: string}> 
   // The single-owner constraint names one sh:class where it listed every sub-shape's class in an
   // sh:or; this fixture has no sub-shape, so its golden is unchanged.
   {version: 2, goldenDigest: '745c0583dff0d2a757431a8ab45eb3fc84db0375c5ef9b41b9370147a9a887d0'},
+  // Shapes as declared: the root Shape's `label` and `type` are no longer copied under the shape.
+  {version: 3, goldenDigest: 'f378a93237c5680c3f5bd5f2ed2983bca5067910426552aacf04cc58bb7a5939'},
 ];
 
 const insertDataOf = (updates: string[]) => {

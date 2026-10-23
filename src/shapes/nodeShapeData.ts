@@ -220,10 +220,28 @@ export function getPropertyShapes(
   // properties when no class existed — so a project-authored shape silently lost
   // everything it inherited.
   const res: PropertyShapeData[] = [...ownPropertyShapes(nodeShape)];
-  for (const superShape of getSuperShapes(nodeShape)) {
+  for (const superShape of inheritedShapes(nodeShape)) {
     res.push(...ownPropertyShapes(superShape));
   }
   return res;
+}
+
+/** Core's root `Shape` (core's shapes are always under `https://linked.cm/`). */
+const ROOT_SHAPE_IRI = 'https://linked.cm/shape/core/Shape';
+
+/**
+ * The shapes whose property shapes `nodeShape` inherits: {@link getSuperShapes}, ending at the
+ * root `Shape`. A class-backed chain already ends there; a shape known only as data (one a catalog
+ * read from a store) names no root in its `extends`, and since stored shapes are written as
+ * declared, the root's `label` and `type` reach it only here.
+ */
+function inheritedShapes(nodeShape: NodeShapeData): NodeShapeData[] {
+  const chain = getSuperShapes(nodeShape);
+  if (nodeShape.id === ROOT_SHAPE_IRI || chain.some((shape) => shape.id === ROOT_SHAPE_IRI)) {
+    return chain;
+  }
+  const root = getAllNodeShapes().get(ROOT_SHAPE_IRI);
+  return root ? [...chain, root] : chain;
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +317,7 @@ export function getPropertyShape(
 ): PropertyShapeData | undefined {
   const own = ownPropertyShapes(nodeShape).find((ps) => ps.label === label);
   if (own || !checkSubShapes) return own;
-  for (const superShape of getSuperShapes(nodeShape)) {
+  for (const superShape of inheritedShapes(nodeShape)) {
     const inherited = ownPropertyShapes(superShape).find(
       (ps) => ps.label === label,
     );

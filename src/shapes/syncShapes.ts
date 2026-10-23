@@ -6,7 +6,7 @@
 import {getAllShapeClasses, getShapeClass} from '../utils/ShapeClass.js';
 import {NodeShape} from './SHACL.js';
 import {
-  getUniquePropertyShapes,
+  getPropertyShapes,
   type NodeShapeData,
   type PropertyShapeData,
 } from './nodeShapeData.js';
@@ -14,8 +14,6 @@ import {Shape} from './Shape.js';
 import {DeleteBuilder} from '../queries/DeleteBuilder.js';
 import type {IDataset} from '../interfaces/IDataset.js';
 import {rdfList} from './List.js';
-import {PathList} from './PathList.js';
-import {rdf} from '../ontologies/rdf.js';
 import {serializePathToNodeData} from './serializePathToNodeData.js';
 import {buildSingleOwnerConstraints} from './singleOwnerConstraint.js';
 import {QueryBuilder} from '../queries/QueryBuilder.js';
@@ -29,7 +27,7 @@ import {builtInShapeIris} from '../utils/ShapeCatalog.js';
 const FRAMEWORK_PACKAGE = '@_linked/core';
 
 /**
- * Build the create-pipeline data object for a single PropertyShape (flattened under shapeIri).
+ * Build the create-pipeline data object for a single PropertyShape (under shapeIri).
  *
  * @internal Exported for tests only — not part of the public API.
  */
@@ -89,16 +87,23 @@ export function buildPropertyShapeData(ps: PropertyShapeData, shapeIri: string):
   return d;
 }
 
-/** An `rdf:List` of shape references, its cells blank once written (`PathList` cells). */
-function shapeList(shapes: {id: string}[]): unknown {
-  return shapes.reduceRight<unknown>(
-    (rest, shape) => ({shape: PathList, first: {id: shape.id}, rest}),
-    {id: rdf.nil.id},
-  );
-}
-
-/** Build the create-pipeline data object for a NodeShape and its (flattened) property shapes. */
-function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<string, unknown> {
+/**
+ * The create-pipeline data object for a NodeShape and its own property shapes, as declared: an
+ * inherited property shape is not copied (a reader follows `core:isExtending`; SHACL applies the
+ * super-shape through its target class). `sh:and`/`sh:xone` are `rdf:List`s with IRI cells
+ * (`{shape IRI}/and/0`, …), so the only blank nodes a shape is written with are its complex paths.
+ *
+ * With `generated: false` the single-owner constraints the shape's `contains` properties generate
+ * are left out (a package's shape graph holds the shapes as declared; the generated ones depend on
+ * the app's registered sub-shapes and live in the app's shape graph).
+ *
+ * @internal Exported for core's shape writers only — not part of the public API.
+ */
+export function buildNodeShapeData(
+  nodeShape: NodeShapeData,
+  shapeIri: string,
+  options: {generated?: boolean} = {},
+): Record<string, unknown> {
   const d: Record<string, unknown> = {};
   if (nodeShape.targetClass) d.targetClass = nodeShape.targetClass;
   if (nodeShape.description) d.description = nodeShape.description;
@@ -116,19 +121,26 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
   if (nodeShape.deactivated !== undefined) d.deactivated = nodeShape.deactivated;
   if (nodeShape.message && nodeShape.message.length) d.message = nodeShape.message;
   if (nodeShape.severity) d.severity = nodeShape.severity;
-  // sh:and / sh:xone are rdf:Lists of shapes, written as blank nodes.
-  if (nodeShape.andShapes && nodeShape.andShapes.length) d.andShapes = shapeList(nodeShape.andShapes);
-  if (nodeShape.xoneShapes && nodeShape.xoneShapes.length) d.xoneShapes = shapeList(nodeShape.xoneShapes);
+  // sh:and / sh:xone are rdf:Lists of shapes, with IRI cells under the shape's IRI.
+  if (nodeShape.andShapes && nodeShape.andShapes.length) {
+    d.andShapes = rdfList(nodeShape.andShapes.map(({id}) => ({id})), {base: `${shapeIri}/and`});
+  }
+  if (nodeShape.xoneShapes && nodeShape.xoneShapes.length) {
+    d.xoneShapes = rdfList(nodeShape.xoneShapes.map(({id}) => ({id})), {base: `${shapeIri}/xone`});
+  }
   if (nodeShape.notShape) d.notShape = nodeShape.notShape;
-  // Flatten: emit own + inherited property shapes (deduped by label) under this shape.
-  d.properties = getUniquePropertyShapes(nodeShape).map((ps) =>
-    buildPropertyShapeData(ps, shapeIri),
-  );
+  // As declared: the shape's own property shapes (its overrides included), deduped by label.
+  const seen = new Set<string>();
+  d.properties = getPropertyShapes(nodeShape)
+    .filter((ps) => !seen.has(ps.label) && (seen.add(ps.label), true))
+    .map((ps) => buildPropertyShapeData(ps, shapeIri));
   // The single-owner constraints of the shape's own `contains` properties, owned through
   // `core:generatedShape` and written nested in the same create with their fixed IRIs.
-  const generated = buildSingleOwnerConstraints(nodeShape, shapeIri);
-  if (generated.length > 0) {
-    d.generatedShapes = generated.map(({iri, data}) => ({__id: iri, ...data}));
+  if (options.generated !== false) {
+    const generated = buildSingleOwnerConstraints(nodeShape, shapeIri);
+    if (generated.length > 0) {
+      d.generatedShapes = generated.map(({iri, data}) => ({__id: iri, ...data}));
+    }
   }
   return d;
 }
@@ -146,7 +158,7 @@ function buildNodeShapeData(nodeShape: NodeShapeData, shapeIri: string): Record<
  *
  * @internal Exported for tests only — not part of the public API.
  */
-export const SHAPE_HASH_VERSION = 2;
+export const SHAPE_HASH_VERSION = 3;
 
 /**
  * A canonical string for create-pipeline data: equal for equal data, independent of object key
@@ -190,7 +202,7 @@ function canonicalize(value: unknown): string {
 /**
  * The content hash shape sync stores on a NodeShape as `core:shapeHash`: SHA-256 (hex) of the
  * canonical form of the shape IRI and the exact create data the sync writes for it — the
- * NodeShape, its flattened own + inherited property shapes, their `sh:in` lists and paths, and
+ * NodeShape, its own property shapes (as declared), their `sh:in` lists and paths, and
  * the generated single-owner shapes it owns (whose owner classes come from the registered
  * sub-shapes, so registering a new sub-shape changes the hash of the declaring shape).
  *
