@@ -152,7 +152,7 @@ export abstract class SparqlDataset implements IDataset {
    * (a copy carrying the expanded set), or `null` when the set expanded to no graph and the read
    * matches nothing.
    */
-  protected async expandReadGraphs<T extends IRSelectQuery | IRCountQuery | IRAskQuery>(
+  protected async resolveReadGraphs<T extends IRSelectQuery | IRCountQuery | IRAskQuery>(
     ir: T,
   ): Promise<T | null> {
     if (!ir.graphs) return ir;
@@ -222,7 +222,7 @@ export abstract class SparqlDataset implements IDataset {
     // overloaded per query kind and cannot resolve a union, and lowering twice
     // would be the thing this method most needs not to do.
     const lowered = lower(query as SelectQuery) as IRSelectQuery | IRCountQuery;
-    const ir = await this.expandReadGraphs(lowered);
+    const ir = await this.resolveReadGraphs(lowered);
     if (!ir) {
       // The graph set expanded to no graph (no graph of that kind is registered).
       return lowered.kind === 'count' ? 0 : mapSparqlSelectResult(NO_ROWS, lowered);
@@ -254,7 +254,7 @@ export abstract class SparqlDataset implements IDataset {
    * of the node under any type or none. Errors reject; never reported as `false`.
    */
   async askQuery(query: AskQuery): Promise<boolean> {
-    const ir = await this.expandReadGraphs(lower(query));
+    const ir = await this.resolveReadGraphs(lower(query));
     if (!ir) return false;
     const sparql = askToSparql(ir, this.options);
     const json = await this.executeSparqlSelect(sparql);
