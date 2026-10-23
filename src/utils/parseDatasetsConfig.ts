@@ -6,8 +6,7 @@
 //     "datasets": {
 //       "<alias>": {
 //         "store":  "<npm-import-path>",
-//         "config": { /* passed verbatim to the store's constructor */ },
-//         "graphs": { "<shape IRI>": "<graph IRI>" }   // optional graph routing
+//         "config": { /* passed verbatim to the store's constructor */ }
 //       }
 //     }
 //   }
@@ -16,6 +15,10 @@
 // `config` is the store class's own concern — the runtime never inspects it.
 // `${VAR}` / `${VAR:-default}` placeholders inside string values are resolved
 // against an env map at parse time.
+//
+// Graph routing is not configured here: it lives in the app's code
+// (`LinkedStorage.setDatasetForShapes(store, shapes, {graph})`, see
+// `utils/graphRouting.ts`). This file holds what changes per deployment.
 
 /** One entry under `datasets`. Keyed by alias name in the parent object. */
 export interface DatasetEntry {
@@ -23,12 +26,6 @@ export interface DatasetEntry {
   store: string;
   /** Constructor argument forwarded to the store class. Shape is store-specific. */
   config: Record<string, unknown>;
-  /**
-   * Graph routing for this store (optional): shape IRI → the named graph its instances live in.
-   * A shape not listed (nor a super-shape of it) lives in the default graph. `loadStores`
-   * registers it for the store it builds (see `utils/graphRouting.ts`).
-   */
-  graphs?: Record<string, string>;
 }
 
 /** Top-level structure of linked.{backend,frontend}.datasets.json. */
@@ -107,27 +104,9 @@ export function parseDatasetsConfig(
       );
     }
     if (e.config === undefined) e.config = {};
-    if (e.graphs !== undefined) {
-      if (!e.graphs || typeof e.graphs !== 'object' || Array.isArray(e.graphs)) {
-        throw new Error(
-          `Invalid datasets config: alias "${alias}" "graphs" must be an object of shape IRI → graph IRI`,
-        );
-      }
-      for (const [shape, graph] of Object.entries(e.graphs)) {
-        if (!ABSOLUTE_IRI.test(shape) || typeof graph !== 'string' || !ABSOLUTE_IRI.test(graph)) {
-          throw new Error(
-            `Invalid datasets config: alias "${alias}" "graphs" maps shape IRIs to graph IRIs; ` +
-              `got ${JSON.stringify(shape)} → ${JSON.stringify(graph)}`,
-          );
-        }
-      }
-    }
   }
   return resolved as DatasetsConfig;
 }
-
-/** An absolute IRI: a scheme, then no whitespace or IRIREF-ending character. */
-const ABSOLUTE_IRI = /^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"{}|^`\\]*$/;
 
 function resolveInterpolations(
   value: unknown,

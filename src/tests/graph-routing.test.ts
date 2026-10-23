@@ -5,10 +5,10 @@
  */
 
 /**
- * Graph routing: the per-dataset routes, the datasets config's `graphs` key, routed reads (one
- * golden query per form), routed writes, `.into()`, and the graphs live queries carry.
+ * Graph routing: the per-dataset routes and their forms (`'own'`, `dataGraph()`, IRIs), routed
+ * reads (one golden query per form), routed writes, `.into()`, and the graphs live queries carry.
  */
-import {afterEach, describe, expect, test} from '@jest/globals';
+import {afterEach, describe, expect, jest, test} from '@jest/globals';
 import {Dog, Employee, Person, Pet} from '../test-helpers/query-fixtures';
 import {lower} from '../queries/lower';
 import {countToSparql, selectToSparql} from '../sparql/irToAlgebra';
@@ -194,41 +194,36 @@ describe('LinkedStorage.setDatasetForShapes', () => {
   });
 });
 
-describe('the datasets config graphs key', () => {
-  test('parsed, checked and registered for the store loadStores builds', async () => {
-    const config = parseDatasetsConfig(
-      {
-        datasets: {
-          appData: {
-            store: '@_linked/example/shapes/RoutedStore',
-            config: {},
-            graphs: {[Person.shape.id]: '${DATA_ROOT}/graph/people'},
-          },
+describe('the datasets config has no graphs key', () => {
+  test('a graphs key is not validated, and loadStores routes nothing from it and warns', async () => {
+    const raw = {
+      datasets: {
+        appData: {
+          store: '@_linked/example/shapes/RoutedStore',
+          config: {},
+          graphs: {[Person.shape.id]: 'not even an IRI'},
         },
       },
-      {DATA_ROOT: 'https://acme.example/data'},
-    );
-    expect(config.datasets.appData.graphs).toEqual({[Person.shape.id]: G_PEOPLE});
+    };
+    // Unknown alias keys pass through, as before: the parser no longer checks this one.
+    const config = parseDatasetsConfig(raw, {});
     class RoutedStore {
       constructor(readonly config: unknown) {}
     }
     const globals = globalThis as Record<symbol, unknown>;
     const IMPORT_MODULE = Symbol.for('@_linked/core:importModule');
     globals[IMPORT_MODULE] = async () => ({RoutedStore});
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const stores = await loadStores(config);
       expect(stores.appData).toBeInstanceOf(RoutedStore);
-      expect(getShapeGraphs(stores.appData as object)).toEqual({[Person.shape.id]: G_PEOPLE});
+      expect(graphRoutingFor(stores.appData as object)).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toMatch(/alias "appData" has a "graphs" key[^]*setDatasetForShapes/);
     } finally {
+      warn.mockRestore();
       delete globals[IMPORT_MODULE];
     }
-  });
-
-  test('a malformed graphs key is refused', () => {
-    const entry = (graphsKey: unknown) => ({datasets: {a: {store: 'x', graphs: graphsKey}}});
-    expect(() => parseDatasetsConfig(entry([G_PEOPLE]))).toThrow(/"graphs" must be an object/);
-    expect(() => parseDatasetsConfig(entry({[Person.shape.id]: 'people'}))).toThrow(/graph IRIs/);
-    expect(() => parseDatasetsConfig(entry({person: G_PEOPLE}))).toThrow(/graph IRIs/);
   });
 });
 

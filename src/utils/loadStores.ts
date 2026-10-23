@@ -6,7 +6,6 @@
 // Backends import this directly; frontends never do.
 
 import type {DatasetsConfig} from './parseDatasetsConfig.js';
-import {setShapeGraphs} from './graphRouting.js';
 
 /**
  * The module loader `loadStores` imports each store with. A host that
@@ -32,8 +31,8 @@ function importModule(specifier: string): Promise<unknown> {
 /**
  * Dynamically imports each alias's `store` (an npm specifier) and
  * instantiates the resolved class with the entry's `config` verbatim —
- * `new StoreClass(entry.config)`. Returns alias → store. An entry's `graphs` (shape IRI → graph
- * IRI) is registered as that store's graph routing.
+ * `new StoreClass(entry.config)`. Returns alias → store. Graph routing is not read from the
+ * config (an entry with a `graphs` key gets a warning): the app routes shapes in code.
  *
  * Convention: the last segment of the `store` path is the named export
  * to use (e.g. `@_linked/fuseki/shapes/FusekiStore` → `FusekiStore`).
@@ -87,9 +86,13 @@ export async function loadStores<T = unknown>(
       );
     }
     const store = new (StoreClass as new (cfg: unknown) => T)(entry.config);
-    // The alias's graph routing belongs to this store instance (see `graphRouting.ts`).
-    if (entry.graphs && Object.keys(entry.graphs).length > 0) {
-      setShapeGraphs(store as object, entry.graphs);
+    // Graph routing lives in the app's code, never in this file (see `graphRouting.ts`).
+    if ((entry as {graphs?: unknown}).graphs !== undefined) {
+      console.warn(
+        `[linked] loadStores: alias "${alias}" has a "graphs" key, which the datasets config ` +
+          `does not read; route shapes in code with ` +
+          `LinkedStorage.setDatasetForShapes(store, [Shape], {graph: 'own'}) (or dataGraph('slug')).`,
+      );
     }
     stores[alias] = store;
   }
