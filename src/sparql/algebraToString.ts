@@ -484,9 +484,17 @@ export function deleteInsertPlanToSparql(
   const whereBody = serializeAlgebraNode(plan.whereAlgebra, collector);
   const wherePart = `WHERE {\n${indent(whereBody)}\n}`;
 
+  // `WITH <g>` makes the graph the target of DELETE and INSERT and the dataset of WHERE.
+  let withPart = '';
+  if (plan.graph) {
+    collectUri(collector, plan.graph);
+    withPart = `WITH ${formatUri(plan.graph)}`;
+  }
+
   const prefixBlock = buildPrefixBlock(collector.uris);
   const parts: string[] = [];
   if (prefixBlock) parts.push(prefixBlock);
+  if (withPart) parts.push(withPart);
   parts.push(deletePart);
   if (insertPart) parts.push(insertPart.trimEnd());
   parts.push(wherePart);

@@ -23,6 +23,8 @@ import {CountBuilder} from '../queries/CountBuilder';
 import {selectToSparql, countToSparql} from '../sparql/irToAlgebra';
 import {builtInShapeIris} from '../utils/ShapeCatalog';
 import {getNodeShapeUri} from '../shapes/SHACL';
+import {SparqlDataset} from '../sparql/SparqlDataset';
+import {sha256Hex} from '../utils/sha256';
 
 const G = 'https://linked.cm/pkg/example/graph/ontology';
 const ONTOLOGY_GRAPH = 'https://linked.cm/ont/core/OntologyGraph';
@@ -279,6 +281,151 @@ describe('the graph API', () => {
     expect(selectToSparql(select as any)).toContain(`GRAPH <${graphs.registry}>`);
     const count = lower(CountBuilder.of({shapeClass: OntologyGraph as any}));
     expect(countToSparql(count as any)).toContain(`GRAPH <${graphs.registry}>`);
+  });
+});
+
+describe('SparqlDataset.graphQuery', () => {
+  const REG = graphs.registry;
+  const nt: GraphContent = {mediaType: 'application/n-triples', text: '<urn:a> <urn:b> "x\\ny" .\n'};
+  const ttl: GraphContent = {
+    mediaType: 'text/turtle',
+    text: '@prefix ex: <http://example.org/> .\nex:A a ex:Class ; ex:label "A"@en .',
+  };
+
+  /** A SPARQL dataset that records what it sends and answers the registry ASK as told. */
+  class RecordingSparql extends SparqlDataset {
+    updates: string[] = [];
+    asks: string[] = [];
+    constructor(private registered: boolean) {
+      super();
+    }
+    protected async executeSparqlSelect(sparql: string): Promise<any> {
+      this.asks.push(sparql);
+      return {head: {}, boolean: this.registered};
+    }
+    protected async executeSparqlUpdate(sparql: string): Promise<void> {
+      this.updates.push(sparql);
+    }
+  }
+
+  test('graph_create: one update with the body and the whole record', async () => {
+    const ds = new RecordingSparql(false);
+    const result = await OntologyGraph.create({id: G, package: '@_linked/example', version: '1.0.0'})
+      .withContent(ttl)
+      .exec(ds);
+    expect(ds.asks).toEqual([
+      `ASK { GRAPH <${REG}> { <${G}> <http://www.w3.org/ns/sparql-service-description#name> <${G}> } }`,
+    ]);
+    expect(ds.updates).toHaveLength(1);
+    const update = ds.updates[0];
+    expect(update).toMatch(new RegExp(`^DROP SILENT GRAPH <${G}> ;\\nINSERT DATA \\{ GRAPH <${G}> \\{\\n`));
+    expect(update).toContain('<http://example.org/A> <http://example.org/label> "A"@en .');
+    expect(update).toContain(`DELETE WHERE { GRAPH <${REG}> { <${G}> ?p ?o } }`);
+    expect(update).toContain(`a <${ONTOLOGY_GRAPH}>`);
+    expect(update).toContain(`<http://www.w3.org/ns/sparql-service-description#name> <${G}>`);
+    expect(update).toContain('<https://linked.cm/ont/core/feedsHierarchy> "true"^^<http://www.w3.org/2001/XMLSchema#boolean>');
+    expect(update).toContain('<https://linked.cm/ont/core/package> "@_linked/example"');
+    expect(update).toContain(`<https://linked.cm/ont/core/contentHash> "${sha256Hex(ttl.text)}"`);
+    expect(update).toContain(`<http://purl.org/dc/terms/modified> "${result.modified}"^^<http://www.w3.org/2001/XMLSchema#dateTime>`);
+    expect(result).toMatchObject({graph: G, contentHash: sha256Hex(ttl.text), changed: true});
+  });
+
+  test('graph_create of a registered graph is refused with graph-exists, nothing written', async () => {
+    const ds = new RecordingSparql(true);
+    const err = await OntologyGraph.create({id: G, package: 'p'}).exec(ds).catch((e) => e);
+    expect(isGraphQueryError(err, 'graph-exists')).toBe(true);
+    expect(ds.updates).toEqual([]);
+  });
+
+  test('graph_replace and graph_patch of an unregistered graph are refused', async () => {
+    const ds = new RecordingSparql(false);
+    for (const call of [
+      () => NamedGraph.replaceContent(G, nt).exec(ds),
+      () => NamedGraph.patchContent(G, {insert: nt}).exec(ds),
+      () => OntologyGraph.update(G).set({version: '2'}).exec(ds),
+    ]) {
+      expect(isGraphQueryError(await call().catch((e) => e), 'graph-not-registered')).toBe(true);
+    }
+    expect(ds.updates).toEqual([]);
+  });
+
+  test("graph_replace: the master plan's update, plus the own fields passed", async () => {
+    const ds = new RecordingSparql(true);
+    await OntologyGraph.update(G).set({version: '2.0.0'}).replaceContent(nt, {contentHash: 'filehash'}).exec(ds);
+    const ops = ds.updates[0].split(' ;\n');
+    expect(ops[0]).toBe(`DROP SILENT GRAPH <${G}>`);
+    expect(ops[1]).toBe(`INSERT DATA { GRAPH <${G}> {\n<urn:a> <urn:b> "x\\ny" .\n} }`);
+    expect(ops.slice(2, 5)).toEqual([
+      `DELETE WHERE { GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/contentHash> ?v0 } }`,
+      `DELETE WHERE { GRAPH <${REG}> { <${G}> <http://purl.org/dc/terms/modified> ?v1 } }`,
+      `DELETE WHERE { GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/version> ?v2 } }`,
+    ]);
+    expect(ops[5]).toContain('"filehash"');
+    expect(ops[5]).toContain('<https://linked.cm/ont/core/version> "2.0.0"');
+    expect(ops).toHaveLength(6);
+  });
+
+  test('graph_patch: DELETE DATA then INSERT DATA, and a new hash', async () => {
+    const ds = new RecordingSparql(true);
+    const del: GraphContent = {mediaType: 'application/n-triples', text: '<urn:a> <urn:b> <urn:old> .'};
+    const result = await NamedGraph.patchContent(G, {insert: nt, delete: del}).exec(ds);
+    const ops = ds.updates[0].split(' ;\n');
+    expect(ops[0]).toBe(`DELETE DATA { GRAPH <${G}> {\n<urn:a> <urn:b> <urn:old> .\n} }`);
+    expect(ops[1]).toContain(`INSERT DATA { GRAPH <${G}> {`);
+    expect(result.contentHash).toBe(sha256Hex(`${del.text}\n${nt.text}`));
+    expect(ops.join('\n')).not.toContain('version');
+  });
+
+  test('graph_patch record only: own fields, hash and modified kept', async () => {
+    const ds = new RecordingSparql(true);
+    const result = await OntologyGraph.update(G).set({version: '3'}).exec(ds);
+    expect(ds.updates).toEqual([
+      `DELETE WHERE { GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/version> ?v0 } } ;\n` +
+        `INSERT DATA { GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/version> "3"^^<http://www.w3.org/2001/XMLSchema#string> . } }`,
+    ]);
+    expect(result).toEqual({graph: G, changed: false});
+  });
+
+  test('graph_drop: the graph and its record, no registry check', async () => {
+    const ds = new RecordingSparql(false);
+    await OntologyGraph.delete(G).exec(ds);
+    expect(ds.asks).toEqual([]);
+    expect(ds.updates).toEqual([
+      `DROP SILENT GRAPH <${G}> ;\nDELETE WHERE { GRAPH <${REG}> { <${G}> ?p ?o } }`,
+    ]);
+  });
+
+  test('a store refuses a portable name even when the query arrives raw', async () => {
+    const ds = new RecordingSparql(true);
+    const err = await ds
+      .graphQuery({kind: 'graph_replace', graph: graphs.union, recordClass: ONTOLOGY_GRAPH, content: nt})
+      .catch((e) => e);
+    expect(isGraphQueryError(err, 'graph-name-read-only')).toBe(true);
+    const unknown = await ds.graphQuery({kind: 'graph_load', graph: G, recordClass: ONTOLOGY_GRAPH} as any).catch((e) => e);
+    expect(isGraphQueryError(unknown, 'unsupported-query-kind')).toBe(true);
+  });
+
+  test('bodies are parsed: invalid text, quads, relative IRIs and blank-node deletes are refused', async () => {
+    const ds = new RecordingSparql(true);
+    const replace = (content: GraphContent) => NamedGraph.replaceContent(G, content).exec(ds).catch((e) => e);
+    expect(String(await replace({mediaType: 'application/n-triples', text: '} } ; DROP ALL ; INSERT DATA { {'})))
+      .toMatch(/not valid N-Triples/);
+    expect(String(await replace({mediaType: 'text/turtle', text: '<rel> <urn:p> <urn:o> .'}))).toMatch(/IRI/);
+    const bnode = await NamedGraph.patchContent(G, {delete: {mediaType: 'text/turtle', text: '<urn:s> <urn:p> [] .'}})
+      .exec(ds)
+      .catch((e) => e);
+    expect(String(bnode)).toMatch(/cannot delete a blank node/);
+    expect(ds.updates).toEqual([]);
+  });
+
+  test('unknown record classes and fields are refused', async () => {
+    const ds = new RecordingSparql(false);
+    const cls = await ds.graphQuery({kind: 'graph_create', graph: G, recordClass: 'urn:not-a-record'}).catch((e) => e);
+    expect(String(cls)).toMatch(/not a graph record class/);
+    const field = await OntologyGraph.create({id: G, package: 'p', colour: 'red'} as any).exec(ds).catch((e) => e);
+    expect(String(field)).toMatch(/no field "colour"/);
+    const auto = await OntologyGraph.create({id: G, package: 'p', contentHash: 'x'} as any).exec(ds).catch((e) => e);
+    expect(String(auto)).toMatch(/filled in by core/);
   });
 });
 

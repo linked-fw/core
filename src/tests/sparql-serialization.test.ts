@@ -740,6 +740,21 @@ describe('deleteInsertPlanToSparql', () => {
     expect(result).toContain('WHERE {');
   });
 
+  test('DeleteInsertPlan with a graph targets it with WITH', () => {
+    const plan: SparqlDeleteInsertPlan = {
+      type: 'delete_insert',
+      deletePatterns: [triple(iri(ENTITY_URI), iri(HOBBY_URI), variable('old_hobby'))],
+      insertPatterns: [triple(iri(ENTITY_URI), iri(HOBBY_URI), literal('Chess'))],
+      whereAlgebra: bgp(triple(iri(ENTITY_URI), iri(HOBBY_URI), variable('old_hobby'))),
+      graph: GRAPH_URI,
+    };
+
+    const lines = deleteInsertPlanToSparql(plan).split('\n');
+    expect(lines[0]).toBe(`WITH <${GRAPH_URI}>`);
+    expect(lines[1]).toBe('DELETE {');
+    expect(deleteInsertPlanToSparql({...plan, graph: undefined})).not.toContain('WITH');
+  });
+
   test('DeleteInsertPlan with empty insert (unset/delete only)', () => {
     const plan: SparqlDeleteInsertPlan = {
       type: 'delete_insert',

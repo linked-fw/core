@@ -167,6 +167,12 @@ type GraphRecordBaseStatics = Omit<
   (abstract new (node?: string | {id?: string}) => Shape);
 const GraphRecordBase = Shape as unknown as GraphRecordBaseStatics;
 
+// Each class is registered by call, right after its declaration (a subclass's property shapes
+// attach to its registered parent), with an explicit name that survives a minifier. The
+// decorator form's `typeof Shape` bound does not accept these classes' graph-query statics.
+const registerGraphRecordShape = (cls: object, name: string, description: string): void =>
+  linkedShape({name, description})(cls as typeof Shape);
+
 /**
  * A named graph's record in the graph registry (`sd:NamedGraph`). Its subject is the graph IRI.
  * `select()` reads the registry (`static storedInGraph`), so callers never name it.
@@ -292,6 +298,11 @@ export class NamedGraph extends GraphRecordBase {
     throw new Error('A graph record changes through graph queries: use delete(iri) per graph.');
   }
 }
+registerGraphRecordShape(
+  NamedGraph,
+  'NamedGraph',
+  "A named graph's record in the graph registry: name, content hash, load time, sources, whether it feeds the class hierarchy. (graph registry, named graph)",
+);
 
 /** A graph holding one package's whole ontology data, at `{package IRI}/graph/ontology`. Feeds the hierarchy. */
 export class OntologyGraph extends NamedGraph {
@@ -320,6 +331,11 @@ export class OntologyGraph extends NamedGraph {
     return `${getPackageUri(packageName)}/graph/ontology`;
   }
 }
+registerGraphRecordShape(
+  OntologyGraph,
+  'OntologyGraph',
+  "The registry record of a package's ontology graph. (graph registry, ontology graph)",
+);
 
 /** A graph holding one package's shapes, at `{package IRI}/graph/shapes`. */
 export class ShapesGraph extends NamedGraph {
@@ -348,29 +364,18 @@ export class ShapesGraph extends NamedGraph {
     return `${getPackageUri(packageName)}/graph/shapes`;
   }
 }
+registerGraphRecordShape(
+  ShapesGraph,
+  'ShapesGraph',
+  "The registry record of a package's shapes graph. (graph registry, shapes graph)",
+);
 
 /** Ontology-editor drafts in a branch's app data (`{DATA_ROOT}/graph/drafts`). Never feeds the hierarchy. */
 export class DraftGraph extends NamedGraph {
   static targetClass = coreOntology.DraftGraph;
 }
-
-// Registered by call, with explicit names: the decorator form's `typeof Shape` bound does not
-// accept these classes' graph-query statics, and an explicit name survives a minifier.
-const describe = (name: string, description: string) =>
-  linkedShape({name, description}) as (cls: typeof Shape) => void;
-describe(
-  'NamedGraph',
-  'A named graph\'s record in the graph registry: name, content hash, load time, sources, whether it feeds the class hierarchy. (graph registry, named graph)',
-)(NamedGraph as unknown as typeof Shape);
-describe(
-  'OntologyGraph',
-  'The registry record of a package\'s ontology graph. (graph registry, ontology graph)',
-)(OntologyGraph as unknown as typeof Shape);
-describe(
-  'ShapesGraph',
-  'The registry record of a package\'s shapes graph. (graph registry, shapes graph)',
-)(ShapesGraph as unknown as typeof Shape);
-describe(
+registerGraphRecordShape(
+  DraftGraph,
   'DraftGraph',
   'The registry record of a graph of ontology-editor drafts. (graph registry, draft graph)',
-)(DraftGraph as unknown as typeof Shape);
+);

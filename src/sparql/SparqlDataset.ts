@@ -18,7 +18,18 @@ import type {
   GraphQuery,
   GraphResult,
 } from '../queries/IntermediateRepresentation.js';
-import {unsupportedGraphQuery} from '../queries/graphQuery.js';
+import {
+  assertGraphWritable,
+  GraphQueryError,
+  isGraphQueryKind,
+  unsupportedGraphQuery,
+} from '../queries/graphQuery.js';
+import {getGraphRecordClass, graphContentHash} from '../queries/graphRecords.js';
+import {
+  graphQueryBodies,
+  graphQueryToSparql,
+  graphRegisteredAsk,
+} from './graphQueryToSparql.js';
 import type {SparqlQueryResults} from './resultMapping.js';
 import {
   selectToSparql,
@@ -233,8 +244,51 @@ export abstract class SparqlDataset implements IDataset {
     };
   }
 
+  /**
+   * Run a graph query as **one SPARQL update** (body and registry record in one request, so one
+   * transaction): `graph_create`, `graph_replace`, `graph_patch`, `graph_drop`.
+   *
+   * Refusals (`GraphQueryError`): a portable graph name or the registry itself
+   * (`graph-name-read-only`); create of a registered graph (`graph-exists`); replace or patch of
+   * a graph with no record (`graph-not-registered`); any other kind (`unsupported-query-kind`).
+   * Whether the graph is registered is read first, with one `ASK` on the registry; the write
+   * itself is the single update.
+   *
+   * Bodies are parsed and re-serialised as N-Triples (see `graphQueryToSparql.ts`). A body is
+   * sent inside the update rather than by the Graph Store Protocol: a GSP `PUT` and the record's
+   * update would be two transactions.
+   */
   async graphQuery(query: GraphQuery): Promise<GraphResult> {
-    throw unsupportedGraphQuery(query);
+    if (!isGraphQueryKind(query?.kind)) throw unsupportedGraphQuery(query ?? {});
+    assertGraphWritable(query.graph);
+    getGraphRecordClass(query.recordClass);
+    if (query.kind !== 'graph_drop') {
+      const registered = mapSparqlAskResult(
+        await this.executeSparqlSelect(graphRegisteredAsk(query.graph)),
+      );
+      if (query.kind === 'graph_create' && registered) {
+        throw new GraphQueryError(
+          'graph-exists',
+          `<${query.graph}> is already registered; change it with update(), replaceContent() or patchContent().`,
+          query.graph,
+        );
+      }
+      if (query.kind !== 'graph_create' && !registered) {
+        throw new GraphQueryError(
+          'graph-not-registered',
+          `<${query.graph}> has no record in the graph registry; register it with create() first.`,
+          query.graph,
+        );
+      }
+    }
+    const modified = new Date().toISOString();
+    const sparql = graphQueryToSparql(query, await graphQueryBodies(query), modified);
+    if (sparql) await this.executeSparqlUpdate(sparql);
+    const contentHash = graphContentHash(query);
+    const changed = query.kind !== 'graph_patch' || !!query.patch;
+    return contentHash === undefined
+      ? {graph: query.graph, changed}
+      : {graph: query.graph, contentHash, modified, changed};
   }
 
   /**
