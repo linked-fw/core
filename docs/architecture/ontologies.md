@@ -204,7 +204,7 @@ It runs at app boot and through the app's control route, before shape sync.
 
 ## Named graphs and the graph registry
 
-A dataset keeps named graphs on purpose (a package's whole ontology data, later its shapes,
+A dataset keeps named graphs on purpose (a package's whole ontology data, its shapes,
 ontology-editor drafts), and records each one in the **graph registry**, a named graph at
 `https://linked.cm/pkg/core/graph/registry` (`graphs.registry`), the same IRI in every dataset.
 A record is described with SPARQL Service Description plus core terms; its subject is the graph
@@ -391,6 +391,58 @@ DSL-JSON: a process that receives a mutation derives its graph from its own rout
 **Live queries.** `QueryDependencies.graphs` (the `.from()` names, or the routed read sets) and
 `MutationEffects.graph` (the `.into()` graph, the routed graph of a create, or the one graph of a change to existing subjects; unknown when the read set holds several) are set when the dataset `LinkedStorage`
 routes the shape to has routes; the matcher skips a template that does not read the written graph.
+
+### Shape graphs
+
+A package's shapes live in its shape graph, `{package IRI}/graph/shapes`
+(`ShapesGraph.iriFor(pkg)`), recorded as a `ShapesGraph` (never a hierarchy source). Readers read
+`graphs.allShapes` (every graph the registry lists as a `ShapesGraph`) plus the app's own shape
+graph.
+
+**Stored as declared.** A shape is written with its own property shapes only, plus
+`core:isExtending` to the shape it extends; inherited property shapes are not copied. A reader that
+needs a shape's full property set follows `core:isExtending` (the property readers do so through
+the registry for a shape known only as data, and end its chain at the root `Shape`, whose `label`
+and `type` every shape inherits). SHACL applies a super-shape to a sub-shape's instances through its
+`sh:targetClass` and `rdfs:subClassOf`.
+
+**`shapes.ttl`** (`@_linked/core/shapes/shapesToTurtle`, server only):
+
+- `shapesToTurtle(shapes, {prefixes?})`: the shapes (classes or node shape data) as declared, in a
+  fixed form: the prefix block `core`, `rdf`, `rdfs`, `sh`, `xsd` plus the caller's (sorted; a fixed
+  name cannot be rebound), then one block per IRI subject sorted by IRI, the subject on its own
+  line, then one `predicate object` per line (`a` first, then by predicate IRI, then by the written
+  object), `;` between, `.` at the end, a blank line between blocks. The triples are the ones core's
+  create pipeline writes for a `NodeShape`. Blank nodes only for complex `sh:path` values (SHACL
+  requires them; sequence and alternative lists are blank-celled), each the object of exactly one
+  triple and written inline on its owner's line (`[ sh:inversePath ex:p ]`, `( ex:a ex:b )`);
+  `sh:in`, `sh:languageIn`, `sh:and` and `sh:xone` lists have IRI cells (`{IRI}/in/0`, `{IRI}/and/0`).
+  Same shapes and prefixes, same bytes.
+- `packageShapes(pkg)`, `packageShapesTurtle(pkg)`: a package's registered shapes (for
+  `@_linked/core`, its built-ins) and their Turtle. `linked build` writes it to
+  `lib/esm/data/shapes.ttl`.
+- `singleOwnerShapesTurtle(shapes)`: the single-owner shapes generated from `contains` properties
+  (with the owners' `core:generatedShape` links), for the app's own shape graph
+  `{DATA_ROOT}/graph/shapes`. Their `sh:qualifiedValueShape` is an inline blank node too.
+
+**The sync** (`@_linked/core/shapes/syncShapeGraphs`): `syncShapeGraphs(ds?, {force, packages,
+turtleFor, appShapes, orphanScope})` → `{written, skipped, pruned, cleaned, appGraph?,
+defaultGraph?}`. Per package, the body is `turtleFor(pkg)` (a server passes the installed
+`shapes.ttl`) or `packageShapesTurtle(pkg)`; the hash is `sha256Hex('linked-shape-graph/1\n' +
+text)`, compared with the record's `core:contentHash`; equal → no write; else the graph is created
+or replaced whole in one graph query (`sources` `data/shapes.ttl`). `appShapes: {graph, package?}`
+writes the generated single-owner shapes of every registered shape to the app's graph the same way.
+After the graphs, the package shapes an earlier sync wrote into the default graph (`NodeShape`s with
+`core:shapeHash`) are deleted there with their owned subtrees, once. `orphanScope: 'all'` drops the
+shape graphs of packages no longer registered (never an app's graph). A store without graph queries
+gets the default-graph `syncShapes` instead (`defaultGraph` counts its writes).
+
+**Patching a shape** (`NamedGraph.patchContent`): the unit is the shape's concise bounded
+description: its statements and, through each blank object, the blank node's statements,
+recursively. A store deletes each blank-node structure as a pattern through its IRI subject
+(`DELETE { GRAPH <g> { <s> sh:path ?b0 . ?b0 sh:inversePath ex:p } } WHERE { … FILTER(isBlank(?b0)) }`)
+and inserts the new statements; a delete body whose blank node is the object of two triples, or
+hangs off no IRI subject, is refused.
 
 ## A package that mirrors a standard
 

@@ -27,7 +27,7 @@ merge --ff-only named-graphs--<step>`, then `npx linked build` in that main chec
 step; one release PR per phase (master R1, R2).
 
 Records: K1 → report 048, K2 → 049, K3 → 050, K4 → 051, K5 → 052 (`docs/reports/`). Backlog
-follow-ups from 063.
+follow-ups from 063 (K5: from 068).
 
 ## Contracts
 
@@ -862,3 +862,14 @@ Master §K5 is the scope; this is its plan-mode detail, written against `named-g
    (written then skipped, cleanup, SHACL targeting). Quick gate: `shape-graphs`,
    `shape-graphs-fuseki`, `sparql-fuseki-shape-sync`.
 4. **Docs and record:** `ontologies.md`, changeset, report 052, Outcome; full gate and Verify.
+
+### Outcome
+
+Landed (report [052](../reports/052-shape-graphs.md)). Contract clarified: "blank nodes only for
+`sh:inversePath` and sequence paths" holds as "only for complex `sh:path` values" (SHACL requires a
+blank node for every complex path, decision 13); the API added inside the contract is as written
+above (`packageShapesTurtle` is the call L1 makes, with no `prefixes`). Deviations: blank-node
+labels scoped per create in the writer; the root `Shape` inheritance went into the property
+readers (`inheritedShapes`), not `getSuperShapes`. Backlog 068 records default-graph shapes of
+removed packages. Full gate: 2659 passed, 352/352 `[fuseki]`; `two-copies-built` still fails
+(backlog 060).
