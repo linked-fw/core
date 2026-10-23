@@ -23,7 +23,7 @@ export const FUSEKI_BASE_URL = process.env.FUSEKI_BASE_URL || 'http://localhost:
  */
 const COMPOSE_PROJECT = process.env.LINKED_CORE_TEST_COMPOSE_PROJECT || 'linked-core-test';
 /** The image the compose file runs when LINKED_FUSEKI_IMAGE is unset. */
-const DEFAULT_IMAGE = 'ghcr.io/linked-fw/fuseki:6.2.0-1';
+const DEFAULT_IMAGE = 'ghcr.io/linked-fw/fuseki:6.2.0-2';
 /** Every dataset a test file creates is named with this prefix (see `datasetName`). */
 export const TEST_DATASET_PREFIX = 'nashville-test-';
 /** The dataset global setup creates to check that the store infers, and drops again. */

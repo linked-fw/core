@@ -6,7 +6,7 @@
 # FUSEKI_BASE_URL (FUSEKI_TEST_PORT, default 3939).
 services:
   fuseki:
-    image: ${LINKED_FUSEKI_IMAGE:-ghcr.io/linked-fw/fuseki:6.2.0-1}
+    image: ${LINKED_FUSEKI_IMAGE:-ghcr.io/linked-fw/fuseki:6.2.0-2}
     environment:
       - ADMIN_PASSWORD=admin
       - ENABLE_SHACL=true
