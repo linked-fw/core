@@ -532,3 +532,12 @@ Master §K2 is the scope; this is its plan-mode detail, written against `named-g
 3. **The store, docs and record:** `graphRegistryCache.ts`, `SparqlDataset`, the test
    `FusekiStore`, exports, the `[fuseki]` suite, `ontologies.md`, changeset, report 049, backlogs
    065 and 066, Outcome.
+
+### Outcome
+
+Landed (report [049](../reports/049-reads-from-graphs.md)). Deviations from this section:
+`graphs.default`/`graphs.union` together with other graphs are refused (Jena's `FROM NAMED
+<urn:x-arq:DefaultGraph>` matches nothing; backlog 066 for K4), so `mapGraphName` serves
+`graphs.union` alone; `graphs.allShapes` is expanded already; the store method is
+`resolveReadGraphs`; backlogs are 065 (linked type checks) and 066 (K3 took 064). Full gate:
+2580 passed, 339/339 `[fuseki]`; `two-copies-built` still fails (backlog 060).
