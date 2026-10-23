@@ -6,6 +6,7 @@
 // Backends import this directly; frontends never do.
 
 import type {DatasetsConfig} from './parseDatasetsConfig.js';
+import {setShapeGraphs} from './graphRouting.js';
 
 /**
  * The module loader `loadStores` imports each store with. A host that
@@ -31,7 +32,8 @@ function importModule(specifier: string): Promise<unknown> {
 /**
  * Dynamically imports each alias's `store` (an npm specifier) and
  * instantiates the resolved class with the entry's `config` verbatim —
- * `new StoreClass(entry.config)`. Returns alias → store.
+ * `new StoreClass(entry.config)`. Returns alias → store. An entry's `graphs` (shape IRI → graph
+ * IRI) is registered as that store's graph routing.
  *
  * Convention: the last segment of the `store` path is the named export
  * to use (e.g. `@_linked/fuseki/shapes/FusekiStore` → `FusekiStore`).
@@ -84,7 +86,12 @@ export async function loadStores<T = unknown>(
           `Expected a named export "${exportName}" or a default export that is a class.`,
       );
     }
-    stores[alias] = new (StoreClass as new (cfg: unknown) => T)(entry.config);
+    const store = new (StoreClass as new (cfg: unknown) => T)(entry.config);
+    // The alias's graph routing belongs to this store instance (see `graphRouting.ts`).
+    if (entry.graphs && Object.keys(entry.graphs).length > 0) {
+      setShapeGraphs(store as object, entry.graphs);
+    }
+    stores[alias] = store;
   }
   return stores;
 }

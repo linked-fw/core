@@ -80,6 +80,13 @@ export {
 } from './utils/graphRegistryCache.js';
 export type {ReadGraphsInput} from './queries/readGraphs.js';
 export {
+  getShapeGraphs,
+  graphRoutingFor,
+  setShapeGraphs,
+  unsetShapeGraph,
+} from './utils/graphRouting.js';
+export type {ShapeGraphRouting} from './utils/graphRouting.js';
+export {
   CONTEXT_REF_KEY,
   encodeContextRef,
   isContextRefJSON,

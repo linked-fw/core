@@ -17,6 +17,7 @@ import {
   withShapeCatalog,
 } from './ShapeClass.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
+import {setShapeGraphs, unsetShapeGraph} from './graphRouting.js';
 
 // plan-011 — count physical evaluations of THIS module on the one shared
 // global object. With the single-loader fix there should be exactly one copy;
@@ -119,8 +120,42 @@ export abstract class LinkedStorage {
     return () => routingState.listeners!.delete(listener);
   }
 
-  /** Pin one or more shape classes to a specific IDataset implementer. */
-  static setDatasetForShapes(dataset: IDataset, ...shapeClasses: Function[]) {
+  /**
+   * Pin shape classes to a specific IDataset implementer, optionally in one of its named graphs.
+   *
+   * - `setDatasetForShapes(dataset, [ShapeA, ShapeB], {graph})`: the shapes route to `dataset`,
+   *   and their instances live in `graph` there (see `graphRouting.ts`: a shape's graph covers its
+   *   unrouted sub-shapes, and a read of a shape covers its sub-shapes' graphs). Without `graph`,
+   *   the default graph, as before routing existed.
+   * - `setDatasetForShapes(dataset, ShapeA, ShapeB)`: the same pins, in the default graph.
+   */
+  static setDatasetForShapes(
+    dataset: IDataset,
+    shapes: Function[],
+    options?: {graph?: string},
+  ): void;
+  static setDatasetForShapes(dataset: IDataset, ...shapeClasses: Function[]): void;
+  static setDatasetForShapes(dataset: IDataset, ...args: unknown[]): void {
+    const shapeClasses: Function[] = Array.isArray(args[0])
+      ? (args[0] as Function[])
+      : (args as Function[]);
+    const graph = Array.isArray(args[0])
+      ? (args[1] as {graph?: string} | undefined)?.graph
+      : undefined;
+    if (graph !== undefined) {
+      const shapeGraphs: Record<string, string> = {};
+      for (const shapeClass of shapeClasses) {
+        const uri = shapeUriOf(shapeClass);
+        if (!uri) {
+          throw new Error(
+            'LinkedStorage.setDatasetForShapes: a graph route needs registered shape classes ' +
+              '(a class with a static shape IRI).',
+          );
+        }
+        shapeGraphs[uri] = graph;
+      }
+      setShapeGraphs(dataset, shapeGraphs);
+    }
     shapeClasses.forEach((shapeClass) => {
       // A shape's IRI is its identity, so two classes claiming the same IRI are the
       // same shape and must not route to different datasets. That situation is a
@@ -144,7 +179,7 @@ export abstract class LinkedStorage {
   }
 
   /**
-   * Remove the pin for a shape, by class or by IRI.
+   * Remove the pin for a shape, by class or by IRI, and its graph routes.
    *
    * Removes **every** entry sharing that IRI, not just the one class object handed in.
    * Deleting by class identity alone is not enough: resolution falls back to matching
@@ -153,6 +188,10 @@ export abstract class LinkedStorage {
    */
   static unsetDatasetForShape(shape: Function | string): void {
     const uri = typeof shape === 'string' ? shape : shapeUriOf(shape);
+    if (uri) {
+      // Its graph routes go with the pin, in every dataset this router knows.
+      for (const dataset of this.getDatasets()) unsetShapeGraph(uri, dataset);
+    }
     routingState.shapeToDataset.delete(shape as Function);
     if (uri) {
       for (const pinned of [...routingState.shapeToDataset.keys()]) {
