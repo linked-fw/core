@@ -16,4 +16,5 @@ Named graphs: whole-graph operations with automatic records in a graph registry.
 - `IDataset.graphQuery` is required. A dataset without graph support implements it by throwing `unsupportedGraphQuery(query)`. Core's callers treat a dataset without the method as `unsupported-query-kind` at runtime, so an older dataset class keeps working until it is updated.
 - `IDataset.updateQuery`, `createQuery` and `deleteQuery` are required (a read-only dataset implements them by throwing).
 - `IDataset.askQuery` is optional: an ask on a dataset without it is answered with a select `LIMIT 1` (a shapeless ask is refused there).
+- `QueryDispatch` gains an optional `graphQuery`, and `QueryDispatchEvent` a kind `'graph'` (an exhaustive switch over event kinds no longer type-checks).
 - Core's built-in shapes gain `NamedGraph`, `OntologyGraph`, `ShapesGraph` and `DraftGraph` (shape sync writes them like the other built-ins).

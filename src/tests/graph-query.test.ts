@@ -83,7 +83,7 @@ describe('parseGraphQuery', () => {
     [{...query, content: {mediaType: 'application/ld+json', text: '{}'}}, /mediaType must be one of/],
     [{...query, content: undefined}, /graph_replace needs content/],
     [{...query, kind: 'graph_drop'}, /content is only for/],
-    [{kind: 'graph_create', graph: G, recordClass: ONTOLOGY_GRAPH, patch: {}}, /patch is only for graph_patch/],
+    [{kind: 'graph_create', graph: G, recordClass: ONTOLOGY_GRAPH, patch: {insert: {mediaType: 'text/turtle', text: ''}}}, /patch is only for graph_patch/],
     [{...query, record: ['a']}, /record must be an object/],
     [{...query, v: '2.0'}, /Unsupported DSL-JSON wire version/],
   ])('refuses a malformed query (%#)', (json, message) => {
@@ -426,6 +426,54 @@ describe('SparqlDataset.graphQuery', () => {
     expect(String(field)).toMatch(/no field "colour"/);
     const auto = await OntologyGraph.create({id: G, package: 'p', contentHash: 'x'} as any).exec(ds).catch((e) => e);
     expect(String(auto)).toMatch(/filled in by core/);
+  });
+});
+
+describe('review fixes', () => {
+  /** A SPARQL dataset without askQuery: asks go through its selectQuery and core's result mapping. */
+  class NoAskSparql extends SparqlDataset {
+    selects: string[] = [];
+    constructor(private ids: string[]) {
+      super();
+    }
+    protected async executeSparqlSelect(sparql: string): Promise<any> {
+      this.selects.push(sparql);
+      return {head: {vars: ['a0']}, results: {bindings: this.ids.map((id) => ({a0: {type: 'uri', value: id}}))}};
+    }
+    protected async executeSparqlUpdate(): Promise<void> {}
+  }
+  const noAsk = (ids: string[]) => {
+    const ds = new NoAskSparql(ids);
+    (ds as {askQuery?: unknown}).askQuery = undefined;
+    return ds;
+  };
+
+  test('a subject ask on a store without askQuery answers through the single-result select', async () => {
+    await expect(OntologyGraph.exists(G, noAsk([G]))).resolves.toBe(true);
+    await expect(OntologyGraph.exists(G, noAsk([]))).resolves.toBe(false);
+    const ds = noAsk([G]);
+    await OntologyGraph.exists(G, ds);
+    expect(ds.selects[0]).toContain('LIMIT 1');
+  });
+
+  test('an ask without a subject (nullSubject) is false without a select', async () => {
+    const ds = noAsk([G]);
+    const {resolveExistence} = await import('../queries/queryDispatch');
+    const ask = {toJSON: () => ({op: 'ask', shape: OntologyGraph.shape.id, nullSubject: true})} as any;
+    await expect(resolveExistence(ds, ask)).resolves.toBe(false);
+    expect(ds.selects).toEqual([]);
+  });
+
+  test('a relative graph name is refused before anything is sent', async () => {
+    const {store, received} = graphStore();
+    await expect(DraftGraph.create({id: 'foo'}).exec(store)).rejects.toThrow(/absolute IRI/);
+    expect(received).toEqual([]);
+  });
+
+  test('an empty patch is refused at the boundary', () => {
+    expect(() =>
+      parseGraphQuery({kind: 'graph_patch', graph: G, recordClass: ONTOLOGY_GRAPH, patch: {}}),
+    ).toThrow(/patch needs insert, delete or both/);
   });
 });
 

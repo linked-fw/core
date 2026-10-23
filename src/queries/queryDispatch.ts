@@ -11,8 +11,9 @@ import {catalogOf, withShapeCatalog} from '../utils/ShapeClass.js';
 
 /**
  * Abstraction boundary between the DSL layer (Shape) and the storage layer
- * (LinkedStorage / IDataset). Both sides import this leaf module; neither
- * imports the other.
+ * (LinkedStorage / IDataset). Both sides import this module; neither imports
+ * the other. (Its own imports are used only inside functions: the shape-catalog
+ * helpers, and the select builder, loaded on demand for the ask fallback.)
  *
  * Return types are intentionally `any` — the DSL layer threads precise
  * result types through its own generics; the dispatch is a runtime bridge.
@@ -80,7 +81,7 @@ export async function resolveExistence(
 
 /**
  * Answer an ask on a dataset without `askQuery`: the ask's pattern as a select of ids with
- * `LIMIT 1`. The select builder is imported on demand, so this module stays a leaf.
+ * `LIMIT 1`. The select builder is imported on demand (it imports this module).
  */
 async function existenceBySelect(target: ExistenceTarget, query: AskQuery): Promise<boolean> {
   if (typeof target?.selectQuery !== 'function') {
@@ -89,7 +90,11 @@ async function existenceBySelect(target: ExistenceTarget, query: AskQuery): Prom
       'ask query cannot be answered.',
     );
   }
-  const {op: _op, nullSubject: _nullSubject, ...pattern} = query.toJSON();
+  const {op: _op, nullSubject, ...pattern} = query.toJSON();
+  // `.for(null)`: no subject to ask about. AskBuilder.exec answers false before this, but a
+  // rehydrated ask can arrive here directly, and without a subject the select would match any
+  // instance.
+  if (nullSubject) return false;
   if (!pattern.shape) {
     throw new Error(
       'This dataset does not implement IDataset.askQuery, and a shapeless ask ' +
@@ -101,15 +106,14 @@ async function existenceBySelect(target: ExistenceTarget, query: AskQuery): Prom
   const select = withShapeCatalog(catalogOf(query), () =>
     SelectBuilder.fromJSON({...pattern, shape: pattern.shape as string, limit: 1}),
   );
-  const rows = await target.selectQuery(select);
-  if (!Array.isArray(rows)) {
-    throw new Error(
-      `Answering an ask with a select LIMIT 1 expected an array of rows; got ${
-        rows === null ? 'null' : typeof rows
-      }.`,
-    );
-  }
-  return rows.length > 0;
+  const answer = await target.selectQuery(select);
+  // A select with one subject is a single-result query: a row or null. Otherwise rows.
+  if (answer === null || answer === undefined) return false;
+  if (Array.isArray(answer)) return answer.length > 0;
+  if (typeof answer === 'object') return true;
+  throw new Error(
+    `Answering an ask with a select LIMIT 1 expected rows, a row or null; got ${typeof answer}.`,
+  );
 }
 
 /** A target that may answer a graph query. */

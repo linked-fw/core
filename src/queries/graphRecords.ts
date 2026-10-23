@@ -137,10 +137,15 @@ function literalFor(name: string, field: GraphRecordField, value: unknown): Grap
  */
 export function graphContentHash(query: GraphQuery): string | undefined {
   if (query.kind === 'graph_drop') return undefined;
-  if (query.kind === 'graph_patch' && !query.patch) return undefined;
+  if (query.kind === 'graph_patch' && !hasPatchBody(query)) return undefined;
   if (query.contentHash) return query.contentHash;
   if (query.kind === 'graph_patch') {
     return sha256Hex(`${query.patch?.delete?.text ?? ''}\n${query.patch?.insert?.text ?? ''}`);
   }
   return sha256Hex(query.content?.text ?? '');
+}
+
+/** Whether a graph query changes the graph's body (a patch with neither member does not). */
+export function hasPatchBody(query: GraphQuery): boolean {
+  return !!(query.patch?.insert || query.patch?.delete);
 }

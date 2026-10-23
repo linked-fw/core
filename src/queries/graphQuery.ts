@@ -85,12 +85,18 @@ export function unsupportedGraphQuery(query: {kind?: unknown; graph?: unknown}, 
   );
 }
 
+/** Absolute IRI with a scheme and none of the characters that end an IRIREF. */
+const IRI_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"{}|^`\\]*$/;
+
 /**
- * Refuse a write to a portable graph name (`graphs.default`, `graphs.union`, `graphs.allOntologies`,
+ * Refuse a graph name that is not an absolute IRI, and a write to a portable graph name (`graphs.default`, `graphs.union`, `graphs.allOntologies`,
  * `graphs.allShapes`) or to the registry itself: names are read-only, and the registry is written
  * only as part of a graph query on another graph.
  */
 export function assertGraphWritable(graph: string): void {
+  if (typeof graph !== 'string' || !IRI_PATTERN.test(graph)) {
+    throw new Error(`A graph name must be an absolute IRI; got ${JSON.stringify(graph)}.`);
+  }
   if (PORTABLE_GRAPH_NAMES.has(graph)) {
     throw new GraphQueryError(
       'graph-name-read-only',
@@ -102,8 +108,6 @@ export function assertGraphWritable(graph: string): void {
   }
 }
 
-/** Absolute IRI with a scheme and none of the characters that end an IRIREF. */
-const IRI_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"{}|^`\\]*$/;
 
 function fail(message: string): never {
   throw new Error(`Invalid graph query: ${message}`);
@@ -163,6 +167,7 @@ export function parseGraphQuery(json: unknown): GraphQuery {
     query.patch = {};
     if (patch.insert !== undefined) query.patch.insert = checkContent(patch.insert, 'patch.insert');
     if (patch.delete !== undefined) query.patch.delete = checkContent(patch.delete, 'patch.delete');
+    if (!query.patch.insert && !query.patch.delete) fail('patch needs insert, delete or both.');
   }
   if (input.contentHash !== undefined) {
     if (typeof input.contentHash !== 'string' || !input.contentHash) {

@@ -24,7 +24,7 @@ import {
   isGraphQueryKind,
   unsupportedGraphQuery,
 } from '../queries/graphQuery.js';
-import {getGraphRecordClass, graphContentHash} from '../queries/graphRecords.js';
+import {getGraphRecordClass, graphContentHash, hasPatchBody} from '../queries/graphRecords.js';
 import {
   graphQueryBodies,
   graphQueryToSparql,
@@ -285,7 +285,7 @@ export abstract class SparqlDataset implements IDataset {
     const sparql = graphQueryToSparql(query, await graphQueryBodies(query), modified);
     if (sparql) await this.executeSparqlUpdate(sparql);
     const contentHash = graphContentHash(query);
-    const changed = query.kind !== 'graph_patch' || !!query.patch;
+    const changed = query.kind !== 'graph_patch' || hasPatchBody(query);
     return contentHash === undefined
       ? {graph: query.graph, changed}
       : {graph: query.graph, contentHash, modified, changed};
