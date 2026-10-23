@@ -7,6 +7,12 @@ packages: [core, sparql]
 
 ## Status: placeholder
 
+The graph part is being designed and built through CN plan 071 and core sub-plan
+[004](../plans/004-named-graphs.md): the portable names (`graphs.default`, `graphs.union`,
+`graphs.allOntologies`, `graphs.allShapes`, `graphs.registry` in
+`@_linked/core/ontologies/graphs`) and the graph registry landed with report 048; per-app storage
+rules that route shapes to graphs come later in that plan.
+
 This ideation doc is a placeholder for future design work. The storage config layer will determine how shapes, named graphs, datasets, and graph databases relate to each other.
 
 ## Prerequisite work completed

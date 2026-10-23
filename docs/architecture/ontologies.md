@@ -1,5 +1,5 @@
 ---
-summary: Why core ships its own copies of rdf, rdfs, owl, shacl and xsd, how they differ from the ontologies in packages (Turtle data, the registry, the hierarchy reader, the ontology sync, mirror packages), and the rule for which kind you are writing.
+summary: Why core ships its own copies of rdf, rdfs, owl, shacl and xsd, how they differ from the ontologies in packages (Turtle data, the registry, the hierarchy reader, the ontology sync, named graphs and the graph registry, mirror packages), and the rule for which kind you are writing.
 ---
 
 # Ontologies in core, and ontologies in packages
@@ -190,6 +190,64 @@ orphanScope})` (`@_linked/core/ontology/syncOntologies`, server only) writes it:
 
 It runs at app boot and through the app's control route, before shape sync. Everything goes
 through Linked Queries, in the default graph.
+
+## Named graphs and the graph registry
+
+A dataset keeps named graphs on purpose (a package's whole ontology data, later its shapes,
+ontology-editor drafts), and records each one in the **graph registry**, a named graph at
+`https://linked.cm/pkg/core/graph/registry` (`graphs.registry`), the same IRI in every dataset.
+A record is described with SPARQL Service Description plus core terms; its subject is the graph
+IRI:
+
+```turtle
+# in GRAPH <https://linked.cm/pkg/core/graph/registry>
+<https://linked.cm/pkg/schema/graph/ontology> a core:OntologyGraph ;
+  sd:name <https://linked.cm/pkg/schema/graph/ontology> ;
+  core:package "@_linked/schema" ; core:version "1.7.0" ;
+  core:contentHash "3f9c…" ; core:feedsHierarchy true ;
+  dcterms:modified "2026-10-30T10:12:00Z"^^xsd:dateTime ;
+  dcterms:source "data/schema.ttl" .
+```
+
+The record's class is the graph's kind, a built-in shape in `@_linked/core/shapes/NamedGraph`:
+`NamedGraph` (`sd:NamedGraph`, fields `name`, `contentHash`, `feedsHierarchy`, `modified`,
+`sources`), `OntologyGraph` and `ShapesGraph` (adding `package`, `version`) and `DraftGraph`, each
+class `rdfs:subClassOf sd:NamedGraph` in `core.ttl`. Selecting `NamedGraph` returns every kind's
+records through the store's inference; its `select()` reads the registry (the shapes declare
+`static storedInGraph`), so callers never name it. `feedsHierarchy` defaults per class
+(`OntologyGraph` true, the others false); a store that builds its hierarchy from the registry reads
+it to decide which graphs feed inference.
+
+Package graphs are `{package IRI}/graph/{kind}` (`OntologyGraph.iriFor('@_linked/schema')` →
+`https://linked.cm/pkg/schema/graph/ontology`); graphs a dataset owns hang under its data root,
+`{DATA_ROOT}/graph/{kind}`.
+
+**Graph queries.** A graph and its record change together, through `IDataset.graphQuery`
+(required; a store without graph support throws `GraphQueryError('unsupported-query-kind')`).
+The statics build one graph query per call, and a SPARQL store runs it as one update (one
+transaction):
+
+| Call | Graph query |
+|---|---|
+| `OntologyGraph.create({id, package, version}).withContent(c)` | `graph_create` (refused when registered: `graph-exists`) |
+| `NamedGraph.replaceContent(iri, c)` | `graph_replace` (refused when not registered: `graph-not-registered`) |
+| `NamedGraph.patchContent(iri, {insert, delete})` | `graph_patch` |
+| `OntologyGraph.update(iri).set({version})` | `graph_patch` with a record and no body (hash kept) |
+| `OntologyGraph.update(iri).set({version}).replaceContent(c)` | `graph_replace` with the record |
+| `OntologyGraph.delete(iri)` | `graph_drop` (graph and record) |
+
+Content is `{mediaType: 'text/turtle' | 'application/n-triples', text}`. Core fills the record's
+automatic fields: `sd:name`, `core:contentHash` (`sha256Hex` of the content text, or a hash the
+caller passes; for a patch, of its delete text, a newline and its insert text) and
+`dcterms:modified`. The calls are server-only (a browser call throws; the import does not), and a
+store parses each body before it enters a request. A receiving process checks a graph query that
+arrived as JSON with `parseGraphQuery`.
+
+**Portable names** (`@_linked/core/ontologies/graphs`): `graphs.default`, `graphs.union`,
+`graphs.allOntologies`, `graphs.allShapes` and `graphs.registry`, under
+`https://linked.cm/pkg/core/graph/`. A store maps them to its own names; every write to one is
+refused (`graph-name-read-only`), the registry included: it is written only as part of a graph
+query on another graph.
 
 ## A package that mirrors a standard
 
