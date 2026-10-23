@@ -51,6 +51,8 @@ import {
   getPropertyShapes,
   type NodeShapeData,
 } from '../shapes/nodeShapeData.js';
+import {LinkedStorage} from '../utils/LinkedStorage.js';
+import {graphRoutingFor, type ShapeGraphRouting} from '../utils/graphRouting.js';
 import {
   getAllNodeShapes,
   getNodeShape,
@@ -82,6 +84,12 @@ export type QueryDependencies = {
   shapes: Set<string>;
   /** `false` when the query is bound to subjects (`.for` / `.forAll` / a resolved context). */
   unbound: boolean;
+  /**
+   * The graphs the query reads: its `.from()` names as written, or, when the dataset its root
+   * shape routes to has graph routing, the routed read sets of every shape in `shapes`
+   * (`graphs.default` for the default graph). Absent = unknown (any graph).
+   */
+  graphs?: Set<string>;
 };
 
 export type MutationEffects = {
@@ -98,6 +106,12 @@ export type MutationEffects = {
   ids?: Set<string>;
   /** Shapes whose instance set may have changed: the target shape for create/upsert/delete + shapes of nested created nodes; empty for a plain update. */
   membership: Set<string>;
+  /**
+   * The graph the mutation writes: its `.into()` graph, or, when the dataset its shape routes to
+   * has graph routing, the shape's routed graph (`graphs.default` for the default graph). Absent =
+   * unknown (any graph).
+   */
+  graph?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -415,7 +429,31 @@ export function queryDependencies(
   collector.attributeUnreached();
 
   deps.unbound = !isBound(ir);
+  const readGraphs = ir.graphs ? new Set(ir.graphs) : routedReadGraphs(ir.root.shape, deps.shapes);
+  if (readGraphs) deps.graphs = readGraphs;
   return deps;
+}
+
+/** The graph routing of the dataset `LinkedStorage` routes a shape to, if it has routes. */
+function routingForShape(shapeId: string): ShapeGraphRouting | undefined {
+  const shapeClass = getShapeClass(shapeId);
+  return shapeClass ? graphRoutingFor(LinkedStorage.getDatasetForShapeClass(shapeClass)) : undefined;
+}
+
+/** The routed read sets of `shapes`, in the dataset the root shape routes to; undefined without routing. */
+function routedReadGraphs(rootShape: string, shapes: Set<string>): Set<string> | undefined {
+  const routing = routingForShape(rootShape);
+  if (!routing) return undefined;
+  const out = new Set<string>();
+  for (const shape of new Set([rootShape, ...shapes])) {
+    for (const graph of routing.readGraphsForShape(shape)) out.add(graph);
+  }
+  return out;
+}
+
+/** The graph a mutation writes: its `.into()` graph, else its shape's routed graph, if known. */
+function writtenGraph(ir: {shape: string; graph?: string}): string | undefined {
+  return ir.graph ?? routingForShape(ir.shape)?.graphForShape(ir.shape);
 }
 
 // ---------------------------------------------------------------------------
@@ -485,6 +523,12 @@ class EffectCollector {
   }
 }
 
+/** The `graph` field of a mutation's effects, when the graph is known. */
+function withGraph(ir: {shape: string; graph?: string}): {graph?: string} {
+  const graph = writtenGraph(ir);
+  return graph === undefined ? {} : {graph};
+}
+
 /** `lower()` is overloaded per builder kind; dispatch on the discriminator. */
 function lowerMutation(
   mutation: LowerableCreate | LowerableUpdate | LowerableDelete,
@@ -535,6 +579,7 @@ export function mutationEffects(
         props: collector.props,
         ids: collector.ids,
         membership: collector.membership,
+        ...withGraph(ir),
       };
     }
     case 'update':
@@ -549,6 +594,7 @@ export function mutationEffects(
         props: collector.props,
         ids: collector.ids,
         membership: collector.membership,
+        ...withGraph(ir),
       };
     }
     case 'update_where': {
@@ -559,6 +605,7 @@ export function mutationEffects(
         props: collector.props,
         ids: undefined,
         membership: collector.membership,
+        ...withGraph(ir),
       };
     }
     case 'delete':
@@ -583,6 +630,7 @@ export function mutationEffects(
         props: collector.props,
         ids: ir.kind === 'delete' ? collector.ids : undefined,
         membership: collector.membership,
+        ...withGraph(ir),
       };
     }
   }

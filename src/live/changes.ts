@@ -55,11 +55,12 @@ function reviveEffects(e: MutationEffects): MutationEffects {
     props: toSet(e.props),
     ids: e.ids === undefined ? undefined : toSet(e.ids),
     membership: toSet(e.membership),
+    ...(typeof e.graph === 'string' ? {graph: e.graph} : {}),
   };
 }
 
 /** A stable fingerprint of an effects object, used to fold a local change and its remote echo into one. */
 export function effectsHash(e: MutationEffects): string {
   const sorted = (s: Set<string>) => [...s].sort().join(',');
-  return `${e.op}|${e.shape}|${sorted(e.props)}|${e.ids ? sorted(e.ids) : '*'}|${sorted(e.membership)}`;
+  return `${e.op}|${e.shape}|${sorted(e.props)}|${e.ids ? sorted(e.ids) : '*'}|${sorted(e.membership)}|${e.graph ?? '*'}`;
 }

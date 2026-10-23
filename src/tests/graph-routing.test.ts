@@ -22,6 +22,10 @@ import {UpdateBuilder} from '../queries/UpdateBuilder';
 import {DeleteBuilder} from '../queries/DeleteBuilder';
 import {fromJSON} from '../queries/fromJSON';
 import {isGraphQueryError} from '../queries/graphQuery';
+import {mutationEffects, queryDependencies, type MutationEffects, type QueryDependencies} from '../queries/queryDependencies';
+import {effectsHash, normalizeChange} from '../live/changes';
+import {readsWrittenGraph, selectInstances, type LiveIndexes} from '../live/matcher';
+import type {Instance, Template} from '../live/LiveQueryStore';
 import {LinkedStorage} from '../utils/LinkedStorage';
 import {
   getShapeGraphs,
@@ -498,3 +502,92 @@ describe('routed writes', () => {
 function GR(local: string): string {
   return `https://example.org/graph-routing/${local}`;
 }
+
+describe('live queries carry graphs', () => {
+  const G_ALBUMS = 'https://acme.example/data/graph/albums';
+  const G_PANORAMAS = 'https://acme.example/data/graph/panoramas';
+  const pinned: Function[] = [];
+  afterEach(() => {
+    for (const shape of pinned.splice(0)) LinkedStorage.unsetDatasetForShape(shape);
+  });
+  const routeAlbums = () => {
+    const ds = fakeDataset();
+    pinned.push(GRAlbum, GRPhoto);
+    LinkedStorage.setDatasetForShapes(ds, [GRAlbum], {graph: G_ALBUMS});
+    LinkedStorage.setDatasetForShapes(ds, [GRPhoto]);
+    setShapeGraphs(ds, {[GRPanorama.shape.id]: G_PANORAMAS});
+    return ds;
+  };
+
+  test('dependencies: the .from() names, else the routed read sets of every shape read, else unknown', () => {
+    expect(queryDependencies(GRAlbum.select((a) => a.title)).graphs).toBeUndefined();
+    expect([...queryDependencies(GRAlbum.select((a) => a.title).from([G_PANORAMAS, graphs.default])).graphs!]).toEqual([
+      G_PANORAMAS,
+      graphs.default,
+    ]);
+    routeAlbums();
+    expect([...queryDependencies(GRAlbum.select((a) => a.title)).graphs!]).toEqual([G_ALBUMS]);
+    expect([...queryDependencies(GRAlbum.select((a) => a.cover.caption)).graphs!].sort()).toEqual(
+      [G_ALBUMS, G_PANORAMAS, graphs.default].sort(),
+    );
+  });
+
+  test('effects: the .into() graph, else the routed graph, else unknown', () => {
+    expect(mutationEffects(GRAlbum.create({title: 'x'})).graph).toBeUndefined();
+    expect(mutationEffects(GRAlbum.create({title: 'x'}).into(G_ALBUMS)).graph).toBe(G_ALBUMS);
+    routeAlbums();
+    expect(mutationEffects(GRAlbum.update({title: 'x'}).for({id: 'https://e.org/a'})).graph).toBe(G_ALBUMS);
+    expect(mutationEffects(GRPanorama.delete({id: 'https://e.org/p'})).graph).toBe(G_PANORAMAS);
+    expect(mutationEffects(GRPhoto.create({caption: 'x'})).graph).toBe(graphs.default);
+  });
+
+  test('the graph survives JSON transport and is part of the fold hash', () => {
+    const e: MutationEffects = {op: 'create', shape: GRAlbum.shape.id, props: new Set(['p']), ids: new Set(['i']), membership: new Set(), graph: G_ALBUMS};
+    const revived = normalizeChange({effects: JSON.parse(JSON.stringify({...e, props: [...e.props], ids: [...e.ids!], membership: []}))});
+    expect(revived.graph).toBe(G_ALBUMS);
+    expect(effectsHash(e)).not.toBe(effectsHash({...e, graph: G_PANORAMAS}));
+    expect(effectsHash(e)).not.toBe(effectsHash({...e, graph: undefined}));
+  });
+
+  test('readsWrittenGraph: unknown on either side or a store-resolved name reads any graph', () => {
+    expect(readsWrittenGraph(undefined, G_ALBUMS)).toBe(true);
+    expect(readsWrittenGraph(new Set([G_ALBUMS]), undefined)).toBe(true);
+    expect(readsWrittenGraph(new Set([G_ALBUMS]), G_ALBUMS)).toBe(true);
+    expect(readsWrittenGraph(new Set([G_ALBUMS]), G_PANORAMAS)).toBe(false);
+    expect(readsWrittenGraph(new Set([graphs.allShapes]), G_PANORAMAS)).toBe(true);
+  });
+
+  test('the matcher skips a template that does not read the written graph', () => {
+    const template = (graphsRead?: string[]): Template => {
+      const t = {key: String(graphsRead), kind: 'select', reactive: true, pinned: false, json: {}, instances: new Map()} as unknown as Template;
+      const inst = {key: 'i', template: t, params: {}, ids: new Set(['https://e.org/a'])} as unknown as Instance;
+      (t as unknown as {instances: Map<string, Instance>}).instances.set('i', inst);
+      return t;
+    };
+    const albums = template([G_ALBUMS]);
+    const panoramas = template([G_PANORAMAS]);
+    const unknown = template(undefined);
+    const deps = (t: Template): QueryDependencies => ({
+      narrow: new Set(['title']),
+      filter: new Set(),
+      hidden: new Set(),
+      shapes: new Set([GRAlbum.shape.id]),
+      unbound: true,
+      ...(t === unknown ? {} : {graphs: new Set(t === albums ? [G_ALBUMS] : [G_PANORAMAS])}),
+    });
+    const all = [albums, panoramas, unknown];
+    const index: LiveIndexes = {
+      templatesByProp: new Map([['title', new Set(all)]]),
+      templatesByShape: new Map([[GRAlbum.shape.id, new Set(all)]]),
+      instancesById: new Map([['https://e.org/a', new Set(all.map((t) => [...(t as unknown as {instances: Map<string, Instance>}).instances.values()][0]))]]),
+      depsOf: deps,
+    };
+    const hit = (e: MutationEffects) => [...selectInstances(index, e)].map((i) => i.template);
+    const update: MutationEffects = {op: 'update', shape: GRAlbum.shape.id, props: new Set(['title']), ids: new Set(['https://e.org/a']), membership: new Set(), graph: G_ALBUMS};
+    expect(new Set(hit(update))).toEqual(new Set([albums, unknown]));
+    const create: MutationEffects = {op: 'create', shape: GRAlbum.shape.id, props: new Set(['title']), ids: new Set(), membership: new Set([GRAlbum.shape.id]), graph: G_PANORAMAS};
+    expect(new Set(hit(create))).toEqual(new Set([panoramas, unknown]));
+    const anywhere: MutationEffects = {...update, graph: undefined};
+    expect(hit(anywhere)).toHaveLength(3);
+  });
+});
