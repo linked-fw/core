@@ -15,16 +15,19 @@
  * package directory they know before they sync or check.
  *
  * In `linked start` (dev) the app runs in Vite's SSR module runner, and the cli sets a host loader on
- * `globalThis` (`Symbol.for('@_linked/core:importModule')`, which `loadStores` reads too). A register
+ * `globalThis` (`MODULE_LOADER_KEY`, `Symbol.for('@_linked/core:importModule')`, read through
+ * `utils/importPackageModule`, which `loadStores` uses too). A register
  * module imported by file path would then be a second copy of its package: Node's next to the
  * runner's, or the built `lib` next to the workspace `src` the app imports. With the host loader
- * set, each register module is imported through it by package specifier
+ * set, each register module is imported through it by package specifier with `importPackageModule`
  * (`<name>/ontologies/<prefix>.register`), so it is the module the app's own import of it gets.
  *
  * Server only: it reads the file system (imported dynamically, as `loadOntologyFiles` does).
  *
  * @module @_linked/core/ontology/registerInstalled
  */
+
+import {importPackageModule, installedModuleLoader} from '../utils/importPackageModule.js';
 
 type Fs = {
   readdir(path: string): Promise<string[]>;
@@ -33,14 +36,6 @@ type Fs = {
 };
 type Path = {join(...parts: string[]): string; resolve(...parts: string[]): string; basename(p: string): string};
 type Url = {pathToFileURL(path: string): URL};
-
-/** The host loader `linked start` sets; see the module comment and `loadStores`. */
-const IMPORT_MODULE = Symbol.for('@_linked/core:importModule');
-
-function hostLoader(): ((specifier: string) => Promise<unknown>) | undefined {
-  const hook = (globalThis as Record<symbol, unknown>)[IMPORT_MODULE];
-  return typeof hook === 'function' ? (hook as (specifier: string) => Promise<unknown>) : undefined;
-}
 
 async function nodeModule<T>(specifier: string): Promise<T> {
   return (await import(/* @vite-ignore */ /* webpackIgnore: true */ specifier)) as T;
@@ -106,8 +101,11 @@ export async function registerInstalledOntologies(
 
     const manifest = await readManifest(fs, path, dir);
     const name = manifest.name;
-    const host = hostLoader();
-    if (host && hostCanImport(manifest) && (await resolvesFromCwd(fs, path, name, dir))) {
+    const viaHost =
+      installedModuleLoader() !== undefined &&
+      hostCanImport(manifest) &&
+      (await resolvesFromCwd(fs, path, name, dir));
+    if (viaHost) {
       // The host resolves each specifier as the app's own import of it: to `lib`, or to `src`
       // for a workspace package. List the register modules from `src` when it has them, so a
       // stale `lib` does not decide which ones exist.
@@ -121,7 +119,8 @@ export async function registerInstalledOntologies(
       }
       if (files.length === 0) continue;
       const specifiers = files.map((file) => `${name}/ontologies/${file.slice(0, -suffix.length)}.register`);
-      if (await importAll(specifiers, host, (specifier) => `${specifier} (through the host loader)`)) {
+      const describe = (specifier: string) => `${specifier} (through the host loader)`;
+      if (await importAll(specifiers, importPackageModule, describe)) {
         registered.push(name);
       }
       continue;
