@@ -1,5 +1,57 @@
 # Changelog
 
+## 2.39.0
+
+### Minor Changes
+
+- [#374](https://github.com/linked-fw/core/pull/374) [`c706cc1`](https://github.com/linked-fw/core/commit/c706cc16c27fb395a886f8c5dfe97f5211dd7d8f) Thanks [@flyon](https://github.com/flyon)! - Graph routes state intent, and graph routing lives only in code.
+  
+  - `setDatasetForShapes(store, shapes, {graph: 'own'})` puts each shape in its own graph, `{DATA_ROOT}/graph/{package slug}/{shape name}` (the package the shape was registered by, slugged as package IRIs are; the shape IRI's last segment, case kept). `{graph: dataGraph('slug')}` routes to `{DATA_ROOT}/graph/{slug}`. An absolute graph IRI stays accepted. `setShapeGraphs` takes the same forms.
+  - `DATA_ROOT` is the store's: the new optional `IDataset.dataRoot()` (`SparqlDataset.dataRoot()` returns `SparqlOptions.dataRoot`, the root it mints ids under), else the process's `DATA_ROOT`. It is joined whenever the routing is read; a route that needs a root the store lacks is refused then. `getShapeGraphs` returns the resolved IRIs.
+  - `dataGraph`, `OWN_GRAPH` and the types `GraphRoute`, `DataGraphRoute` are exported from `@_linked/core/ontologies/graphs` and the index, next to `graphs`; `dataRootOf(dataset)` from `@_linked/core/utils/graphRouting` and the index.
+  
+  **Breaking changes**
+  
+  - The datasets config's per-alias `graphs` key is removed (it was never released): `parseDatasetsConfig` no longer checks it, `DatasetEntry.graphs` is gone, and `loadStores` routes nothing from it and warns. Route shapes in code instead.
+  - A route string that is not `'own'` or an absolute graph IRI is refused with the new message (`'own', dataGraph('slug') or an absolute graph IRI`).
+
+- [#374](https://github.com/linked-fw/core/pull/374) [`2c894e3`](https://github.com/linked-fw/core/commit/2c894e31ff290e50eda6f772de42b6225aa0da34) Thanks [@flyon](https://github.com/flyon)! - Graph routing: storage rules pick the named graph of a shape, per dataset.
+  
+  - `LinkedStorage.setDatasetForShapes(dataset, [shapes], {graph})` pins shapes to a dataset and routes their instances to a graph there (the variadic form stays). `setShapeGraphs`, `getShapeGraphs`, `unsetShapeGraph` and `graphRoutingFor` are exported for composite datasets.
+  - A shape's graph is its own route, else its nearest routed super-shape's, else the default graph; its read set adds its sub-shapes' graphs and the read sets of the shapes that own it (`contains`).
+  - Routed reads: each subject group reads its shape's set (`GRAPH <g>`, `FROM NAMED` with `GRAPH ?g`, `VALUES ?g` for a narrower type-checked subject); a set holding the default graph is read without `FROM NAMED`, through `VALUES` with the store's name for it. Without routes every query compiles exactly as before.
+  - `.from()` with `graphs.default` among other graphs now reads (through `VALUES`) on a store that maps the default graph.
+  - Routed writes: a create writes the shape's graph (`INSERT DATA { GRAPH <g> … }`); an update, upsert or delete writes the graph the subject lives in (`WITH <g>`, or, when the shape's read set holds several graphs, `GRAPH ?g` found in the same update over `VALUES` of the read set; an upsert of a subject found nowhere creates it in the shape's graph). Owned nodes live in the owner's graph; the owned-link check refuses a node that lives in another graph. `.into(graph)` on create, update and delete builders, checked against the routing (`GraphQueryError('graph-not-routed')`) and never carried in DSL-JSON.
+  - `SparqlOptions.namedGraphUriParameter`: the `FROM NAMED` set goes to the transport (`SparqlDataset.executeSparqlSelectWithNamedGraphs`, which refuses by default).
+  - A nested node a create, update or upsert does not own (not `contains`) is written into its own shape's routed graph, in the same update (one `GRAPH` block per graph); the link to it stays in its holder's graph, and owned nodes stay with their owner.
+  - A shape's read set also covers the owners of its sub-shapes (a photo shape reads the graph of an album that owns panorama covers).
+  - A route to a graph the store manages itself is refused with `GraphQueryError('graph-name-read-only')`, naming the shape and the graph: a portable name, the registry, a package ontology or shape graph (`…/pkg/{slug}/graph/…`), the app's `{DATA_ROOT}/graph/shapes` (`dataGraph('shapes')`) and `{DATA_ROOT}/graph/import/…`.
+  - Live queries: `QueryDependencies.graphs` and `MutationEffects.graph`; the matcher skips a template that does not read the written graph. A change and its remote echo fold when their graphs agree or one has none (`effectsHash` leaves the graph out; `graphsFold` compares it).
+  
+  **Breaking changes**
+  
+  - Under routing, reads and writes of routed shapes (and of shapes whose sub-shapes or owners are routed) leave the default graph: data written before a route was added stays where it was and is no longer read for that shape.
+  - `GraphQueryErrorCode` gains `graph-not-routed`: an exhaustive `switch` or `Record<GraphQueryErrorCode, …>` over the codes needs the new case (the published `@_linked/server`'s `queryPlane.ts` has one; its next core bump adds it).
+  - Mutation IR kinds gain an optional `graph` (and `writeGraphs` on changes to existing subjects); `SparqlDeleteInsertPlan` gains `graphIn`; a store that builds its own SPARQL from the IR must honour it (or refuse a mutation that has one).
+  - Under routing, an update of a subject found in no graph of its shape's read set writes nothing (an upsert creates it).
+  - `.from([graphs.default, …])` is no longer refused on a store with `mapGraphName`; it reads the default graph with the others.
+  - `toJSON()` of a create, update or delete builder with `.into()` throws instead of dropping the graph (a client that sent it to a remote dataset was written into the routed graph without knowing).
+  - The mutation plans gain `SparqlInsertDataPlan.elsewhere` and `SparqlDeleteInsertPlan.insertElsewhere` (the blocks of nested nodes in other graphs), and `IRDeleteMutation` an internal `keepIncoming`; a store that builds its own SPARQL from the plans or the IR must honour them.
+  - `ownedLinkTypesQuery(ids)` no longer takes a graph (it is the check without routing).
+
+- [#374](https://github.com/linked-fw/core/pull/374) [`200037d`](https://github.com/linked-fw/core/commit/200037d9017b04221f28bf101e7b93a35be16d4a) Thanks [@flyon](https://github.com/flyon)! - Shape graphs: each package's shapes in its own named graph, written from a deterministic `shapes.ttl`.
+  
+  - `@_linked/core/shapes/shapesToTurtle`: `shapesToTurtle(shapes, {prefixes})` writes shapes as deterministic Turtle (fixed prefix block, subjects sorted, `a` first, predicates sorted, one statement per line; blank nodes only for complex `sh:path` values, inline under their one IRI subject). `packageShapes(pkg)` and `packageShapesTurtle(pkg)` give a package's registered shapes and their `shapes.ttl` (what `linked build` writes to `lib/esm/data/shapes.ttl`); `singleOwnerShapesTurtle(shapes)` gives the generated single-owner shapes for an app's own shape graph.
+  - `@_linked/core/shapes/syncShapeGraphs`: `syncShapeGraphs(ds, {force, packages, turtleFor, appShapes, orphanScope})` replaces a package's graph `{package IRI}/graph/shapes` (a `ShapesGraph` record) whole when its hash (`linked-shape-graph/1`) differs, writes the app's generated shapes to the app's graph, removes once the shapes an earlier sync wrote into the default graph (each shape's own description: its triples, the blank nodes under them and its owned subtree; the links other default-graph shapes hold to it, such as `core:isExtending` and `sh:node`, stay), and falls back to `syncShapes` on a store without graph queries.
+  - `NamedGraph.patchContent`: a delete body may hold blank nodes; each blank-node structure is deleted as a pattern through the IRI subject it hangs off (the shape's concise bounded description).
+  
+  **Breaking changes**
+  
+  - Shapes are stored as declared: `syncShapes`/`syncShape` (and the shape graphs) write a shape's own property shapes plus `core:isExtending`, no longer copies of the inherited ones. A reader of stored shapes that relied on the copies must follow `core:isExtending`. `SHAPE_HASH_VERSION` is 3, so the next default-graph sync rewrites every stored shape once.
+  - `sh:and` and `sh:xone` lists are written with IRI cells (`{shape IRI}/and/0`, …) instead of blank cells.
+  - The property readers (`getPropertyShapes(shape, true)`, `getPropertyShape`) end the inheritance chain of a shape known only as data at the root `Shape`: such a shape now lists the root's `label` and `type`, which it previously had only through the stored copies.
+  - A `graph_patch` whose delete body holds blank nodes is no longer refused: a store that implements `graphQuery` itself must delete each blank-node structure through its IRI subject, or refuse it.
+
 ## 2.38.1
 
 ### Patch Changes
