@@ -15,7 +15,10 @@ import type {
   SelectResult,
   CreateResult,
   UpdateResult,
+  GraphQuery,
+  GraphResult,
 } from '../queries/IntermediateRepresentation.js';
+import {unsupportedGraphQuery} from '../queries/graphQuery.js';
 import type {SparqlQueryResults} from './resultMapping.js';
 import {
   selectToSparql,
@@ -228,6 +231,10 @@ export abstract class SparqlDataset implements IDataset {
       deleted: ir.ids,
       count: ir.ids.length,
     };
+  }
+
+  async graphQuery(query: GraphQuery): Promise<GraphResult> {
+    throw unsupportedGraphQuery(query);
   }
 
   /**

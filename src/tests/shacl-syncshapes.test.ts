@@ -14,6 +14,7 @@ import {lower} from '../queries/lower';
 import type {IDataset} from '../interfaces/IDataset';
 import '../shapes/List';
 import '../shapes/PathNode';
+import {unusedDatasetMethods} from '../test-helpers/test-utils';
 
 const {linkedShape} = linkedPackage('syncshapes-test');
 const ex = (n: string) => ({id: `https://example.org/u#${n}`});
@@ -279,6 +280,7 @@ describe('syncShape (single)', () => {
 function makeTargetStore(existingIds: string[]) {
   const storeCalls: Call[] = [];
   const store: IDataset = {
+    ...unusedDatasetMethods,
     askQuery: async () => false,
     selectQuery: async () => existingIds.map((id) => ({id})) as any,
     createQuery: async (q: any) => {

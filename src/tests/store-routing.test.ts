@@ -4,6 +4,7 @@ import {Shape} from '../shapes/Shape';
 import {LinkedStorage} from '../utils/LinkedStorage';
 import type {IDataset} from '../interfaces/IDataset';
 import type {NodeReferenceValue} from '../utils/NodeReference';
+import {unusedDatasetMethods} from '../test-helpers/test-utils';
 
 const {linkedShape} = linkedPackage('store-routing-test');
 
@@ -37,6 +38,7 @@ type StoreCalls = {
 const createStore = () => {
   const calls: StoreCalls = {select: 0, ask: 0, update: 0, create: 0, delete: 0};
   const store: IDataset = {
+    ...unusedDatasetMethods,
     selectQuery: async () => {
       calls.select += 1;
       return [];
@@ -128,6 +130,7 @@ describe('LinkedStorage.askQuery routing', () => {
   const createAskStore = (answer: boolean) => {
     const calls = {ask: 0, select: 0};
     const store: IDataset = {
+      ...unusedDatasetMethods,
       selectQuery: async () => {
         calls.select += 1;
         return [] as any;
@@ -167,6 +170,7 @@ describe('LinkedStorage.askQuery routing', () => {
 
   test('a store failure propagates — it is never routed into a false', async () => {
     const broken: IDataset = {
+      ...unusedDatasetMethods,
       selectQuery: async () => {
         throw new Error('store unreachable');
       },
@@ -207,6 +211,7 @@ describe('LinkedStorage.askQuery routing', () => {
 
   test('a failure during fan-out propagates — unknown is not false', async () => {
     const broken: IDataset = {
+      ...unusedDatasetMethods,
       selectQuery: async () => [],
       askQuery: async () => {
         throw new Error('one store unreachable');

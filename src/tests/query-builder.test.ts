@@ -10,6 +10,7 @@ import {FieldSet} from '../queries/FieldSet';
 import {setQueryContext, getQueryContext, PendingQueryContext, UnresolvedContextError} from '../queries/QueryContext';
 import {lower} from '../queries/lower';
 import {resolveExistence} from '../queries/queryDispatch';
+import {Shape} from '../shapes/Shape';
 
 const personShape = Person.shape;
 
@@ -896,9 +897,9 @@ describe('undecorated property access in a query', () => {
 // =============================================================================
 
 /**
- * A store that answers asks directly, as every IDataset must. `answer` may be a
- * value or a thunk that throws — an ask is never rewritten as a select, so what
- * this returns is the whole story.
+ * A store that answers asks directly. `answer` may be a value or a thunk that
+ * throws — a store with `askQuery` is never asked through a select, so what this
+ * returns is the whole story.
  */
 const askStore = (answer: boolean | (() => never)): any => ({
   selectQuery: async () => {
@@ -1136,12 +1137,26 @@ describe('SelectBuilder — .exists() prefers askQuery', () => {
     expect(seen.select).toBe(1);
   });
 
-  test('a store that does not implement askQuery at all is reported, not worked around', async () => {
-    // TypeScript rejects this at compile time; JS consumers get a clear error
-    // naming the contract and the one-line default, rather than a silent slow path.
+  test('a store without askQuery is asked with a select LIMIT 1', async () => {
+    const seen: any[] = [];
+    const withRow = {
+      selectQuery: async (q: any) => {
+        seen.push(q.toJSON());
+        return [{id: entity('p1').id}];
+      },
+    };
+    await expect(Person.exists(entity('p1'), withRow as any)).resolves.toBe(true);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({shape: Person.shape.id, subject: entity('p1').id, limit: 1});
+    expect(seen[0].op).toBeUndefined();
+    const empty = {selectQuery: async () => []};
+    await expect(Person.exists(entity('p1'), empty as any)).resolves.toBe(false);
+  });
+
+  test('a shapeless ask on a store without askQuery is refused', async () => {
     await expect(
-      Person.exists(entity('p1'), {selectQuery: async () => []} as any),
-    ).rejects.toThrow(/does not implement the required IDataset\.askQuery/);
+      Shape.exists(entity('p1'), {selectQuery: async () => []} as any),
+    ).rejects.toThrow(/shapeless ask/);
   });
 });
 

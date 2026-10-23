@@ -17,12 +17,14 @@ import {
   type LiveQueryStore,
 } from '../live/LiveQueryStore';
 import {Person, Team, ids} from '../test-helpers/live-fixtures';
+import {unusedDatasetMethods} from '../test-helpers/test-utils';
 
 class FeedDataset implements IDataset {
   selects = 0;
   listeners = new Set<(e: ChangeEvent) => void>();
   constructor(readonly authoritativeChanges?: boolean) {}
 
+  graphQuery = unusedDatasetMethods.graphQuery;
   async selectQuery(query: any): Promise<any> {
     this.selects++;
     const json = query.toJSON();

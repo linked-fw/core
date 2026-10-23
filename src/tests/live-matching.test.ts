@@ -13,6 +13,7 @@ import {linkedPackage} from '../utils/Package';
 import {resetLiveQueryStore, type LiveQuery, type LiveQueryStore} from '../live/LiveQueryStore';
 import {templateKey} from '../live/keys';
 import {Employee, Person, Team, ids} from '../test-helpers/live-fixtures';
+import {unusedDatasetMethods} from '../test-helpers/test-utils';
 
 const {linkedShape} = linkedPackage('live-matching-test');
 
@@ -37,6 +38,7 @@ class ScriptedDataset implements IDataset {
     this.answers.set(templateKey(query as any), fn);
   }
 
+  graphQuery = unusedDatasetMethods.graphQuery;
   async selectQuery(query: any): Promise<any> {
     const key = templateKey(query);
     this.fetches.set(key, (this.fetches.get(key) ?? 0) + 1);

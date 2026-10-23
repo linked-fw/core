@@ -5,6 +5,9 @@ import type {DeleteQuery, DeleteResponse} from './DeleteQuery.js';
 import type {IDataset} from '../interfaces/IDataset.js';
 import type {AskQuery} from './AskQuery.js';
 import type {CountQuery} from './CountQuery.js';
+import type {GraphQuery, GraphResult} from './IntermediateRepresentation.js';
+import {unsupportedGraphQuery} from './graphQuery.js';
+import {catalogOf, withShapeCatalog} from '../utils/ShapeClass.js';
 
 /**
  * Abstraction boundary between the DSL layer (Shape) and the storage layer
@@ -27,10 +30,19 @@ export interface QueryDispatch {
   createQuery<R = any>(query: CreateQuery): Promise<R>;
   updateQuery<R = any>(query: UpdateQuery): Promise<R>;
   deleteQuery(query: DeleteQuery): Promise<DeleteResponse>;
+  /**
+   * Run a graph query (`IDataset.graphQuery`). Optional here because a dispatch installed by an
+   * older copy of core has no such method; {@link resolveGraphQuery} treats a missing one as a
+   * dataset without graph support.
+   */
+  graphQuery?(query: GraphQuery): Promise<GraphResult>;
 }
 
-/** A target that can answer an ask query. */
-type ExistenceTarget = {askQuery(query: AskQuery): Promise<boolean>};
+/** A target that can answer an ask query, or a select (the fallback). */
+type ExistenceTarget = {
+  askQuery?(query: AskQuery): Promise<boolean>;
+  selectQuery?(query: any): Promise<any>;
+};
 
 /**
  * Answer an ask query against `target` — the single entry point for every
@@ -38,11 +50,11 @@ type ExistenceTarget = {askQuery(query: AskQuery): Promise<boolean>};
  * `LinkedStorage.askQuery` both come here rather than calling `askQuery`
  * directly, so the contract below is enforced once for every store.
  *
- * There is deliberately **no translation to a select query anywhere in this
- * package.** An ask goes to `IDataset.askQuery` and a SPARQL-backed store turns
- * it into `ASK`. A store that lacks a boolean primitive implements `askQuery`
- * itself, in whatever way its backend allows — that decision belongs to the
- * store, and making it here would hide it.
+ * An ask goes to `IDataset.askQuery`, and a SPARQL-backed store turns it into
+ * `ASK`. `askQuery` is the one optional dataset method: when `target` has none,
+ * the same pattern is sent to `selectQuery` as a select with `LIMIT 1`, and the
+ * answer is `true` when a row comes back. A shapeless ask has no select to send,
+ * so on such a target it is refused.
  *
  * `askQuery` must resolve to a real boolean: anything else rejects rather than
  * being coerced, since a truthy non-boolean would read as "exists". Errors
@@ -53,11 +65,7 @@ export async function resolveExistence(
   query: AskQuery,
 ): Promise<boolean> {
   if (typeof target?.askQuery !== 'function') {
-    throw new Error(
-      'This dataset does not implement the required IDataset.askQuery(query). ' +
-      'An ask query is answered with a boolean — a SPARQL store emits ASK — and is ' +
-      'never rewritten as a select on its behalf.',
-    );
+    return existenceBySelect(target, query);
   }
   const answer = await target.askQuery(query);
   if (typeof answer !== 'boolean') {
@@ -68,6 +76,59 @@ export async function resolveExistence(
     );
   }
   return answer;
+}
+
+/**
+ * Answer an ask on a dataset without `askQuery`: the ask's pattern as a select of ids with
+ * `LIMIT 1`. The select builder is imported on demand, so this module stays a leaf.
+ */
+async function existenceBySelect(target: ExistenceTarget, query: AskQuery): Promise<boolean> {
+  if (typeof target?.selectQuery !== 'function') {
+    throw new Error(
+      'This dataset implements neither IDataset.askQuery nor IDataset.selectQuery, so an ' +
+      'ask query cannot be answered.',
+    );
+  }
+  const {op: _op, nullSubject: _nullSubject, ...pattern} = query.toJSON();
+  if (!pattern.shape) {
+    throw new Error(
+      'This dataset does not implement IDataset.askQuery, and a shapeless ask ' +
+      '("does a node with this IRI exist at all") has no shape to select by. ' +
+      'Implement askQuery on the dataset, or ask through a shape.',
+    );
+  }
+  const {SelectBuilder} = await import('./QueryBuilder.js');
+  const select = withShapeCatalog(catalogOf(query), () =>
+    SelectBuilder.fromJSON({...pattern, shape: pattern.shape as string, limit: 1}),
+  );
+  const rows = await target.selectQuery(select);
+  if (!Array.isArray(rows)) {
+    throw new Error(
+      `Answering an ask with a select LIMIT 1 expected an array of rows; got ${
+        rows === null ? 'null' : typeof rows
+      }.`,
+    );
+  }
+  return rows.length > 0;
+}
+
+/** A target that may answer a graph query. */
+type GraphTarget = {graphQuery?(query: GraphQuery): Promise<GraphResult>};
+
+/**
+ * Run a graph query against `target` — the entry point every graph static and router goes
+ * through. A target without a `graphQuery` function (a dataset class built against an older
+ * core, or a dispatch set by one) is treated exactly like a dataset that throws
+ * `unsupported-query-kind`, so callers have one refusal to handle.
+ */
+export async function resolveGraphQuery(
+  target: GraphTarget | undefined,
+  query: GraphQuery,
+): Promise<GraphResult> {
+  if (typeof target?.graphQuery !== 'function') {
+    throw unsupportedGraphQuery(query, 'it has no graphQuery method');
+  }
+  return target.graphQuery(query);
 }
 
 /**
@@ -167,6 +228,7 @@ export type QueryDispatchEvent = (
   | {kind: 'create'; query: CreateQuery; result: Promise<unknown>}
   | {kind: 'update'; query: UpdateQuery; result: Promise<unknown>}
   | {kind: 'delete'; query: DeleteQuery; result: Promise<DeleteResponse>}
+  | {kind: 'graph'; query: GraphQuery; result: Promise<GraphResult>}
 ) & {
   /** The explicit dataset of an `exec(target)` call; absent for the global dispatch. */
   target?: IDataset;
@@ -249,6 +311,11 @@ function instrumentDispatch(d: QueryDispatch, target?: IDataset): QueryDispatch 
       notifyDispatch({kind: 'delete', query, result, target});
       return result;
     },
+    graphQuery(query: GraphQuery): Promise<GraphResult> {
+      const result = resolveGraphQuery(d, query);
+      notifyDispatch({kind: 'graph', query, result, target});
+      return result;
+    },
   };
   Object.defineProperty(wrapped, INSTRUMENTED, {value: true, enumerable: false});
   return wrapped;
@@ -268,14 +335,17 @@ export function getQueryDispatch(): QueryDispatch {
   return dispatch;
 }
 
-/** The mutating query kinds — the `IDataset` methods that are optional per-store. */
+/**
+ * The mutating query kinds. Required on `IDataset`, but a dataset class built against an older
+ * core may still lack one, so an explicit target is checked.
+ */
 export type MutationKind = 'create' | 'update' | 'delete';
 
 /**
  * Pick the object a mutation `exec(target?)` dispatches through: the explicit `target`
  * dataset (validated to implement the op) when a target is given, otherwise the global
- * dispatch. Unlike `selectQuery`, a store's mutation methods are optional on `IDataset`,
- * so a target that can't perform `kind` is a caller error.
+ * dispatch. A target that can't perform `kind` (a dataset class built against an older core,
+ * when these methods were optional) is a caller error.
  *
  * Throws synchronously if the target lacks the method — callers invoke this from within an
  * `async exec`, so the throw surfaces as a rejected promise rather than a synchronous throw.

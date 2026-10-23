@@ -6,11 +6,13 @@ import type {CountQuery} from '../queries/CountQuery.js';
 import type {CreateQuery} from '../queries/CreateQuery.js';
 import type {UpdateQuery} from '../queries/UpdateQuery.js';
 import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
-import {setQueryDispatch, resolveExistence} from '../queries/queryDispatch.js';
+import type {GraphQuery, GraphResult} from '../queries/IntermediateRepresentation.js';
+import {setQueryDispatch, resolveExistence, resolveGraphQuery} from '../queries/queryDispatch.js';
 import {
   catalogOf,
   getActiveShapeCatalog,
   getShapeClass,
+  getShapesForTargetClass,
   outsideShapeCatalog,
   withShapeCatalog,
 } from './ShapeClass.js';
@@ -102,6 +104,7 @@ export abstract class LinkedStorage {
       createQuery: (q) => this.createQuery(q),
       updateQuery: (q) => this.updateQuery(q),
       deleteQuery: (q) => this.deleteQuery(q),
+      graphQuery: (q) => this.graphQuery(q),
     });
     notifyRoutingChanged();
   }
@@ -320,9 +323,10 @@ export abstract class LinkedStorage {
    * Any other router implementing `IDataset` inherits this obligation: a shapeless
    * ask means "anywhere I can reach", not "in my default store".
    *
-   * The contract itself — a real boolean, errors never flattened to `false` —
-   * belongs to `resolveExistence`, which the builder also goes through. None of it
-   * is re-implemented here.
+   * The contract itself — a real boolean, errors never flattened to `false`, and
+   * the answer for a dataset without `askQuery` (a select `LIMIT 1`) — belongs to
+   * `resolveExistence`, which the builder also goes through. None of it is
+   * re-implemented here.
    */
   static async askQuery(query: AskQuery): Promise<boolean> {
     if (!query?.shape) {
@@ -419,5 +423,32 @@ export abstract class LinkedStorage {
     return getActiveShapeCatalog() === undefined
       ? dataset.deleteQuery(query)
       : outsideShapeCatalog(() => dataset.deleteQuery(query));
+  }
+
+  /**
+   * Route a graph query by its record shape: the shape whose target class is
+   * `query.recordClass` (`OntologyGraph` for `core:OntologyGraph`), resolved like any query's
+   * shape, so a pin of `NamedGraph` covers every graph-record class. Without a pin, the
+   * default dataset. A dataset without a `graphQuery` method answers
+   * `GraphQueryError('unsupported-query-kind')` (see `resolveGraphQuery`).
+   */
+  static graphQuery(query: GraphQuery): Promise<GraphResult> {
+    const dataset = this.resolveDatasetForGraphQuery(query);
+    if (!dataset) {
+      return Promise.reject(
+        new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().'),
+      );
+    }
+    return getActiveShapeCatalog() === undefined
+      ? resolveGraphQuery(dataset, query)
+      : outsideShapeCatalog(() => resolveGraphQuery(dataset, query));
+  }
+
+  private static resolveDatasetForGraphQuery(query: GraphQuery): IDataset | undefined {
+    const recordShape = query?.recordClass
+      ? getShapesForTargetClass(query.recordClass)[0]
+      : undefined;
+    const shapeClass = recordShape ? getShapeClass(recordShape.id) : undefined;
+    return shapeClass ? this.getDatasetForShapeClass(shapeClass) : routingState.defaultDataset;
   }
 }

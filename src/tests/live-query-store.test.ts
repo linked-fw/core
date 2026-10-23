@@ -17,6 +17,7 @@ import {LIVE_STORE_KEY} from '../live/registry';
 import {Person, Team, ids} from '../test-helpers/live-fixtures';
 import {ShapeCatalog, withShapeCatalog} from '../utils/ShapeCatalog';
 import {toWire} from '../shapes/nodeShapeWire';
+import {unusedDatasetMethods} from '../test-helpers/test-utils';
 
 /** A catalog holding the fixtures' Person and Team as data, as a project branch would. */
 const fixtureCatalog = () => ShapeCatalog.from([toWire(Person.shape), toWire(Team.shape)]);
@@ -47,6 +48,10 @@ class ScriptedDataset implements IDataset {
     return d;
   }
 
+  updateQuery = unusedDatasetMethods.updateQuery;
+  createQuery = unusedDatasetMethods.createQuery;
+  deleteQuery = unusedDatasetMethods.deleteQuery;
+  graphQuery = unusedDatasetMethods.graphQuery;
   async selectQuery(query: any): Promise<any> {
     this.selects++;
     if (this.failNext) {

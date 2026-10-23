@@ -22,6 +22,7 @@ import type {AskQueryJSON} from './AskQuery.js';
 import type {CountQueryJSON} from './CountQuery.js';
 import type {MutationJSON} from './MutationSerialization.js';
 import {assertWireVersion} from './wireVersion.js';
+import {isGraphQueryKind} from './graphQuery.js';
 import {getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 
@@ -57,6 +58,15 @@ export function fromJSON(
     return withShapeCatalog(options.catalog, () => fromJSON(json));
   }
   assertWireVersion((json as {v?: unknown})?.v);
+  const kind = (json as unknown as {kind?: unknown})?.kind;
+  if (isGraphQueryKind(kind)) {
+    // A graph query is plain data, not a builder: it has no `exec()` and goes to
+    // `IDataset.graphQuery`, never through the select path below.
+    throw new Error(
+      `"${kind}" is a graph query, not a query builder envelope: ` +
+      'check it with parseGraphQuery() and pass it to IDataset.graphQuery().',
+    );
+  }
   if (json && typeof json === 'object' && 'op' in json) {
     switch (json.op) {
       case 'ask':
