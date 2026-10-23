@@ -134,6 +134,21 @@ await OntologyGraph.update(g).set({version: '1.7.0'}).replaceContent({mediaType:
 ```
 
 
+### Ontology sync (provider K3; consumers V1, C2)
+
+- `syncOntologies(ds?, {force?, packages?, orphanScope?})` → `{written, skipped, pruned}`
+  (signature kept).
+- Per package: hash `sha256Hex('linked-ontology-sync/2\n' + texts.join('\n'))` over the raw file
+  texts in registered order; compare with the registry record's `core:contentHash` (read through
+  `OntologyGraph.select()`); unchanged → no write (an unforked branch stays unforked); changed or
+  missing or `force` → `create(...).withContent` or `update(...).set({version}).replaceContent`
+  with the N-Triples body (P3). Then P4's cleanup of the plan-070 default-graph triples and node.
+- Orphans (`orphanScope: 'all'`): `OntologyGraph.delete(iri)` for records whose package is not
+  registered.
+- On `unsupported-query-kind`: plan 070's default-graph diff, unchanged (`OntologySync` nodes,
+  hash prefix `/1`).
+- `OntologySync`, `ClassAxioms` and their exports stay (deprecated) for the fallback.
+
 ## K1 — `graphQuery` and the graph API (sensitive)
 
 Master §K1 is the scope; this is its plan-mode detail. Found in the code at `named-graphs`
@@ -287,3 +302,121 @@ and patch through a subclass check the stored record's class. The registration c
 refuses relative graph names and empty patches. Full gate: 2530 passed, 330/330 `[fuseki]`;
 `two-copies-built` still fails (backlog 060). Open note for K4: routing takes the first shape that
 targets the record class.
+
+## K3 — the ontology sync on package graphs
+
+Master §K3 is the scope and §Ontology sync (above) the contract; this is its plan-mode detail.
+Found in the code at `named-graphs` (`75162c1`, K1 landed). Line numbers drift; search for the
+symbol.
+
+### Design in the code
+
+- `syncOntologies(ds?, options)` keeps its signature and result. It parses every registered
+  package once (`readPackageOntologies`, as today; the parse still sets the in-memory hierarchy),
+  then runs the **graph path**; the first `GraphQueryError('unsupported-query-kind')` (from the
+  store, or from `resolveGraphQuery`'s guard for a dataset without a `graphQuery` function)
+  switches the run to the **fallback**, plan 070's default-graph diff, moved unchanged into a
+  private function. An explicit `ds` without a `graphQuery` function goes to the fallback
+  without reading the registry. A store either supports graph queries or not, so the switch
+  happens at the first graph write, before anything was written through the graph path.
+- **Graph path, per package** (sorted by name, sequential: one update each, schema.org's body is
+  ~1 MB):
+  1. `hash = ontologyGraphHash(texts)` = `sha256Hex('linked-ontology-sync/2\n' +
+     texts.join('\n'))` over the raw texts in registration order (`PackageOntologyData.texts`).
+  2. The stored records come from one `OntologyGraph.select(r => [r.package, r.contentHash])`
+     at the start of the run, keyed by the record's subject (the graph IRI).
+  3. Equal hash and no `force` → `skipped`, no write.
+  4. Otherwise the body is built: each text parsed with N3.js (permissive parser, as the
+     hierarchy reader) with a per-file blank-node prefix (`f<i>_`), default-graph quads only,
+     serialised line by line as N-Triples, deduped (P3). The graph IRI is
+     `OntologyGraph.iriFor(pkg)`. No record → `OntologyGraph.create({id, package, sources})
+     .withContent(body, {contentHash: hash})`; a record → `OntologyGraph.update(id).set({sources})
+     .replaceContent(body, {contentHash: hash})`. The caller-supplied hash is the one recorded,
+     so the next run compares like with like. `sources` are the registrations' `files` with
+     leading `./` and `../` segments removed (`data/schema.ttl`).
+  5. P4 cleanup (below), then `written`.
+- **`version`** is not recorded: core knows no package's version (`OntologyRegistration` has
+  none, `linkedPackage` takes none). The field stays optional; recording it needs the version in
+  the registration (core backlog 064).
+- **P4 cleanup.** The stored plan-070 nodes come from one `OntologySync` select at the start of
+  the run. For every package in scope that still has a node and whose graph is written or
+  skipped as unchanged (so an interrupted cleanup is finished by the next run), the sync removes
+  from the default graph each line the node lists unless another remaining node lists it, one
+  `ClassAxioms` update per subject class (the existing `diffUpdates`, at most eight in flight),
+  then deletes the node. Nodes are removed from the "remaining" set as their package is cleaned,
+  so a triple two packages listed goes with the second. A package whose data cannot be read keeps
+  its node (and so its triples). The cleanup runs after the package's graph is written, so the
+  hierarchy never loses a class in between. Reading of P4's "or the package graph does not
+  replace": a listed line the package no longer has is removed as well (plan 070 would have
+  removed it on the change); otherwise the default graph would keep a stale axiom no node lists,
+  and master Verify's "empty default-graph hierarchy for synced packages" would not hold.
+- **Orphans** (`orphanScope: 'all'`, no `packages`): `OntologyGraph.delete(iri)` for every record
+  whose `package` is not registered (→ `pruned`), and the plan-070 cleanup above for every node
+  whose package is not registered (→ `pruned`, once per package name).
+- **Fallback**: today's code, unchanged (`/1` hash, `OntologySync` nodes, `ClassAxioms` diffs).
+  `ontologySyncHash`, `ontologyTriplesText`, `ontologySyncNodeIri`, `toNTriplesLine`,
+  `OntologySync` and `ClassAxioms` stay exported, marked deprecated (fallback only).
+
+### Files
+
+| File | What changes |
+|---|---|
+| `src/ontology/syncOntologies.ts` | the graph path, `ontologyGraphHash`, `ONTOLOGY_GRAPH_HASH_PREFIX`, P4 cleanup, orphan records; the plan-070 path moved into a private fallback; module doc |
+| `src/ontology/hierarchy.ts` | `nTriplesFromTurtle(texts, sources?)` → the N-Triples body (per-file blank-node prefix, default graph only, deduped), sharing the parser loader |
+| `src/shapes/OntologySync.ts`, `src/shapes/ClassAxioms.ts` | doc: deprecated, used by the fallback and the cleanup only |
+| `src/tests/ontology-sync.test.ts` | unit, graph path against a recording double (`graphQuery` captured, record select answered); fallback tests on a double whose `graphQuery` throws `unsupported-query-kind` and on one without `graphQuery` |
+| `src/tests/ontology-sync-fuseki.test.ts` | `[fuseki]` on image `6.2.0-2`: master Verify; the measurement of schema.org's first and second sync |
+| `docs/architecture/ontologies.md` | §The ontology sync rewritten for package graphs, the fallback kept in brief |
+| `.changeset/*.md` (new) | minor; breaking: the sync requires `ghcr.io/linked-fw/fuseki:6.2.0-2` or a store that builds its hierarchy from the registry; ontology data moves out of the default graph |
+| `docs/backlog/064-*.md` (new) | the package version in registrations and records |
+| `docs/reports/050-ontology-sync-on-package-graphs.md` (new) | the record |
+
+### Pitfalls
+
+- **Old image, new core** (P5): on `6.2.0-1` the hierarchy is read from the default graph only,
+  which the cleanup empties. The `[fuseki]` tests need `LINKED_FUSEKI_IMAGE=linked-fuseki:071`;
+  the changeset says so; the owner's `:3030` moves before this lands.
+- **The hash is over raw bytes, the body is N-Triples**: the record must carry the sync's hash
+  (`contentHash` option), not the store's hash of the body, or every boot rewrites.
+- **Blank nodes across files** (OWL restrictions, lists): one parser per file with its own
+  prefix, so `_:b0` of two files never merge.
+- **Cleanup must not delete what still feeds**: only lines a node lists, never one another
+  remaining node lists; graph first, cleanup second.
+- **K2 works in parallel** on `SparqlDataset.ts`/`irToAlgebra.ts`; this step does not touch them
+  (`OntologyGraph.select()` already reads the registry through K1's `storedInGraph`). Whoever
+  lands second rebases.
+- **Shape sync** runs after the ontology sync; nothing here changes it.
+- **Server** (`src/utils/ontologySync.ts`) calls `syncOntologies(ds, {orphanScope})` and logs
+  `written`/`skipped`/`pruned`: the result shape stays.
+
+### Tests
+
+- Quick gate (after each phase), from the core worktree, with the Fuseki env exported first:
+  `FUSEKI_BASE_URL=http://localhost:3174 FUSEKI_TEST_PORT=3174
+  LINKED_CORE_TEST_COMPOSE_PROJECT=fuseki-071-k3 LINKED_FUSEKI_IMAGE=linked-fuseki:071`, then
+  `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs
+  src/tests/ontology-sync.test.ts src/tests/ontology-sync-fuseki.test.ts` and `npm run typecheck`.
+- Full gate: `npm test` (`two-copies-built` known red, backlog 060; typecheck run separately),
+  `npm run test:fuseki`, `npm run check:dts`, `npx linked build`.
+- Unit: the `/2` hash vector; first sync → one `graph_create` per package with the N-Triples
+  body, `contentHash` = the sync hash, `sources`; an equal record → no graph query; a changed
+  text → `graph_replace` with the record; `force` writes despite an equal hash; blank nodes of two
+  files stay apart; orphan records dropped only under `orphanScope: 'all'`; P4: node lines
+  removed except those another node lists, node deleted, cleanup on a skipped package with a
+  node left; the fallback on `unsupported-query-kind` and on a dataset without `graphQuery`
+  sends exactly today's updates.
+- `[fuseki]` (master Verify): first sync writes N graphs with records and returns them in
+  `written`; second sync `skipped` with zero updates; a label change rewrites only that package;
+  a store with plan-070 data (written by the fallback path) ends with an empty default-graph
+  hierarchy for synced packages, a hand-written axiom kept, `ASK { ?x a Super }` still true; a
+  store double without `graphQuery` takes the old path; measurement of schema.org's first and
+  second sync.
+
+### Phases
+
+1. **Graph path and fallback:** hash, body, records, create/replace, orphans, the fallback
+   switch; unit tests.
+2. **P4 cleanup and the live tests:** the cleanup, unit tests for it, the `[fuseki]` suite and
+   the measurement on `linked-fuseki:071`.
+3. **Docs and record:** `ontologies.md`, deprecations, backlog 064, changeset, report 050,
+   Outcome.
