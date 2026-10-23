@@ -272,17 +272,20 @@ written, in the DSL-JSON field `graphs` and the IR field `graphs`, and the store
 | a graph IRI, `graphs.registry` | itself |
 | `graphs.allOntologies`, `graphs.allShapes` | every graph the registry lists with an `OntologyGraph` / `ShapesGraph` record |
 | `graphs.default` alone | the default graph, as without `.from()` |
+| `graphs.default` with other graphs | the default graph under the store's name for it, through `VALUES` (below) |
 | `graphs.union` alone | the store's name for it (`SparqlOptions.mapGraphName`; Fuseki `urn:x-arq:UnionGraph`) |
 
-`graphs.default` or `graphs.union` together with other graphs is refused
-(`unsupported-query-kind`): a set is read as `FROM NAMED` graphs, and Jena's `FROM NAMED
-<urn:x-arq:DefaultGraph>` matches nothing. A set that expands to no graph matches nothing; the
-store answers it without a request.
+`graphs.union` together with other graphs is refused (`unsupported-query-kind`; it holds them
+already), and so is `graphs.default` with other graphs on a store without a name for it
+(`mapGraphName`). A set that expands to no graph matches nothing; the store answers it without a
+request.
 
 `SparqlDataset` compiles one graph as `GRAPH <iri> { … }` around the whole pattern, and several
 as `FROM NAMED <g1> … <gK>` with one `GRAPH ?g_<subject> { … }` block per subject: a subject's
 data lives in one graph, so its graph variable is shared by all its blocks, OPTIONAL and EXISTS
-ones included.
+ones included. A set holding the default graph has no `FROM NAMED` (on Jena any `FROM NAMED`
+hides the default graph, even from `VALUES` and `GRAPH <urn:x-arq:DefaultGraph>`); each subject
+then reads `VALUES ?g_<subject> { <urn:x-arq:DefaultGraph> <g1> … }` with its `GRAPH` block.
 
 ```ts
 import {graphs} from '@_linked/core/ontologies/graphs';
@@ -308,7 +311,8 @@ reached through a link that carries an inferred type check gets that check in a 
 the same graph variable, after the block that reads one of its stored triples. The rows are the
 same; on Jena, which reorders the patterns inside one block and would run the type check in every
 allowed graph, it is about twice as fast (the measurements are in `graphScope.ts`). The generator
-emits no linked type check today, so the flag changes no query yet.
+emits no linked type check (graph routing does not need one: a subject's graphs come from its
+shape, see below), so the flag changes no generated query.
 
 **The registry cache.** A store reads its registry once per dataset and process (one `SELECT` on
 `graphs.registry`) and keeps it: its own graph queries update the cache in the same step, so its
@@ -317,6 +321,61 @@ package export by cache key) drops it when another process changed the graphs (C
 the apps it runs); an entry older than 30 seconds (`GRAPH_REGISTRY_MAX_AGE_MS`) is re-read. A
 store keys the cache with `graphRegistryKey()` (default: one key per instance; a store overrides
 it with its dataset's identity). Writes never depend on the cache.
+
+### Graph routing
+
+Storage rules pick the graph the way they pick the dataset: a **route** maps a shape to one named
+graph of one dataset, so ordinary code never names a graph. Without routes everything lives in the
+default graph, exactly as before routing existed.
+
+```ts
+LinkedStorage.setDatasetForShapes(store, [Article], {graph: `${DATA_ROOT}/graph/articles`});
+```
+
+```json
+{"datasets": {"appData": {"store": "@_linked/fuseki/shapes/FusekiStore", "config": {},
+  "graphs": {"https://acme.id.create.now/pkg/news/shape/Article": "${DATA_ROOT}/graph/articles"}}}}
+```
+
+`loadStores` registers an alias's `graphs` for the store it builds; `setShapeGraphs(dataset, map)`
+does the same directly (a composite dataset registers routes on the store it forwards to), and
+`graphRoutingFor(dataset)` reads them. Routes are kept per dataset object, by shape IRI.
+
+- **A shape's graph** (where its instances are written): its own route, else its nearest routed
+  super-shape's, else the default graph.
+- **A shape's read set**: its graph, every registered sub-shape's graph, and the read set of every
+  shape that owns it through a `contains` property (an owned node is written into its owner's
+  graph).
+
+**Reads** with no `.from()` give each subject group the read set of its shape: the root's shape,
+an object property's value shape, or, through a `contains` property, the owner's set. A subject
+of unknown shape may be in any routed graph or the default graph. The forms:
+
+| Situation | SPARQL |
+|---|---|
+| every subject reads only the default graph | unchanged |
+| every subject reads the same single graph | `GRAPH <g> { whole pattern }` |
+| named graphs only | `FROM NAMED` their union; per subject `GRAPH <g>` (one graph), `GRAPH ?g` (the whole union) or, for a type-checked subject with a narrower set, `VALUES ?g { … }` + `GRAPH ?g` |
+| the default graph with named graphs | no `FROM NAMED`; default-only subjects plain, one-graph subjects `GRAPH <g>`, others `VALUES ?g { <store default name> … }` + `GRAPH ?g` |
+
+`VALUES` is written where a subject's graph variable is first bound, not again in the OPTIONAL
+blocks that join on it. With `SparqlOptions.namedGraphUriParameter` the `FROM NAMED` set goes to
+the transport as the protocol's `named-graph-uri` parameters instead
+(`executeSparqlSelectWithNamedGraphs`, which a store with the option overrides; the default
+refuses rather than read every named graph).
+
+**Writes** go into the shape's graph: `INSERT DATA { GRAPH <g> { … } }`, or `WITH <g>` before a
+`DELETE`/`INSERT`, so an update's old values, a delete's incoming references and an owned walk are
+read and removed in that graph only; nested (owned) nodes are created there too, and the
+owned-link check reads the linked ids' types there. `.into(graph)` on a create, update or delete
+builder overrides the graph, only to a graph in the shape's read set (else
+`GraphQueryError('graph-not-routed')`; a portable name, the registry or a store-reserved name is
+`graph-name-read-only`). `.into()` is never carried in DSL-JSON: a process that receives a
+mutation derives its graph from its own routing.
+
+**Live queries.** `QueryDependencies.graphs` (the `.from()` names, or the routed read sets) and
+`MutationEffects.graph` (the `.into()` or routed graph) are set when the dataset `LinkedStorage`
+routes the shape to has routes; the matcher skips a template that does not read the written graph.
 
 ## A package that mirrors a standard
 

@@ -108,7 +108,9 @@ describeFuseki('graph queries on the inferring store', () => {
     expect(fields['core:version']).toEqual(['1.0.0']);
     expect(fields['core:feedsHierarchy']).toEqual(['true']);
     expect(fields['core:contentHash']).toEqual([sha256Hex(body.text)]);
-    expect(fields['dcterms:modified']).toEqual([result.modified]);
+    // Compared as instants: Jena writes an xsd:dateTime in canonical form, so `…17.560Z` reads back
+    // as `…17.56Z`.
+    expect(fields['dcterms:modified'].map((d) => new Date(d).toISOString())).toEqual([result.modified]);
     expect(fields['dcterms:source']).toEqual(['data/live.ttl']);
     // The body went to the graph, not to the default graph.
     const stray = await executeSparqlQuery('ASK { <http://example.org/A> ?p ?o }');
