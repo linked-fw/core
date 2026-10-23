@@ -328,18 +328,41 @@ Storage rules pick the graph the way they pick the dataset: a **route** maps a s
 graph of one dataset, so ordinary code never names a graph. Without routes everything lives in the
 default graph, exactly as before routing existed.
 
+Routes live in the app's code (its `linked.backend.storage.ts`), never in the datasets config,
+which keeps what changes per deployment. A route states intent; developers do not write graph
+IRIs:
+
 ```ts
-LinkedStorage.setDatasetForShapes(store, [Article], {graph: `${DATA_ROOT}/graph/articles`});
+import {dataGraph} from '@_linked/core/ontologies/graphs';
+
+LinkedStorage.setDatasetForShapes(store, [Article, Comment], {graph: 'own'});
+LinkedStorage.setDatasetForShapes(store, [Tag, Category], {graph: dataGraph('taxonomy')});
 ```
 
-```json
-{"datasets": {"appData": {"store": "@_linked/fuseki/shapes/FusekiStore", "config": {},
-  "graphs": {"https://acme.id.create.now/pkg/news/shape/Article": "${DATA_ROOT}/graph/articles"}}}}
-```
+| Route | Graph |
+|---|---|
+| `'own'` | `{DATA_ROOT}/graph/{package slug}/{shape name}` — one graph per shape |
+| `dataGraph('slug')` | `{DATA_ROOT}/graph/{slug}` — shared by the shapes routed to it |
+| an absolute graph IRI | as given (advanced use) |
 
-`loadStores` registers an alias's `graphs` for the store it builds; `setShapeGraphs(dataset, map)`
-does the same directly (a composite dataset registers routes on the store it forwards to), and
-`graphRoutingFor(dataset)` reads them. Routes are kept per dataset object, by shape IRI.
+- **`'own'`**: the package is the one the shape class was registered by (`linkedPackage(name)`); its
+  slug is `packageNameToSlug(name)` (npm scope dropped, every run of characters other than ASCII
+  letters and digits → `-`, trimmed, lower-cased: `@acme/news-site` → `news-site`); the shape name
+  is the shape IRI's last segment, case kept (`@linkedShape({name})`, else the class name). So
+  `Article` of `@acme/news-site` → `{DATA_ROOT}/graph/news-site/Article`. A shape no package
+  registered is refused.
+- **`dataGraph(slug)`**: the slug is one or more `/`-separated segments, each
+  `^[a-z0-9]+(?:-[a-z0-9]+)*$` (`articles`, `news/archive`); anything else throws.
+- **`DATA_ROOT`** is the store's: `IDataset.dataRoot()` (a `SparqlDataset` returns its
+  `SparqlOptions.dataRoot`, the root it mints ids under), else the process's `DATA_ROOT`; trailing
+  slashes dropped (`dataRootOf(dataset)`). It is joined each time the routing is read, so a root
+  the store learns later is the one used. A route that needs a root the store lacks is refused when
+  resolved, with the shape named.
+
+`setShapeGraphs(dataset, {<shape IRI>: route})` records routes directly (a composite dataset
+registers them on the store it forwards to); `getShapeGraphs(dataset)` returns them resolved, and
+`graphRoutingFor(dataset)` is what reads and writes compile with. Routes are kept per dataset
+object, by shape IRI.
 
 - **A shape's graph** (where its instances are written): its own route, else its nearest routed
   super-shape's, else the default graph.

@@ -4,7 +4,7 @@
 
 Graph routing: storage rules pick the named graph of a shape, per dataset.
 
-- `LinkedStorage.setDatasetForShapes(dataset, [shapes], {graph})` pins shapes to a dataset and routes their instances to a graph there (the variadic form stays); the datasets config takes `graphs: {<shape IRI>: <graph IRI>}` per alias, which `loadStores` registers for the store it builds. `setShapeGraphs`, `getShapeGraphs`, `unsetShapeGraph` and `graphRoutingFor` are exported for composite datasets.
+- `LinkedStorage.setDatasetForShapes(dataset, [shapes], {graph})` pins shapes to a dataset and routes their instances to a graph there (the variadic form stays). `setShapeGraphs`, `getShapeGraphs`, `unsetShapeGraph` and `graphRoutingFor` are exported for composite datasets.
 - A shape's graph is its own route, else its nearest routed super-shape's, else the default graph; its read set adds its sub-shapes' graphs and the read sets of the shapes that own it (`contains`).
 - Routed reads: each subject group reads its shape's set (`GRAPH <g>`, `FROM NAMED` with `GRAPH ?g`, `VALUES ?g` for a narrower type-checked subject); a set holding the default graph is read without `FROM NAMED`, through `VALUES` with the store's name for it. Without routes every query compiles exactly as before.
 - `.from()` with `graphs.default` among other graphs now reads (through `VALUES`) on a store that maps the default graph.

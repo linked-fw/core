@@ -968,3 +968,11 @@ search for the symbol.
    Quick gate: `graph-routing`, `dataset-pin-identity`, `read-graphs`.
 3. **Live store, docs and record:** `[fuseki]` test, `ontologies.md`, backlog 069, changesets,
    report 053, Outcome; full gate.
+
+### Outcome
+
+Implemented, not landed (report [053](../reports/053-graph-routing-forms.md)). Core as planned;
+no deviation. Stopped before landing: CN's `parseAppGraphRoutes` reads `graphs` back through
+core's `DatasetEntry` type and expects core's IRI check (`TS2339` and `appGraphRoutes.test.ts:73`),
+so landing turns CN's gate red until CN stops relying on it. Backlog 069 records per-instance graph
+functions. Full gate: 2664 passed, 353/353 `[fuseki]`; `two-copies-built` still fails (backlog 060).

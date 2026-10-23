@@ -12,7 +12,8 @@
  * never touch.
  *
  * Every read runs on a store with `isolateLinkedTypeChecks` off and one with it on, and both must
- * return identical rows.
+ * return identical rows. The last test routes through `LinkedStorage` with `{graph: 'own'}`, resolved
+ * under the store's data root.
  */
 import {afterAll, beforeAll, expect, test} from '@jest/globals';
 import {
@@ -26,6 +27,8 @@ import {describeFuseki} from '../test-helpers/fuseki-live';
 import {FusekiStore} from '../test-helpers/FusekiStore';
 import {Employee, Person, Pet, employeeClass, personClass, propBase} from '../test-helpers/query-fixtures';
 import {GR, GRAlbum, GRPanorama, GRPhoto} from '../test-helpers/graph-routing-fixtures';
+import {RF, RFArticle, RFNewsArticle} from '../test-helpers/graph-route-forms-fixtures';
+import {LinkedStorage} from '../utils/LinkedStorage';
 import {setShapeGraphs} from '../utils/graphRouting';
 import {isGraphQueryError} from '../queries/graphQuery';
 import {DeleteBuilder} from '../queries/DeleteBuilder';
@@ -255,5 +258,45 @@ describeFuseki('graph routing', () => {
       );
     expect(isGraphQueryError((err as {cause?: unknown})?.cause ?? err, 'graph-not-routed')).toBe(true);
     expect(await graphsOf(`${D}album/2`)).toEqual([]);
+  });
+
+  test("{graph: 'own'} through LinkedStorage: a create lands in {root}/graph/{package slug}/{shape name} and reads back from it", async () => {
+    const ROOT = `${D}own-root`;
+    const OWN = `${ROOT}/graph/news-site/RFArticle`;
+    const ARTICLE = `${D}article/1`;
+    const NEWS = `${D}article/2`;
+    const store = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME, {dataRoot: ROOT});
+    // The DSL's own dispatch (no `.exec(store)`): the pin picks the store, the route its graph.
+    const previousDefault = LinkedStorage.getDefaultDataset();
+    LinkedStorage.setDefaultDataset(off);
+    LinkedStorage.setDatasetForShapes(store, [RFArticle, RFNewsArticle], {graph: 'own'});
+    try {
+      await RFArticle.create({__id: ARTICLE, headline: 'Routed'} as never);
+      expect(await graphsOf(ARTICLE)).toEqual([OWN]);
+      // A route set on a sub-shape too: its own graph, read as part of the super-shape's set.
+      await RFNewsArticle.create({__id: NEWS, headline: 'Breaking'} as never);
+      const NEWS_OWN = `${ROOT}/graph/news-site/RFNewsArticle`;
+      expect(await graphsOf(NEWS)).toEqual([NEWS_OWN]);
+      // A decoy in the default graph is not an instance of a routed shape any more; the class
+      // hierarchy (default graph) makes a news article an article.
+      await executeSparqlUpdate(
+        `INSERT DATA { <${D}article/decoy> a <${RF}Article> ; <${RF}headline> "Decoy" . ` +
+          `<${RF}NewsArticle> <${RDFS_SUBCLASS_OF}> <${RF}Article> . }`,
+      );
+      const rows = await RFArticle.select((a) => a.headline);
+      expect(sorted(rows)).toEqual([
+        {id: ARTICLE, headline: 'Routed'},
+        {id: NEWS, headline: 'Breaking'},
+      ]);
+      await RFArticle.update({headline: 'Changed'}).for({id: ARTICLE});
+      expect(await graphsOf(ARTICLE, `<${RF}headline>`)).toEqual([OWN]);
+      const minted = (await RFArticle.create({headline: 'Minted'})) as {id: string};
+      expect(minted.id.startsWith(`${ROOT}/`)).toBe(true);
+      expect(await graphsOf(minted.id)).toEqual([OWN]);
+    } finally {
+      LinkedStorage.unsetDatasetForShape(RFArticle);
+      LinkedStorage.unsetDatasetForShape(RFNewsArticle);
+      if (previousDefault) LinkedStorage.setDefaultDataset(previousDefault);
+    }
   });
 });

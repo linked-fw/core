@@ -557,6 +557,12 @@ LinkedStorage.setDefaultDataset(stores.appData);
 // LinkedStorage.setDatasetForShapes(stores.appData, [Person, BlogPost]);
 ```
 
+The file holds what changes per deployment (stores, endpoints, credentials). Graph routing is not
+part of it: the app routes shapes in code, e.g.
+`LinkedStorage.setDatasetForShapes(stores.appData, [BlogPost], {graph: 'own'})` (see
+`docs/architecture/ontologies.md`, Graph routing). An alias with a `graphs` key gets a warning
+from `loadStores` and routes nothing.
+
 Each store class must accept a single config-object argument (`new StoreClass(config)`). `@_linked/fuseki`'s `FusekiStore` and `@_linked/server`'s `BackendAPIStore` both follow this contract.
 
 ## File storage
