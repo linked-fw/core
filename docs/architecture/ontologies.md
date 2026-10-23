@@ -97,7 +97,13 @@ const names = await registerInstalledOntologies(packageDirs); // package roots
 
 It imports `<dir>/lib/esm/ontologies/*.register.js` of each directory (the cli's build layout),
 in the order given and by file name within a package, and returns the names of the packages it
-registered. A directory without register modules is skipped silently, a directory given twice
+registered. When the host has installed a module loader (`linked start` in dev; see
+[Loading package modules](./loading-package-modules.md)), a package that the app resolves to that
+directory is imported through the loader by specifier instead,
+`<name>/ontologies/<prefix>.register` (listed from `src/ontologies` when the package has it), so
+it is the same module the app's own import of it gets and Vite never sees a second copy. Without
+a loader (a built app, the cli's build check), or for a directory the app does not resolve the
+package to, each file is imported natively by its path. A directory without register modules is skipped silently, a directory given twice
 (also through a symlink) is imported once, and a register module that throws is warned about,
 naming the file, and its package left out. Registration is idempotent, so a package the app
 already imported is unaffected.

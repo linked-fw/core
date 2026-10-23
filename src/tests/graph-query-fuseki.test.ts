@@ -108,7 +108,11 @@ describeFuseki('graph queries on the inferring store', () => {
     expect(fields['core:version']).toEqual(['1.0.0']);
     expect(fields['core:feedsHierarchy']).toEqual(['true']);
     expect(fields['core:contentHash']).toEqual([sha256Hex(body.text)]);
-    expect(fields['dcterms:modified']).toEqual([result.modified]);
+    // Compared as instants: Fuseki canonicalises xsd:dateTime and drops trailing zeros of the
+    // milliseconds (`.260Z` comes back as `.26Z`).
+    expect(fields['dcterms:modified'].map((v: string) => Date.parse(v))).toEqual([
+      Date.parse(result.modified),
+    ]);
     expect(fields['dcterms:source']).toEqual(['data/live.ttl']);
     // The body went to the graph, not to the default graph.
     const stray = await executeSparqlQuery('ASK { <http://example.org/A> ?p ?o }');
