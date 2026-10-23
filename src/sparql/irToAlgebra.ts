@@ -40,7 +40,8 @@ import type {
   SparqlLeftJoin,
   SparqlFilter,
 } from './SparqlAlgebra.js';
-import {type SparqlOptions, generateEntityUri} from './sparqlUtils.js';
+import {type SparqlCompileOptions, generateEntityUri} from './sparqlUtils.js';
+import type {ShapeGraphRouting} from '../utils/graphRouting.js';
 import {
   selectPlanToSparql,
   askPlanToSparql,
@@ -64,7 +65,8 @@ import {
   withShapeCatalog,
 } from '../utils/ShapeClass.js';
 import {UnresolvedContextError} from '../queries/QueryContext.js';
-import {scopeAlgebraToGraphs} from './graphScope.js';
+import {scopeAlgebraToGraphs, type ReadGraphScope} from './graphScope.js';
+import {graphs} from '../ontologies/graphs.js';
 
 // The `*ToAlgebra` / `*ToSparql` exports compile in the catalog the IR was lowered in (its
 // non-enumerable `catalog` field). An IR without one — built by hand, or copied with a spread,
@@ -547,6 +549,12 @@ function buildOptionalTraversalSubtree(
 class VariableRegistry {
   private map = new Map<string, string>();
   private usedVarNames = new Set<string>();
+  private readonly entries: {alias: string; property: string; variable: string}[] = [];
+
+  /** Every (alias, property) → variable binding, in the order they were made. */
+  bindings(): readonly {alias: string; property: string; variable: string}[] {
+    return this.entries;
+  }
 
   private key(alias: string, property: string): string {
     return bindingKey(alias, property);
@@ -563,6 +571,7 @@ class VariableRegistry {
   set(alias: string, property: string, variable: string): void {
     this.map.set(this.key(alias, property), variable);
     this.usedVarNames.add(variable);
+    this.entries.push({alias, property, variable});
   }
 
   getOrCreate(alias: string, property: string): string {
@@ -624,11 +633,51 @@ function storedGraphOf(shapeId: string): string | undefined {
 }
 
 /**
+ * The graphs a read of a shape covers under graph routing: the graph its class stores its
+ * instances in (`storedInGraph`, the graph-registry records), else its routed read set.
+ */
+function routedGraphsOfShape(shapeId: string, routing: ShapeGraphRouting): readonly string[] {
+  const storedIn = storedGraphOf(shapeId);
+  return storedIn ? [storedIn] : routing.readGraphsForShape(shapeId);
+}
+
+/**
+ * The per-subject graph sets of a routed read: the root alias reads its shape's set, and every
+ * variable bound through an object property reads the set of that property's value shape (so a
+ * traversal's target, a filter's linked node and a nested select all read where their shape is
+ * routed). A subject of unknown shape (an object property without a value shape) may be anywhere
+ * the routing writes. `undefined` when every subject of known shape reads only the default graph:
+ * the query is then compiled exactly as without routing.
+ */
+function routedReadScope(
+  rootAlias: string,
+  rootShape: string,
+  registry: VariableRegistry,
+  routing: ShapeGraphRouting,
+): ReadGraphScope | undefined {
+  const shapeOf = new Map<string, string>([[rootAlias, rootShape]]);
+  // Bindings are made parent first, so one pass in order resolves every chain.
+  for (const {alias, property, variable} of registry.bindings()) {
+    if (!shapeOf.has(alias) || shapeOf.has(variable)) continue;
+    const valueShape = findPropertyShapeById(property)?.valueShape?.id;
+    if (valueShape) shapeOf.set(variable, valueShape);
+  }
+  const bySubject = new Map<string, readonly string[]>();
+  for (const [variable, shapeId] of shapeOf) {
+    bySubject.set(variable, routedGraphsOfShape(shapeId, routing));
+  }
+  const otherSubjects = routing.allGraphs();
+  const onlyDefault = (set: readonly string[]) => set.length === 1 && set[0] === graphs.default;
+  if ([...bySubject.values()].every(onlyDefault)) return undefined;
+  return {bySubject, otherSubjects};
+}
+
+/**
  * Converts an IRSelectQuery to a SparqlSelectPlan.
  */
 export function selectToAlgebra(
   query: IRSelectQuery,
-  _options?: SparqlOptions,
+  _options?: SparqlCompileOptions,
 ): SparqlSelectPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -1193,10 +1242,17 @@ export function selectToAlgebra(
   // `.from()` scopes the read to its graphs (expanded by the store); without it, a shape whose
   // instances live in one named graph (the graph-registry records, `NamedGraph.storedInGraph`)
   // is read there. Counts and asks reuse this algebra and its dataset clause.
+  //
+  // With graph routing (the store passes it only when its dataset has routes) and no `.from()`,
+  // each subject group reads the graphs its shape is routed to (see `routedReadScope`).
   const storedIn = storedGraphOf(query.root.shape);
+  const routed =
+    !query.graphs && _options?.routing
+      ? routedReadScope(rootAlias, query.root.shape, registry, _options.routing)
+      : undefined;
   const scoped = scopeAlgebraToGraphs(
     algebra,
-    query.graphs ?? (storedIn ? [storedIn] : undefined),
+    query.graphs ?? routed ?? (storedIn ? [storedIn] : undefined),
     _options,
   );
   return {
@@ -1814,7 +1870,7 @@ const STRING_LEXICAL_DATATYPES = new Set<string>([XSD_TIME]);
  */
 function fieldValueToTerms(
   value: IRFieldValue,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
   datatype?: string,
 ): SparqlTerm[] {
   if (value === null || value === undefined) {
@@ -1951,7 +2007,7 @@ function nestedCreateTriples(
   propertyId: string,
   propertyTerm: SparqlTerm,
   data: IRNodeData,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
   blanks?: BlankNodeMinter,
 ): SparqlTriple[] {
   const kind = nestedNodeKind(propertyId, data);
@@ -1978,7 +2034,7 @@ function nestedCreateTriples(
  */
 function generateNodeDataTriples(
   data: IRNodeData,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
   blanks?: BlankNodeMinter,
   kind: NestedNodeKind = 'iri',
 ): {term: SparqlTerm; triples: SparqlTriple[]} {
@@ -2044,7 +2100,7 @@ function generateNodeDataTriples(
  */
 export function createToAlgebra(
   query: IRCreateMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): SparqlInsertDataPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -2091,7 +2147,7 @@ function keptReferences(value: IRFieldValue): SparqlTerm[] {
 function processUpdateFields(
   data: IRNodeData,
   subjectTerm: SparqlTerm,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): {
   deletePatterns: SparqlTriple[];
   insertPatterns: SparqlTriple[];
@@ -2369,7 +2425,7 @@ function wrapOldValueOptionals(
  */
 export function updateToAlgebra(
   query: IRUpdateMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -2389,7 +2445,7 @@ export function updateToAlgebra(
  */
 export function upsertToAlgebra(
   query: IRUpsertMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -2409,7 +2465,7 @@ export function upsertToAlgebra(
  */
 function buildDeleteInsertPlan(
   query: IRUpdateMutation | IRUpsertMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
   opts?: {ensureType?: string},
 ): SparqlDeleteInsertPlan {
   const subjectTerm = iriTerm(query.id);
@@ -3298,7 +3354,7 @@ export function buildOwnedSelfDelete(
  */
 export function deleteToAlgebra(
   query: IRDeleteMutation,
-  _options?: SparqlOptions,
+  _options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3393,7 +3449,7 @@ function bulkDeleteUnion(
  */
 export function deleteAllToAlgebra(
   query: IRDeleteAllMutation,
-  _options?: SparqlOptions,
+  _options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3431,7 +3487,7 @@ export function deleteAllToAlgebra(
  */
 export function deleteWhereToAlgebra(
   query: IRDeleteWhereMutation,
-  _options?: SparqlOptions,
+  _options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3499,7 +3555,7 @@ export function deleteWhereToAlgebra(
  */
 export function updateWhereToAlgebra(
   query: IRUpdateWhereMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3573,7 +3629,7 @@ export function updateWhereToAlgebra(
  */
 export function askToAlgebra(
   query: IRAskQuery,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): SparqlAskPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3593,7 +3649,13 @@ export function askToAlgebra(
         tripleOf(iriTerm(query.subjectId), varTerm('p'), varTerm('o')),
       ],
     };
-    const scoped = scopeAlgebraToGraphs(bgp, query.graphs, options);
+    // Under graph routing a node of no shape may be in any graph the routing writes to.
+    const scope: ReadGraphScope | undefined =
+      query.graphs ??
+      (options?.routing
+        ? {bySubject: new Map(), otherSubjects: options.routing.allGraphs()}
+        : undefined);
+    const scoped = scopeAlgebraToGraphs(bgp, scope, options);
     return {
       type: 'ask',
       algebra: scoped.algebra,
@@ -3667,7 +3729,7 @@ export function askToAlgebra(
  */
 export function countToAlgebra(
   query: IRCountQuery,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): SparqlSelectPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3735,7 +3797,7 @@ export function countToAlgebra(
  */
 export function selectToSparql(
   query: IRSelectQuery,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3750,7 +3812,7 @@ export function selectToSparql(
  */
 export function askToSparql(
   query: IRAskQuery,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3766,7 +3828,7 @@ export function askToSparql(
  */
 export function countToSparql(
   query: IRCountQuery,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3782,7 +3844,7 @@ export function countToSparql(
  */
 export function createToSparql(
   query: IRCreateMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3798,7 +3860,7 @@ export function createToSparql(
  */
 export function updateToSparql(
   query: IRUpdateMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3811,7 +3873,7 @@ export function updateToSparql(
 /** Lowers an IRUpsertMutation all the way to a SPARQL update string. */
 export function upsertToSparql(
   query: IRUpsertMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3826,7 +3888,7 @@ export function upsertToSparql(
  */
 export function deleteToSparql(
   query: IRDeleteMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3841,7 +3903,7 @@ export function deleteToSparql(
  */
 export function deleteAllToSparql(
   query: IRDeleteAllMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3856,7 +3918,7 @@ export function deleteAllToSparql(
  */
 export function deleteWhereToSparql(
   query: IRDeleteWhereMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3871,7 +3933,7 @@ export function deleteWhereToSparql(
  */
 export function updateWhereToSparql(
   query: IRUpdateWhereMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {

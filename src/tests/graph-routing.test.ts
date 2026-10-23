@@ -9,7 +9,13 @@
  * golden query per form), routed writes, `.into()`, and the graphs live queries carry.
  */
 import {afterEach, describe, expect, test} from '@jest/globals';
-import {Employee, Person} from '../test-helpers/query-fixtures';
+import {Dog, Employee, Person, Pet} from '../test-helpers/query-fixtures';
+import {lower} from '../queries/lower';
+import {countToSparql, selectToSparql} from '../sparql/irToAlgebra';
+import {SparqlDataset} from '../sparql/SparqlDataset';
+import type {SparqlCompileOptions, SparqlOptions} from '../sparql/sparqlUtils';
+import type {SparqlQueryResults} from '../sparql/resultMapping';
+import {NamedGraph} from '../shapes/NamedGraph';
 import {LinkedStorage} from '../utils/LinkedStorage';
 import {
   getShapeGraphs,
@@ -27,6 +33,52 @@ import '../ontologies/xsd';
 
 const G_PEOPLE = 'https://acme.example/data/graph/people';
 const G_STAFF = 'https://acme.example/data/graph/staff';
+const G_PETS = 'https://acme.example/data/graph/pets';
+const P = 'https://example.org/props/';
+const T = 'https://example.org/types/';
+
+/** Jena's names for the portable default and union graphs, as `FusekiStore` maps them. */
+const jena = (iri: string) =>
+  iri === graphs.default ? 'urn:x-arq:DefaultGraph' : iri === graphs.union ? 'urn:x-arq:UnionGraph' : null;
+
+/** Compile options with the routing of a fresh dataset routed by `shapeGraphs`. */
+function routed(shapeGraphs: Record<string, string>, options: SparqlOptions = {mapGraphName: jena}): SparqlCompileOptions {
+  const ds = fakeDataset();
+  setShapeGraphs(ds, shapeGraphs);
+  return {...options, routing: graphRoutingFor(ds)};
+}
+
+/** A SPARQL store that records what it is sent and answers empty results. */
+class CaptureStore extends SparqlDataset {
+  selects: string[] = [];
+  updates: string[] = [];
+  namedGraphUris: string[][] = [];
+  constructor(options?: SparqlOptions, private readonly sendsNamedGraphs = false) {
+    super(options);
+  }
+  protected async executeSparqlSelect(sparql: string): Promise<SparqlQueryResults> {
+    this.selects.push(sparql);
+    if (sparql.includes('COUNT(')) {
+      return {
+        head: {vars: ['count']},
+        results: {bindings: [{count: {type: 'literal', value: '0', datatype: 'http://www.w3.org/2001/XMLSchema#integer'}}]},
+      };
+    }
+    if (/^(PREFIX[^\n]*\n)*ASK/m.test(sparql) && !sparql.includes('SELECT')) return {head: {}, boolean: false};
+    return {head: {vars: []}, results: {bindings: []}};
+  }
+  protected async executeSparqlUpdate(sparql: string): Promise<void> {
+    this.updates.push(sparql);
+  }
+  protected override executeSparqlSelectWithNamedGraphs(sparql: string, namedGraphs: string[]) {
+    if (!this.sendsNamedGraphs) return super.executeSparqlSelectWithNamedGraphs(sparql, namedGraphs);
+    this.namedGraphUris.push(namedGraphs);
+    return this.executeSparqlSelect(sparql);
+  }
+  last(): string {
+    return this.selects[this.selects.length - 1];
+  }
+}
 
 /** A dataset object to key routes by; routing never calls it. */
 const fakeDataset = (): IDataset => ({}) as unknown as IDataset;
@@ -147,5 +199,179 @@ describe('the datasets config graphs key', () => {
     expect(() => parseDatasetsConfig(entry([G_PEOPLE]))).toThrow(/"graphs" must be an object/);
     expect(() => parseDatasetsConfig(entry({[Person.shape.id]: 'people'}))).toThrow(/graph IRIs/);
     expect(() => parseDatasetsConfig(entry({person: G_PEOPLE}))).toThrow(/graph IRIs/);
+  });
+});
+
+describe('routed reads: golden SPARQL per form', () => {
+  const personAndFriend = () => Person.select((p) => [p.name, p.bestFriend.name]);
+
+  test('no routes, or routes that miss every subject: the query is unchanged', () => {
+    const plain = selectToSparql(lower(personAndFriend()));
+    expect(selectToSparql(lower(personAndFriend()), {mapGraphName: jena})).toBe(plain);
+    expect(selectToSparql(lower(personAndFriend()), routed({[Pet.shape.id]: G_PETS}))).toBe(plain);
+  });
+
+  test('every subject in one graph: GRAPH <g> around the whole pattern, no FROM NAMED', () => {
+    expect(selectToSparql(lower(personAndFriend()), routed({[Person.shape.id]: G_PEOPLE}))).toBe(
+      `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name ?a1_name ?a1
+WHERE {
+  GRAPH <${G_PEOPLE}> {
+    ?a0 rdf:type <${T}Person> .
+    OPTIONAL {
+      ?a0 <${P}bestFriend> ?a1 .
+      OPTIONAL {
+        ?a1 <${P}name> ?a1_name .
+      }
+    }
+    OPTIONAL {
+      ?a0 <${P}name> ?a0_name .
+    }
+  }
+}`,
+    );
+  });
+
+  test('a sub-shape in another graph: FROM NAMED both, one GRAPH ?g block per subject', () => {
+    expect(
+      selectToSparql(lower(personAndFriend()), routed({[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF})),
+    ).toBe(
+      `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name ?a1_name ?a1
+FROM NAMED <${G_PEOPLE}>
+FROM NAMED <${G_STAFF}>
+WHERE {
+  GRAPH ?g_a0 {
+    ?a0 rdf:type <${T}Person> .
+  }
+  OPTIONAL {
+    GRAPH ?g_a0 {
+      ?a0 <${P}bestFriend> ?a1 .
+    }
+    OPTIONAL {
+      GRAPH ?g_a1 {
+        ?a1 <${P}name> ?a1_name .
+      }
+    }
+  }
+  OPTIONAL {
+    GRAPH ?g_a0 {
+      ?a0 <${P}name> ?a0_name .
+    }
+  }
+}`,
+    );
+  });
+
+  test('subjects in different graphs: a fixed GRAPH <g> per one-graph subject under FROM NAMED', () => {
+    const sparql = selectToSparql(
+      lower(Person.select((p) => [p.name, p.pets.bestFriend])),
+      routed({[Person.shape.id]: G_PEOPLE, [Pet.shape.id]: G_PETS}),
+    );
+    expect(sparql).toContain(`FROM NAMED <${G_PEOPLE}>\nFROM NAMED <${G_PETS}>`);
+    expect(sparql).toContain(`GRAPH <${G_PEOPLE}> {\n    ?a0 rdf:type <${T}Person> .`);
+    expect(sparql).toContain(`GRAPH <${G_PETS}> {\n        ?a1 <${P}bestFriend> ?a1_bestFriend .`);
+    expect(sparql).not.toContain('VALUES');
+  });
+
+  test('a type-checked subject whose set is narrower than the others: VALUES, written once', () => {
+    // Every subject reads the whole union: no VALUES.
+    expect(
+      selectToSparql(lower(Person.select((p) => p.name)), routed({[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF})),
+    ).not.toContain('VALUES');
+    // Person reads people + staff, its pets the pets graph: the root's set is narrower than the
+    // union, and it carries a type check.
+    const join = selectToSparql(
+      lower(Person.select((p) => [p.name, p.pets.bestFriend])),
+      routed({[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF, [Pet.shape.id]: G_PETS}),
+    );
+    expect(join).toContain(`FROM NAMED <${G_PEOPLE}>\nFROM NAMED <${G_PETS}>\nFROM NAMED <${G_STAFF}>`);
+    expect(join.match(/VALUES \?g_a0/g)).toHaveLength(1);
+    expect(join).toContain(`VALUES ?g_a0 { <${G_PEOPLE}> <${G_STAFF}> }\n  GRAPH ?g_a0 {`);
+    // The pets subject has one graph: fixed, no VALUES.
+    expect(join).toContain(`GRAPH <${G_PETS}> {`);
+  });
+
+  test('the default graph with named graphs: no FROM NAMED, VALUES with the store name, plain triples for default-only subjects', () => {
+    const sparql = selectToSparql(
+      lower(Person.select((p) => [p.name, p.pets.bestFriend])),
+      routed({[Employee.shape.id]: G_STAFF}),
+    );
+    expect(sparql).not.toContain('FROM NAMED');
+    expect(sparql).toContain(`VALUES ?g_a0 { <urn:x-arq:DefaultGraph> <${G_STAFF}> }\n  GRAPH ?g_a0 {`);
+    // Pet is unrouted: plain triples, the store's default graph.
+    expect(sparql).toContain(`OPTIONAL {\n      ?a1 <${P}bestFriend> ?a1_bestFriend .\n    }`);
+  });
+
+  test('the default graph with named graphs needs a store name for it', () => {
+    expect(() =>
+      selectToSparql(lower(Person.select((p) => p.name)), routed({[Employee.shape.id]: G_STAFF}, {})),
+    ).toThrow(/mapGraphName/);
+  });
+
+  test('count and ask carry the routed scope', async () => {
+    const options = routed({[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF});
+    const count = countToSparql(lower(Person.select((p) => p.name).where((p) => p.bestFriend.name.equals('x')).toCount()), options);
+    expect(count).toContain(`FROM NAMED <${G_PEOPLE}>`);
+    expect(count).toContain('GRAPH ?g_a1 {');
+    const store = new CaptureStore({mapGraphName: jena});
+    setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF});
+    await Person.select().where((p) => p.name.equals('x')).exists(store);
+    expect(store.last()).toMatch(/^ASK\nFROM NAMED/m);
+  });
+
+  test('.from() overrides routing; the graph-record shapes keep their graph', () => {
+    const options = routed({[Person.shape.id]: G_PEOPLE});
+    const sparql = selectToSparql(lower(personAndFriend().from(G_PETS)), options);
+    expect(sparql).toContain(`GRAPH <${G_PETS}> {`);
+    expect(sparql).not.toContain(G_PEOPLE);
+    expect(selectToSparql(lower(NamedGraph.select((g) => g.contentHash)), options)).toContain(
+      `GRAPH <${graphs.registry}> {`,
+    );
+  });
+});
+
+describe('routed reads through the store', () => {
+  test('a store reads with its own routes; .from(graphs.default) reads the default graph only', async () => {
+    const store = new CaptureStore({mapGraphName: jena});
+    await Person.select((p) => p.name).exec(store);
+    const unrouted = store.last();
+    setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE});
+    await Person.select((p) => p.name).exec(store);
+    expect(store.last()).toContain(`GRAPH <${G_PEOPLE}> {`);
+    await Person.select((p) => p.name).from(graphs.default).exec(store);
+    expect(store.last()).toBe(unrouted);
+    await Person.select().toCount().exec(store);
+    expect(store.last()).toContain(`GRAPH <${G_PEOPLE}> {`);
+  });
+
+  test('a shapeless ask under routing looks in every routed graph and the default graph', async () => {
+    const store = new CaptureStore({mapGraphName: jena});
+    setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE, [Pet.shape.id]: G_PETS});
+    const {AskBuilder} = await import('../queries/AskBuilder');
+    await AskBuilder.forNode('https://e.org/x').exec(store);
+    expect(store.last()).toContain(
+      `VALUES ?g_s0 { <urn:x-arq:DefaultGraph> <${G_PEOPLE}> <${G_PETS}> }`,
+    );
+  });
+
+  test('namedGraphUriParameter: the set goes to the transport, not into the query text', async () => {
+    const store = new CaptureStore({mapGraphName: jena, namedGraphUriParameter: true}, true);
+    setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF});
+    await Person.select((p) => p.name).exec(store);
+    expect(store.last()).not.toContain('FROM NAMED');
+    expect(store.last()).toContain('GRAPH ?g_a0 {');
+    expect(store.namedGraphUris).toEqual([[G_PEOPLE, G_STAFF]]);
+    // A one-graph read needs no dataset: sent as usual.
+    setShapeGraphs(store, {[Employee.shape.id]: G_PEOPLE});
+    await Person.select((p) => p.name).exec(store);
+    expect(store.namedGraphUris).toHaveLength(1);
+  });
+
+  test('namedGraphUriParameter on a transport that does not send them is refused, never read unrestricted', async () => {
+    const store = new CaptureStore({mapGraphName: jena, namedGraphUriParameter: true});
+    setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF});
+    await expect(Person.select((p) => p.name).exec(store)).rejects.toThrow(/named-graph-uri/);
+    expect(store.selects).toEqual([]);
   });
 });

@@ -7,17 +7,22 @@
 /**
  * Reads from named graphs: scope a read's algebra to the graphs it may read.
  *
- * The query body never names a graph the caller did not ask for. Given the expanded set (the
- * store expands portable names first, see `SparqlDataset`):
+ * The query body never names a graph the caller or the routing did not give it. The graphs come
+ * either as one set for every subject (`.from()`, expanded by the store first, see
+ * `SparqlDataset`) or per subject (graph routing: each subject reads where its shape is routed,
+ * sub-shapes included). Then:
  *
- * - **no set**: the algebra is unchanged and reads the default graph;
- * - **one graph**: the whole pattern goes in `GRAPH <iri> { … }`;
- * - **several graphs**: every basic graph pattern is split into one cleanly ordered
- *   `GRAPH ?g_<subject> { … }` block per subject, and the plan gets `FROM NAMED <g1> … <gK>`, the
- *   set those blocks may match in. A subject's data lives in exactly one graph, so the graph
- *   variable is per subject and the same in every block of that subject (in OPTIONAL, MINUS,
- *   UNION, sub-select and EXISTS patterns too): an OPTIONAL block of a bound subject joins on its
- *   graph.
+ * - **only the default graph**: the algebra is unchanged;
+ * - **one graph for every subject**: the whole pattern goes in `GRAPH <iri> { … }`;
+ * - **otherwise**: every basic graph pattern is split into one cleanly ordered block per subject,
+ *   `GRAPH ?g_<subject> { … }`, `GRAPH <iri> { … }` for a subject with one graph, or plain triples
+ *   for a subject that reads only the default graph. With named graphs only, the plan gets
+ *   `FROM NAMED <g1> … <gK>`, the set the blocks may match in, and a type-checked subject whose
+ *   set is narrower gets `VALUES ?g_<subject> { … }`; with the default graph in the mix there is
+ *   no `FROM NAMED` (it would hide the default graph) and every subject with several graphs gets
+ *   `VALUES`. A subject's data lives in exactly one graph, so the graph variable is per subject
+ *   and the same in every block of that subject (in OPTIONAL, MINUS, UNION, sub-select and EXISTS
+ *   patterns too): an OPTIONAL block of a bound subject joins on its graph.
  *
  * Measured on Jena (10 of 100 graphs, ~1M quads): `FROM NAMED` with a graph variable per subject
  * returns exactly the expected rows with inference working inside each graph, at close to the
@@ -34,12 +39,16 @@ import type {
 } from './SparqlAlgebra.js';
 import type {SparqlOptions} from './sparqlUtils.js';
 import {graphs} from '../ontologies/graphs.js';
+import {GraphQueryError} from '../queries/graphQuery.js';
 
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
 
-/** Names only a store can resolve: it expands or maps them before compiling. */
+/**
+ * Names only a store can resolve: it expands or maps them before compiling. `graphs.default`
+ * reaches the generator in a set with other graphs (it is read through `VALUES` under the store's
+ * name for it, `mapGraphName`); the others never do.
+ */
 const STORE_RESOLVED_NAMES: ReadonlySet<string> = new Set([
-  graphs.default,
   graphs.union,
   graphs.allOntologies,
   graphs.allShapes,
@@ -52,111 +61,268 @@ export type GraphScopedAlgebra = {
 };
 
 /**
- * Scope `algebra` to `graphNames` (already expanded by the store; see the module comment).
- * Refuses an empty set (without `FROM NAMED`, `GRAPH ?g` would match in every named graph; a
- * store answers an empty expansion without querying) and a name only a store can resolve.
+ * The graphs a read may match in:
+ * - a list: one set for every subject (`.from()`, expanded by the store);
+ * - per subject (graph routing): the set of each subject variable, and the set of any subject
+ *   not listed (`otherSubjects`: every graph the routing knows, the default graph included).
+ *
+ * A set names concrete graphs; `graphs.default` stands for the default graph.
+ */
+export type ReadGraphScope =
+  | readonly string[]
+  | {
+      bySubject: ReadonlyMap<string, readonly string[]>;
+      otherSubjects: readonly string[];
+    };
+
+/**
+ * Scope `algebra` to its graphs (see the module comment and `ReadGraphScope`). Refuses an empty
+ * set (without `FROM NAMED`, `GRAPH ?g` would match in every named graph; a store answers an empty
+ * expansion without querying) and a name only a store can resolve.
+ *
+ * - Every subject reads only the default graph: unchanged.
+ * - Every subject reads one same named graph: `GRAPH <iri> { whole pattern }`.
+ * - Only named graphs: `FROM NAMED` their union; per subject group, a set of one graph is
+ *   `GRAPH <iri>`, a set equal to the union `GRAPH ?g`, and a narrower set of a subject with a
+ *   type check `VALUES ?g { … }` with `GRAPH ?g` (another subject's graph might hold instances of
+ *   its class; core cannot know which classes a graph holds). A linked subject without a type
+ *   check needs no `VALUES`: its data lives in one graph, and `FROM NAMED` bounds it.
+ * - The default graph with named graphs: no `FROM NAMED`, because with any `FROM NAMED` the
+ *   default graph is unreachable on Jena (as plain triples, in `GRAPH <urn:x-arq:DefaultGraph>`
+ *   and in `VALUES`); a subject that reads only the default graph is plain triples, one graph
+ *   `GRAPH <iri>`, and any other set `VALUES ?g { … }` with the default graph under the store's
+ *   name for it (`SparqlOptions.mapGraphName(graphs.default)`; refused without one).
  */
 export function scopeAlgebraToGraphs(
   algebra: SparqlAlgebraNode,
-  graphNames: readonly string[] | undefined,
+  scope: ReadGraphScope | undefined,
   options?: SparqlOptions,
 ): GraphScopedAlgebra {
-  if (graphNames === undefined) return {algebra};
-  if (graphNames.length === 0) {
-    throw new Error(
-      'A read from an empty set of graphs matches nothing; the store answers it without ' +
-        'querying. Without FROM NAMED, GRAPH ?g would match in every named graph instead.',
-    );
-  }
-  for (const name of graphNames) {
-    if (STORE_RESOLVED_NAMES.has(name)) {
+  if (scope === undefined) return {algebra};
+  const allSets: (readonly string[])[] = isUniformScope(scope)
+    ? [scope]
+    : [...scope.bySubject.values(), scope.otherSubjects];
+  for (const set of allSets) {
+    if (set.length === 0) {
       throw new Error(
-        `<${name}> is a portable graph name a store resolves (SparqlDataset expands it from the ` +
-          `graph registry or maps it to its own name). Compile the read through the store, or ` +
-          `pass the graphs it stands for.`,
+        'A read from an empty set of graphs matches nothing; the store answers it without ' +
+          'querying. Without FROM NAMED, GRAPH ?g would match in every named graph instead.',
       );
     }
+    for (const name of set) {
+      if (STORE_RESOLVED_NAMES.has(name)) {
+        throw new Error(
+          `<${name}> is a portable graph name a store resolves (SparqlDataset expands it from the ` +
+            `graph registry or maps it to its own name). Compile the read through the store, or ` +
+            `pass the graphs it stands for.`,
+        );
+      }
+    }
   }
-  if (graphNames.length === 1) {
-    return {algebra: {type: 'graph', iri: graphNames[0], inner: algebra}};
-  }
-  const scoper = new SubjectGraphScoper(algebra, options?.isolateLinkedTypeChecks === true);
-  return {algebra: scoper.scope(algebra), dataset: {fromNamed: [...graphNames]}};
+  const scoper = new SubjectGraphScoper(algebra, scope, options);
+  return scoper.result();
 }
+
+function isUniformScope(scope: ReadGraphScope): scope is readonly string[] {
+  return Array.isArray(scope);
+}
+
+const sameSet = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((g) => b.includes(g));
+
+/** How one subject's blocks are written. */
+type SubjectForm =
+  | {kind: 'plain'}
+  | {kind: 'fixed'; iri: string}
+  | {kind: 'variable'; values?: string[]};
 
 class SubjectGraphScoper {
   /** Variables used anywhere in the algebra, so a graph variable never collides with one. */
   private readonly used = new Set<string>();
   /** Subjects reached through a link: variables that are the object of some triple. */
   private readonly linked = new Set<string>();
+  /** Subjects with a type check (`?x a C`) somewhere in the algebra. */
+  private readonly typed = new Set<string>();
+  /** Every subject, by its key, in first-appearance order. */
+  private readonly subjects = new Map<string, SparqlTerm>();
   private readonly graphVars = new Map<string, string>();
+  private readonly forms = new Map<string, SubjectForm>();
+  private readonly isolateLinkedTypeChecks: boolean;
   private iriSubjects = 0;
+  private fromNamed?: string[];
+  private unchanged = false;
+  private wholeGraph?: string;
 
   constructor(
-    algebra: SparqlAlgebraNode,
-    private readonly isolateLinkedTypeChecks: boolean,
+    private readonly algebra: SparqlAlgebraNode,
+    scope: ReadGraphScope,
+    options?: SparqlOptions,
   ) {
+    this.isolateLinkedTypeChecks = options?.isolateLinkedTypeChecks === true;
     collectNode(algebra, (triple) => {
       for (const term of [triple.subject, triple.object]) {
         if (term.kind === 'variable') this.used.add(term.name);
       }
       if (triple.object.kind === 'variable') this.linked.add(triple.object.name);
+      const key = subjectKey(triple.subject);
+      if (!this.subjects.has(key)) this.subjects.set(key, triple.subject);
+      if (isTypeCheck(triple)) this.typed.add(key);
     }, this.used);
+    this.planForms(scope, options);
   }
 
-  scope(node: SparqlAlgebraNode): SparqlAlgebraNode {
+  /** Decide each subject's form, the dataset clause, or that the algebra stays as it is. */
+  private planForms(scope: ReadGraphScope, options?: SparqlOptions): void {
+    const setOf = (key: string): readonly string[] => {
+      if (isUniformScope(scope)) return scope;
+      const term = this.subjects.get(key);
+      const own = term?.kind === 'variable' ? scope.bySubject.get(term.name) : undefined;
+      return own ?? scope.otherSubjects;
+    };
+    const sets = new Map<string, readonly string[]>();
+    for (const key of this.subjects.keys()) sets.set(key, setOf(key));
+    const used = sets.size > 0 ? [...sets.values()] : [setOf('')];
+
+    if (used.every((set) => set.length === 1 && set[0] === graphs.default)) {
+      this.unchanged = true;
+      return;
+    }
+    const first = used[0];
+    if (first.length === 1 && used.every((set) => sameSet(set, first))) {
+      this.wholeGraph = first[0];
+      return;
+    }
+    const withDefault = used.some((set) => set.includes(graphs.default));
+    // The named graphs any subject reads: a `.from()` set in the caller's order, a routed one
+    // sorted, so the query text is stable.
+    const named = [...new Set(used.flat().filter((g) => g !== graphs.default))];
+    const union = isUniformScope(scope) ? named : named.sort();
+    let defaultName: string | null | undefined;
+    const storeName = (graph: string): string => {
+      if (graph !== graphs.default) return graph;
+      if (defaultName === undefined) {
+        defaultName = options?.mapGraphName ? options.mapGraphName(graphs.default) : null;
+      }
+      if (!defaultName) {
+        throw new GraphQueryError(
+          'unsupported-query-kind',
+          'This read covers the default graph together with named graphs, which a SPARQL store ' +
+            'reads through VALUES under its own name for the default graph; this store has none ' +
+            '(SparqlOptions.mapGraphName).',
+          graphs.default,
+        );
+      }
+      return defaultName;
+    };
+    for (const [key, set] of sets) {
+      if (withDefault) {
+        if (set.length === 1 && set[0] === graphs.default) this.forms.set(key, {kind: 'plain'});
+        else if (set.length === 1) this.forms.set(key, {kind: 'fixed', iri: set[0]});
+        else this.forms.set(key, {kind: 'variable', values: set.map(storeName)});
+      } else if (set.length === 1 && union.length > 1) {
+        this.forms.set(key, {kind: 'fixed', iri: set[0]});
+      } else if (sameSet(set, union) || !this.typed.has(key)) {
+        this.forms.set(key, {kind: 'variable'});
+      } else {
+        this.forms.set(key, {kind: 'variable', values: [...set]});
+      }
+    }
+    if (!withDefault) this.fromNamed = union;
+  }
+
+  result(): GraphScopedAlgebra {
+    if (this.unchanged) return {algebra: this.algebra};
+    if (this.wholeGraph !== undefined) {
+      return {algebra: {type: 'graph', iri: this.wholeGraph, inner: this.algebra}};
+    }
+    const algebra = this.scope(this.algebra);
+    return this.fromNamed ? {algebra, dataset: {fromNamed: this.fromNamed}} : {algebra};
+  }
+
+  /**
+   * Scope `node`. `bound` holds the graph variables a required block before this point has
+   * already bound (it grows along a join): a subject's `VALUES` is written only where its graph
+   * variable is not bound yet. An OPTIONAL, UNION, MINUS or EXISTS pattern starts from a copy,
+   * since what it binds does not reach the patterns after it; a sub-select starts empty.
+   */
+  scope(node: SparqlAlgebraNode, bound: Set<string> = new Set()): SparqlAlgebraNode {
     switch (node.type) {
       case 'bgp':
-        return this.scopeBgp(node);
-      case 'join':
+        return this.scopeBgp(node, bound);
+      case 'join': {
+        const left = this.scope(node.left, bound);
+        return {...node, left, right: this.scope(node.right, bound)};
+      }
       case 'union':
-      case 'minus':
-        return {...node, left: this.scope(node.left), right: this.scope(node.right)};
-      case 'left_join':
         return {
           ...node,
-          left: this.scope(node.left),
-          right: this.scope(node.right),
-          ...(node.condition ? {condition: this.scopeExpression(node.condition)} : {}),
+          left: this.scope(node.left, new Set(bound)),
+          right: this.scope(node.right, new Set(bound)),
         };
-      case 'filter':
-        return {...node, expression: this.scopeExpression(node.expression), inner: this.scope(node.inner)};
-      case 'extend':
-        return {...node, expression: this.scopeExpression(node.expression), inner: this.scope(node.inner)};
+      case 'minus': {
+        const left = this.scope(node.left, bound);
+        return {...node, left, right: this.scope(node.right, new Set(bound))};
+      }
+      case 'left_join': {
+        const left = this.scope(node.left, bound);
+        const inRight = new Set(bound);
+        const right = this.scope(node.right, inRight);
+        return {
+          ...node,
+          left,
+          right,
+          ...(node.condition ? {condition: this.scopeExpression(node.condition, inRight)} : {}),
+        };
+      }
+      case 'filter': {
+        const inner = this.scope(node.inner, bound);
+        return {...node, expression: this.scopeExpression(node.expression, bound), inner};
+      }
+      case 'extend': {
+        const inner = this.scope(node.inner, bound);
+        return {...node, expression: this.scopeExpression(node.expression, bound), inner};
+      }
       case 'subselect':
-        return {...node, inner: this.scope(node.inner)};
+        return {...node, inner: this.scope(node.inner, new Set())};
       case 'graph':
       case 'values':
         return node;
     }
   }
 
-  private scopeExpression(expr: SparqlExpression): SparqlExpression {
+  private scopeExpression(expr: SparqlExpression, bound: Set<string>): SparqlExpression {
     switch (expr.kind) {
       case 'exists_expr':
-        return {...expr, pattern: this.scope(expr.pattern)};
+        return {...expr, pattern: this.scope(expr.pattern, new Set(bound))};
       case 'binary_expr':
-        return {...expr, left: this.scopeExpression(expr.left), right: this.scopeExpression(expr.right)};
+        return {
+          ...expr,
+          left: this.scopeExpression(expr.left, bound),
+          right: this.scopeExpression(expr.right, bound),
+        };
       case 'logical_expr':
-        return {...expr, exprs: expr.exprs.map((e) => this.scopeExpression(e))};
+        return {...expr, exprs: expr.exprs.map((e) => this.scopeExpression(e, bound))};
       case 'not_expr':
-        return {...expr, inner: this.scopeExpression(expr.inner)};
+        return {...expr, inner: this.scopeExpression(expr.inner, bound)};
       case 'function_expr':
       case 'aggregate_expr':
-        return {...expr, args: expr.args.map((e) => this.scopeExpression(e))};
+        return {...expr, args: expr.args.map((e) => this.scopeExpression(e, bound))};
       case 'in_expr':
         return {
           ...expr,
-          value: this.scopeExpression(expr.value),
-          list: expr.list.map((e) => this.scopeExpression(e)),
+          value: this.scopeExpression(expr.value, bound),
+          list: expr.list.map((e) => this.scopeExpression(e, bound)),
         };
       default:
         return expr;
     }
   }
 
-  /** One `GRAPH ?g { … }` block per subject, in the order the subjects first appear. */
-  private scopeBgp(bgp: SparqlBGP): SparqlAlgebraNode {
+  /**
+   * One block per subject, in the order the subjects first appear: `GRAPH ?g { … }` (after its
+   * `VALUES` when the subject's set is restricted), `GRAPH <iri> { … }`, or plain triples.
+   */
+  private scopeBgp(bgp: SparqlBGP, bound: Set<string>): SparqlAlgebraNode {
     if (bgp.triples.length === 0) return bgp;
     const groups = new Map<string, {subject: SparqlTerm; triples: SparqlTriple[]}>();
     for (const triple of bgp.triples) {
@@ -167,10 +333,23 @@ class SubjectGraphScoper {
     }
     const blocks: SparqlAlgebraNode[] = [];
     for (const [key, {subject, triples}] of groups) {
+      const form = this.forms.get(key) ?? {kind: 'variable'};
+      if (form.kind === 'plain') {
+        blocks.push({type: 'bgp', triples});
+        continue;
+      }
+      if (form.kind === 'fixed') {
+        blocks.push({type: 'graph', iri: form.iri, inner: {type: 'bgp', triples}});
+        continue;
+      }
       const variable = this.graphVariable(key, subject);
+      if (form.values && !bound.has(variable)) {
+        blocks.push({type: 'values', variable, iris: form.values});
+      }
       for (const part of this.splitLinkedTypeCheck(subject, triples)) {
         blocks.push({type: 'graph', variable, inner: {type: 'bgp', triples: part}});
       }
+      bound.add(variable);
     }
     return blocks.reduce((left, right) => ({type: 'join', left, right}));
   }

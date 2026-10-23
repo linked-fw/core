@@ -53,7 +53,16 @@ import {
   mapSparqlUpdateResult,
   isSparqlSelectResults,
 } from './resultMapping.js';
-import {generateEntityUri, type SparqlOptions} from './sparqlUtils.js';
+import {
+  generateEntityUri,
+  type SparqlCompileOptions,
+  type SparqlOptions,
+} from './sparqlUtils.js';
+import {graphRoutingFor, type ShapeGraphRouting} from '../utils/graphRouting.js';
+import {askToAlgebra, countToAlgebra, selectToAlgebra} from './irToAlgebra.js';
+import {askPlanToSparql, selectPlanToSparql} from './algebraToString.js';
+import type {SparqlAskPlan, SparqlSelectPlan} from './SparqlAlgebra.js';
+import {withShapeCatalog} from '../utils/ShapeClass.js';
 import {lower} from '../queries/lower.js';
 import {attachCatalog, catalogOf} from '../utils/ShapeClass.js';
 import {graphs} from '../ontologies/graphs.js';
@@ -127,6 +136,80 @@ export abstract class SparqlDataset implements IDataset {
    */
   invalidateGraphRegistry(dataset?: string): void {
     invalidateGraphRegistry(dataset ?? this.graphRegistryKey());
+  }
+
+  /**
+   * The graph routing this store compiles with: the routes registered for this instance (see
+   * `utils/graphRouting.ts`), or `undefined` when it has none, in which case every read and write
+   * is exactly what it was before graph routing. A store that takes its routes from elsewhere
+   * overrides it.
+   */
+  protected graphRouting(): ShapeGraphRouting | undefined {
+    return graphRoutingFor(this);
+  }
+
+  /** The compile options of a read: routed unless the read names its graphs (`.from()`). */
+  private readOptions(ir: {graphs?: string[]}): SparqlCompileOptions | undefined {
+    if (ir.graphs) return this.options;
+    const routing = this.graphRouting();
+    return routing ? {...this.options, routing} : this.options;
+  }
+
+  /**
+   * Send a read whose set of named graphs goes to the transport as the protocol's
+   * `named-graph-uri` parameters (`SparqlOptions.namedGraphUriParameter`). The default refuses:
+   * a transport that dropped the list would let `GRAPH ?g` match in every named graph. A store
+   * that sets the option overrides this and sends `namedGraphs` with the query.
+   */
+  protected executeSparqlSelectWithNamedGraphs(
+    _sparql: string,
+    _namedGraphs: string[],
+  ): Promise<SparqlQueryResults> {
+    return Promise.reject(
+      new Error(
+        'SparqlOptions.namedGraphUriParameter is set, but this store does not send ' +
+          'named-graph-uri parameters: override executeSparqlSelectWithNamedGraphs in its ' +
+          'transport, or leave the option off (FROM NAMED in the query text).',
+      ),
+    );
+  }
+
+  /**
+   * Compile and send a read. With `namedGraphUriParameter`, a plan's `FROM NAMED` set leaves the
+   * query text and goes to `executeSparqlSelectWithNamedGraphs`; otherwise the string compilers
+   * run exactly as before.
+   */
+  private async sendRead(
+    ir: IRSelectQuery | IRCountQuery | IRAskQuery,
+    options: SparqlCompileOptions | undefined,
+  ): Promise<SparqlQueryResults> {
+    if (!this.options?.namedGraphUriParameter) {
+      const sparql =
+        ir.kind === 'count'
+          ? countToSparql(ir, options)
+          : ir.kind === 'ask'
+            ? askToSparql(ir, options)
+            : selectToSparql(ir, options);
+      return this.executeSparqlSelect(sparql);
+    }
+    const {sparql, namedGraphs} = withShapeCatalog(catalogOf(ir), () => {
+      const plan: SparqlSelectPlan | SparqlAskPlan =
+        ir.kind === 'count'
+          ? countToAlgebra(ir, options)
+          : ir.kind === 'ask'
+            ? askToAlgebra(ir, options)
+            : selectToAlgebra(ir, options);
+      const named = plan.dataset?.fromNamed;
+      const {dataset: _dataset, ...withoutDataset} = plan;
+      const text =
+        withoutDataset.type === 'ask'
+          ? askPlanToSparql(withoutDataset as SparqlAskPlan, options)
+          : selectPlanToSparql(withoutDataset as SparqlSelectPlan, options);
+      return {sparql: text, namedGraphs: named};
+    });
+    return namedGraphs && namedGraphs.length > 0
+      ? this.executeSparqlSelectWithNamedGraphs(sparql, namedGraphs)
+      : this.executeSparqlSelect(sparql);
   }
 
   /** Read this dataset's graph registry: every record's graph and class, in one SELECT. */
@@ -227,16 +310,16 @@ export abstract class SparqlDataset implements IDataset {
       // The graph set expanded to no graph (no graph of that kind is registered).
       return lowered.kind === 'count' ? 0 : mapSparqlSelectResult(NO_ROWS, lowered);
     }
+    // Routing applies to reads that name no graphs: `.from(graphs.default)` reads the default graph.
+    const options = this.readOptions(lowered);
     if (ir.kind === 'count') {
-      const sparql = countToSparql(ir, this.options);
-      const json = await this.executeSparqlSelect(sparql);
+      const json = await this.sendRead(ir, options);
       // `mapSparqlCountResult` is strict in the same way the guard below is: it
       // refuses an ASK response, an empty result set and a non-integer binding
       // rather than answering `0`.
       return mapSparqlCountResult(json, ir);
     }
-    const sparql = selectToSparql(ir, this.options);
-    const json = await this.executeSparqlSelect(sparql);
+    const json = await this.sendRead(ir, options);
     if (!isSparqlSelectResults(json)) {
       throw new Error(
         'Expected a SPARQL SELECT result set, got an ASK response. The endpoint ' +
@@ -254,10 +337,10 @@ export abstract class SparqlDataset implements IDataset {
    * of the node under any type or none. Errors reject; never reported as `false`.
    */
   async askQuery(query: AskQuery): Promise<boolean> {
-    const ir = await this.resolveReadGraphs(lower(query));
+    const lowered = lower(query);
+    const ir = await this.resolveReadGraphs(lowered);
     if (!ir) return false;
-    const sparql = askToSparql(ir, this.options);
-    const json = await this.executeSparqlSelect(sparql);
+    const json = await this.sendRead(ir, this.readOptions(lowered));
     return mapSparqlAskResult(json);
   }
 

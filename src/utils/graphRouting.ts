@@ -91,6 +91,8 @@ export interface ShapeGraphRouting {
    * duplicates, sorted (`graphs.default` first when present), so the query text is stable.
    */
   readGraphsForShape(shapeId: string): string[];
+  /** Every graph the routing names, and the default graph: where a node of unknown shape may be. */
+  allGraphs(): string[];
 }
 
 /**
@@ -116,6 +118,9 @@ export function graphRoutingFor(dataset: IDataset | object | undefined): ShapeGr
       const set = new Set<string>([graphForShape(shapeId)]);
       for (const sub of getSubShapes(shapeId)) set.add(graphForShape(sub.id));
       return sortGraphSet(set);
+    },
+    allGraphs(): string[] {
+      return sortGraphSet([graphs.default, ...table.values()]);
     },
   };
 }
