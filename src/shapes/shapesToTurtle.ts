@@ -71,10 +71,20 @@ function nodeShapeOf(input: ShapeInput): NodeShapeData {
   return data;
 }
 
-/** The triples core's create pipeline writes for a `NodeShape` create of `data` at `iri`. */
+/**
+ * The triples core's create pipeline writes for a `NodeShape` create of `data` at `iri`. Each
+ * create labels its blank nodes from `_:b0`, so they are scoped by the subject IRI here: blank
+ * nodes of two creates never merge.
+ */
 function createTriples(iri: string, data: Record<string, unknown>): SparqlTriple[] {
   const builder = NodeShape.create(data as never).withId(iri);
-  return createToAlgebra(lower(builder as unknown as LowerableCreate)).triples;
+  const scoped = (term: SparqlTerm): SparqlTerm =>
+    term.kind === 'blank' ? {kind: 'blank', label: `${iri} ${term.label}`} : term;
+  return createToAlgebra(lower(builder as unknown as LowerableCreate)).triples.map((t) => ({
+    subject: scoped(t.subject),
+    predicate: t.predicate,
+    object: scoped(t.object),
+  }));
 }
 
 /** The fixed block plus `extra`, refusing a rebinding of a fixed name or a bad name/namespace. */

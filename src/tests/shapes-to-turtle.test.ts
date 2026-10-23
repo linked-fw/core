@@ -255,6 +255,15 @@ describe('shapesToTurtle', () => {
     expect(actual.join('\n')).not.toContain('shapeHash');
   });
 
+  test('keeps the blank nodes of two shapes apart', async () => {
+    const other: NodeShapeData = {
+      id: `${S}Other`,
+      propertyShapes: [{id: `${S}Other/up`, label: 'up', path: {inv: {id: `${X}up`}}} as never],
+    };
+    const quads = await parseTurtle(shapesToTurtle([Fixture, other]));
+    expect(assertBlankNodesOnlyForPaths(quads)).toBe(4);
+  });
+
   test('uses blank nodes only for complex paths, each hanging off one IRI subject', async () => {
     const quads = await parseTurtle(shapesToTurtle([Fixture, Sub, Img]));
     expect(assertBlankNodesOnlyForPaths(quads)).toBe(3);

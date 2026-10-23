@@ -228,8 +228,10 @@ function buildSyncData(
  * The stored `core:shapeHash` of each of `iris` that exists as a NodeShape, in one select. A shape
  * that is absent, or stored without a hash (written before hashes existed), is missing from the
  * map. `ds` targets an explicit dataset, as for the writes.
+ *
+ * @internal Exported for core's shape graph sync only — not part of the public API.
  */
-async function readStoredHashes(iris: string[], ds?: IDataset): Promise<Map<string, string>> {
+export async function readStoredHashes(iris: string[], ds?: IDataset): Promise<Map<string, string>> {
   const stored = new Map<string, string>();
   if (iris.length === 0) return stored;
   const rows = (await (QueryBuilder.from(NodeShape).select(['shapeHash']).forAll(iris) as unknown as {
