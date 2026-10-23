@@ -25,6 +25,13 @@ graphs". Three consequences are not covered yet:
 - A computed update (`p.bestFriend.name.ucase()`) reads the linked node's value in the subject's
   graph.
 
+- `UpdateBuilder.from(Album).set({cover: {id: X}}).forAll()` (an `update_where` linking an owned
+  node) is not checked for X living in another graph than the matched owners (the by-id and create
+  paths refuse that); a later cascade of such an owner would miss X.
+- An upsert whose shape reads several graphs wraps its WHERE in `OPTIONAL { GRAPH ?g { … } }`: a
+  computed value through a required traversal that does not match no longer stops the constant
+  inserts (`a <Class>`, literal sets).
+
 Before routing all of these ran in the default graph, where everything was.
 
 ## Open questions

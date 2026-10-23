@@ -2139,10 +2139,16 @@ function inWriteGraph(
     }
     return name;
   };
+  // A graph variable no pattern of the plan uses (with its `_p`, `_o`, `_found` companions).
+  const used = collectVariableNames([plan.deletePatterns, plan.insertPatterns, plan.whereAlgebra], new Set());
+  let variable = 'g_w';
+  for (let n = 2; [variable, `${variable}_p`, `${variable}_o`, `${variable}_found`].some((v) => used.has(v)); n++) {
+    variable = `g_w${n}`;
+  }
   return {
     ...plan,
     graphIn: {
-      variable: 'g_w',
+      variable,
       graphs: query.writeGraphs.map(storeName),
       ...(subject ? {subject} : {}),
       ...(query.kind === 'upsert' ? {fallback: storeName(query.graph ?? graphs.default)} : {}),
@@ -3412,6 +3418,12 @@ export function deleteToAlgebra(
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => deleteToAlgebra(query, _options));
+  }
+  if (query.writeGraphs && query.ids.length > 1) {
+    throw new Error(
+      'deleteToAlgebra: a delete whose subjects may live in different graphs (writeGraphs) is one ' +
+        'plan per id; compile it with deleteToSparql, which writes one operation per id.',
+    );
   }
   const deletePatterns: SparqlTriple[] = [];
   const guards: SparqlTriple[] = [];

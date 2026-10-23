@@ -190,6 +190,32 @@ describeFuseki('graph routing', () => {
     expect(notEmployees.map((r) => r.name)).toEqual(['Frank']);
   });
 
+  test('a subject in the default graph, under a mixed read set, is changed and deleted there', async () => {
+    const mixed = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME);
+    setShapeGraphs(mixed, {[Employee.shape.id]: G_STAFF});
+    const FRANK = `${D}frank`;
+    const named = async (subject: string) => (await graphsOf(subject)).filter((g) => g !== 'default');
+    await Person.update({name: 'Francis', hobby: 'chess'}).for({id: FRANK}).exec(mixed);
+    expect(await graphsOf(FRANK)).toEqual(['default']);
+    const rows = await Person.select((p) => [p.name, p.hobby]).where((p) => p.name.equals('Francis')).exec(mixed);
+    expect(rows).toEqual([{id: FRANK, name: 'Francis', hobby: 'chess'}]);
+    await Person.upsert({name: 'Frank'}).for({id: FRANK}).exec(mixed);
+    expect(await graphsOf(FRANK)).toEqual(['default']);
+    const names = await off.rawQuery(`SELECT ?n WHERE { <${FRANK}> <${propBase}name> ?n }`);
+    if (!names || !isSparqlSelectResults(names)) throw new Error('expected a result set');
+    expect(names.results.bindings.map((b) => b.n!.value)).toEqual(['Frank']);
+    // The default-graph photo, changed and deleted through a shape that also reads named graphs.
+    await GRPhoto.update({caption: 'found'}).for({id: `${D}photo/loose`}).exec(off);
+    expect(await graphsOf(`${D}photo/loose`)).toEqual(['default']);
+    await GRPhoto.delete({id: `${D}photo/loose`}).exec(off);
+    expect(await graphsOf(`${D}photo/loose`)).toEqual([]);
+    // A delete of a default-graph person through the mixed set; nothing appeared in a named graph.
+    await executeSparqlUpdate(`INSERT DATA { <${D}hank> a <${personClass.id}> ; <${propBase}name> "Hank" . }`);
+    await Person.delete({id: `${D}hank`}).exec(mixed);
+    expect(await graphsOf(`${D}hank`)).toEqual([]);
+    expect(await named(FRANK)).toEqual([]);
+  });
+
   test('an update changes only the copy in the routed graph', async () => {
     await executeSparqlUpdate(
       `INSERT DATA { GRAPH <${G_OTHER}> { <${ALBUM}> a <${GR}Album> ; <${GR}title> "Holiday" ; <${GR}cover> <${COVER}> . ` +

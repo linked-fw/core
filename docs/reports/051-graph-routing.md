@@ -269,6 +269,17 @@ quoted: "**Verdict: not clean. There is 1 high finding and 1 medium finding.**"
   read (one pass over the registered shapes; a cache needs invalidation on route and shape
   changes).
 
+Re-review of the fixes (same reviewer, `2c894e3..adc163f`), quoted: "**Verdict: one open medium, and
+it is a verification gap, not a confirmed defect: no `[fuseki]` test writes to a subject that lives
+in the default graph when its shape's read set mixes the default graph with named graphs. The
+earlier high and medium are resolved. No other open medium or high.**" Closed with the `[fuseki]`
+test "a subject in the default graph, under a mixed read set, is changed and deleted there"
+(update, upsert, delete of a person in the default graph and of the default-graph photo, all
+landing there, nothing in a named graph). Its lows: `deleteToAlgebra` with several ids and
+`writeGraphs` now refuses (`deleteToSparql` splits); the graph variable `g_w` avoids the plan's
+variables; the `update_where` owned-link gap and the upsert-with-traversal wrapper are recorded in
+backlog 067.
+
 Observed while testing (outside this step): `.minus((p) => p.name.equals('x'))` compiles to a MINUS
 whose FILTER reads `?a0_name` without binding it inside the MINUS, so it removes nothing, with or
 without graphs.
