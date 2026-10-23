@@ -71,11 +71,14 @@ export type SparqlExtend = {
   expression: SparqlExpression;
 };
 
-export type SparqlGraph = {
-  type: 'graph';
-  iri: string;
-  inner: SparqlAlgebraNode;
-};
+/**
+ * `GRAPH <iri> { … }` or `GRAPH ?variable { … }`: the inner pattern matched inside one named
+ * graph, fixed or bound to the variable (restricted by the plan's `FROM NAMED` set, see
+ * {@link SparqlDatasetClause}).
+ */
+export type SparqlGraph =
+  | {type: 'graph'; iri: string; variable?: never; inner: SparqlAlgebraNode}
+  | {type: 'graph'; variable: string; iri?: never; inner: SparqlAlgebraNode};
 
 export type SparqlValues = {
   type: 'values';
@@ -200,6 +203,15 @@ export type SparqlAggregateBinding = {
 
 // --- Top-level query plans ---
 
+/**
+ * The query's dataset clause: `FROM NAMED <g>` for each graph a `GRAPH ?g { … }` block may match
+ * in. Only ever written with a non-empty list: without `FROM NAMED`, `GRAPH ?g` ranges over
+ * every named graph of the store.
+ */
+export type SparqlDatasetClause = {
+  fromNamed: string[];
+};
+
 export type SparqlSelectPlan = {
   type: 'select';
   algebra: SparqlAlgebraNode;
@@ -211,6 +223,7 @@ export type SparqlSelectPlan = {
   groupBy?: string[];
   having?: SparqlExpression;
   aggregates?: SparqlAggregateBinding[];
+  dataset?: SparqlDatasetClause;
 };
 
 /**
@@ -223,6 +236,7 @@ export type SparqlSelectPlan = {
 export type SparqlAskPlan = {
   type: 'ask';
   algebra: SparqlAlgebraNode;
+  dataset?: SparqlDatasetClause;
 };
 
 export type SparqlInsertDataPlan = {
