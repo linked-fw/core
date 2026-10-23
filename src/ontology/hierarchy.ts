@@ -36,8 +36,11 @@ type Quad = {
 };
 
 type N3Module = {
-  Parser: new () => {
+  Parser: new (options?: {blankNodePrefix?: string}) => {
     parse(input: string, callback: (error: Error | null, quad: Quad | null) => void): void;
+  };
+  Writer: new (options?: {format?: string}) => {
+    quadToString(subject: unknown, predicate: unknown, object: unknown): string;
   };
 };
 
@@ -57,9 +60,10 @@ async function parseTurtle(
   text: string,
   source: string,
   onQuad: (quad: Quad) => void,
+  blankNodePrefix?: string,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const parser = new n3.Parser();
+    const parser = new n3.Parser(blankNodePrefix ? {blankNodePrefix} : undefined);
     let failed = false;
     parser.parse(text, (error, quad) => {
       if (failed) return;
@@ -111,6 +115,38 @@ export async function hierarchyFromTurtle(
     });
   }
   return triples.sort(compareTriples);
+}
+
+/**
+ * The default-graph triples of `texts` (Turtle) as one N-Triples text: one line per triple, in
+ * file order, deduped, each line ending in a newline. Each text gets its own blank-node prefix
+ * (`f<i>_`), so the blank-node labels of two files never merge. A triple in a named graph is
+ * dropped, as in {@link hierarchyFromTurtle}. A parse error rejects, naming the source.
+ *
+ * The ontology sync sends this as the body of a package's ontology graph: prefix blocks and
+ * blank-node labels of several files cannot clash in N-Triples.
+ */
+export async function nTriplesFromTurtle(texts: string[], sources?: string[]): Promise<string> {
+  const n3 = await loadN3();
+  const writer = new n3.Writer({format: 'N-Triples'});
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (let i = 0; i < texts.length; i++) {
+    await parseTurtle(
+      n3,
+      texts[i],
+      sourceName(sources, i),
+      (quad) => {
+        if (quad.graph.termType !== 'DefaultGraph') return;
+        const line = writer.quadToString(quad.subject, quad.predicate, quad.object);
+        if (seen.has(line)) return;
+        seen.add(line);
+        lines.push(line);
+      },
+      `f${i}_`,
+    );
+  }
+  return lines.join('');
 }
 
 /**
