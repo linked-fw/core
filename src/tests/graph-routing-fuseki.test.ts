@@ -134,6 +134,17 @@ describeFuseki('graph routing', () => {
     expect(rows[0].pets).toEqual([{id: `${D}rex`, bestFriend: {id: `${D}tom`}}]);
   });
 
+  test('a MINUS with the default graph in the set removes default-graph rows (its own VALUES)', async () => {
+    // Persons unrouted (default graph), employees in the staff graph: Person reads both.
+    const mixed = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME);
+    setShapeGraphs(mixed, {[Employee.shape.id]: G_STAFF});
+    await executeSparqlUpdate(`INSERT DATA { <${D}gus> a <${employeeClass.id}> ; <${propBase}name> "Gus" . }`);
+    const names = (await Person.select((p) => p.name).exec(mixed)).map((r) => r.name).sort();
+    expect(names).toEqual(['Bob', 'Frank', 'Gus']);
+    const notEmployees = await Person.select((p) => p.name).minus(Employee).exec(mixed);
+    expect(notEmployees.map((r) => r.name)).toEqual(['Frank']);
+  });
+
   test('an update changes only the copy in the routed graph', async () => {
     await executeSparqlUpdate(
       `INSERT DATA { GRAPH <${G_OTHER}> { <${ALBUM}> a <${GR}Album> ; <${GR}title> "Holiday" ; <${GR}cover> <${COVER}> . ` +

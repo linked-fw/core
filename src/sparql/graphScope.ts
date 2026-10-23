@@ -242,8 +242,8 @@ class SubjectGraphScoper {
   /**
    * Scope `node`. `bound` holds the graph variables a required block before this point has
    * already bound (it grows along a join): a subject's `VALUES` is written only where its graph
-   * variable is not bound yet. An OPTIONAL, UNION, MINUS or EXISTS pattern starts from a copy,
-   * since what it binds does not reach the patterns after it; a sub-select starts empty.
+   * variable is not bound yet. An OPTIONAL, UNION or EXISTS pattern starts from a copy, since what
+   * it binds does not reach the patterns after it; a MINUS right side and a sub-select start empty.
    */
   scope(node: SparqlAlgebraNode, bound: Set<string> = new Set()): SparqlAlgebraNode {
     switch (node.type) {
@@ -260,8 +260,11 @@ class SubjectGraphScoper {
           right: this.scope(node.right, new Set(bound)),
         };
       case 'minus': {
+        // The right side of a MINUS is evaluated on its own (no bindings flow in), so it writes
+        // its own VALUES: without them, with no FROM NAMED, GRAPH ?g would never match the
+        // default graph and nothing from it would be removed.
         const left = this.scope(node.left, bound);
-        return {...node, left, right: this.scope(node.right, new Set(bound))};
+        return {...node, left, right: this.scope(node.right, new Set())};
       }
       case 'left_join': {
         const left = this.scope(node.left, bound);
