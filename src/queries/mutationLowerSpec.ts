@@ -46,4 +46,6 @@ export interface DeleteLowerSpec<S extends Shape = Shape> {
   wherePath?: WherePath;
   /** The graph `.into()` names (server-side only; never serialized). */
   into?: string;
+  /** @internal Delete by ids that keeps the incoming links (see `IRDeleteMutation.keepIncoming`). */
+  keepIncoming?: boolean;
 }

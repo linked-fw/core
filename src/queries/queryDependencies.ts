@@ -533,9 +533,36 @@ class EffectCollector {
 }
 
 /** The `graph` field of a mutation's effects, when the graph is known. */
-function withGraph(ir: {kind: string; shape: string; graph?: string}): {graph?: string} {
+function withGraph(ir: {kind: string; shape: string; graph?: string; data?: IRNodeData}): {graph?: string} {
   const graph = writtenGraph(ir);
-  return graph === undefined ? {} : {graph};
+  if (graph === undefined) return {};
+  // A nested node the mutation does not own is written into its own shape's graph: when that is
+  // another graph, the mutation writes more than one, and the effect names none.
+  const routing = ir.data ? routingForShape(ir.shape) : undefined;
+  if (routing && ir.data && nestedWritesElsewhere(ir.data, routing, graph)) return {};
+  return {graph};
+}
+
+/**
+ * True when a node nested in `data` is written into another graph than `graph`, the graph `data`
+ * is written into: an owned node (`contains`) lives with its holder, any other nested node in its
+ * own shape's routed graph.
+ */
+function nestedWritesElsewhere(data: IRNodeData, routing: ShapeGraphRouting, graph: string): boolean {
+  const nestedIn = (value: IRFieldValue): IRNodeData[] => {
+    if (Array.isArray(value)) return value.flatMap(nestedIn);
+    if (isNodeData(value)) return [value];
+    if (isSetModification(value)) return (value.add ?? []).flatMap(nestedIn);
+    return [];
+  };
+  for (const field of data.fields) {
+    const owned = !!findPropertyShapeById(field.property)?.contains;
+    for (const child of nestedIn(field.value)) {
+      const childGraph = owned ? graph : routing.graphForShape(child.shape);
+      if (childGraph !== graph || nestedWritesElsewhere(child, routing, graph)) return true;
+    }
+  }
+  return false;
 }
 
 /** `lower()` is overloaded per builder kind; dispatch on the discriminator. */

@@ -58,6 +58,13 @@ export type OwnedLink = {
   expectedClass: string;
   /** `expectedClass`, and `sh:class` if declared. A subclass instance matches through its inferred types. */
   acceptedClasses: string[];
+  /**
+   * The shape of the nearest nested node, created by the same mutation through a property that
+   * does not own it, that declares the link: under graph routing that node lives in its own
+   * shape's graph, so the linked node must too. Absent for a link of the mutation's subject (or
+   * of a node it owns).
+   */
+  nestedIn?: string;
 };
 
 type OwnedLinkMutation =
@@ -66,7 +73,7 @@ type OwnedLinkMutation =
   | IRUpsertMutation
   | IRUpdateWhereMutation;
 
-type OwnedRule = Omit<OwnedLink, 'id'>;
+type OwnedRule = Omit<OwnedLink, 'id' | 'nestedIn'>;
 
 const RDF_NIL = rdf.nil.id;
 const RDF_TYPE = rdf.type.id;
@@ -121,16 +128,22 @@ function buildRule(ps: PropertyShapeData | undefined, fallbackShape: string): Ow
   };
 }
 
-function walk(data: IRNodeData, cache: Map<string, OwnedRule | null>, out: OwnedLink[]): void {
+function walk(
+  data: IRNodeData,
+  cache: Map<string, OwnedRule | null>,
+  out: OwnedLink[],
+  nestedIn?: string,
+): void {
   for (const field of data.fields) {
     const rule = ownedRuleFor(field.property, data.shape, cache);
     for (const item of writtenValues(field.value)) {
       if (isNodeData(item)) {
         // A nested create is not a link — the mutation writes its type itself — but its
-        // own fields can link.
-        walk(item, cache, out);
+        // own fields can link. A node it does not own lives apart from it under routing.
+        const owned = !!findPropertyShapeById(field.property)?.contains;
+        walk(item, cache, out, owned ? nestedIn : item.shape);
       } else if (rule && isBareNodeReference(item) && item.id !== RDF_NIL) {
-        out.push({id: item.id, ...rule});
+        out.push({id: item.id, ...rule, ...(nestedIn ? {nestedIn} : {})});
       }
     }
   }
@@ -148,16 +161,16 @@ export function collectOwnedLinks(ir: OwnedLinkMutation): OwnedLink[] {
   return out;
 }
 
-/** `SELECT ?id ?type WHERE { VALUES ?id { … } ?id rdf:type ?type }` for the distinct ids. */
-export function ownedLinkTypesQuery(ids: string[], graph?: string): string {
+/**
+ * `SELECT ?id ?type WHERE { VALUES ?id { … } ?id rdf:type ?type }` for the distinct ids: the
+ * check without graph routing, where every node is in the default graph (under routing,
+ * {@link ownedLinkGraphTypesQuery}).
+ */
+export function ownedLinkTypesQuery(ids: string[]): string {
   const distinct = [...new Set(ids)];
   for (const id of distinct) assertSafeIri(id);
   const values = distinct.map((id) => `<${id}>`).join(' ');
-  const typeTriple = `?id <${RDF_TYPE}> ?type`;
-  if (graph === undefined) return `SELECT ?id ?type WHERE { VALUES ?id { ${values} } ${typeTriple} }`;
-  // In the graph the mutation writes: an owned node lives in its owner's graph.
-  assertSafeIri(graph);
-  return `SELECT ?id ?type WHERE { VALUES ?id { ${values} } GRAPH <${graph}> { ${typeTriple} } }`;
+  return `SELECT ?id ?type WHERE { VALUES ?id { ${values} } ?id <${RDF_TYPE}> ?type }`;
 }
 
 /**

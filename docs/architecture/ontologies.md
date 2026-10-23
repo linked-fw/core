@@ -205,7 +205,7 @@ It runs at app boot and through the app's control route, before shape sync.
 ## Named graphs and the graph registry
 
 A dataset keeps named graphs on purpose (a package's whole ontology data, its shapes,
-ontology-editor drafts), and records each one in the **graph registry**, a named graph at
+draft graphs), and records each one in the **graph registry**, a named graph at
 `https://linked.cm/pkg/core/graph/registry` (`graphs.registry`), the same IRI in every dataset.
 A record is described with SPARQL Service Description plus core terms; its subject is the graph
 IRI:
@@ -358,6 +358,13 @@ LinkedStorage.setDatasetForShapes(store, [Tag, Category], {graph: dataGraph('tax
   slashes dropped (`dataRootOf(dataset)`). It is joined each time the routing is read, so a root
   the store learns later is the one used. A route that needs a root the store lacks is refused when
   resolved, with the shape named.
+- **Managed graphs are refused.** A route never names a graph the store manages itself: a portable
+  name, the graph registry, a package's ontology or shape graph (`…/pkg/{slug}/graph/…`), the
+  app's shape graph (`{DATA_ROOT}/graph/shapes`, so `dataGraph('shapes')`) or an imported graph
+  (`{DATA_ROOT}/graph/import/…`). The refusal is `GraphQueryError('graph-name-read-only')` and names
+  the shape and the graph: when the route is set, or, for a full IRI under the data root, when the
+  routing is read. (Draft graphs, `{DATA_ROOT}/graph/drafts/…`, stay routable: an app routes its
+  draft shapes there.)
 
 `setShapeGraphs(dataset, {<shape IRI>: route})` records routes directly (a composite dataset
 registers them on the store it forwards to); `getShapeGraphs(dataset)` returns them resolved, and
@@ -367,8 +374,9 @@ object, by shape IRI.
 - **A shape's graph** (where its instances are written): its own route, else its nearest routed
   super-shape's, else the default graph.
 - **A shape's read set**: its graph, every registered sub-shape's graph, and the read set of every
-  shape that owns it through a `contains` property (an owned node is written into its owner's
-  graph).
+  shape that owns it, or one of its super- or sub-shapes, through a `contains` property (an owned
+  node is written into its owner's graph; an album that owns a panorama cover puts its graph in the
+  read set of the photo shape the panorama extends).
 
 **Reads** with no `.from()` give each subject group the read set of its shape: the root's shape,
 an object property's value shape, or, through a `contains` property, the owner's set. A subject
@@ -388,7 +396,13 @@ the transport as the protocol's `named-graph-uri` parameters instead
 refuses rather than read every named graph).
 
 **Writes.** A create goes into the shape's graph (`INSERT DATA { GRAPH <g> { … } }`); nested
-(owned) nodes are created there too. An update or delete of existing subjects runs in the graph the
+owned (`contains`) nodes are created there too. A nested node the mutation does not own is written
+into its own shape's graph, in the same update, as one `GRAPH` block per graph (plain triples for
+the default graph; under `WITH <g>`, the store's name for the default graph), while the link to it
+stays with its holder: `Article.create({author: {name: 'Ann'}})` writes the article and its
+`author` link in the articles graph and Ann in the people graph, where `Person.select()` and
+`Article.select((a) => a.author.name)` read her. The same holds for the nested creates of an
+update or upsert. An update or delete of existing subjects runs in the graph the
 subject lives in: when the shape's read set is one graph, `WITH <g>` before the
 `DELETE`/`INSERT`; when it holds several (a sub-shape's or an owner's graph), the same update finds
 the graph:
@@ -409,11 +423,13 @@ owner's graph: the owned-link check reads the linked node's types in every graph
 that lives elsewhere. `.into(graph)` on a create, update or delete builder overrides the graph, only
 to a graph in the shape's read set (else `GraphQueryError('graph-not-routed')`; a portable name, the
 registry or a store-reserved name is `graph-name-read-only`). `.into()` is never carried in
-DSL-JSON: a process that receives a mutation derives its graph from its own routing.
+DSL-JSON: a process that receives a mutation derives its graph from its own routing, and `toJSON`
+of a builder with `.into()` throws rather than drop it.
 
 **Live queries.** `QueryDependencies.graphs` (the `.from()` names, or the routed read sets) and
-`MutationEffects.graph` (the `.into()` graph, the routed graph of a create, or the one graph of a change to existing subjects; unknown when the read set holds several) are set when the dataset `LinkedStorage`
+`MutationEffects.graph` (the `.into()` graph, the routed graph of a create, or the one graph of a change to existing subjects; unknown when the read set holds several, or when a nested node is written into another graph) are set when the dataset `LinkedStorage`
 routes the shape to has routes; the matcher skips a template that does not read the written graph.
+A change and its remote echo fold when their graphs agree or one of them has none.
 
 ### Shape graphs
 
@@ -456,7 +472,9 @@ text)`, compared with the record's `core:contentHash`; equal → no write; else 
 or replaced whole in one graph query (`sources` `data/shapes.ttl`). `appShapes: {graph, package?}`
 writes the generated single-owner shapes of every registered shape to the app's graph the same way.
 After the graphs, the package shapes an earlier sync wrote into the default graph (`NodeShape`s with
-`core:shapeHash`) are deleted there with their owned subtrees, once. `orphanScope: 'all'` drops the
+`core:shapeHash`) lose their own description there, once: their triples, the blank nodes under them
+and their owned subtrees. The links other default-graph shapes hold to them (`core:isExtending`,
+`sh:node`) stay. `orphanScope: 'all'` drops the
 shape graphs of packages no longer registered (never an app's graph). A store without graph queries
 gets the default-graph `syncShapes` instead (`defaultGraph` counts its writes).
 

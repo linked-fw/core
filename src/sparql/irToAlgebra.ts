@@ -39,6 +39,7 @@ import type {
   SparqlAggregateExpr,
   SparqlLeftJoin,
   SparqlFilter,
+  SparqlGraphTriples,
 } from './SparqlAlgebra.js';
 import {type SparqlCompileOptions, generateEntityUri} from './sparqlUtils.js';
 import type {ShapeGraphRouting} from '../utils/graphRouting.js';
@@ -1951,6 +1952,65 @@ type BlankNodeMinter = {next: number};
 type NestedNodeKind = 'iri' | 'blank';
 
 /**
+ * Where the nodes of a nested create are written under graph routing. An owned node (reached
+ * through a `contains` property) and a blank node live with the node that holds them; any other
+ * nested node is written into its own shape's routed graph, in the same update, because that is
+ * where a read of its shape finds it. The link triple stays with the holder.
+ *
+ * `target` is the graph the triples being generated go to: `null` for the plan's own graph (what
+ * the plan's `graph`, `WITH` or `graphIn` names), else a graph IRI (`graphs.default` for the
+ * default graph). Triples for another target are collected in `elsewhere`.
+ */
+type NestedPlacement = {
+  routing: ShapeGraphRouting;
+  /** The plan's own graph when it is known at compile time; `undefined` when found at write time. */
+  planGraph: string | undefined;
+  elsewhere: Map<string, SparqlTriple[]>;
+  target: string | null;
+};
+
+/** A placement for a mutation compiled with `routing`, or `undefined` without routing. */
+function nestedPlacement(
+  options: SparqlCompileOptions | undefined,
+  planGraph: string | undefined,
+): NestedPlacement | undefined {
+  return options?.routing
+    ? {routing: options.routing, planGraph, elsewhere: new Map(), target: null}
+    : undefined;
+}
+
+/**
+ * The plan's `elsewhere` blocks. With `WITH <g>` (`withGraph`) a template triple outside a `GRAPH`
+ * block goes to `<g>`, so the default graph is named with the store's name for it.
+ */
+function elsewhereBlocks(
+  placement: NestedPlacement | undefined,
+  options: SparqlCompileOptions | undefined,
+  withGraph?: string,
+): SparqlGraphTriples[] | undefined {
+  if (!placement || placement.elsewhere.size === 0) return undefined;
+  return [...placement.elsewhere].map(([graph, triples]) => ({
+    graph: graph === graphs.default && withGraph !== undefined ? defaultGraphStoreName(options) : graph,
+    triples,
+  }));
+}
+
+/** The store's name for the default graph (`SparqlOptions.mapGraphName`), or a refusal. */
+function defaultGraphStoreName(options: SparqlCompileOptions | undefined): string {
+  const name = options?.mapGraphName ? options.mapGraphName(graphs.default) : null;
+  if (!name) {
+    throw new GraphQueryError(
+      'unsupported-query-kind',
+      'This write may find its subject in the default graph or in named graphs, which a SPARQL ' +
+        'store addresses through its own name for the default graph; this store has none ' +
+        '(SparqlOptions.mapGraphName).',
+      graphs.default,
+    );
+  }
+  return name;
+}
+
+/**
  * True when the property's `sh:nodeKind` allows blank-node values (`sh:BlankNode`,
  * `sh:BlankNodeOrIRI`, `sh:BlankNodeOrLiteral`). A nested create under such a property may be
  * minted as a blank node, and a delete / replace through it removes its blank value.
@@ -2015,6 +2075,7 @@ function nestedCreateTriples(
   data: IRNodeData,
   options?: SparqlCompileOptions,
   blanks?: BlankNodeMinter,
+  placement?: NestedPlacement,
 ): SparqlTriple[] {
   const kind = nestedNodeKind(propertyId, data);
   if (kind === 'blank' && !blanks) {
@@ -2025,8 +2086,31 @@ function nestedCreateTriples(
         `parent${findPropertyShapeById(propertyId)?.nodeKind?.id === shacl.BlankNodeOrIRI.id ? ', or give it an id to write it as an IRI' : ''}.`,
     );
   }
-  const nested = generateNodeDataTriples(data, options, blanks, kind);
-  return [tripleOf(subjectTerm, propertyTerm, nested.term), ...nested.triples];
+  const child = placement && childPlacement(placement, propertyId, data, kind);
+  const nested = generateNodeDataTriples(data, options, blanks, kind, child);
+  const link = tripleOf(subjectTerm, propertyTerm, nested.term);
+  if (!placement || !child || child.target === placement.target) return [link, ...nested.triples];
+  const key = child.target!;
+  const bucket = placement.elsewhere.get(key);
+  if (bucket) bucket.push(...nested.triples);
+  else placement.elsewhere.set(key, nested.triples);
+  return [link];
+}
+
+/**
+ * The placement of a nested node (see {@link NestedPlacement}): an owned or blank node stays
+ * with its holder; any other node goes to its shape's routed graph, which is the plan's own
+ * graph when the two are the same and the plan's graph is known.
+ */
+function childPlacement(
+  placement: NestedPlacement,
+  propertyId: string,
+  data: IRNodeData,
+  kind: NestedNodeKind,
+): NestedPlacement {
+  if (kind === 'blank' || findPropertyShapeById(propertyId)?.contains) return placement;
+  const graph = placement.routing.graphForShape(data.shape);
+  return {...placement, target: graph === placement.planGraph ? null : graph};
 }
 
 /**
@@ -2043,6 +2127,7 @@ function generateNodeDataTriples(
   options?: SparqlCompileOptions,
   blanks?: BlankNodeMinter,
   kind: NestedNodeKind = 'iri',
+  placement?: NestedPlacement,
 ): {term: SparqlTerm; triples: SparqlTriple[]} {
   const triples: SparqlTriple[] = [];
   let subjectTerm: SparqlTerm;
@@ -2071,7 +2156,7 @@ function generateNodeDataTriples(
       for (const item of field.value) {
         if (item && typeof item === 'object' && 'shape' in item && 'fields' in item) {
           triples.push(
-            ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, item as IRNodeData, options, blanks),
+            ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, item as IRNodeData, options, blanks, placement),
           );
         } else {
           const terms = fieldValueToTerms(item, options, resolvePropertyDatatype(field.property));
@@ -2086,7 +2171,7 @@ function generateNodeDataTriples(
     // Handle nested IRNodeData
     if (typeof field.value === 'object' && 'shape' in field.value && 'fields' in field.value) {
       triples.push(
-        ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, field.value as IRNodeData, options, blanks),
+        ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, field.value as IRNodeData, options, blanks, placement),
       );
       continue;
     }
@@ -2125,22 +2210,13 @@ function inWriteGraph(
   subject?: string,
 ): SparqlDeleteInsertPlan {
   if (!query.writeGraphs || query.writeGraphs.length === 0) return inGraph(plan, query.graph);
-  const storeName = (graph: string): string => {
-    if (graph !== graphs.default) return graph;
-    const name = options?.mapGraphName ? options.mapGraphName(graphs.default) : null;
-    if (!name) {
-      throw new GraphQueryError(
-        'unsupported-query-kind',
-        'This write may find its subject in the default graph or in named graphs, which a SPARQL ' +
-          'store addresses through its own name for the default graph; this store has none ' +
-          '(SparqlOptions.mapGraphName).',
-        graphs.default,
-      );
-    }
-    return name;
-  };
+  const storeName = (graph: string): string =>
+    graph === graphs.default ? defaultGraphStoreName(options) : graph;
   // A graph variable no pattern of the plan uses (with its `_p`, `_o`, `_found` companions).
-  const used = collectVariableNames([plan.deletePatterns, plan.insertPatterns, plan.whereAlgebra], new Set());
+  const used = collectVariableNames(
+    [plan.deletePatterns, plan.insertPatterns, plan.whereAlgebra, plan.insertElsewhere],
+    new Set(),
+  );
   let variable = 'g_w';
   for (let n = 2; [variable, `${variable}_p`, `${variable}_o`, `${variable}_found`].some((v) => used.has(v)); n++) {
     variable = `g_w${n}`;
@@ -2167,8 +2243,10 @@ export function createToAlgebra(
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => createToAlgebra(query, options));
   }
-  const {triples} = generateNodeDataTriples(query.data, options, {next: 0});
-  const plan: SparqlInsertDataPlan = {type: 'insert_data', triples};
+  const placement = nestedPlacement(options, query.graph ?? graphs.default);
+  const {triples} = generateNodeDataTriples(query.data, options, {next: 0}, 'iri', placement);
+  const elsewhere = elsewhereBlocks(placement, options);
+  const plan: SparqlInsertDataPlan = {type: 'insert_data', triples, ...(elsewhere ? {elsewhere} : {})};
   return inGraph(plan, query.graph);
 }
 
@@ -2207,6 +2285,7 @@ function processUpdateFields(
   data: IRNodeData,
   subjectTerm: SparqlTerm,
   options?: SparqlCompileOptions,
+  placement?: NestedPlacement,
 ): {
   deletePatterns: SparqlTriple[];
   insertPatterns: SparqlTriple[];
@@ -2288,7 +2367,7 @@ function processUpdateFields(
         for (const addItem of setMod.add) {
           if (addItem && typeof addItem === 'object' && 'shape' in addItem && 'fields' in addItem) {
             insertPatterns.push(
-              ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, addItem as IRNodeData, options),
+              ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, addItem as IRNodeData, options, undefined, placement),
             );
           } else {
             const terms = fieldValueToTerms(addItem, options, resolvePropertyDatatype(field.property));
@@ -2346,7 +2425,7 @@ function processUpdateFields(
       for (const item of field.value) {
         if (item && typeof item === 'object' && 'shape' in item && 'fields' in item) {
           insertPatterns.push(
-            ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, item as IRNodeData, options),
+            ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, item as IRNodeData, options, undefined, placement),
           );
         } else {
           const terms = fieldValueToTerms(item, options, resolvePropertyDatatype(field.property));
@@ -2365,7 +2444,7 @@ function processUpdateFields(
       oldValueTriples.push(tripleOf(subjectTerm, propertyTerm, oldVar));
 
       insertPatterns.push(
-        ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, field.value as IRNodeData, options),
+        ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, field.value as IRNodeData, options, undefined, placement),
       );
       continue;
     }
@@ -2528,7 +2607,8 @@ function buildDeleteInsertPlan(
   opts?: {ensureType?: string},
 ): SparqlDeleteInsertPlan {
   const subjectTerm = iriTerm(query.id);
-  const result = processUpdateFields(query.data, subjectTerm, options);
+  const placement = nestedPlacement(options, knownPlanGraph(query));
+  const result = processUpdateFields(query.data, subjectTerm, options, placement);
 
   const whereAlgebra = buildUpdateWhere(
     {type: 'bgp', triples: []},
@@ -2545,12 +2625,28 @@ function buildDeleteInsertPlan(
       ]
     : result.insertPatterns;
 
+  const insertElsewhere = elsewhereBlocks(placement, options, withGraphOf(query));
   return {
     type: 'delete_insert',
     deletePatterns: result.deletePatterns,
     insertPatterns,
     whereAlgebra,
+    ...(insertElsewhere ? {insertElsewhere} : {}),
   };
+}
+
+/**
+ * The graph a change to existing subjects writes when it is known at compile time: its one graph
+ * (`WITH <g>`, or the default graph). `undefined` when the store finds the subject's graph at
+ * write time (`writeGraphs`).
+ */
+function knownPlanGraph(query: {graph?: string; writeGraphs?: string[]}): string | undefined {
+  return query.writeGraphs && query.writeGraphs.length > 0 ? undefined : (query.graph ?? graphs.default);
+}
+
+/** The `WITH <g>` graph of a change to existing subjects, if it has one (see `inWriteGraph`). */
+function withGraphOf(query: {graph?: string; writeGraphs?: string[]}): string | undefined {
+  return query.writeGraphs && query.writeGraphs.length > 0 ? undefined : query.graph;
 }
 
 /** Left-nested UNION of `blocks` (at least one). */
@@ -3437,13 +3533,15 @@ export function deleteToAlgebra(
     const objWild = tripleOf(varTerm(`s${idx}`), varTerm(`p2${idx}`), subjectTerm);
     const typeGuard = tripleOf(subjectTerm, iriTerm(RDF_TYPE), iriTerm(resolveShapeScanIri(query.shape)));
 
-    // DELETE block: all patterns (subject-wildcard, object-wildcard, type)
-    deletePatterns.push(subjWild, objWild, typeGuard);
+    // DELETE block: all patterns (subject-wildcard, object-wildcard, type); with
+    // `keepIncoming` only the subject's own description, not the links to it.
+    deletePatterns.push(...(query.keepIncoming ? [subjWild, typeGuard] : [subjWild, objWild, typeGuard]));
 
     // WHERE: the type guard is required; the subject's own triples and its
     // incoming references (the entity may have none) are separate UNION blocks.
     guards.push(typeGuard);
-    blocks.push({type: 'bgp', triples: [subjWild]}, {type: 'bgp', triples: [objWild]});
+    blocks.push({type: 'bgp', triples: [subjWild]});
+    if (!query.keepIncoming) blocks.push({type: 'bgp', triples: [objWild]});
 
     // The subject's own blank values (through its blank-capable properties) and the blank
     // nodes below them.
@@ -3627,7 +3725,8 @@ export function updateWhereToAlgebra(
     return withShapeCatalog(catalog, () => updateWhereToAlgebra(query, options));
   }
   const subjectTerm = varTerm('a0');
-  const result = processUpdateFields(query.data, subjectTerm, options);
+  const placement = nestedPlacement(options, knownPlanGraph(query));
+  const result = processUpdateFields(query.data, subjectTerm, options, placement);
 
   // WHERE: type triple is always required
   const typeTriple = tripleOf(subjectTerm, iriTerm(RDF_TYPE), iriTerm(resolveShapeScanIri(query.data.shape)));
@@ -3664,11 +3763,13 @@ export function updateWhereToAlgebra(
   // that split for both update paths.
   whereAlgebra = buildUpdateWhere(whereAlgebra, result, query.traversalPatterns, subjectTerm);
 
+  const insertElsewhere = elsewhereBlocks(placement, options, withGraphOf(query));
   return inWriteGraph({
     type: 'delete_insert',
     deletePatterns: result.deletePatterns,
     insertPatterns: result.insertPatterns,
     whereAlgebra,
+    ...(insertElsewhere ? {insertElsewhere} : {}),
   }, query, options);
 }
 

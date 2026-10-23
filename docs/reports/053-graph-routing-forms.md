@@ -138,6 +138,10 @@ Verify:
   left out of the read, an update in the same graph, a minted id under the root and in the graph.
 - The JSON key: "a graphs key is not validated, and loadStores routes nothing from it and warns".
 
+## Review fixes
+
+Recorded in report [051](051-graph-routing.md) §Review fixes: routes to managed graphs (`dataGraph('shapes')`, `import/…`, package graphs, the registry, portable names) are refused with `graph-name-read-only` (fix 4; draft graphs left routable pending a decision).
+
 ## Follow-ups
 
 - Backlog [069](../backlog/069-per-instance-graph-functions.md): per-instance graph functions.

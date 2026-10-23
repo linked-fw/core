@@ -13,6 +13,7 @@ import type {NodeShapeData} from '../shapes/SHACL.js';
 import {encodeNodeData, decodeNodeDataToRaw, type CreateMutationJSON} from './MutationSerialization.js';
 import type {CreateLowerSpec} from './mutationLowerSpec.js';
 import {brandLinkedClass} from '../utils/linkedError.js';
+import {refuseSerializedInto} from './intoGraph.js';
 
 /**
  * Internal state bag for CreateBuilder.
@@ -23,7 +24,7 @@ interface CreateBuilderInit<S extends Shape> {
   catalog?: ShapeCatalog;
   data?: UpdatePartial<S>;
   fixedId?: string;
-  /** The graph `.into()` names; never serialized. */
+  /** The graph `.into()` names; never serialized (`toJSON` refuses a builder that has one). */
   into?: string;
 }
 
@@ -106,7 +107,8 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
 
   /**
    * Write into `graph` instead of the graph the store's routing picks for this shape. Server-side
-   * only: the graph is never carried in DSL-JSON (a receiving process derives the graph itself),
+   * only: the graph is never carried in DSL-JSON (a receiving process derives the graph itself;
+   * `toJSON` refuses a builder that has one),
    * and the store refuses a graph its routing does not allow for the shape (its routed read set:
    * the shape's graph and its sub-shapes' graphs) with `GraphQueryError('graph-not-routed')`.
    */
@@ -172,6 +174,7 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
     if (catalog !== getActiveShapeCatalog()) {
       return withShapeCatalog(catalog, () => this.toJSON());
     }
+    refuseSerializedInto('CreateBuilder', this._into);
     if (!this._data) {
       throw new Error('CreateBuilder requires .set(data) before .toJSON().');
     }

@@ -17,6 +17,7 @@ import {
   type LiveQueryStore,
 } from '../live/LiveQueryStore';
 import {Person, Team, ids} from '../test-helpers/live-fixtures';
+import {mutationEffects} from '../queries/queryDependencies';
 import {unusedDatasetMethods} from '../test-helpers/test-utils';
 
 class FeedDataset implements IDataset {
@@ -139,6 +140,25 @@ describe('change sources', () => {
     dataset.emit({mutation: json, result: {id: ids.T1}}); // echo with the same effects
     await flush();
     expect(dataset.selects).toBe(2);
+  });
+
+  test('a change and its echo fold when one has no graph; two different graphs do not fold', async () => {
+    const effects = mutationEffects(Team.update({name: 'X'}).for(ids.T1));
+    const G1 = 'https://acme.example/data/graph/teams';
+    const G2 = 'https://acme.example/data/graph/other';
+    store.publish({effects: {...effects, graph: G1}}, 'local');
+    await flush();
+    expect(dataset.selects).toBe(2);
+    store.publish({effects}, 'feed'); // the echo, without the routed graph: folded
+    await flush();
+    expect(dataset.selects).toBe(2);
+    await new Promise((r) => setTimeout(r, store.options.echoMs + 10));
+    store.publish({effects: {...effects, graph: G1}}, 'local');
+    await flush();
+    expect(dataset.selects).toBe(3);
+    store.publish({effects: {...effects, graph: G2}}, 'feed'); // another graph: a change of its own
+    await flush();
+    expect(dataset.selects).toBe(4);
   });
 
   test('an authoritative dataset suppresses local effects and refetches on its own feed', async () => {

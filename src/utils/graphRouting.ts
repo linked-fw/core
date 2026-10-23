@@ -27,12 +27,18 @@
  * - `dataGraph('slug')` → `{DATA_ROOT}/graph/{slug}`.
  * - An absolute graph IRI, as given (advanced use).
  *
+ * A route never names a graph the store manages itself: a portable name, the graph registry, a
+ * package's ontology or shape graph (`…/pkg/{slug}/graph/…`), the app's shape graph
+ * (`{DATA_ROOT}/graph/shapes`) or an imported graph (`{DATA_ROOT}/graph/import/…`). Such a route
+ * is refused with `GraphQueryError('graph-name-read-only')`, naming the shape and the graph: when
+ * it is set, or, for a full IRI under the data root, when the routing is read.
+ *
  * - **A shape's graph** (where its instances are written): its own route, else its nearest routed
  *   super-shape's, else the default graph.
  * - **Its read set**: its graph plus the graph of every registered sub-shape, because a select of a
  *   shape returns the instances of its sub-shapes too, plus the read set of every shape that owns
- *   it (a `contains` property whose value shape is it or a super-shape of it), because an owned
- *   node is written into its owner's graph.
+ *   it or one of its sub-shapes (a `contains` property whose value shape is it, a super-shape or
+ *   a sub-shape of it), because an owned node is written into its owner's graph.
  *
  * The default graph appears in a set as `graphs.default`. The table lives on the shared global and
  * is keyed by the dataset object and the shape IRI (never a class object): a module can evaluate
@@ -47,6 +53,7 @@ import {
   PORTABLE_GRAPH_NAMES,
   type GraphRoute,
 } from '../ontologies/graphs.js';
+import {GraphQueryError} from '../queries/graphQuery.js';
 import {getAllNodeShapes, getRegisteredShapeClass, getSubShapes, getSuperShapes} from './ShapeClass.js';
 import {getPropertyShapes} from '../shapes/nodeShapeData.js';
 import {packageNameToSlug} from '../shapes/SHACL.js';
@@ -72,6 +79,26 @@ function checkShape(shape: string): void {
   }
 }
 
+/**
+ * Paths under a data root that name graphs a store manages itself, which a route never names: the
+ * app's shape graph (`graph/shapes`, written by the shape sync) and imported graphs
+ * (`graph/import/…`).
+ */
+const MANAGED_UNDER_ROOT = /^graph\/(?:shapes|import\/.+)$/;
+
+/** A package's ontology or shape graph (`…/pkg/{slug}/graph/…`; core's portable names are refused before). */
+const PACKAGE_GRAPH = /\/pkg\/[^/]+\/graph\//;
+
+/** A route to a graph the store manages itself is refused, naming the shape and the graph. */
+function refuseManaged(shape: string, graph: string, what: string): never {
+  throw new GraphQueryError(
+    'graph-name-read-only',
+    `The graph route of <${shape}> names <${graph}>, ${what}, which only its own sync writes; ` +
+      `route the shape to a data graph ('own', dataGraph('slug')) or leave it in the default graph.`,
+    graph,
+  );
+}
+
 function checkGraphIri(shape: string, graph: string): void {
   if (typeof graph !== 'string' || !IRI_PATTERN.test(graph)) {
     throw new Error(
@@ -80,11 +107,23 @@ function checkGraphIri(shape: string, graph: string): void {
     );
   }
   if (PORTABLE_GRAPH_NAMES.has(graph) && graph !== graphs.default) {
-    throw new Error(
+    throw new GraphQueryError(
+      'graph-name-read-only',
       `<${graph}> is a portable graph name a store resolves at read time; a route names the one ` +
         `graph a shape's instances are written to (route <${shape}> to a graph IRI, or leave it ` +
         `out for the default graph).`,
+      graph,
     );
+  }
+  if (graph !== graphs.default && PACKAGE_GRAPH.test(graph)) {
+    refuseManaged(shape, graph, "a package's ontology or shape graph");
+  }
+}
+
+/** Refuse a path under the data root that names a managed graph ({@link MANAGED_UNDER_ROOT}). */
+function checkUnderRoot(shape: string, path: string, graph: string): void {
+  if (MANAGED_UNDER_ROOT.test(path)) {
+    refuseManaged(shape, graph, path === 'graph/shapes' ? "the app's shape graph" : 'an imported graph');
   }
 }
 
@@ -114,13 +153,18 @@ export function ownGraphPath(shape: string): string {
 /** A route as stored: `undefined` for the default graph (no route). */
 function storedRoute(shape: string, route: GraphRoute): StoredRoute | undefined {
   checkShape(shape);
-  if (route === OWN_GRAPH) return {underRoot: ownGraphPath(shape), form: `'own'`};
+  if (route === OWN_GRAPH) {
+    const path = ownGraphPath(shape);
+    checkUnderRoot(shape, path, `{DATA_ROOT}/${path}`);
+    return {underRoot: path, form: `'own'`};
+  }
   if (isDataGraphRoute(route)) {
     // Re-checked: a route may arrive as plain data rather than from dataGraph().
     const {dataGraph: slug} = route;
     if (typeof slug !== 'string' || !DATA_GRAPH_SLUG.test(slug)) {
       throw new Error(`The graph route of <${shape}> has an invalid dataGraph slug ${JSON.stringify(slug)}.`);
     }
+    checkUnderRoot(shape, `graph/${slug}`, `{DATA_ROOT}/graph/${slug}`);
     return {underRoot: `graph/${slug}`, form: `dataGraph('${slug}')`};
   }
   checkGraphIri(shape, route as string);
@@ -171,7 +215,14 @@ function resolveStored(
   stored: StoredRoute,
   root: () => string | undefined,
 ): string {
-  if ('iri' in stored) return stored.iri;
+  if ('iri' in stored) {
+    // A full IRI under the data root may name a managed graph there; checked once the root is known.
+    const base = root();
+    if (base && stored.iri.startsWith(`${base}/`)) {
+      checkUnderRoot(shape, stored.iri.slice(base.length + 1), stored.iri);
+    }
+    return stored.iri;
+  }
   const base = root();
   if (!base) {
     throw new Error(
@@ -257,7 +308,14 @@ export function graphRoutingFor(dataset: IDataset | object | undefined): ShapeGr
       }
     }
     const out = new Set<string>();
-    for (const target of [shapeId, ...getSuperShapes(shapeId).map((s) => s.id)]) {
+    // A select of the shape returns its sub-shapes' instances too, so the owners of a sub-shape
+    // (an album that contains a panorama, read as a photo) hold nodes this shape reads.
+    const targets = [
+      shapeId,
+      ...getSuperShapes(shapeId).map((s) => s.id),
+      ...getSubShapes(shapeId).map((s) => s.id),
+    ];
+    for (const target of targets) {
       for (const owner of ownersByValueShape.get(target) ?? []) out.add(owner);
     }
     return [...out];

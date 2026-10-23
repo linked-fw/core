@@ -334,7 +334,9 @@ export function lower(
     }
     case 'delete': {
       const spec = query._lowerSpec();
-      return withInto(lowerDelete(spec), spec.into);
+      const ir = withInto(lowerDelete(spec), spec.into);
+      if (spec.keepIncoming && ir.kind === 'delete') ir.keepIncoming = true;
+      return ir;
     }
   }
 }

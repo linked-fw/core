@@ -208,11 +208,13 @@ async function syncGraphs(
   }
 
   // The one-time cleanup: the shapes an earlier sync wrote into the default graph, now held by
-  // their package's graph. Each goes with its owned subtree (property shapes, lists, paths and
-  // generated shapes), through the delete cascade. Shapes no package of this run holds stay.
+  // their package's graph. Each loses its own description only (its triples, the blank nodes
+  // under them, and its owned subtree: property shapes, lists, paths and generated shapes); the
+  // links other default-graph shapes hold to it (`core:isExtending`, `sh:node`, …) stay, since a
+  // shape that stays still names it. Shapes no package of this run holds stay.
   const stale = await readStoredHashes(cleanupIris, ds);
   for (const iri of [...stale.keys()].sort()) {
-    await DeleteBuilder.from(NodeShape, {id: iri}).exec(ds);
+    await DeleteBuilder.from(NodeShape, {id: iri})._keepingIncoming().exec(ds);
     result.cleaned++;
   }
 

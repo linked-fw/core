@@ -303,6 +303,92 @@ Observed while testing (outside this step): `.minus((p) => p.name.equals('x'))` 
 whose FILTER reads `?a0_name` without binding it inside the MINUS, so it removes nothing, with or
 without graphs.
 
+## Review fixes
+
+Fixes from the final review of CN plan 071's phase 2 (core), in worktree `named-graphs--fixcore`.
+Shape-graph fixes (3, 9) are recorded here too and cross-referenced from report 052; the
+managed-graph refusal (4) from report 053.
+
+1. **(High) Nested create of a node the mutation does not own.** `createToAlgebra` wrapped every
+   triple of a create in the parent's `GRAPH <g>`, while reads find a node reached through a
+   non-`contains` property in its value shape's read set. Now (as decided) each nested non-owned
+   node is written into its own shape's routed graph in the same update, one `GRAPH` block per
+   graph; the link triple stays in the holder's graph; owned (`contains`) and blank nested nodes
+   stay with their holder. `SparqlDataset` compiles creates and updates with the routing
+   (`writeOptions()`), `irToAlgebra.ts` places nested triples (`NestedPlacement`), and the plans
+   carry the other blocks (`SparqlInsertDataPlan.elsewhere`, `SparqlDeleteInsertPlan.insertElsewhere`;
+   plain triples for the default graph, the store's name for it under `WITH <g>`). The same holds for
+   nested creates in update, upsert and update-where. The owned-link check of a link declared by a
+   nested non-owned node reads that node's graph (`OwnedLink.nestedIn`), and `MutationEffects.graph`
+   is unknown when a nested node goes to another graph. Fuseki scenario
+   (`graph-routing-nested-fuseki.test.ts`): Article → articles, Person → people;
+   `Article.create({author: {name: 'Ann', avatar}})` puts Ann and her owned avatar in people, the
+   article and its `author` link in articles; `Article.select((a) => a.author.name)` returns "Ann",
+   `Person.select()` finds her, `Person.update` changes her there; an update with a new nested
+   author lands her in people too. Unit golden checks in `graph-routing-nested.test.ts`.
+2. **(Medium) Owners of sub-shapes.** `ownersOf` now also collects the owners of every sub-shape,
+   so a shape's read set includes them. Fuseki scenario: Album (albums) `contains cover: Panorama`,
+   Panorama extends Photo; `Photo.select()` finds the cover, `Photo.update` and `Photo.delete` of
+   the cover run in albums (`VALUES ?g_w { <default> <albums> }`), and the live dependencies of a
+   photo read include the albums graph.
+3. **(Medium) The one-time default-graph shape cleanup cut incoming links** (report 052).
+   `DeleteBuilder.from(NodeShape, {id})` also removed `?s ?p <shape>`. The cleanup now deletes only
+   each stale shape's own description (its triples, the blank nodes under them and its owned
+   subtree: property shapes, lists, paths, generated shapes) through an internal delete by ids that
+   keeps incoming links (`DeleteBuilder._keepingIncoming()`, `IRDeleteMutation.keepIncoming`;
+   `toJSON` refuses it). The cleanup stays. `[fuseki]` test "the cleanup deletes a stale shape's own
+   description and keeps the links shapes that stay hold to it": a staying default-graph shape keeps
+   its `core:isExtending` and `sh:node` links to the cleaned shape (fails without the fix).
+4. **(Medium) Routes to managed graphs** (report 053). A route is refused with
+   `GraphQueryError('graph-name-read-only')` (the existing code: these graphs are written only by
+   their own sync), naming the shape and the graph, when it names a portable name or the registry
+   (now typed), a package ontology or shape graph (`…/pkg/{slug}/graph/…`), the app's
+   `{DATA_ROOT}/graph/shapes` (`dataGraph('shapes')`) or `{DATA_ROOT}/graph/import/…`: at
+   `setShapeGraphs` time for `'own'`, `dataGraph()` and IRIs, and, for a full IRI under the data
+   root, when the routing is read (the root is known only then). **Not done: `{DATA_ROOT}/graph/drafts/…`.**
+   CN routes its draft shapes (`FormDraft`, `OntologyDraft` and their fields and terms) to
+   `{DATA_ROOT}/graph/drafts/forms` and `…/drafts/ontology` with `setShapeGraphs` on
+   `AppDataFusekiStore` (`draftGraphRoutes`), so refusing drafts in core would break CN's drafts;
+   left routable pending a decision (reported to the master).
+5. **(Low) `toJSON` with `.into()`** now throws on create, update and delete builders
+   (`queries/intoGraph.ts`), instead of dropping the graph. Published dependents checked: CN calls
+   `.into()` only in `formDraftStore.ts` and `ontologyDraftStore.ts`, server-side on the branch
+   store (no serialization); the server's `RemoteDataset` ships `toJSON()` and now refuses such a
+   builder, which is the intent; server-utils, fuseki and webid.email do not call `.into()`. The test
+   "DSL-JSON never carries a write graph: toJSON refuses .into()" replaces the old assertion.
+6. **(Low) Echo folding.** `effectsHash` leaves the graph out; `LiveQueryStore` folds a change and
+   its echo only when `graphsFold(a, b)` (a missing graph folds with any; two known graphs must be
+   equal). Test in `change-sources.test.ts` (fails with the graph in the hash).
+7. **(Low)** The dead `GRAPH` branch of `ownedLinkTypesQuery` (the no-routing path, where `ir.graph`
+   is never set) is removed with its parameter.
+8. **(Low)** Recorded: backlog [070](../backlog/070-graph-routing-per-read-cost.md) (route table
+   and owner scan rebuilt on every read; cache per registration version).
+9. **(Release)** `files` gains `"!lib/esm/tests"`: the build copies `src/tests` fixtures to
+   `lib/esm/tests`. `npm pack --dry-run`: the only `.ttl` files are `lib/esm/data/core.ttl`,
+   `npm.ttl` and `shapes.ttl` (412 files, 1.1 MB).
+
+Also (coordinator's request): `DraftGraph`'s comment, its registered description and the
+`core:DraftGraph` comment in `core.ttl` describe any draft graph a dataset owns
+(`{DATA_ROOT}/graph/drafts/…`), not one app's; `core-shapes.ttl` golden updated.
+
+Observed, not changed: a nested create without `__id` returns `id: ''` for the nested node in the
+create result (`mapSparqlCreateResult` maps the IR, whose nested ids are minted only in the
+compiler); the default-graph `syncShape` delete → create also removes incoming links of the
+rewritten shape (the same cascade as finding 3, outside the cleanup).
+
+Gate (worktree `named-graphs--fixcore` on `named-graphs` at `0797ff3`; own Fuseki
+`ghcr.io/linked-fw/fuseki:6.2.0-2` on :3197, compose project `fuseki-071-fixcore`, env exported
+before every jest run):
+
+- `node …/_linked-cli/lib/esm/launch.js build`: `✔ Build successful`, 6.3 s.
+- `jest`: `Test Suites: 1 failed, 4 skipped, 134 passed, 135 of 139 total`, `Tests: 120 skipped,
+  2685 passed, 2805 total`, `Time: 23.359 s` (25.8 s wall), `[fuseki] live tests: 356 total — 356
+  passed, 0 failed, 0 skipped`. The failing suite is `two-copies-built.test.ts` ("Jest worker
+  encountered 4 child process exceptions, exceeding retry limit"), backlog 060.
+- `npm run typecheck`: clean, 3.4 s. `npm run check:dts`: clean, 1.5 s. `npm run test:fuseki`:
+  `356 total — 356 passed`, `Time: 9.454 s` (11.7 s wall).
+- Without fixes 1 and 2 the new suites fail (`Tests: 10 failed, 9 passed, 19 total`).
+
 ## Follow-ups
 
 - Backlog [067](../backlog/067-writes-across-graphs.md): a routed mutation runs in one graph;

@@ -22,7 +22,7 @@ import {
 } from '../utils/ShapeClass.js';
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import type {ShapeConstructor} from '../shapes/Shape.js';
-import {effectsHash, normalizeChange, type ChangeEvent, type ChangeOrigin} from './changes.js';
+import {effectsHash, graphsFold, normalizeChange, type ChangeEvent, type ChangeOrigin} from './changes.js';
 import {selectInstances} from './matcher.js';
 import {
   kindOf,
@@ -181,7 +181,7 @@ export class LiveQueryStore {
 
   private readonly _disposers: Array<() => void> = [];
   private readonly _feeds = new Map<IDataset, () => void>();
-  private readonly _recentChanges = new Map<string, {at: number; origin: ChangeOrigin}>();
+  private readonly _recentChanges = new Map<string, {at: number; origin: ChangeOrigin; graph?: string}>();
   private _pendingRefetch = new Set<Instance>();
   private _flushScheduled = false;
   /** How many templates each catalog has; a change is decoded once per catalog listed here. */
@@ -441,10 +441,16 @@ export class LiveQueryStore {
       const hash = effectsHash(effects);
       const now = Date.now();
       const prev = this._recentChanges.get(hash);
-      if (prev && prev.origin !== 'manual' && prev.origin !== origin && now - prev.at < this.options.echoMs) {
+      if (
+        prev &&
+        prev.origin !== 'manual' &&
+        prev.origin !== origin &&
+        now - prev.at < this.options.echoMs &&
+        graphsFold(prev.graph, effects.graph)
+      ) {
         return; // the echo of a change already applied
       }
-      this._recentChanges.set(hash, {at: now, origin});
+      this._recentChanges.set(hash, {at: now, origin, ...(effects.graph !== undefined ? {graph: effects.graph} : {})});
       if (this._recentChanges.size > 256) {
         // Bounded: anything older than the echo window can no longer fold with a newcomer.
         for (const [h, r] of this._recentChanges) if (now - r.at >= this.options.echoMs) this._recentChanges.delete(h);

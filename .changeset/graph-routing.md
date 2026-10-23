@@ -10,7 +10,10 @@ Graph routing: storage rules pick the named graph of a shape, per dataset.
 - `.from()` with `graphs.default` among other graphs now reads (through `VALUES`) on a store that maps the default graph.
 - Routed writes: a create writes the shape's graph (`INSERT DATA { GRAPH <g> … }`); an update, upsert or delete writes the graph the subject lives in (`WITH <g>`, or, when the shape's read set holds several graphs, `GRAPH ?g` found in the same update over `VALUES` of the read set; an upsert of a subject found nowhere creates it in the shape's graph). Owned nodes live in the owner's graph; the owned-link check refuses a node that lives in another graph. `.into(graph)` on create, update and delete builders, checked against the routing (`GraphQueryError('graph-not-routed')`) and never carried in DSL-JSON.
 - `SparqlOptions.namedGraphUriParameter`: the `FROM NAMED` set goes to the transport (`SparqlDataset.executeSparqlSelectWithNamedGraphs`, which refuses by default).
-- Live queries: `QueryDependencies.graphs` and `MutationEffects.graph`; the matcher skips a template that does not read the written graph.
+- A nested node a create, update or upsert does not own (not `contains`) is written into its own shape's routed graph, in the same update (one `GRAPH` block per graph); the link to it stays in its holder's graph, and owned nodes stay with their owner.
+- A shape's read set also covers the owners of its sub-shapes (a photo shape reads the graph of an album that owns panorama covers).
+- A route to a graph the store manages itself is refused with `GraphQueryError('graph-name-read-only')`, naming the shape and the graph: a portable name, the registry, a package ontology or shape graph (`…/pkg/{slug}/graph/…`), the app's `{DATA_ROOT}/graph/shapes` (`dataGraph('shapes')`) and `{DATA_ROOT}/graph/import/…`.
+- Live queries: `QueryDependencies.graphs` and `MutationEffects.graph`; the matcher skips a template that does not read the written graph. A change and its remote echo fold when their graphs agree or one has none (`effectsHash` leaves the graph out; `graphsFold` compares it).
 
 **Breaking changes**
 
@@ -19,3 +22,6 @@ Graph routing: storage rules pick the named graph of a shape, per dataset.
 - Mutation IR kinds gain an optional `graph` (and `writeGraphs` on changes to existing subjects); `SparqlDeleteInsertPlan` gains `graphIn`; a store that builds its own SPARQL from the IR must honour it (or refuse a mutation that has one).
 - Under routing, an update of a subject found in no graph of its shape's read set writes nothing (an upsert creates it).
 - `.from([graphs.default, …])` is no longer refused on a store with `mapGraphName`; it reads the default graph with the others.
+- `toJSON()` of a create, update or delete builder with `.into()` throws instead of dropping the graph (a client that sent it to a remote dataset was written into the routed graph without knowing).
+- The mutation plans gain `SparqlInsertDataPlan.elsewhere` and `SparqlDeleteInsertPlan.insertElsewhere` (the blocks of nested nodes in other graphs), and `IRDeleteMutation` an internal `keepIncoming`; a store that builds its own SPARQL from the plans or the IR must honour them.
+- `ownedLinkTypesQuery(ids)` no longer takes a graph (it is the check without routing).

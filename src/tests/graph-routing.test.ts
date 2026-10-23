@@ -23,7 +23,7 @@ import {DeleteBuilder} from '../queries/DeleteBuilder';
 import {fromJSON} from '../queries/fromJSON';
 import {isGraphQueryError} from '../queries/graphQuery';
 import {mutationEffects, queryDependencies, type MutationEffects, type QueryDependencies} from '../queries/queryDependencies';
-import {effectsHash, normalizeChange} from '../live/changes';
+import {effectsHash, graphsFold, normalizeChange} from '../live/changes';
 import {readsWrittenGraph, selectInstances, type LiveIndexes} from '../live/matcher';
 import type {Instance, Template} from '../live/LiveQueryStore';
 import {LinkedStorage} from '../utils/LinkedStorage';
@@ -656,12 +656,13 @@ WHERE {
     expect(lastUpdate(store)).not.toContain('GRAPH');
   });
 
-  test('DSL-JSON never carries a write graph; a received one is ignored and the receiver routes', async () => {
-    const builder = GRAlbum.update({title: 'x'}).for({id: ALBUM}).into(G_PANORAMAS);
-    const json = builder.toJSON();
-    expect(JSON.stringify(json)).not.toContain(G_PANORAMAS);
-    expect(JSON.stringify(GRAlbum.create({title: 'x'}).into(G_PANORAMAS).toJSON())).not.toContain(G_PANORAMAS);
-    expect(JSON.stringify(GRAlbum.delete({id: ALBUM}).into(G_PANORAMAS).toJSON())).not.toContain(G_PANORAMAS);
+  test('DSL-JSON never carries a write graph: toJSON refuses .into(); a received one is ignored and the receiver routes', async () => {
+    const intoRefused = /toJSON\(\): this mutation names its graph with \.into\(<https:\/\/acme\.example\/data\/graph\/panoramas>\)/;
+    expect(() => GRAlbum.update({title: 'x'}).for({id: ALBUM}).into(G_PANORAMAS).toJSON()).toThrow(intoRefused);
+    expect(() => GRAlbum.create({title: 'x'}).into(G_PANORAMAS).toJSON()).toThrow(intoRefused);
+    expect(() => GRAlbum.delete({id: ALBUM}).into(G_PANORAMAS).toJSON()).toThrow(intoRefused);
+    expect(() => JSON.stringify(GRAlbum.create({title: 'x'}).into(G_PANORAMAS))).toThrow(/CreateBuilder\.toJSON/);
+    const json = GRAlbum.update({title: 'x'}).for({id: ALBUM}).toJSON();
     const forged = {...json, graph: G_PANORAMAS, into: G_PANORAMAS};
     const store = routedStore();
     await (fromJSON(forged as never) as UpdateBuilder).exec(store);
@@ -714,12 +715,16 @@ describe('live queries carry graphs', () => {
     expect(mutationEffects(GRPhoto.create({caption: 'x'})).graph).toBe(graphs.default);
   });
 
-  test('the graph survives JSON transport and is part of the fold hash', () => {
+  test('the graph survives JSON transport; it is compared apart from the fold hash', () => {
     const e: MutationEffects = {op: 'create', shape: GRAlbum.shape.id, props: new Set(['p']), ids: new Set(['i']), membership: new Set(), graph: G_ALBUMS};
     const revived = normalizeChange({effects: JSON.parse(JSON.stringify({...e, props: [...e.props], ids: [...e.ids!], membership: []}))});
     expect(revived.graph).toBe(G_ALBUMS);
-    expect(effectsHash(e)).not.toBe(effectsHash({...e, graph: G_PANORAMAS}));
-    expect(effectsHash(e)).not.toBe(effectsHash({...e, graph: undefined}));
+    expect(effectsHash(e)).toBe(effectsHash({...e, graph: G_PANORAMAS}));
+    expect(effectsHash(e)).toBe(effectsHash({...e, graph: undefined}));
+    expect(graphsFold(G_ALBUMS, undefined)).toBe(true);
+    expect(graphsFold(undefined, G_ALBUMS)).toBe(true);
+    expect(graphsFold(G_ALBUMS, G_ALBUMS)).toBe(true);
+    expect(graphsFold(G_ALBUMS, G_PANORAMAS)).toBe(false);
   });
 
   test('readsWrittenGraph: unknown on either side or a store-resolved name reads any graph', () => {

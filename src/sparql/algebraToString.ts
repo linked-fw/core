@@ -9,7 +9,9 @@ import type {
   SparqlDeleteInsertPlan,
   SparqlDeleteWherePlan,
   SparqlDatasetClause,
+  SparqlGraphTriples,
 } from './SparqlAlgebra.js';
+import {graphs} from '../ontologies/graphs.js';
 import {
   type SparqlOptions,
   formatUri,
@@ -482,6 +484,8 @@ export function insertDataPlanToSparql(
   } else {
     triplesStr = serializeTriples(plan.triples, collector);
   }
+  const elsewhere = serializeGraphTriples(plan.elsewhere, collector);
+  if (elsewhere) triplesStr = `${triplesStr}\n${elsewhere}`;
 
   const body = `INSERT DATA {\n${indent(triplesStr)}\n}`;
 
@@ -490,6 +494,26 @@ export function insertDataPlanToSparql(
   if (prefixBlock) parts.push(prefixBlock);
   parts.push(body);
   return parts.join('\n');
+}
+
+/**
+ * The blocks a mutation writes outside its own graph: `GRAPH <g> { … }` per graph, plain triples
+ * for the default graph. Empty when there are none.
+ */
+function serializeGraphTriples(
+  blocks: SparqlGraphTriples[] | undefined,
+  collector: UriCollector,
+): string {
+  if (!blocks || blocks.length === 0) return '';
+  return blocks
+    .filter((block) => block.triples.length > 0)
+    .map((block) => {
+      const triples = serializeTriples(block.triples, collector);
+      if (block.graph === graphs.default) return triples;
+      collectUri(collector, block.graph);
+      return `GRAPH ${formatUri(block.graph)} {\n${indent(triples)}\n}`;
+    })
+    .join('\n');
 }
 
 export function deleteInsertPlanToSparql(
@@ -507,9 +531,14 @@ export function deleteInsertPlanToSparql(
 
   // INSERT block (may be empty)
   let insertPart = '';
-  if (plan.insertPatterns.length > 0) {
-    const insertTriples = serializeTriples(plan.insertPatterns, collector);
-    insertPart = `INSERT {\n${indent(inGraphVar(insertTriples))}\n}\n`;
+  const insertElsewhere = serializeGraphTriples(plan.insertElsewhere, collector);
+  if (plan.insertPatterns.length > 0 || insertElsewhere) {
+    const blocks: string[] = [];
+    if (plan.insertPatterns.length > 0) {
+      blocks.push(inGraphVar(serializeTriples(plan.insertPatterns, collector)));
+    }
+    if (insertElsewhere) blocks.push(insertElsewhere);
+    insertPart = `INSERT {\n${indent(blocks.join('\n'))}\n}\n`;
   }
 
   // WHERE block

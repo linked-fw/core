@@ -193,6 +193,10 @@ Verify (master):
   `sh:conforms false` with a `MinCountConstraintComponent` result for `e1` from
   `…/SgPerson/name`, and none for `e2`.
 
+## Review fixes
+
+Recorded in report [051](051-graph-routing.md) §Review fixes: the cleanup now keeps incoming links (fix 3) and the tarball leaves out `lib/esm/tests` (fix 9).
+
 ## Follow-ups
 
 - Backlog [068](../backlog/068-default-graph-shapes-of-removed-packages.md): default-graph shapes of

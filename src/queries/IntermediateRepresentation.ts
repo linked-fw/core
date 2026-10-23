@@ -385,6 +385,13 @@ export type IRDeleteMutation = {
    */
   writeGraphs?: string[];
   ids: NodeReferenceValue[];
+  /**
+   * Delete only each subject's own description: its triples, its blank values and its owned
+   * subtree, but not the links other nodes hold to it (`?s ?p <id>`). Internal (the one-time
+   * cleanup of shapes that moved to their shape graph); never carried in DSL-JSON. A store that
+   * builds its own deletes from the IR must honour it or refuse the delete.
+   */
+  keepIncoming?: boolean;
 };
 
 export type IRDeleteAllMutation = {

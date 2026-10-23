@@ -6,7 +6,7 @@
 
 <https://linked.cm/shape/core/DraftGraph>
   a sh:NodeShape ;
-  rdfs:comment "The registry record of a graph of ontology-editor drafts. (graph registry, draft graph)" ;
+  rdfs:comment "The registry record of a draft graph a dataset owns. (graph registry, draft graph)" ;
   sh:targetClass core:DraftGraph ;
   core:isExtending <https://linked.cm/shape/core/NamedGraph> .
 

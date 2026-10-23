@@ -59,8 +59,20 @@ function reviveEffects(e: MutationEffects): MutationEffects {
   };
 }
 
-/** A stable fingerprint of an effects object, used to fold a local change and its remote echo into one. */
+/**
+ * A stable fingerprint of an effects object, used to fold a local change and its remote echo into
+ * one. It leaves out the graph: a change and its echo may differ there (the local side knows the
+ * routed graph, a feed often does not), so the graphs are compared apart, by {@link graphsFold}.
+ */
 export function effectsHash(e: MutationEffects): string {
   const sorted = (s: Set<string>) => [...s].sort().join(',');
-  return `${e.op}|${e.shape}|${sorted(e.props)}|${e.ids ? sorted(e.ids) : '*'}|${sorted(e.membership)}|${e.graph ?? '*'}`;
+  return `${e.op}|${e.shape}|${sorted(e.props)}|${e.ids ? sorted(e.ids) : '*'}|${sorted(e.membership)}`;
+}
+
+/**
+ * Whether two effects with the same {@link effectsHash} may fold on their graphs: a missing graph
+ * (unknown) folds with any graph; two known graphs fold only when they are the same.
+ */
+export function graphsFold(a: string | undefined, b: string | undefined): boolean {
+  return a === undefined || b === undefined || a === b;
 }

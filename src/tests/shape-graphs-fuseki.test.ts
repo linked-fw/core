@@ -140,6 +140,35 @@ describeFuseki('shape graphs on the inferring store', () => {
   );
 
   test(
+    "the cleanup deletes a stale shape's own description and keeps the links shapes that stay hold to it",
+    async () => {
+      // The default-graph shape again, as an older server wrote it, and a shape of another writer
+      // that stays in the default graph: it extends the stale shape and names it in sh:node.
+      await syncShape(SgPerson, store, {force: true})();
+      const STAY = `${X}StayingShape`;
+      await executeSparqlUpdate(
+        `INSERT DATA { <${STAY}> a <${SH}NodeShape> ; <${CORE}isExtending> <${SgPerson.shape.id}> ; ` +
+          `<${SH}property> <${STAY}/friend> . <${STAY}/friend> a <${SH}PropertyShape> ; ` +
+          `<${SH}path> <${X}friend> ; <${SH}node> <${SgPerson.shape.id}> . }`,
+      );
+      expect(await count(`<${SgPerson.shape.id}> <${CORE}shapeHash> ?h`)).toBe(1);
+
+      const result = await syncShapeGraphs(store, {packages: ['@_linked/core', PKG], force: true});
+      expect(result.cleaned).toBe(1);
+      // The stale shape's description is gone: its triples, its property shapes and the blank
+      // node of its inverse path.
+      expect(await count(`<${SgPerson.shape.id}> ?p ?o`)).toBe(0);
+      expect(await count(`<${SgPerson.shape.id}/name> ?p ?o`)).toBe(0);
+      expect(await count(`?b ?p ?o FILTER(isBlank(?b))`)).toBe(0);
+      // The links the staying shape holds to it are kept.
+      expect(await count(`<${STAY}> <${CORE}isExtending> <${SgPerson.shape.id}>`)).toBe(1);
+      expect(await count(`<${STAY}/friend> <${SH}node> <${SgPerson.shape.id}>`)).toBe(1);
+      expect(await count(`<${STAY}> <${SH}property> <${STAY}/friend>`)).toBe(1);
+    },
+    LIVE_FUSEKI_TIMEOUT,
+  );
+
+  test(
     "a sub-shape's instances still validate against the super-shape (SHACL targeting)",
     async () => {
       const data =

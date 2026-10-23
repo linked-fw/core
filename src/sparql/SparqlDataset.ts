@@ -80,6 +80,7 @@ import {
   ownedLinkGraphTypesQuery,
   ownedLinkTypesFromResults,
   ownedLinkTypesQuery,
+  type OwnedLink,
 } from './ownedLinkCheck.js';
 
 /**
@@ -161,6 +162,15 @@ export abstract class SparqlDataset implements IDataset {
   /** The compile options of a read: routed unless the read names its graphs (`.from()`). */
   private readOptions(ir: {graphs?: string[]}): SparqlCompileOptions | undefined {
     if (ir.graphs) return this.options;
+    const routing = this.graphRouting();
+    return routing ? {...this.options, routing} : this.options;
+  }
+
+  /**
+   * The compile options of a create or update: routed when the store has routes, so a nested node
+   * that is not owned is written into its own shape's graph (see `irToAlgebra.ts`).
+   */
+  private writeOptions(): SparqlCompileOptions | undefined {
     const routing = this.graphRouting();
     return routing ? {...this.options, routing} : this.options;
   }
@@ -429,7 +439,7 @@ export abstract class SparqlDataset implements IDataset {
     const uri = ir.data.id || generateEntityUri(ir.data.shape, this.options);
     ir.data.id = uri;
     await this.checkOwnedLinks(ir);
-    const sparql = createToSparql(ir, this.options);
+    const sparql = createToSparql(ir, this.writeOptions());
     await this.executeSparqlUpdate(sparql);
     return mapSparqlCreateResult(uri, ir);
   }
@@ -438,14 +448,14 @@ export abstract class SparqlDataset implements IDataset {
     const ir = this.resolveWriteGraph(lower(query));
     await this.checkOwnedLinks(ir);
     if (ir.kind === 'update_where') {
-      const sparql = updateWhereToSparql(ir, this.options);
+      const sparql = updateWhereToSparql(ir, this.writeOptions());
       await this.executeSparqlUpdate(sparql);
       return {id: ''} as UpdateResult;
     }
     const sparql =
       ir.kind === 'upsert'
-        ? upsertToSparql(ir, this.options)
-        : updateToSparql(ir, this.options);
+        ? upsertToSparql(ir, this.writeOptions())
+        : updateToSparql(ir, this.writeOptions());
     await this.executeSparqlUpdate(sparql);
     return mapSparqlUpdateResult(ir);
   }
@@ -463,8 +473,9 @@ export abstract class SparqlDataset implements IDataset {
     const links = collectOwnedLinks(ir);
     if (links.length === 0) return;
     const ids = links.map((link) => link.id);
-    if (!this.graphRouting()) {
-      const json = await this.executeSparqlSelect(ownedLinkTypesQuery(ids, ir.graph));
+    const routing = this.graphRouting();
+    if (!routing) {
+      const json = await this.executeSparqlSelect(ownedLinkTypesQuery(ids));
       assertOwnedLinkTypes(links, ownedLinkTypesFromResults(json));
       return;
     }
@@ -483,33 +494,17 @@ export abstract class SparqlDataset implements IDataset {
       for (const [graph, types] of byGraph) if (types.has(owner)) ownerGraphs.add(graph);
       if (ownerGraphs.size === 0 && ir.kind === 'upsert') ownerGraphs.add(ir.graph ?? graphs.default);
     }
-    const typesById = new Map<string, Set<string>>();
-    const elsewhere = new Map<string, string>();
-    for (const [graph, types] of byGraph) {
-      for (const [id, classes] of types) {
-        if (ownerGraphs.size === 0 || ownerGraphs.has(graph)) {
-          let set = typesById.get(id);
-          if (!set) typesById.set(id, (set = new Set()));
-          for (const c of classes) set.add(c);
-        } else if (!elsewhere.has(id)) {
-          elsewhere.set(id, graph);
-        }
-      }
+    // A link declared by a nested node the mutation does not own is checked against that node's
+    // graph: it is written into its own shape's routed graph.
+    const groups = new Map<string, {graphs: Set<string>; links: typeof links}>();
+    for (const link of links) {
+      const linkGraphs = link.nestedIn ? new Set([routing.graphForShape(link.nestedIn)]) : ownerGraphs;
+      const key = link.nestedIn ? `nested ${[...linkGraphs][0]}` : 'subject';
+      let group = groups.get(key);
+      if (!group) groups.set(key, (group = {graphs: linkGraphs, links: []}));
+      group.links.push(link);
     }
-    const misplaced = links.filter((link) => !typesById.has(link.id) && elsewhere.has(link.id));
-    if (misplaced.length > 0) {
-      throw new Error(
-        misplaced
-          .map(
-            (link) =>
-              `Cannot link <${link.id}> into the contains property "${link.label}" of <${link.shape}>: ` +
-              `it lives in <${elsewhere.get(link.id)}>, not in the graph its owner lives in. An owned ` +
-              'node lives in its owner\'s graph, where the owner\'s deletes reach it.',
-          )
-          .join('\n'),
-      );
-    }
-    assertOwnedLinkTypes(links, typesById);
+    for (const group of groups.values()) assertOwnedLinksIn(group.links, group.graphs, byGraph);
   }
 
 
@@ -623,3 +618,42 @@ export abstract class SparqlDataset implements IDataset {
 
 // Backwards-compatibility re-export — remove once all consumers are updated.
 export {SparqlDataset as SparqlStore};
+
+/**
+ * Under graph routing: refuse links to nodes typed only in another graph than `ownerGraphs` (an
+ * owned node lives in its owner's graph, where the owner's deletes reach it), then check the
+ * classes the owner's graphs hold. An empty `ownerGraphs` (an owner not found) reads every graph.
+ */
+function assertOwnedLinksIn(
+  links: OwnedLink[],
+  ownerGraphs: ReadonlySet<string>,
+  byGraph: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>,
+): void {
+  const typesById = new Map<string, Set<string>>();
+  const elsewhere = new Map<string, string>();
+  for (const [graph, types] of byGraph) {
+    for (const [id, classes] of types) {
+      if (ownerGraphs.size === 0 || ownerGraphs.has(graph)) {
+        let set = typesById.get(id);
+        if (!set) typesById.set(id, (set = new Set()));
+        for (const c of classes) set.add(c);
+      } else if (!elsewhere.has(id)) {
+        elsewhere.set(id, graph);
+      }
+    }
+  }
+  const misplaced = links.filter((link) => !typesById.has(link.id) && elsewhere.has(link.id));
+  if (misplaced.length > 0) {
+    throw new Error(
+      misplaced
+        .map(
+          (link) =>
+            `Cannot link <${link.id}> into the contains property "${link.label}" of <${link.shape}>: ` +
+            `it lives in <${elsewhere.get(link.id)}>, not in the graph its owner lives in. An owned ` +
+            'node lives in its owner\'s graph, where the owner\'s deletes reach it.',
+        )
+        .join('\n'),
+    );
+  }
+  assertOwnedLinkTypes(links, typesById);
+}

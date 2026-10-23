@@ -239,10 +239,21 @@ export type SparqlAskPlan = {
   dataset?: SparqlDatasetClause;
 };
 
+/**
+ * Triples a mutation writes outside its own graph: the nodes of a nested create that live in
+ * another graph under graph routing (a non-owned node is written into its own shape's graph).
+ * `graph` is a graph IRI, or `graphs.default` for the default graph, written as plain triples
+ * (the compiler never leaves `graphs.default` here for a plan with `WITH <g>`; it names the
+ * store's default graph instead).
+ */
+export type SparqlGraphTriples = {graph: string; triples: SparqlTriple[]};
+
 export type SparqlInsertDataPlan = {
   type: 'insert_data';
   triples: SparqlTriple[];
   graph?: string;
+  /** One `GRAPH` block per other graph the create writes (see {@link SparqlGraphTriples}). */
+  elsewhere?: SparqlGraphTriples[];
 };
 
 export type SparqlDeleteInsertPlan = {
@@ -259,6 +270,8 @@ export type SparqlDeleteInsertPlan = {
    * subject found in none of them is written to `fallback`.
    */
   graphIn?: {variable: string; graphs: string[]; subject?: string; fallback?: string};
+  /** INSERT template blocks in other graphs (see {@link SparqlGraphTriples}). */
+  insertElsewhere?: SparqlGraphTriples[];
 };
 
 export type SparqlDeleteWherePlan = {
