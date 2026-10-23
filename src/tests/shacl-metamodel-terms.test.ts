@@ -96,10 +96,11 @@ describe('shape sync writes the new terms', () => {
     ]) {
       expect(insert).toContain(triple);
     }
-    // sh:and / sh:xone are blank rdf:Lists of the member shapes.
-    expect(insert).toMatch(new RegExp(`${S.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')} shacl:and _:b\\d+ \\.`));
-    expect(insert).toMatch(/_:b\d+ rdf:first <https:\/\/example\.org\/terms#A> \./);
-    expect(insert).toMatch(/shacl:xone _:b\d+ \./);
+    // sh:and / sh:xone are rdf:Lists of the member shapes, with IRI cells under the shape.
+    expect(insert).toContain(`${S} shacl:and <https://linked.cm/shape/metamodel-terms-test/Termed/and/0> .`);
+    expect(insert).toContain(`<https://linked.cm/shape/metamodel-terms-test/Termed/and/0> rdf:first <https://example.org/terms#A> .`);
+    expect(insert).toContain(`${S} shacl:xone <https://linked.cm/shape/metamodel-terms-test/Termed/xone/0> .`);
+    expect(insert).not.toMatch(/_:b\d+ rdf:first/);
   });
 });
 

@@ -16,6 +16,7 @@ import type {DeleteLowerSpec} from './mutationLowerSpec.js';
 import {PendingQueryContext, asContextRef} from './QueryContext.js';
 import {encodeContextRef, isContextRefJSON} from './ContextRef.js';
 import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
+import {refuseSerializedInto} from './intoGraph.js';
 
 type DeleteMode = 'ids' | 'all' | 'where';
 
@@ -34,6 +35,10 @@ interface DeleteBuilderInit<S extends Shape> {
   whereFn?: WhereClause<S>;
   /** A pre-resolved where path (used by fromJSON; no live callback). */
   where?: WherePath;
+  /** The graph `.into()` names; never serialized (`toJSON` refuses a builder that has one). */
+  into?: string;
+  /** Keep the incoming links of the deleted ids (internal; never serialized). */
+  keepIncoming?: boolean;
 }
 
 /**
@@ -56,6 +61,8 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
   private readonly _mode?: DeleteMode;
   private readonly _whereFn?: WhereClause<S>;
   private readonly _where?: WherePath;
+  private readonly _into?: string;
+  private readonly _keepIncoming?: boolean;
 
   private readonly _catalog: ShapeCatalog | undefined;
 
@@ -67,6 +74,8 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     this._mode = init.mode;
     this._whereFn = init.whereFn;
     this._where = init.where;
+    this._into = init.into;
+    this._keepIncoming = init.keepIncoming;
   }
 
   private clone(overrides: Partial<DeleteBuilderInit<S>> = {}): DeleteBuilder<S, any> {
@@ -76,6 +85,8 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
       mode: this._mode,
       whereFn: this._whereFn,
       where: this._where,
+      into: this._into,
+      keepIncoming: this._keepIncoming,
       catalog: this._catalog,
       ...overrides,
     });
@@ -150,11 +161,44 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     return this._catalog;
   }
 
+  /**
+   * Write into `graph` instead of the graph the store's routing picks for this shape. Server-side
+   * only: the graph is never carried in DSL-JSON (a receiving process derives the graph itself;
+   * `toJSON` refuses a builder that has one),
+   * and the store refuses a graph its routing does not allow for the shape (its routed read set:
+   * the shape's graph and its sub-shapes' graphs) with `GraphQueryError('graph-not-routed')`.
+   */
+  into(graph: string): DeleteBuilder<S, R> {
+    if (typeof graph !== 'string' || !graph) {
+      throw new Error('.into() takes a graph IRI.');
+    }
+    return this.clone({into: graph}) as unknown as DeleteBuilder<S, R>;
+  }
+
+  /**
+   * @internal Delete only the description of each id (its triples, blank values and owned
+   * subtree) and keep the links other nodes hold to it. Server-side only, by ids only; never
+   * serialized (`toJSON` refuses it).
+   */
+  _keepingIncoming(): DeleteBuilder<S, R> {
+    return this.clone({keepIncoming: true}) as unknown as DeleteBuilder<S, R>;
+  }
+
   /** @internal The IR-free lowering spec consumed by `lower()`. Validates inputs. */
   _lowerSpec(): DeleteLowerSpec<S> {
+    let spec = this._lowerSpecWithoutGraph();
+    if (this._into !== undefined) spec = {...spec, into: this._into};
+    if (this._keepIncoming) {
+      if (spec.mode !== 'ids') throw new Error('DeleteBuilder: keeping incoming links needs a delete by ids.');
+      spec = {...spec, keepIncoming: true};
+    }
+    return spec;
+  }
+
+  private _lowerSpecWithoutGraph(): DeleteLowerSpec<S> {
     const catalog = this._catalog;
     if (catalog !== getActiveShapeCatalog()) {
-      return withShapeCatalog(catalog, () => this._lowerSpec());
+      return withShapeCatalog(catalog, () => this._lowerSpecWithoutGraph());
     }
     const mode = this._mode || (this._ids ? 'ids' : undefined);
 
@@ -185,6 +229,10 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     const catalog = this._catalog;
     if (catalog !== getActiveShapeCatalog()) {
       return withShapeCatalog(catalog, () => this.toJSON());
+    }
+    refuseSerializedInto('DeleteBuilder', this._into);
+    if (this._keepIncoming) {
+      throw new Error('DeleteBuilder.toJSON(): a delete that keeps incoming links is server-side only.');
     }
     const shape = this._shape.shape.id;
     const mode = this._mode || (this._ids ? 'ids' : undefined);

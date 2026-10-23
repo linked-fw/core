@@ -22,6 +22,7 @@ import {
 import {serializeWherePath, deserializeWherePath} from './QueryBuilderSerialization.js';
 import type {UpdateLowerSpec} from './mutationLowerSpec.js';
 import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
+import {refuseSerializedInto} from './intoGraph.js';
 
 type UpdateMode = 'for' | 'forAll' | 'where';
 
@@ -46,6 +47,8 @@ interface UpdateBuilderInit<S extends Shape> {
    * only the lowered IR kind and the `.where()`/`.forAll()` guards differ.
    */
   upsert?: boolean;
+  /** The graph `.into()` names; never serialized (`toJSON` refuses a builder that has one). */
+  into?: string;
 }
 
 /**
@@ -73,6 +76,7 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
   private readonly _where?: WherePath;
   private readonly _targetContextName?: string;
   private readonly _upsert: boolean;
+  private readonly _into?: string;
 
   private readonly _catalog: ShapeCatalog | undefined;
 
@@ -87,6 +91,7 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
     this._where = init.where;
     this._targetContextName = init.targetContextName;
     this._upsert = init.upsert ?? false;
+    this._into = init.into;
   }
 
   private clone(overrides: Partial<UpdateBuilderInit<S>> = {}): UpdateBuilder<S, any, any> {
@@ -99,6 +104,7 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
       where: this._where,
       targetContextName: this._targetContextName,
       upsert: this._upsert,
+      into: this._into,
       catalog: this._catalog,
       ...overrides,
     });
@@ -219,11 +225,30 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
     return this._catalog;
   }
 
+  /**
+   * Write into `graph` instead of the graph the store's routing picks for this shape. Server-side
+   * only: the graph is never carried in DSL-JSON (a receiving process derives the graph itself;
+   * `toJSON` refuses a builder that has one),
+   * and the store refuses a graph its routing does not allow for the shape (its routed read set:
+   * the shape's graph and its sub-shapes' graphs) with `GraphQueryError('graph-not-routed')`.
+   */
+  into(graph: string): UpdateBuilder<S, U, R> {
+    if (typeof graph !== 'string' || !graph) {
+      throw new Error('.into() takes a graph IRI.');
+    }
+    return this.clone({into: graph}) as unknown as UpdateBuilder<S, U, R>;
+  }
+
   /** @internal The IR-free lowering spec consumed by `lower()`. Validates inputs. */
   _lowerSpec(): UpdateLowerSpec<S> {
+    const spec = this._lowerSpecWithoutGraph();
+    return this._into === undefined ? spec : {...spec, into: this._into};
+  }
+
+  private _lowerSpecWithoutGraph(): UpdateLowerSpec<S> {
     const catalog = this._catalog;
     if (catalog !== getActiveShapeCatalog()) {
-      return withShapeCatalog(catalog, () => this._lowerSpec());
+      return withShapeCatalog(catalog, () => this._lowerSpecWithoutGraph());
     }
     if (!this._data) {
       throw new Error(
@@ -308,6 +333,7 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
     if (catalog !== getActiveShapeCatalog()) {
       return withShapeCatalog(catalog, () => this.toJSON());
     }
+    refuseSerializedInto('UpdateBuilder', this._into);
     if (!this._data) {
       throw new Error('UpdateBuilder requires .set(data) before .toJSON().');
     }

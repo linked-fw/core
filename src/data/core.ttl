@@ -16,7 +16,7 @@ core:
 
 core:DraftGraph
     a owl:Class ;
-    rdfs:comment "A named graph of ontology-editor drafts in a branch's app data; it never feeds the class hierarchy."@en ;
+    rdfs:comment "A named graph of drafts a dataset owns, under its data root; it never feeds the class hierarchy."@en ;
     rdfs:label "draft graph"@en ;
     rdfs:subClassOf sd:NamedGraph .
 

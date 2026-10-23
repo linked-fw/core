@@ -405,16 +405,54 @@ describe('SparqlDataset.graphQuery', () => {
     expect(isGraphQueryError(unknown, 'unsupported-query-kind')).toBe(true);
   });
 
-  test('bodies are parsed: invalid text, quads, relative IRIs and blank-node deletes are refused', async () => {
+  test('bodies are parsed: invalid text, quads and relative IRIs are refused', async () => {
     const ds = new RecordingSparql(true);
     const replace = (content: GraphContent) => NamedGraph.replaceContent(G, content).exec(ds).catch((e) => e);
     expect(String(await replace({mediaType: 'application/n-triples', text: '} } ; DROP ALL ; INSERT DATA { {'})))
       .toMatch(/not valid N-Triples/);
     expect(String(await replace({mediaType: 'text/turtle', text: '<rel> <urn:p> <urn:o> .'}))).toMatch(/IRI/);
-    const bnode = await NamedGraph.patchContent(G, {delete: {mediaType: 'text/turtle', text: '<urn:s> <urn:p> [] .'}})
-      .exec(ds)
-      .catch((e) => e);
-    expect(String(bnode)).toMatch(/cannot delete a blank node/);
+    expect(ds.updates).toEqual([]);
+  });
+
+  test('graph_patch deletes a blank-node structure as a pattern through its IRI subject (CBD)', async () => {
+    const ds = new RecordingSparql(true);
+    const del: GraphContent = {
+      mediaType: 'text/turtle',
+      text:
+        '<urn:ps> <urn:label> "kids" ; <http://www.w3.org/ns/shacl#path> [ <http://www.w3.org/ns/shacl#inversePath> <urn:parent> ] .\n' +
+        '<urn:seq> <http://www.w3.org/ns/shacl#path> ( <urn:a> [ <http://www.w3.org/ns/shacl#inversePath> <urn:b> ] ) .',
+    };
+    const insert: GraphContent = {
+      mediaType: 'text/turtle',
+      text: '<urn:ps> <http://www.w3.org/ns/shacl#path> [ <http://www.w3.org/ns/shacl#inversePath> <urn:mother> ] .',
+    };
+    await NamedGraph.patchContent(G, {delete: del, insert}).exec(ds);
+    const ops = ds.updates[0].split(' ;\n');
+    const SH = 'http://www.w3.org/ns/shacl#';
+    const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
+    expect(ops[0]).toBe(`DELETE DATA { GRAPH <${G}> {\n<urn:ps> <urn:label> "kids" .\n} }`);
+    const inv = `<urn:ps> <${SH}path> ?b0 . ?b0 <${SH}inversePath> <urn:parent> .`;
+    expect(ops[1]).toBe(
+      `DELETE { GRAPH <${G}> { ${inv} } } WHERE { GRAPH <${G}> { ${inv} } FILTER(isBlank(?b0)) }`,
+    );
+    const seq =
+      `<urn:seq> <${SH}path> ?b0 . ?b0 <${RDF}first> <urn:a> . ?b0 <${RDF}rest> ?b1 . ` +
+      `?b1 <${RDF}first> ?b2 . ?b1 <${RDF}rest> <${RDF}nil> . ?b2 <${SH}inversePath> <urn:b> .`;
+    expect(ops[2]).toBe(
+      `DELETE { GRAPH <${G}> { ${seq} } } WHERE { GRAPH <${G}> { ${seq} } FILTER(isBlank(?b0) && isBlank(?b1) && isBlank(?b2)) }`,
+    );
+    expect(ops[3].startsWith(`INSERT DATA { GRAPH <${G}> {\n`)).toBe(true);
+    expect(ops[3]).toContain(`<${SH}inversePath> <urn:mother>`);
+    expect(ops).toHaveLength(4 + 3); // + the record's hash and modified time
+  });
+
+  test('a blank node shared by two triples or reached from no IRI subject cannot be deleted', async () => {
+    const ds = new RecordingSparql(true);
+    const patch = (text: string) =>
+      NamedGraph.patchContent(G, {delete: {mediaType: 'text/turtle', text}}).exec(ds).catch((e) => e);
+    expect(String(await patch('<urn:s> <urn:p> _:x . <urn:t> <urn:p> _:x .'))).toMatch(/more than one triple/);
+    expect(String(await patch('_:x <urn:p> <urn:o> .'))).toMatch(/no IRI subject reaches/);
+    expect(String(await patch('_:x <urn:p> _:y . _:y <urn:p> _:x .'))).toMatch(/no IRI subject reaches/);
     expect(ds.updates).toEqual([]);
   });
 

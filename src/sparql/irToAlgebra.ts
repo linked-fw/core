@@ -39,8 +39,10 @@ import type {
   SparqlAggregateExpr,
   SparqlLeftJoin,
   SparqlFilter,
+  SparqlGraphTriples,
 } from './SparqlAlgebra.js';
-import {type SparqlOptions, generateEntityUri} from './sparqlUtils.js';
+import {type SparqlCompileOptions, generateEntityUri} from './sparqlUtils.js';
+import type {ShapeGraphRouting} from '../utils/graphRouting.js';
 import {
   selectPlanToSparql,
   askPlanToSparql,
@@ -64,7 +66,9 @@ import {
   withShapeCatalog,
 } from '../utils/ShapeClass.js';
 import {UnresolvedContextError} from '../queries/QueryContext.js';
-import {scopeAlgebraToGraphs} from './graphScope.js';
+import {scopeAlgebraToGraphs, type ReadGraphScope} from './graphScope.js';
+import {graphs} from '../ontologies/graphs.js';
+import {GraphQueryError} from '../queries/graphQuery.js';
 
 // The `*ToAlgebra` / `*ToSparql` exports compile in the catalog the IR was lowered in (its
 // non-enumerable `catalog` field). An IR without one — built by hand, or copied with a spread,
@@ -547,6 +551,12 @@ function buildOptionalTraversalSubtree(
 class VariableRegistry {
   private map = new Map<string, string>();
   private usedVarNames = new Set<string>();
+  private readonly entries: {alias: string; property: string; variable: string}[] = [];
+
+  /** Every (alias, property) → variable binding, in the order they were made. */
+  bindings(): readonly {alias: string; property: string; variable: string}[] {
+    return this.entries;
+  }
 
   private key(alias: string, property: string): string {
     return bindingKey(alias, property);
@@ -563,6 +573,7 @@ class VariableRegistry {
   set(alias: string, property: string, variable: string): void {
     this.map.set(this.key(alias, property), variable);
     this.usedVarNames.add(variable);
+    this.entries.push({alias, property, variable});
   }
 
   getOrCreate(alias: string, property: string): string {
@@ -624,11 +635,56 @@ function storedGraphOf(shapeId: string): string | undefined {
 }
 
 /**
+ * The graphs a read of a shape covers under graph routing: the graph its class stores its
+ * instances in (`storedInGraph`, the graph-registry records), else its routed read set.
+ */
+function routedGraphsOfShape(shapeId: string, routing: ShapeGraphRouting): readonly string[] {
+  const storedIn = storedGraphOf(shapeId);
+  return storedIn ? [storedIn] : routing.readGraphsForShape(shapeId);
+}
+
+/**
+ * The per-subject graph sets of a routed read: the root alias reads its shape's set, and every
+ * variable bound through an object property reads the set of that property's value shape (so a
+ * traversal's target, a filter's linked node and a nested select all read where their shape is
+ * routed), except through a `contains` property: an owned node lives in its owner's graph, so it
+ * reads its owner's set. A subject of unknown shape (an object property without a value shape) may be anywhere
+ * the routing writes. `undefined` when every subject of known shape reads only the default graph:
+ * the query is then compiled exactly as without routing.
+ */
+function routedReadScope(
+  rootAlias: string,
+  rootShape: string,
+  registry: VariableRegistry,
+  routing: ShapeGraphRouting,
+): ReadGraphScope | undefined {
+  const bySubject = new Map<string, readonly string[]>([
+    [rootAlias, routedGraphsOfShape(rootShape, routing)],
+  ]);
+  // Bindings are made parent first, so one pass in order resolves every chain.
+  for (const {alias, property, variable} of registry.bindings()) {
+    const ownerSet = bySubject.get(alias);
+    if (!ownerSet || bySubject.has(variable)) continue;
+    const ps = findPropertyShapeById(property);
+    if (ps?.contains && ps.valueShape?.id) {
+      // An owned node lives in its owner's graph (a nested create is written there).
+      bySubject.set(variable, ownerSet);
+    } else if (ps?.valueShape?.id) {
+      bySubject.set(variable, routedGraphsOfShape(ps.valueShape.id, routing));
+    }
+  }
+  const otherSubjects = routing.allGraphs();
+  const onlyDefault = (set: readonly string[]) => set.length === 1 && set[0] === graphs.default;
+  if ([...bySubject.values()].every(onlyDefault)) return undefined;
+  return {bySubject, otherSubjects};
+}
+
+/**
  * Converts an IRSelectQuery to a SparqlSelectPlan.
  */
 export function selectToAlgebra(
   query: IRSelectQuery,
-  _options?: SparqlOptions,
+  _options?: SparqlCompileOptions,
 ): SparqlSelectPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -1193,10 +1249,17 @@ export function selectToAlgebra(
   // `.from()` scopes the read to its graphs (expanded by the store); without it, a shape whose
   // instances live in one named graph (the graph-registry records, `NamedGraph.storedInGraph`)
   // is read there. Counts and asks reuse this algebra and its dataset clause.
+  //
+  // With graph routing (the store passes it only when its dataset has routes) and no `.from()`,
+  // each subject group reads the graphs its shape is routed to (see `routedReadScope`).
   const storedIn = storedGraphOf(query.root.shape);
+  const routed =
+    !query.graphs && _options?.routing
+      ? routedReadScope(rootAlias, query.root.shape, registry, _options.routing)
+      : undefined;
   const scoped = scopeAlgebraToGraphs(
     algebra,
-    query.graphs ?? (storedIn ? [storedIn] : undefined),
+    query.graphs ?? routed ?? (storedIn ? [storedIn] : undefined),
     _options,
   );
   return {
@@ -1814,7 +1877,7 @@ const STRING_LEXICAL_DATATYPES = new Set<string>([XSD_TIME]);
  */
 function fieldValueToTerms(
   value: IRFieldValue,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
   datatype?: string,
 ): SparqlTerm[] {
   if (value === null || value === undefined) {
@@ -1889,6 +1952,65 @@ type BlankNodeMinter = {next: number};
 type NestedNodeKind = 'iri' | 'blank';
 
 /**
+ * Where the nodes of a nested create are written under graph routing. An owned node (reached
+ * through a `contains` property) and a blank node live with the node that holds them; any other
+ * nested node is written into its own shape's routed graph, in the same update, because that is
+ * where a read of its shape finds it. The link triple stays with the holder.
+ *
+ * `target` is the graph the triples being generated go to: `null` for the plan's own graph (what
+ * the plan's `graph`, `WITH` or `graphIn` names), else a graph IRI (`graphs.default` for the
+ * default graph). Triples for another target are collected in `elsewhere`.
+ */
+type NestedPlacement = {
+  routing: ShapeGraphRouting;
+  /** The plan's own graph when it is known at compile time; `undefined` when found at write time. */
+  planGraph: string | undefined;
+  elsewhere: Map<string, SparqlTriple[]>;
+  target: string | null;
+};
+
+/** A placement for a mutation compiled with `routing`, or `undefined` without routing. */
+function nestedPlacement(
+  options: SparqlCompileOptions | undefined,
+  planGraph: string | undefined,
+): NestedPlacement | undefined {
+  return options?.routing
+    ? {routing: options.routing, planGraph, elsewhere: new Map(), target: null}
+    : undefined;
+}
+
+/**
+ * The plan's `elsewhere` blocks. With `WITH <g>` (`withGraph`) a template triple outside a `GRAPH`
+ * block goes to `<g>`, so the default graph is named with the store's name for it.
+ */
+function elsewhereBlocks(
+  placement: NestedPlacement | undefined,
+  options: SparqlCompileOptions | undefined,
+  withGraph?: string,
+): SparqlGraphTriples[] | undefined {
+  if (!placement || placement.elsewhere.size === 0) return undefined;
+  return [...placement.elsewhere].map(([graph, triples]) => ({
+    graph: graph === graphs.default && withGraph !== undefined ? defaultGraphStoreName(options) : graph,
+    triples,
+  }));
+}
+
+/** The store's name for the default graph (`SparqlOptions.mapGraphName`), or a refusal. */
+function defaultGraphStoreName(options: SparqlCompileOptions | undefined): string {
+  const name = options?.mapGraphName ? options.mapGraphName(graphs.default) : null;
+  if (!name) {
+    throw new GraphQueryError(
+      'unsupported-query-kind',
+      'This write may find its subject in the default graph or in named graphs, which a SPARQL ' +
+        'store addresses through its own name for the default graph; this store has none ' +
+        '(SparqlOptions.mapGraphName).',
+      graphs.default,
+    );
+  }
+  return name;
+}
+
+/**
  * True when the property's `sh:nodeKind` allows blank-node values (`sh:BlankNode`,
  * `sh:BlankNodeOrIRI`, `sh:BlankNodeOrLiteral`). A nested create under such a property may be
  * minted as a blank node, and a delete / replace through it removes its blank value.
@@ -1951,8 +2073,9 @@ function nestedCreateTriples(
   propertyId: string,
   propertyTerm: SparqlTerm,
   data: IRNodeData,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
   blanks?: BlankNodeMinter,
+  placement?: NestedPlacement,
 ): SparqlTriple[] {
   const kind = nestedNodeKind(propertyId, data);
   if (kind === 'blank' && !blanks) {
@@ -1963,8 +2086,31 @@ function nestedCreateTriples(
         `parent${findPropertyShapeById(propertyId)?.nodeKind?.id === shacl.BlankNodeOrIRI.id ? ', or give it an id to write it as an IRI' : ''}.`,
     );
   }
-  const nested = generateNodeDataTriples(data, options, blanks, kind);
-  return [tripleOf(subjectTerm, propertyTerm, nested.term), ...nested.triples];
+  const child = placement && childPlacement(placement, propertyId, data, kind);
+  const nested = generateNodeDataTriples(data, options, blanks, kind, child);
+  const link = tripleOf(subjectTerm, propertyTerm, nested.term);
+  if (!placement || !child || child.target === placement.target) return [link, ...nested.triples];
+  const key = child.target!;
+  const bucket = placement.elsewhere.get(key);
+  if (bucket) bucket.push(...nested.triples);
+  else placement.elsewhere.set(key, nested.triples);
+  return [link];
+}
+
+/**
+ * The placement of a nested node (see {@link NestedPlacement}): an owned or blank node stays
+ * with its holder; any other node goes to its shape's routed graph, which is the plan's own
+ * graph when the two are the same and the plan's graph is known.
+ */
+function childPlacement(
+  placement: NestedPlacement,
+  propertyId: string,
+  data: IRNodeData,
+  kind: NestedNodeKind,
+): NestedPlacement {
+  if (kind === 'blank' || findPropertyShapeById(propertyId)?.contains) return placement;
+  const graph = placement.routing.graphForShape(data.shape);
+  return {...placement, target: graph === placement.planGraph ? null : graph};
 }
 
 /**
@@ -1978,9 +2124,10 @@ function nestedCreateTriples(
  */
 function generateNodeDataTriples(
   data: IRNodeData,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
   blanks?: BlankNodeMinter,
   kind: NestedNodeKind = 'iri',
+  placement?: NestedPlacement,
 ): {term: SparqlTerm; triples: SparqlTriple[]} {
   const triples: SparqlTriple[] = [];
   let subjectTerm: SparqlTerm;
@@ -2009,7 +2156,7 @@ function generateNodeDataTriples(
       for (const item of field.value) {
         if (item && typeof item === 'object' && 'shape' in item && 'fields' in item) {
           triples.push(
-            ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, item as IRNodeData, options, blanks),
+            ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, item as IRNodeData, options, blanks, placement),
           );
         } else {
           const terms = fieldValueToTerms(item, options, resolvePropertyDatatype(field.property));
@@ -2024,7 +2171,7 @@ function generateNodeDataTriples(
     // Handle nested IRNodeData
     if (typeof field.value === 'object' && 'shape' in field.value && 'fields' in field.value) {
       triples.push(
-        ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, field.value as IRNodeData, options, blanks),
+        ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, field.value as IRNodeData, options, blanks, placement),
       );
       continue;
     }
@@ -2040,21 +2187,67 @@ function generateNodeDataTriples(
 }
 
 /**
+ * A mutation plan writing into `graph` (the mutation's `.into()` graph or the store's routed one):
+ * `INSERT DATA { GRAPH <g> { … } }`, or `WITH <g>` before a DELETE/INSERT, which makes the graph
+ * the target of both templates and the dataset of the WHERE, so an update's old values, a
+ * delete's incoming references and an owned walk are all read and removed in that graph only.
+ * Without a graph the plan is unchanged (the default graph).
+ */
+function inGraph<P extends SparqlInsertDataPlan | SparqlDeleteInsertPlan>(plan: P, graph: string | undefined): P {
+  return graph === undefined ? plan : {...plan, graph};
+}
+
+/**
+ * A DELETE/INSERT plan of a mutation on existing subjects. With `writeGraphs` (the subject may
+ * live in any graph of its shape's read set) the plan runs in the graph that holds it, found in
+ * the same update (`graphIn`, see `deleteInsertPlanToSparql`); an upsert of a subject found in
+ * none of them writes the shape's routed graph. Otherwise `inGraph`.
+ */
+function inWriteGraph(
+  plan: SparqlDeleteInsertPlan,
+  query: {kind: string; graph?: string; writeGraphs?: string[]},
+  options: SparqlCompileOptions | undefined,
+  subject?: string,
+): SparqlDeleteInsertPlan {
+  if (!query.writeGraphs || query.writeGraphs.length === 0) return inGraph(plan, query.graph);
+  const storeName = (graph: string): string =>
+    graph === graphs.default ? defaultGraphStoreName(options) : graph;
+  // A graph variable no pattern of the plan uses (with its `_p`, `_o`, `_found` companions).
+  const used = collectVariableNames(
+    [plan.deletePatterns, plan.insertPatterns, plan.whereAlgebra, plan.insertElsewhere],
+    new Set(),
+  );
+  let variable = 'g_w';
+  for (let n = 2; [variable, `${variable}_p`, `${variable}_o`, `${variable}_found`].some((v) => used.has(v)); n++) {
+    variable = `g_w${n}`;
+  }
+  return {
+    ...plan,
+    graphIn: {
+      variable,
+      graphs: query.writeGraphs.map(storeName),
+      ...(subject ? {subject} : {}),
+      ...(query.kind === 'upsert' ? {fallback: storeName(query.graph ?? graphs.default)} : {}),
+    },
+  };
+}
+
+/**
  * Converts an IRCreateMutation to a SparqlInsertDataPlan.
  */
 export function createToAlgebra(
   query: IRCreateMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): SparqlInsertDataPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => createToAlgebra(query, options));
   }
-  const {triples} = generateNodeDataTriples(query.data, options, {next: 0});
-  return {
-    type: 'insert_data',
-    triples,
-  };
+  const placement = nestedPlacement(options, query.graph ?? graphs.default);
+  const {triples} = generateNodeDataTriples(query.data, options, {next: 0}, 'iri', placement);
+  const elsewhere = elsewhereBlocks(placement, options);
+  const plan: SparqlInsertDataPlan = {type: 'insert_data', triples, ...(elsewhere ? {elsewhere} : {})};
+  return inGraph(plan, query.graph);
 }
 
 // ---------------------------------------------------------------------------
@@ -2091,7 +2284,8 @@ function keptReferences(value: IRFieldValue): SparqlTerm[] {
 function processUpdateFields(
   data: IRNodeData,
   subjectTerm: SparqlTerm,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
+  placement?: NestedPlacement,
 ): {
   deletePatterns: SparqlTriple[];
   insertPatterns: SparqlTriple[];
@@ -2173,7 +2367,7 @@ function processUpdateFields(
         for (const addItem of setMod.add) {
           if (addItem && typeof addItem === 'object' && 'shape' in addItem && 'fields' in addItem) {
             insertPatterns.push(
-              ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, addItem as IRNodeData, options),
+              ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, addItem as IRNodeData, options, undefined, placement),
             );
           } else {
             const terms = fieldValueToTerms(addItem, options, resolvePropertyDatatype(field.property));
@@ -2231,7 +2425,7 @@ function processUpdateFields(
       for (const item of field.value) {
         if (item && typeof item === 'object' && 'shape' in item && 'fields' in item) {
           insertPatterns.push(
-            ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, item as IRNodeData, options),
+            ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, item as IRNodeData, options, undefined, placement),
           );
         } else {
           const terms = fieldValueToTerms(item, options, resolvePropertyDatatype(field.property));
@@ -2250,7 +2444,7 @@ function processUpdateFields(
       oldValueTriples.push(tripleOf(subjectTerm, propertyTerm, oldVar));
 
       insertPatterns.push(
-        ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, field.value as IRNodeData, options),
+        ...nestedCreateTriples(subjectTerm, field.property, propertyTerm, field.value as IRNodeData, options, undefined, placement),
       );
       continue;
     }
@@ -2369,13 +2563,13 @@ function wrapOldValueOptionals(
  */
 export function updateToAlgebra(
   query: IRUpdateMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => updateToAlgebra(query, options));
   }
-  return buildDeleteInsertPlan(query, options);
+  return inWriteGraph(buildDeleteInsertPlan(query, options), query, options, query.id);
 }
 
 /**
@@ -2389,17 +2583,17 @@ export function updateToAlgebra(
  */
 export function upsertToAlgebra(
   query: IRUpsertMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => upsertToAlgebra(query, options));
   }
-  return buildDeleteInsertPlan(query, options, {
+  return inWriteGraph(buildDeleteInsertPlan(query, options, {
     // Must match the IRI `create` asserts and `select` scans for; the raw shape id is
     // not the same thing, and a node typed with it would be invisible to queries.
     ensureType: resolveShapeScanIri(query.shape),
-  });
+  }), query, options, query.id);
 }
 
 /**
@@ -2409,11 +2603,12 @@ export function upsertToAlgebra(
  */
 function buildDeleteInsertPlan(
   query: IRUpdateMutation | IRUpsertMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
   opts?: {ensureType?: string},
 ): SparqlDeleteInsertPlan {
   const subjectTerm = iriTerm(query.id);
-  const result = processUpdateFields(query.data, subjectTerm, options);
+  const placement = nestedPlacement(options, knownPlanGraph(query));
+  const result = processUpdateFields(query.data, subjectTerm, options, placement);
 
   const whereAlgebra = buildUpdateWhere(
     {type: 'bgp', triples: []},
@@ -2430,12 +2625,28 @@ function buildDeleteInsertPlan(
       ]
     : result.insertPatterns;
 
+  const insertElsewhere = elsewhereBlocks(placement, options, withGraphOf(query));
   return {
     type: 'delete_insert',
     deletePatterns: result.deletePatterns,
     insertPatterns,
     whereAlgebra,
+    ...(insertElsewhere ? {insertElsewhere} : {}),
   };
+}
+
+/**
+ * The graph a change to existing subjects writes when it is known at compile time: its one graph
+ * (`WITH <g>`, or the default graph). `undefined` when the store finds the subject's graph at
+ * write time (`writeGraphs`).
+ */
+function knownPlanGraph(query: {graph?: string; writeGraphs?: string[]}): string | undefined {
+  return query.writeGraphs && query.writeGraphs.length > 0 ? undefined : (query.graph ?? graphs.default);
+}
+
+/** The `WITH <g>` graph of a change to existing subjects, if it has one (see `inWriteGraph`). */
+function withGraphOf(query: {graph?: string; writeGraphs?: string[]}): string | undefined {
+  return query.writeGraphs && query.writeGraphs.length > 0 ? undefined : query.graph;
 }
 
 /** Left-nested UNION of `blocks` (at least one). */
@@ -3298,11 +3509,17 @@ export function buildOwnedSelfDelete(
  */
 export function deleteToAlgebra(
   query: IRDeleteMutation,
-  _options?: SparqlOptions,
+  _options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => deleteToAlgebra(query, _options));
+  }
+  if (query.writeGraphs && query.ids.length > 1) {
+    throw new Error(
+      'deleteToAlgebra: a delete whose subjects may live in different graphs (writeGraphs) is one ' +
+        'plan per id; compile it with deleteToSparql, which writes one operation per id.',
+    );
   }
   const deletePatterns: SparqlTriple[] = [];
   const guards: SparqlTriple[] = [];
@@ -3316,13 +3533,15 @@ export function deleteToAlgebra(
     const objWild = tripleOf(varTerm(`s${idx}`), varTerm(`p2${idx}`), subjectTerm);
     const typeGuard = tripleOf(subjectTerm, iriTerm(RDF_TYPE), iriTerm(resolveShapeScanIri(query.shape)));
 
-    // DELETE block: all patterns (subject-wildcard, object-wildcard, type)
-    deletePatterns.push(subjWild, objWild, typeGuard);
+    // DELETE block: all patterns (subject-wildcard, object-wildcard, type); with
+    // `keepIncoming` only the subject's own description, not the links to it.
+    deletePatterns.push(...(query.keepIncoming ? [subjWild, typeGuard] : [subjWild, objWild, typeGuard]));
 
     // WHERE: the type guard is required; the subject's own triples and its
     // incoming references (the entity may have none) are separate UNION blocks.
     guards.push(typeGuard);
-    blocks.push({type: 'bgp', triples: [subjWild]}, {type: 'bgp', triples: [objWild]});
+    blocks.push({type: 'bgp', triples: [subjWild]});
+    if (!query.keepIncoming) blocks.push({type: 'bgp', triples: [objWild]});
 
     // The subject's own blank values (through its blank-capable properties) and the blank
     // nodes below them.
@@ -3344,12 +3563,12 @@ export function deleteToAlgebra(
     right: unionOf(blocks),
   };
 
-  return {
+  return inWriteGraph({
     type: 'delete_insert',
     deletePatterns,
     insertPatterns: [],
     whereAlgebra,
-  };
+  }, query, _options, query.ids[0]?.id);
 }
 
 /**
@@ -3393,7 +3612,7 @@ function bulkDeleteUnion(
  */
 export function deleteAllToAlgebra(
   query: IRDeleteAllMutation,
-  _options?: SparqlOptions,
+  _options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3414,12 +3633,12 @@ export function deleteAllToAlgebra(
     ? {type: 'join', left: {type: 'bgp', triples: [typeTriple]}, right: union}
     : {type: 'bgp', triples: [typeTriple, rootWildcard]};
 
-  return {
+  return inWriteGraph({
     type: 'delete_insert',
     deletePatterns,
     insertPatterns: [],
     whereAlgebra,
-  };
+  }, query, _options);
 }
 
 /**
@@ -3431,7 +3650,7 @@ export function deleteAllToAlgebra(
  */
 export function deleteWhereToAlgebra(
   query: IRDeleteWhereMutation,
-  _options?: SparqlOptions,
+  _options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3482,12 +3701,12 @@ export function deleteWhereToAlgebra(
     whereAlgebra = {type: 'join', left: whereAlgebra, right: union};
   }
 
-  return {
+  return inWriteGraph({
     type: 'delete_insert',
     deletePatterns,
     insertPatterns: [],
     whereAlgebra,
-  };
+  }, query, _options);
 }
 
 /**
@@ -3499,14 +3718,15 @@ export function deleteWhereToAlgebra(
  */
 export function updateWhereToAlgebra(
   query: IRUpdateWhereMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => updateWhereToAlgebra(query, options));
   }
   const subjectTerm = varTerm('a0');
-  const result = processUpdateFields(query.data, subjectTerm, options);
+  const placement = nestedPlacement(options, knownPlanGraph(query));
+  const result = processUpdateFields(query.data, subjectTerm, options, placement);
 
   // WHERE: type triple is always required
   const typeTriple = tripleOf(subjectTerm, iriTerm(RDF_TYPE), iriTerm(resolveShapeScanIri(query.data.shape)));
@@ -3543,12 +3763,14 @@ export function updateWhereToAlgebra(
   // that split for both update paths.
   whereAlgebra = buildUpdateWhere(whereAlgebra, result, query.traversalPatterns, subjectTerm);
 
-  return {
+  const insertElsewhere = elsewhereBlocks(placement, options, withGraphOf(query));
+  return inWriteGraph({
     type: 'delete_insert',
     deletePatterns: result.deletePatterns,
     insertPatterns: result.insertPatterns,
     whereAlgebra,
-  };
+    ...(insertElsewhere ? {insertElsewhere} : {}),
+  }, query, options);
 }
 
 // ---------------------------------------------------------------------------
@@ -3573,7 +3795,7 @@ export function updateWhereToAlgebra(
  */
 export function askToAlgebra(
   query: IRAskQuery,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): SparqlAskPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3593,7 +3815,13 @@ export function askToAlgebra(
         tripleOf(iriTerm(query.subjectId), varTerm('p'), varTerm('o')),
       ],
     };
-    const scoped = scopeAlgebraToGraphs(bgp, query.graphs, options);
+    // Under graph routing a node of no shape may be in any graph the routing writes to.
+    const scope: ReadGraphScope | undefined =
+      query.graphs ??
+      (options?.routing
+        ? {bySubject: new Map(), otherSubjects: options.routing.allGraphs()}
+        : undefined);
+    const scoped = scopeAlgebraToGraphs(bgp, scope, options);
     return {
       type: 'ask',
       algebra: scoped.algebra,
@@ -3667,7 +3895,7 @@ export function askToAlgebra(
  */
 export function countToAlgebra(
   query: IRCountQuery,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): SparqlSelectPlan {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3735,7 +3963,7 @@ export function countToAlgebra(
  */
 export function selectToSparql(
   query: IRSelectQuery,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3750,7 +3978,7 @@ export function selectToSparql(
  */
 export function askToSparql(
   query: IRAskQuery,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3766,7 +3994,7 @@ export function askToSparql(
  */
 export function countToSparql(
   query: IRCountQuery,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3782,7 +4010,7 @@ export function countToSparql(
  */
 export function createToSparql(
   query: IRCreateMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3798,7 +4026,7 @@ export function createToSparql(
  */
 export function updateToSparql(
   query: IRUpdateMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3811,7 +4039,7 @@ export function updateToSparql(
 /** Lowers an IRUpsertMutation all the way to a SPARQL update string. */
 export function upsertToSparql(
   query: IRUpsertMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3826,11 +4054,18 @@ export function upsertToSparql(
  */
 export function deleteToSparql(
   query: IRDeleteMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => deleteToSparql(query, options));
+  }
+  if (query.writeGraphs && query.ids.length > 1) {
+    // Each subject may live in another graph of the read set: one operation per id, in one
+    // update request (one transaction).
+    return query.ids
+      .map((id) => deleteToSparql(attachCatalog({...query, ids: [id]}, catalog), options))
+      .join(' ;\n');
   }
   const plan = deleteToAlgebra(query, options);
   return deleteInsertPlanToSparql(plan, options);
@@ -3841,7 +4076,7 @@ export function deleteToSparql(
  */
 export function deleteAllToSparql(
   query: IRDeleteAllMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3856,7 +4091,7 @@ export function deleteAllToSparql(
  */
 export function deleteWhereToSparql(
   query: IRDeleteWhereMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
@@ -3871,7 +4106,7 @@ export function deleteWhereToSparql(
  */
 export function updateWhereToSparql(
   query: IRUpdateWhereMutation,
-  options?: SparqlOptions,
+  options?: SparqlCompileOptions,
 ): string {
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {

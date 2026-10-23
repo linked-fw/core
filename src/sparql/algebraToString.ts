@@ -9,7 +9,9 @@ import type {
   SparqlDeleteInsertPlan,
   SparqlDeleteWherePlan,
   SparqlDatasetClause,
+  SparqlGraphTriples,
 } from './SparqlAlgebra.js';
+import {graphs} from '../ontologies/graphs.js';
 import {
   type SparqlOptions,
   formatUri,
@@ -482,6 +484,8 @@ export function insertDataPlanToSparql(
   } else {
     triplesStr = serializeTriples(plan.triples, collector);
   }
+  const elsewhere = serializeGraphTriples(plan.elsewhere, collector);
+  if (elsewhere) triplesStr = `${triplesStr}\n${elsewhere}`;
 
   const body = `INSERT DATA {\n${indent(triplesStr)}\n}`;
 
@@ -492,30 +496,59 @@ export function insertDataPlanToSparql(
   return parts.join('\n');
 }
 
+/**
+ * The blocks a mutation writes outside its own graph: `GRAPH <g> { … }` per graph, plain triples
+ * for the default graph. Empty when there are none.
+ */
+function serializeGraphTriples(
+  blocks: SparqlGraphTriples[] | undefined,
+  collector: UriCollector,
+): string {
+  if (!blocks || blocks.length === 0) return '';
+  return blocks
+    .filter((block) => block.triples.length > 0)
+    .map((block) => {
+      const triples = serializeTriples(block.triples, collector);
+      if (block.graph === graphs.default) return triples;
+      collectUri(collector, block.graph);
+      return `GRAPH ${formatUri(block.graph)} {\n${indent(triples)}\n}`;
+    })
+    .join('\n');
+}
+
 export function deleteInsertPlanToSparql(
   plan: SparqlDeleteInsertPlan,
   _options?: SparqlOptions,
 ): string {
   const collector: UriCollector = {uris: new Set()};
+  const graphIn = plan.graphIn;
+  const g = graphIn ? `?${sanitizeVarName(graphIn.variable)}` : '';
+  const inGraphVar = (body: string) => (graphIn ? `GRAPH ${g} {\n${indent(body)}\n}` : body);
 
   // DELETE block
   const deleteTriples = serializeTriples(plan.deletePatterns, collector);
-  const deletePart = `DELETE {\n${indent(deleteTriples)}\n}`;
+  const deletePart = `DELETE {\n${indent(inGraphVar(deleteTriples))}\n}`;
 
   // INSERT block (may be empty)
   let insertPart = '';
-  if (plan.insertPatterns.length > 0) {
-    const insertTriples = serializeTriples(plan.insertPatterns, collector);
-    insertPart = `INSERT {\n${indent(insertTriples)}\n}\n`;
+  const insertElsewhere = serializeGraphTriples(plan.insertElsewhere, collector);
+  if (plan.insertPatterns.length > 0 || insertElsewhere) {
+    const blocks: string[] = [];
+    if (plan.insertPatterns.length > 0) {
+      blocks.push(inGraphVar(serializeTriples(plan.insertPatterns, collector)));
+    }
+    if (insertElsewhere) blocks.push(insertElsewhere);
+    insertPart = `INSERT {\n${indent(blocks.join('\n'))}\n}\n`;
   }
 
   // WHERE block
-  const whereBody = serializeAlgebraNode(plan.whereAlgebra, collector);
+  let whereBody = serializeAlgebraNode(plan.whereAlgebra, collector);
+  if (graphIn) whereBody = graphInWhere(graphIn, whereBody, collector);
   const wherePart = `WHERE {\n${indent(whereBody)}\n}`;
 
   // `WITH <g>` makes the graph the target of DELETE and INSERT and the dataset of WHERE.
   let withPart = '';
-  if (plan.graph) {
+  if (plan.graph && !graphIn) {
     collectUri(collector, plan.graph);
     withPart = `WITH ${formatUri(plan.graph)}`;
   }
@@ -528,6 +561,47 @@ export function deleteInsertPlanToSparql(
   if (insertPart) parts.push(insertPart.trimEnd());
   parts.push(wherePart);
   return parts.join('\n');
+}
+
+/**
+ * The WHERE of a mutation that runs in the graph holding its subject (`plan.graphIn`):
+ *
+ * - by subject: `{ SELECT DISTINCT ?g WHERE { VALUES ?g { … } GRAPH ?g { <s> ?p ?o } } }` binds
+ *   the graph that holds the subject (once: a subject lives in one graph), then
+ *   `GRAPH ?g { where }`; a subject found in none of them matches nothing;
+ * - with a fallback (an upsert): the same lookup is OPTIONAL and `?g` is `COALESCE`d with the
+ *   fallback graph, so a subject found nowhere is created there;
+ * - in bulk: `VALUES ?g { … } GRAPH ?g { where }`, every graph of the set in which it matches.
+ */
+function graphInWhere(
+  graphIn: NonNullable<SparqlDeleteInsertPlan['graphIn']>,
+  whereBody: string,
+  collector: UriCollector,
+): string {
+  const v = sanitizeVarName(graphIn.variable);
+  const values = graphIn.graphs
+    .map((iri) => {
+      collectUri(collector, iri);
+      return formatUri(iri);
+    })
+    .join(' ');
+  const inGraph = `GRAPH ?${v} {\n${indent(whereBody)}\n}`;
+  if (!graphIn.subject) return `VALUES ?${v} { ${values} }\n${inGraph}`;
+  collectUri(collector, graphIn.subject);
+  const subject = formatUri(graphIn.subject);
+  if (graphIn.fallback === undefined) {
+    return (
+      `{ SELECT DISTINCT ?${v} WHERE { VALUES ?${v} { ${values} } GRAPH ?${v} { ${subject} ?${v}_p ?${v}_o } } }\n` +
+      inGraph
+    );
+  }
+  collectUri(collector, graphIn.fallback);
+  return (
+    `OPTIONAL { SELECT DISTINCT ?${v}_found WHERE { VALUES ?${v}_found { ${values} } ` +
+    `GRAPH ?${v}_found { ${subject} ?${v}_p ?${v}_o } } }\n` +
+    `BIND(COALESCE(?${v}_found, ${formatUri(graphIn.fallback)}) AS ?${v})\n` +
+    `OPTIONAL {\n${indent(inGraph)}\n}`
+  );
 }
 
 export function deleteWherePlanToSparql(

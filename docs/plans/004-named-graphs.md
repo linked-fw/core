@@ -26,8 +26,8 @@ Integration branch: `named-graphs` (this repository's main checkout
 merge --ff-only named-graphs--<step>`, then `npx linked build` in that main checkout. No PR per
 step; one release PR per phase (master R1, R2).
 
-Records: K1 → report 048, K2 → 049, K3 → 050, K4 → 051, K5 → 052 (`docs/reports/`). Backlog
-follow-ups from 063.
+Records: K1 → report 048, K2 → 049, K3 → 050, K4 → 051, K5 → 052, K6 → 053 (`docs/reports/`). Backlog
+follow-ups from 063 (K5: from 068; K6: 069).
 
 ## Contracts
 
@@ -541,3 +541,437 @@ Landed (report [049](../reports/049-reads-from-graphs.md)). Deviations from this
 `graphs.union` alone; `graphs.allShapes` is expanded already; the store method is
 `resolveReadGraphs`; backlogs are 065 (linked type checks) and 066 (K3 took 064). Full gate:
 2580 passed, 339/339 `[fuseki]`; `two-copies-built` still fails (backlog 060).
+
+## K4 — graph routing (sensitive)
+
+Master §K4 is the scope; this is its plan-mode detail, written against `named-graphs` at
+`8b4c4db` (core 2.38.1 released, phase 1 complete). Line numbers drift; search for the symbol.
+
+### Contract (provided; repeated from the master §Contracts)
+
+**Graph routing (provider K4; consumers V2, C3, C4)**
+
+- `LinkedStorage.setDatasetForShapes(dataset, shapes, {graph?})` and the datasets config's
+  per-shape `graph` key (`linked.backend.datasets.json`: `{datasets: {alias: {store, config,
+  graphs?: {<shape IRI>: <graph IRI>}}}}`, settled: open question 5); default: the default
+  graph, as today.
+- Reads: routing gives each subject group its graph set (sub-shapes included); generator per
+  decision 9 with `VALUES` and the default graph's store name in the set — through `VALUES ?g`,
+  since Jena's `FROM NAMED <urn:x-arq:DefaultGraph>` matches nothing (core backlog 066).
+- Writes: mutation plans carry the routed graph; `.into(graph)` only server-side and only to a
+  graph the routing allows for that shape; DSL-JSON never carries a write graph (the receiver
+  derives it). Owned walks and `checkOwnedLinks` run in the subject's graph; live-query
+  dependencies and change events carry the graph.
+
+### How it works (inside the contract)
+
+- **Where the routes live.** A per-dataset table on the shared global (beside `LinkedStorage`'s
+  routing state, for the same two-copies reason), keyed by the dataset object, mapping a shape
+  IRI to one graph IRI. `setDatasetForShapes(dataset, [shapes], {graph})` pins the shapes and
+  records their graph; the old variadic form `setDatasetForShapes(dataset, ...shapes)` stays.
+  `loadStores` records an alias's `graphs` for the store it builds. A store reads the routes of
+  its own instance; a composite dataset (CN's router, C3) registers routes on the store it
+  forwards to with the exported `setShapeGraphs(dataset, {shape: graph})`.
+- **A shape's graph** is its own route, else its nearest routed super-shape's, else the default
+  graph. **Its read set** is its graph plus the graph of every registered sub-shape (decision 9:
+  "including the graphs of sub-shapes"). The graph-record shapes keep `storedInGraph` (reads of
+  `NamedGraph` read `graphs.registry`; writes of records go through `graphQuery` only).
+- **Reads.** With no `.from()` and routes registered, the store hands the compiler a routing
+  object; each subject group's set comes from its alias's shape (the root's shape, a traversal's
+  value shape; a subject with no known shape gets the union of the query's sets). No group with a
+  named graph → the query is unchanged (today's SPARQL, byte for byte). Otherwise:
+  - every group in one same single graph → `GRAPH <g> { whole pattern }` (as K2's one graph);
+  - all sets named: `FROM NAMED` the union; a group with one graph → `GRAPH <g>`; a group whose
+    set is the union → `GRAPH ?g_x`; a group with a narrower set and a type check (the root's
+    scan, a `MINUS` exclusion) → `VALUES ?g_x { … }` with `GRAPH ?g_x` (decision 9's "overlaps
+    their classes": core cannot know which classes another graph holds, so a type-checked group
+    is restricted whenever its set is narrower); a linked group without a type check needs no
+    `VALUES` (its data lives in one graph, `FROM NAMED` bounds it);
+  - some set holds the default graph and some a named graph: **no `FROM NAMED`** (probed on
+    `6.2.0-2`: with any `FROM NAMED` the default graph is unreachable, in `VALUES`, in
+    `GRAPH <urn:x-arq:DefaultGraph>` and as plain triples); a default-only group is plain
+    triples, a one-graph group `GRAPH <g>`, any other group `VALUES ?g_x { … }` with the default
+    graph's store name (`mapGraphName(graphs.default)`; refused without it).
+  - `.from()` sets use the same code with one set for every group, so `graphs.default` with other
+    graphs now reads (backlog 066 closed); `graphs.union` with other graphs stays refused.
+- **Linked type checks (backlog 065): not needed.** A group's set comes from its value shape, and
+  a linked subject's data lives in one graph, so `FROM NAMED` (or `VALUES`) finds it without a
+  type check; adding one would be a semantic change to every select. `isolateLinkedTypeChecks`
+  stays as it is (inert for generated queries).
+- **`named-graph-uri`.** `SparqlOptions.namedGraphUriParameter` (default false): the set goes to
+  the transport instead of `FROM NAMED` text, through a protected
+  `executeSparqlSelectWithNamedGraphs(sparql, graphs)` whose default throws (a transport that
+  ignored the list would read every named graph).
+- **Writes.** Mutation IR kinds gain `graph?: string`. The store sets the plan's graph: the
+  `.into()` graph if given, else the shape's routed graph; the default graph leaves the plan as
+  today. `insert_data` writes `GRAPH <g>`, `delete_insert` `WITH <g>` (K1), so an update's
+  `WHERE`, an owned walk and a delete's incoming-reference cleanup run in the subject's graph.
+  `checkOwnedLinks` reads the linked ids' types in that graph.
+- **`.into(graph)`** on create, update and delete builders: carried to the IR, never into
+  DSL-JSON (`toJSON` omits it, `fromJSON` never reads one), so only code in the store's own
+  process can use it. "A graph the routing allows for that shape" = the shape's read set (a write
+  there is found by the shape's routed reads); anything else, a portable name, the registry or a
+  store-reserved name → `GraphQueryError('graph-not-routed')` (new code) or the existing
+  `graph-name-read-only`.
+- **Live queries.** `QueryDependencies.graphs?: Set<string>` (the `.from()` names, or the routed
+  sets' union when the dataset `LinkedStorage` resolves for the root has routes; absent =
+  unknown) and `MutationEffects.graph?: string` (the `.into()` graph or the routed graph, same
+  condition; `graphs.default` for an unrouted shape of a routed dataset). The matcher skips a
+  template only when both are known, the dependencies hold no store-resolved name, and the graph
+  is not among them. `effectsHash` and the JSON revival carry the graph.
+
+### Files
+
+| File | What changes |
+|---|---|
+| `src/utils/graphRouting.ts` (new) | the per-dataset table on the shared global; `setShapeGraphs(dataset, map)`, `getShapeGraphs(dataset)`, `unsetShapeGraphs(shapeIri)`; `graphRoutingFor(dataset)` → `{graphForShape(id), readGraphsForShape(id)}` or `undefined` when the dataset has no routes; graph IRIs checked (absolute, not portable, not the registry) |
+| `src/utils/LinkedStorage.ts` | `setDatasetForShapes(dataset, shapes[], {graph?})` beside the variadic form; `unsetDatasetForShape` drops that shape's graph routes |
+| `src/utils/parseDatasetsConfig.ts`, `src/utils/loadStores.ts` | `DatasetEntry.graphs?: Record<string, string>` validated; `loadStores` records it for the store |
+| `src/sparql/sparqlUtils.ts` | `SparqlOptions.namedGraphUriParameter?`; `SparqlCompileOptions` (= options + `routing`) |
+| `src/sparql/graphScope.ts` | per-subject graph sets: union `FROM NAMED`, fixed `GRAPH <g>`, `VALUES`, the default graph without `FROM NAMED`; `.from()` through the same path |
+| `src/sparql/irToAlgebra.ts` | alias → shape → set for select (count and ask reuse it); mutation `graph` → `plan.graph` for every mutation kind |
+| `src/sparql/SparqlDataset.ts` | `protected graphRouting()`; reads compiled with it; write graph resolution and the `.into()` check; `checkOwnedLinks` in the graph; the `named-graph-uri` path |
+| `src/sparql/ownedLinkCheck.ts` | `ownedLinkTypesQuery(ids, graph?)` |
+| `src/utils/graphRegistryCache.ts` | `expandReadGraphs` keeps `graphs.default` in a mixed set when the store maps it |
+| `src/queries/IntermediateRepresentation.ts`, `mutationLowerSpec.ts`, `lower.ts`, `CreateBuilder.ts`, `UpdateBuilder.ts`, `DeleteBuilder.ts` | `graph?` on the mutation IR kinds; `.into(graph)` on the builders (immutable, kept by every fluent call, not serialized) |
+| `src/queries/graphQuery.ts` | refusal code `graph-not-routed` |
+| `src/queries/queryDependencies.ts`, `src/live/changes.ts`, `src/live/matcher.ts` | `graphs` in dependencies, `graph` in effects, the matcher's graph filter |
+| `src/index.ts` | export `setShapeGraphs`, `getShapeGraphs`, `graphRoutingFor` |
+| `src/tests/graph-routing.test.ts` (new) | table and config; golden SPARQL per form (unchanged without routes, one graph, `FROM NAMED` + `GRAPH ?g`, `VALUES`, default graph mixed, sub-shapes, `.from()` with the default graph, `named-graph-uri`); writes per mutation kind; `.into()` allowed and refused, not in JSON; owned-link check in the graph; dependencies, effects and matcher |
+| `src/tests/graph-routing-fuseki.test.ts` (new) | `[fuseki]`: a write lands in the routed graph; routed reads (join across graphs, sub-shape graph, default graph mixed, count, ask); an owned delete stays in its graph; `.into()` refused; identical rows with `isolateLinkedTypeChecks` on and off |
+| `docs/architecture/ontologies.md` | graph routing |
+| `docs/backlog/065…`, `066…` | resolved by this step |
+| `.changeset/graph-routing.md` (new) | minor, with the breaking list |
+| `docs/reports/051-graph-routing.md` (new) | the record |
+
+### Pitfalls
+
+- **Nothing may change without routes.** Every golden suite must pass untouched: the routing
+  object is only passed when the dataset has routes, and a query whose groups all read the
+  default graph compiles exactly as today.
+- **`FROM NAMED` empties the default graph** (probed above): a query that mixes the default graph
+  with named graphs must not carry `FROM NAMED`, and then every named group needs `VALUES` or a
+  fixed graph (`GRAPH ?g` alone would range over every named graph).
+- **Two copies.** The table lives on the shared global and is keyed by the dataset object and the
+  shape IRI, never by a class object.
+- **Across graphs, writes stay in one graph.** A delete by id removes incoming references only in
+  the subject's graph; an `update_where`/`delete_where` filter or a computed update that traverses
+  into a linked node in another graph does not see it. Recorded as a backlog item.
+- **Owned nodes live in the owner's graph** (decision 9's fixture does the same): nested creates go
+  into the plan's graph, whatever their own shape's route.
+- **`.into()` over the wire.** A builder with `.into()` sent through a remote dataset loses it by
+  design; the receiving side derives the graph.
+- **The registry and portable names** are never write targets; reserved store names
+  (`isReservedGraphName`) neither.
+- **K5** shares `irToAlgebra.ts` and `syncShapes.ts`: it rebases on this step.
+
+### Tests
+
+- Quick gate (after each phase), with the env below exported first:
+  `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs <files>`, plus
+  `npm run typecheck`.
+- Full gate (before landing): `npm test` (jest; `two-copies-built` is backlog 060), `npm run
+  typecheck`, `npm run test:fuseki`, `npm run check:dts`, `npx linked build`.
+- Isolation: `FUSEKI_TEST_PORT=3182`, `FUSEKI_BASE_URL=http://localhost:3182`,
+  `LINKED_CORE_TEST_COMPOSE_PROJECT=fuseki-071-k4`, `LINKED_FUSEKI_IMAGE=ghcr.io/linked-fw/fuseki:6.2.0-2`.
+- Verify (master): golden SPARQL per form; `[fuseki]`: decision 9's fixture (10 of 100 graphs,
+  ~1M quads, loaded into a dataset of the step's own store) read through routed DSL queries
+  returns exactly the rows the same queries return on the ideal dataset (only the 10 graphs' data
+  in the default graph), for point, page, count, join, walk and label, with median timings of
+  both; a write lands in the routed graph; an owned delete stays in its graph; `.into()` to a
+  graph the routing forbids refused.
+
+### Phases
+
+1. **Routes:** `graphRouting.ts`, `LinkedStorage`, config and `loadStores`, exports. Quick gate:
+   the routing-table and config tests; `load-stores-loader`, `dataset-pin-identity`.
+2. **Routed reads:** `graphScope.ts`, `irToAlgebra.ts` reads, `SparqlDataset` reads, the
+   `named-graph-uri` path, `expandReadGraphs`. Quick gate: the golden routing tests; the select,
+   ask, count, `read-graphs` suites.
+3. **Routed writes:** IR `graph`, `.into()`, plan graphs, the write check, owned-link check.
+   Quick gate: the write tests; the mutation suites.
+4. **Live queries:** dependencies, effects, matcher. Quick gate: the live tests and
+   `query-dependencies`, `mutation-effects`, `live-matching`.
+5. **Live store, fixture, docs and record:** the `[fuseki]` suite, decision 9's fixture,
+   `ontologies.md`, backlogs, changeset, report 051, Outcome.
+
+### Outcome
+
+Landed (report [051](../reports/051-graph-routing.md)). Deviations from this section: a shape's
+read set includes its owners' graphs, and a traversal through `contains` reads the owner's set
+(owned nodes live in their owner's graph); on review the owner decided the write rule (master
+§Contracts, Graph routing, "As decided on K4's review"): a change to an existing subject runs in the
+graph that holds it, found in the same update (`graphIn`: `SELECT DISTINCT ?g_w … GRAPH ?g_w`), a
+delete of several ids is one operation per id, and the owned-link check refuses a node that lives
+outside its owner's graph; a MINUS right side writes its own `VALUES`. Backlogs 065 and 066 are
+resolved; 067 records writes across graphs. Full gate: 2632 passed, 349/349 `[fuseki]`;
+`two-copies-built` still fails (backlog 060).
+
+## K5 — shape graphs
+
+Master §K5 is the scope; this is its plan-mode detail, written against `named-graphs` at
+`556803b` (K4 landed). Line numbers drift; search for the symbol.
+
+### Contract (provided; repeated from the master §Contracts)
+
+**Shape graphs (provider K5 + L1 + V2; consumers C4, every package)**
+
+- `shapesToTurtle(shapes, {prefixes})` (core, server-only): deterministic (fixed prefix block,
+  subjects sorted, `a` first, predicates sorted, one per line), shapes as declared plus
+  `core:isExtending`, blank nodes only for `sh:inversePath` and sequence paths, each hanging off one
+  IRI subject.
+- `lib/esm/data/shapes.ttl` in every package build (L1). Hash prefix `linked-shape-graph/1`.
+- `syncShapeGraphs(ds, {force?})` replaces `ShapesGraph.iriFor(pkg)` whole on a mismatch; the
+  app's generated single-owner shapes go in `{DATA_ROOT}/graph/shapes` (`ShapesGraph`,
+  `feedsHierarchy` false), regenerated at boot. The default-graph shape sync is removed after a
+  one-time cleanup of the shapes it wrote (by `core:shapeHash` nodes).
+- `patchContent` on a shape graph: the unit is the shape's CBD (deleted as a pattern through the
+  IRI subject, inserted anew).
+
+### How it works (inside the contract)
+
+- **One data builder.** `shapesToTurtle` reuses the create data the shape sync already builds
+  (`buildNodeShapeData`) and lowers it through core's own create pipeline (`createToAlgebra`), so
+  the triples in `shapes.ttl` are exactly the ones a `NodeShape` read expects; only the generated
+  single-owner shapes and `core:shapeHash` are left out. The Turtle writer then serialises those
+  triples deterministically.
+- **As declared (13b).** `buildNodeShapeData` writes the shape's own property shapes
+  (`getPropertyShapes(shape)`, overrides included), no inherited copies; the default-graph
+  `syncShapes` (the fallback, below) writes the same. `SHAPE_HASH_VERSION` 2 → 3 with the golden
+  and the ledger, so every default-graph store rewrites once. Readers: core reads no stored shape
+  except the sync's hash read; a data-only shape (a catalog built from stored shapes) inherits
+  through `extends` already (`getSuperShapes`), and the one thing it got only from the flattened
+  copies, the root `Shape`'s `label` and `type`, it now inherits from the built-in root: the
+  property readers (`getPropertyShapes(…, true)`, `getPropertyShape`) end a data-only chain at the
+  root `Shape`, as a class-backed chain does.
+- **Blank nodes only for paths.** Complex `sh:path` values stay blank (SHACL requires blank path
+  nodes: inverse, alternative, the repetition paths; sequence lists are blank-celled `rdf:List`s).
+  `sh:and`/`sh:xone` lists of shapes, blank today, get IRI cells (`{shape IRI}/and/0`, as `sh:in`
+  already has `{property IRI}/in/0`). Each blank structure is the object of exactly one triple;
+  the writer refuses anything else.
+- **The Turtle form.** A fixed prefix block (`core`, `rdf`, `rdfs`, `sh`, `xsd`, plus the caller's
+  `prefixes`, sorted by prefix; a caller's prefix may not rebind a fixed one), then one block per
+  IRI subject, sorted by IRI: the subject on its own line, then one `predicate object` per line
+  (`a` first, then predicates by IRI, then objects by their written form), `;`-separated, `.` at
+  the end, one blank line between blocks. A blank node is written inline on its parent's line
+  (`[ sh:inversePath ex:p ]`, `( ex:a ex:b )` for a blank-celled list), with its own predicates in
+  the same order. Literals: plain for `xsd:string`, `@lang`, else `"…"^^dt`. An IRI is compacted
+  only when the local part is a safe `PN_LOCAL` (`Prefix.isValidLocalName`). Ends with `\n`.
+- **API** (`src/shapes/shapesToTurtle.ts`, subpath `@_linked/core/shapes/shapesToTurtle`, not in the
+  browser index):
+  - `shapesToTurtle(shapes: Array<typeof Shape | NodeShapeData>, options?: {prefixes?:
+    Record<string, string>}): string` — the given shapes, as declared.
+  - `packageShapes(packageName): NodeShapeData[]` — the registered shapes of a package (for
+    `@_linked/core`, its built-ins only; core's test shapes are never included), the selection
+    `syncShapes` uses.
+  - `packageShapesTurtle(packageName, options?): string | undefined` — `shapesToTurtle` of
+    `packageShapes`, `undefined` when the package has none. This is the call L1's build and the
+    sync both make, so a built `shapes.ttl` and an in-process generation are the same bytes.
+  - `singleOwnerShapesTurtle(shapes, options?): string | undefined` — the generated single-owner
+    shapes of the given shapes (with the owners' `core:generatedShape` links), for the app graph.
+- **`syncShapeGraphs(ds?, options?)`** (`src/shapes/syncShapeGraphs.ts`) → `{written, skipped,
+  pruned, cleaned, appGraph?, defaultGraph?}`. Options: `force`, `packages` (npm names),
+  `turtleFor(pkg)` (the bytes of a package's `shapes.ttl`, or `undefined` to generate;
+  V2 reads the file), `appShapes: {graph, package?}` (the app's `{DATA_ROOT}/graph/shapes`; core
+  knows no `DATA_ROOT`), `orphanScope: 'none' | 'all'`.
+  - Per package (sorted): `hash = sha256Hex('linked-shape-graph/1\n' + text)`; compared with the
+    `ShapesGraph` record's `core:contentHash` (one `ShapesGraph.select()` per run); equal → skipped;
+    else `ShapesGraph.create({id, package, sources: 'data/shapes.ttl'}).withContent(turtle,
+    {contentHash})` or `update(id).set({sources}).replaceContent(…)`.
+  - The app graph: `singleOwnerShapesTurtle` of every registered shape, hashed the same way,
+    replaced whole on a mismatch (a `ShapesGraph` record with the caller's `package`); dropped
+    when there is nothing to write and a record exists. Without `appShapes` it is not written.
+  - **Cleanup (one-time):** after the graphs, every shape the run writes (the packages' shapes and
+    the generated ones) that the default graph still holds with a `core:shapeHash` is deleted there
+    with its owned subtree (`DeleteBuilder` on `NodeShape`, the existing cascade); one select finds
+    them, so a cleaned store costs one read. Shapes another writer put in the default graph are
+    not touched.
+  - Orphans (`orphanScope: 'all'`, no `packages`): `ShapesGraph.delete` of every record whose
+    `package` is not registered (the app graph excepted).
+  - **Fallback**, as the ontology sync: a dataset without `graphQuery`, or
+    `unsupported-query-kind` before the first graph write → the default-graph `syncShapes` (its
+    thunks run; `defaultGraph` = how many). `syncShapes`/`syncShape` stay exported for it and for
+    existing callers.
+- **CBD patches** (`graphQueryToSparql.ts`). `patch.delete` may hold blank nodes: its ground
+  triples go in `DELETE DATA` as today; each triple `<s> <p> _:b` with an IRI subject, together
+  with the statements of `_:b` and recursively of every blank node under it, becomes one
+  `DELETE { GRAPH <g> { … } } WHERE { GRAPH <g> { … } FILTER(isBlank(?b0) && …) }`, blank nodes
+  as variables. Refused (as the plain errors of the body parser today): a blank node that is the
+  object of more than one triple, a blank subject no IRI subject reaches, a cycle. The insert side
+  is unchanged (`INSERT DATA` mints fresh blank nodes).
+
+### Files
+
+| File | What changes |
+|---|---|
+| `src/shapes/syncShapes.ts` | declared property shapes only; `sh:and`/`sh:xone` with IRI cells; `buildNodeShapeData` exported (internal) with an option to leave out generated shapes; `SHAPE_HASH_VERSION` 3; doc |
+| `src/shapes/nodeShapeData.ts`, `src/utils/ShapeClass.ts` | data-only shapes inherit the root `Shape`'s property shapes in the property readers |
+| `src/shapes/shapesToTurtle.ts` (new) | the writer, `shapesToTurtle`, `packageShapes`, `packageShapesTurtle`, `singleOwnerShapesTurtle`, the fixed prefixes |
+| `src/shapes/syncShapeGraphs.ts` (new) | `syncShapeGraphs`, `SHAPE_GRAPH_HASH_PREFIX`, `shapeGraphHash`, cleanup, fallback |
+| `src/sparql/graphQueryToSparql.ts` | CBD deletes in `graph_patch` |
+| `src/index.ts` | nothing new in the browser index (the new modules are subpaths) |
+| `src/tests/shape-sync-output-equivalence.test.ts`, `shacl-syncshapes.test.ts`, others asserting flattened copies | golden and ledger for version 3; declared-only expectations |
+| `src/tests/shapes-to-turtle.test.ts` (new) | the form; byte-identical across runs; golden `src/tests/fixtures/core-shapes.ttl` for core's own shapes; blank nodes only for paths; parses back (N3.js) to the create pipeline's triples |
+| `src/tests/shape-graphs.test.ts` (new) | the sync against a recording double: create, skip, replace, force, app graph, cleanup, orphans, fallback |
+| `src/tests/graph-query.test.ts` | CBD golden SPARQL and refusals |
+| `src/tests/shape-graphs-fuseki.test.ts` (new) | `[fuseki]`: sync written then skipped; cleanup of old default-graph shapes; CBD patch on an `sh:inversePath` shape leaves no orphan blank node; SHACL targeting of a sub-shape's instances by the super-shape with shapes as declared |
+| `docs/architecture/ontologies.md` | shape graphs |
+| `.changeset/shape-graphs.md` (new) | minor, with the breaking list |
+| `docs/reports/052-shape-graphs.md` (new) | the record |
+
+### Pitfalls
+
+- **Hash churn.** The graph hash is over the Turtle bytes; anything non-deterministic in the
+  writer (map order, prefix registry, blank labels) rewrites every graph at every boot. The writer
+  uses only the fixed and passed prefixes, never `Prefix`'s global map.
+- **The default-graph golden.** Declared-only changes what `syncShapes` writes: bump
+  `SHAPE_HASH_VERSION`, update the golden, append to the ledger (never edit an entry).
+- **Two copies.** The shape enumeration reads the shared registry (`getAllShapeClasses`), as
+  `syncShapes` does; nothing keyed by class objects.
+- **Readers in other repositories** (CN's catalogs, server) read the default graph until V2/C4;
+  inherited properties stored as copies disappear from what the default-graph sync writes. CN's
+  catalog follows `extends` through its registry (C4, CN backlog 131).
+- **CBD deletes and inference.** The pattern's `rdf:type` triples could match by inference; the
+  `DELETE` template only removes stored triples, so an inferred match deletes nothing extra.
+- **K4 shares `syncShapes.ts`/`irToAlgebra.ts`**: this step changes no routing code; it rebases
+  on `named-graphs` before landing.
+
+### Tests
+
+- Quick gate (after each phase), with the env below exported first:
+  `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs <files>`, plus
+  `npm run typecheck`.
+- Full gate (before landing): `npm test` (jest; `two-copies-built` is backlog 060), `npm run
+  typecheck`, `npm run test:fuseki`, `npm run check:dts`, `npx linked build`.
+- Isolation: `FUSEKI_TEST_PORT=3183`, `FUSEKI_BASE_URL=http://localhost:3183`,
+  `LINKED_CORE_TEST_COMPOSE_PROJECT=fuseki-071-k5`, `LINKED_FUSEKI_IMAGE=ghcr.io/linked-fw/fuseki:6.2.0-2`.
+- Verify (master): golden `shapes.ttl` for core's own shapes (byte-identical across runs); sync
+  written then skipped; a CBD patch on a shape with an `sh:inversePath` leaves no orphan blank
+  node; a select of a sub-shape's instances still validates against the super-shape (SHACL
+  targeting).
+
+### Phases
+
+1. **Declared shapes and the writer:** declared-only data, IRI-celled `sh:and`/`sh:xone`, version
+   3, root inheritance for data-only shapes, `shapesToTurtle` and friends, the core golden. Quick
+   gate: `shapes-to-turtle`, `shape-sync-output-equivalence`, `shacl-syncshapes`,
+   `shape-sync-hash`, `shape-catalog`, `tighten-only`.
+2. **CBD patches:** `graphQueryToSparql`, unit and `[fuseki]` tests. Quick gate: `graph-query`,
+   `graph-query-fuseki`, the CBD part of `shape-graphs-fuseki`.
+3. **Shape graph sync:** `syncShapeGraphs`, cleanup, fallback, orphans; unit and `[fuseki]` tests
+   (written then skipped, cleanup, SHACL targeting). Quick gate: `shape-graphs`,
+   `shape-graphs-fuseki`, `sparql-fuseki-shape-sync`.
+4. **Docs and record:** `ontologies.md`, changeset, report 052, Outcome; full gate and Verify.
+
+### Outcome
+
+Landed (report [052](../reports/052-shape-graphs.md)). Contract clarified: "blank nodes only for
+`sh:inversePath` and sequence paths" holds as "only for complex `sh:path` values" (SHACL requires a
+blank node for every complex path, decision 13); the API added inside the contract is as written
+above (`packageShapesTurtle` is the call L1 makes, with no `prefixes`). Deviations: blank-node
+labels scoped per create in the writer; the root `Shape` inheritance went into the property
+readers (`inheritedShapes`), not `getSuperShapes`. Backlog 068 records default-graph shapes of
+removed packages. Full gate: 2659 passed, 352/352 `[fuseki]`; `two-copies-built` still fails
+(backlog 060).
+
+## K6 — routing forms (`'own'`, `dataGraph()`); the datasets config's `graphs` key removed
+
+Master §Open questions 5 ("1a decided", "1c-i", "1c-ii", "New steps") is the scope; this is its
+plan-mode detail, written against `named-graphs` at `200037d` (K5 landed). Line numbers drift;
+search for the symbol.
+
+### Contract (provided; master §Contracts "Graph routing", as amended by open question 5)
+
+- Graph routing lives only in code (`linked.backend.storage.ts`, arch-04 Layer 1). The datasets
+  config keeps endpoints and credentials; its per-alias `graphs` key is gone (it was never
+  released).
+- A route states intent: `setDatasetForShapes(ds, shapes, {graph: 'own'})` →
+  `{DATA_ROOT}/graph/{package slug}/{shape name}`; `{graph: dataGraph('slug')}` →
+  `{DATA_ROOT}/graph/{slug}`; both resolved with the store's `DATA_ROOT`. A full graph IRI stays
+  accepted (advanced use). Per-instance graph functions are a backlog item.
+
+### How it works (inside the contract)
+
+- **`DATA_ROOT` source.** The one a store already mints ids under (`generateEntityUri`):
+  the store's `SparqlOptions.dataRoot`, else `process.env.DATA_ROOT`. A dataset exposes its own
+  through a new optional `IDataset.dataRoot?()` (`SparqlDataset.dataRoot()` returns
+  `options.dataRoot`; CN's `AppDataFusekiStore` sets that option to the project's app data root
+  once resolved); `dataRootOf(dataset)` falls back to the env, trims it and drops trailing
+  slashes (as the server's `appShapesGraph` does). No `example.org` fallback: an intent route on a
+  dataset with no root is refused when it is resolved, with an error naming the shape.
+- **When it resolves.** `setShapeGraphs` checks the route and, for `'own'`, derives the path
+  under the root at once (the shape must be registered then); the root is joined in
+  `graphRoutingFor(dataset)`, which every read, write, `.into()` check and live-query dependency
+  calls, so a root the store learns later (CN resolves it lazily) is the one used. The table keeps
+  either an absolute IRI or a root-relative path.
+- **The `'own'` rule.** `{root}/graph/{packageNameToSlug(packageName)}/{shape name}`: the package is
+  the one the shape class was registered by (`linkedPackage(name)`, the class's `packageName`), its
+  slug is arch-02's (scope dropped, runs of non-alphanumerics → `-`, trimmed, lower-cased:
+  `@acme/news-site` → `news-site`); the shape name is the shape IRI's last path segment (the
+  `@linkedShape({name})` or the class name, case kept: `Article`). A shape with no registered
+  package is refused. A sub-shape without a route of its own inherits the routed super-shape's
+  graph (unchanged rule), so `'own'` on `Article` puts an unrouted `NewsArticle` in `…/Article`.
+- **`dataGraph(slug)`** (in `ontologies/graphs.ts`, next to `graphs`, and the index): returns a
+  frozen `{dataGraph: slug}`; the slug is one or more `/`-separated segments, each
+  `^[a-z0-9]+(?:-[a-z0-9]+)*$` (arch-02's slug rule); anything else throws (no silent
+  normalisation of a name the developer chose).
+- **The JSON key.** `parseDatasetsConfig` no longer knows `graphs` (unknown alias keys pass through,
+  as before); `loadStores` no longer applies it and warns once per alias that has one, pointing to
+  `setDatasetForShapes`. `DatasetEntry.graphs` leaves the type.
+
+### Files
+
+| File | What changes |
+|---|---|
+| `src/ontologies/graphs.ts` | `dataGraph(slug)`, `DataGraphRoute`, `OWN_GRAPH`, `GraphRoute`, `isDataGraphRoute` |
+| `src/utils/graphRouting.ts` | routes accept `GraphRoute`; `'own'` path from the registration; root-relative entries joined in `graphRoutingFor`; `dataRootOf(dataset)`; `getShapeGraphs` returns resolved IRIs |
+| `src/utils/LinkedStorage.ts` | `setDatasetForShapes(…, {graph?: GraphRoute})` |
+| `src/interfaces/IDataset.ts`, `src/sparql/SparqlDataset.ts` | optional `dataRoot()`; `SparqlDataset.dataRoot()` |
+| `src/utils/parseDatasetsConfig.ts`, `src/utils/loadStores.ts` | the `graphs` key removed; a warning when present |
+| `src/index.ts` | export `dataGraph` (and its types) next to `graphs`, `dataRootOf` |
+| `src/tests/graph-routing.test.ts` | golden IRIs for `'own'` and `dataGraph`; refusals; the JSON key ignored |
+| `src/tests/graph-routing-fuseki.test.ts` | `[fuseki]`: a write and read through `'own'` |
+| `docs/architecture/ontologies.md` | routing forms; no config key |
+| `docs/backlog/069-per-instance-graph-functions.md` (new) | per-instance graph functions |
+| `.changeset/graph-routing.md`, `.changeset/graph-routing-forms.md` (new) | the config mention dropped; minor with the breaking list |
+| `docs/reports/053-graph-routing-forms.md` (new) | the record |
+
+### Pitfalls
+
+- **CN still reads the key.** CN's C3 `parseAppGraphRoutes` passes the clone's `graphs` through
+  core's `parseDatasetsConfig` and reads it back; ignoring (not refusing) the key keeps that working
+  at run time; its `DatasetEntry.graphs` type access is C6's to remove.
+- **The root is per store.** Never cache a resolved IRI in the table; resolve per routing object.
+- **No root, no guess.** Unlike `generateEntityUri`, no `example.org` fallback.
+- **Two copies.** The `'own'` lookup reads the shared registry (`getRegisteredShapeClass`) by IRI.
+- **Published dependents.** No export is removed; `DatasetEntry.graphs` and the key were never
+  released (core 2.38.1 has neither).
+
+### Tests
+
+- Quick gate (after each phase), with the env below exported first:
+  `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs <files>`, plus
+  `npm run typecheck`.
+- Full gate (before landing): `npm test` (jest; `two-copies-built` is backlog 060), `npm run
+  typecheck`, `npm run test:fuseki`, `npm run check:dts`, `npx linked build`.
+- Isolation: `FUSEKI_TEST_PORT=3190`, `FUSEKI_BASE_URL=http://localhost:3190`,
+  `LINKED_CORE_TEST_COMPOSE_PROJECT=fuseki-071-k6`, `LINKED_FUSEKI_IMAGE=ghcr.io/linked-fw/fuseki:6.2.0-2`.
+- Verify: golden IRIs for `'own'` and `dataGraph` (store root, env root, trailing slash, no root
+  refused, unregistered package refused, bad slug refused); a routed write and read via `'own'` on
+  Fuseki; the JSON `graphs` key is ignored with a warning and routes nothing.
+
+### Phases
+
+1. **The JSON key removed:** parser, `loadStores`, tests. Quick gate: `graph-routing`,
+   `load-stores-loader`, `dataset-pin-identity`.
+2. **Routing forms:** `dataGraph`, `'own'`, `dataRootOf`, `dataRoot()`, exports, golden tests.
+   Quick gate: `graph-routing`, `dataset-pin-identity`, `read-graphs`.
+3. **Live store, docs and record:** `[fuseki]` test, `ontologies.md`, backlog 069, changesets,
+   report 053, Outcome; full gate.
+
+### Outcome
+
+Landed (report [053](../reports/053-graph-routing-forms.md)). Core as planned; no deviation. CN's
+`parseAppGraphRoutes` read `graphs` back through core's `DatasetEntry` type and relied on core's IRI
+check; CN `2004766be` fixed that before this landed. Backlog 069 records per-instance graph
+functions. Full gate: 2664 passed, 353/353 `[fuseki]`; `two-copies-built` still fails (backlog 060).

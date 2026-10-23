@@ -1,0 +1,771 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+/**
+ * Graph routing: the per-dataset routes and their forms (`'own'`, `dataGraph()`, IRIs), routed
+ * reads (one golden query per form), routed writes, `.into()`, and the graphs live queries carry.
+ */
+import {afterEach, beforeEach, describe, expect, jest, test} from '@jest/globals';
+import {Dog, Employee, Person, Pet} from '../test-helpers/query-fixtures';
+import {lower} from '../queries/lower';
+import {countToSparql, selectToSparql} from '../sparql/irToAlgebra';
+import {SparqlDataset} from '../sparql/SparqlDataset';
+import type {SparqlCompileOptions, SparqlOptions} from '../sparql/sparqlUtils';
+import type {SparqlQueryResults} from '../sparql/resultMapping';
+import {NamedGraph} from '../shapes/NamedGraph';
+import {GRAlbum, GRPanorama, GRPhoto} from '../test-helpers/graph-routing-fixtures';
+import {CreateBuilder} from '../queries/CreateBuilder';
+import {UpdateBuilder} from '../queries/UpdateBuilder';
+import {DeleteBuilder} from '../queries/DeleteBuilder';
+import {fromJSON} from '../queries/fromJSON';
+import {isGraphQueryError} from '../queries/graphQuery';
+import {mutationEffects, queryDependencies, type MutationEffects, type QueryDependencies} from '../queries/queryDependencies';
+import {effectsHash, graphsFold, normalizeChange} from '../live/changes';
+import {readsWrittenGraph, selectInstances, type LiveIndexes} from '../live/matcher';
+import type {Instance, Template} from '../live/LiveQueryStore';
+import {LinkedStorage} from '../utils/LinkedStorage';
+import {
+  dataRootOf,
+  getShapeGraphs,
+  graphRoutingFor,
+  setShapeGraphs,
+  unsetShapeGraph,
+} from '../utils/graphRouting';
+import {parseDatasetsConfig} from '../utils/parseDatasetsConfig';
+import {loadStores} from '../utils/loadStores';
+import {dataGraph, graphs, OWN_GRAPH} from '../ontologies/graphs';
+import {RFArticle, RFNewsArticle, RFStoryShape} from '../test-helpers/graph-route-forms-fixtures';
+import type {IDataset} from '../interfaces/IDataset';
+
+import '../ontologies/rdf';
+import '../ontologies/xsd';
+
+const G_PEOPLE = 'https://acme.example/data/graph/people';
+const G_STAFF = 'https://acme.example/data/graph/staff';
+const G_PETS = 'https://acme.example/data/graph/pets';
+const P = 'https://example.org/props/';
+const T = 'https://example.org/types/';
+
+/** Jena's names for the portable default and union graphs, as `FusekiStore` maps them. */
+const jena = (iri: string) =>
+  iri === graphs.default ? 'urn:x-arq:DefaultGraph' : iri === graphs.union ? 'urn:x-arq:UnionGraph' : null;
+
+/** Compile options with the routing of a fresh dataset routed by `shapeGraphs`. */
+function routed(shapeGraphs: Record<string, string>, options: SparqlOptions = {mapGraphName: jena}): SparqlCompileOptions {
+  const ds = fakeDataset();
+  setShapeGraphs(ds, shapeGraphs);
+  return {...options, routing: graphRoutingFor(ds)};
+}
+
+/** A SPARQL store that records what it is sent and answers empty results. */
+class CaptureStore extends SparqlDataset {
+  selects: string[] = [];
+  updates: string[] = [];
+  namedGraphUris: string[][] = [];
+  constructor(options?: SparqlOptions, private readonly sendsNamedGraphs = false) {
+    super(options);
+  }
+  protected async executeSparqlSelect(sparql: string): Promise<SparqlQueryResults> {
+    this.selects.push(sparql);
+    if (sparql.includes('COUNT(')) {
+      return {
+        head: {vars: ['count']},
+        results: {bindings: [{count: {type: 'literal', value: '0', datatype: 'http://www.w3.org/2001/XMLSchema#integer'}}]},
+      };
+    }
+    if (/^(PREFIX[^\n]*\n)*ASK/m.test(sparql) && !sparql.includes('SELECT')) return {head: {}, boolean: false};
+    return {head: {vars: []}, results: {bindings: []}};
+  }
+  protected async executeSparqlUpdate(sparql: string): Promise<void> {
+    this.updates.push(sparql);
+  }
+  protected override executeSparqlSelectWithNamedGraphs(sparql: string, namedGraphs: string[]) {
+    if (!this.sendsNamedGraphs) return super.executeSparqlSelectWithNamedGraphs(sparql, namedGraphs);
+    this.namedGraphUris.push(namedGraphs);
+    return this.executeSparqlSelect(sparql);
+  }
+  last(): string {
+    return this.selects[this.selects.length - 1];
+  }
+}
+
+/** A dataset object to key routes by; routing never calls it. */
+const fakeDataset = (): IDataset => ({}) as unknown as IDataset;
+
+describe('routes', () => {
+  test('a dataset without routes has no routing', () => {
+    expect(graphRoutingFor(fakeDataset())).toBeUndefined();
+    expect(graphRoutingFor(undefined)).toBeUndefined();
+  });
+
+  test('a shape reads its own graph and its sub-shapes graphs; unrouted shapes live in the default graph', () => {
+    const ds = fakeDataset();
+    setShapeGraphs(ds, {[Employee.shape.id]: G_STAFF});
+    const routing = graphRoutingFor(ds)!;
+    expect(routing.graphForShape(Employee.shape.id)).toBe(G_STAFF);
+    expect(routing.graphForShape(Person.shape.id)).toBe(graphs.default);
+    expect(routing.readGraphsForShape(Person.shape.id)).toEqual([graphs.default, G_STAFF]);
+    expect(routing.readGraphsForShape(Employee.shape.id)).toEqual([G_STAFF]);
+  });
+
+  test('an unrouted sub-shape inherits its super-shape graph', () => {
+    const ds = fakeDataset();
+    setShapeGraphs(ds, {[Person.shape.id]: G_PEOPLE});
+    const routing = graphRoutingFor(ds)!;
+    expect(routing.graphForShape(Employee.shape.id)).toBe(G_PEOPLE);
+    expect(routing.readGraphsForShape(Person.shape.id)).toEqual([G_PEOPLE]);
+  });
+
+  test('routes are per dataset; a route to graphs.default removes it; unset drops it', () => {
+    const a = fakeDataset();
+    const b = fakeDataset();
+    setShapeGraphs(a, {[Person.shape.id]: G_PEOPLE});
+    expect(getShapeGraphs(a)).toEqual({[Person.shape.id]: G_PEOPLE});
+    expect(getShapeGraphs(b)).toEqual({});
+    setShapeGraphs(a, {[Person.shape.id]: graphs.default});
+    expect(graphRoutingFor(a)).toBeUndefined();
+    setShapeGraphs(a, {[Person.shape.id]: G_PEOPLE});
+    unsetShapeGraph(Person.shape.id, a);
+    expect(getShapeGraphs(a)).toEqual({});
+  });
+
+  test('a route must name a graph IRI, never a portable name or the registry', () => {
+    const ds = fakeDataset();
+    expect(() => setShapeGraphs(ds, {[Person.shape.id]: 'people'})).toThrow(/absolute graph IRI/);
+    expect(() => setShapeGraphs(ds, {[Person.shape.id]: graphs.allOntologies})).toThrow(/portable/);
+    expect(() => setShapeGraphs(ds, {[Person.shape.id]: graphs.registry})).toThrow(/portable/);
+    expect(() => setShapeGraphs(ds, {'not an iri': G_PEOPLE})).toThrow(/shape IRI/);
+    expect(getShapeGraphs(ds)).toEqual({});
+  });
+});
+
+describe('owned nodes', () => {
+  const G_ALBUMS = 'https://acme.example/data/graph/albums';
+
+  test('a shape owned by a routed shape reads its owner graph too (an owned node is written there)', () => {
+    const ds = fakeDataset();
+    setShapeGraphs(ds, {[GRAlbum.shape.id]: G_ALBUMS});
+    const routing = graphRoutingFor(ds)!;
+    expect(routing.graphForShape(GRPhoto.shape.id)).toBe(graphs.default);
+    expect(routing.readGraphsForShape(GRPhoto.shape.id)).toEqual([graphs.default, G_ALBUMS]);
+    // A sub-shape of the owned value shape can be owned through the inherited property.
+    expect(routing.readGraphsForShape(GRPanorama.shape.id)).toEqual([graphs.default, G_ALBUMS]);
+  });
+
+  test('a traversal through a contains property reads the owner set', () => {
+    const sparql = selectToSparql(lower(GRAlbum.select((a) => [a.title, a.cover.caption])), routed({[GRAlbum.shape.id]: G_ALBUMS}));
+    expect(sparql).toMatch(new RegExp(`^WHERE \\{\\n  GRAPH <${G_ALBUMS}> \\{`, 'm'));
+    expect(sparql).not.toContain('FROM NAMED');
+  });
+});
+
+describe('LinkedStorage.setDatasetForShapes', () => {
+  const pinned: Function[] = [];
+  afterEach(() => {
+    for (const shape of pinned.splice(0)) LinkedStorage.unsetDatasetForShape(shape);
+  });
+
+  test('{graph} pins the shapes to the dataset and routes them to the graph', () => {
+    const ds = fakeDataset();
+    pinned.push(Person, Employee);
+    LinkedStorage.setDatasetForShapes(ds, [Person], {graph: G_PEOPLE});
+    LinkedStorage.setDatasetForShapes(ds, [Employee], {graph: G_STAFF});
+    expect(LinkedStorage.getDatasetForShapeClass(Person)).toBe(ds);
+    expect(LinkedStorage.getDatasetForShapeClass(Employee)).toBe(ds);
+    expect(getShapeGraphs(ds)).toEqual({[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF});
+  });
+
+  test('the variadic form and an array without a graph pin in the default graph', () => {
+    const ds = fakeDataset();
+    pinned.push(Person, Employee);
+    LinkedStorage.setDatasetForShapes(ds, Person);
+    LinkedStorage.setDatasetForShapes(ds, [Employee]);
+    expect(LinkedStorage.getDatasetForShapeClass(Person)).toBe(ds);
+    expect(LinkedStorage.getDatasetForShapeClass(Employee)).toBe(ds);
+    expect(getShapeGraphs(ds)).toEqual({});
+  });
+
+  test('unsetDatasetForShape drops the graph route with the pin', () => {
+    const ds = fakeDataset();
+    LinkedStorage.setDatasetForShapes(ds, [Person], {graph: G_PEOPLE});
+    LinkedStorage.unsetDatasetForShape(Person);
+    expect(getShapeGraphs(ds)).toEqual({});
+  });
+});
+
+describe('route forms: own and dataGraph resolve under the store data root', () => {
+  const ROOT = 'https://acme.example/data';
+  let savedEnv: string | undefined;
+  beforeEach(() => {
+    savedEnv = process.env.DATA_ROOT;
+    delete process.env.DATA_ROOT;
+  });
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = savedEnv;
+  });
+
+  test("golden IRIs: 'own' is {root}/graph/{package slug}/{shape name}; dataGraph is {root}/graph/{slug}", () => {
+    const store = new CaptureStore({dataRoot: ROOT});
+    setShapeGraphs(store, {
+      [RFArticle.shape.id]: 'own',
+      [RFStoryShape.shape.id]: 'own',
+      [GRPhoto.shape.id]: OWN_GRAPH,
+      [Person.shape.id]: 'own',
+      [GRAlbum.shape.id]: dataGraph('albums'),
+      [Pet.shape.id]: dataGraph('pets/archive-2026'),
+    });
+    expect(getShapeGraphs(store)).toEqual({
+      // `@acme/News_Site`: scope dropped, `_` → `-`, lower-cased; the shape name keeps its case.
+      [RFArticle.shape.id]: `${ROOT}/graph/news-site/RFArticle`,
+      // An explicit `@linkedShape({name})` is the shape name, not the class name.
+      [RFStoryShape.shape.id]: `${ROOT}/graph/news-site/Story`,
+      [GRPhoto.shape.id]: `${ROOT}/graph/graph-routing-test/GRPhoto`,
+      [Person.shape.id]: `${ROOT}/graph/core/Person`,
+      [GRAlbum.shape.id]: `${ROOT}/graph/albums`,
+      [Pet.shape.id]: `${ROOT}/graph/pets/archive-2026`,
+    });
+    const routing = graphRoutingFor(store)!;
+    // An unrouted sub-shape lives in its routed super-shape's own graph.
+    expect(routing.graphForShape(RFNewsArticle.shape.id)).toBe(`${ROOT}/graph/news-site/RFArticle`);
+    expect(routing.readGraphsForShape(GRAlbum.shape.id)).toEqual([`${ROOT}/graph/albums`]);
+  });
+
+  test("the root: the store's dataRoot, else DATA_ROOT; trimmed of trailing slashes; read when the routing is", () => {
+    process.env.DATA_ROOT = 'https://env.example/data/';
+    const fromEnv = fakeDataset();
+    setShapeGraphs(fromEnv, {[GRAlbum.shape.id]: dataGraph('albums')});
+    expect(dataRootOf(fromEnv)).toBe('https://env.example/data');
+    expect(getShapeGraphs(fromEnv)).toEqual({[GRAlbum.shape.id]: 'https://env.example/data/graph/albums'});
+
+    const own = new CaptureStore({dataRoot: `${ROOT}//`});
+    expect(own.dataRoot()).toBe(`${ROOT}//`);
+    expect(dataRootOf(own)).toBe(ROOT);
+
+    // A root the store learns later (CN resolves an app's root lazily) is the one used.
+    let late: string | undefined;
+    const lazy = {dataRoot: () => late} as unknown as IDataset;
+    setShapeGraphs(lazy, {[GRAlbum.shape.id]: dataGraph('albums')});
+    expect(getShapeGraphs(lazy)).toEqual({[GRAlbum.shape.id]: 'https://env.example/data/graph/albums'});
+    late = 'https://app.example/root';
+    expect(graphRoutingFor(lazy)!.graphForShape(GRAlbum.shape.id)).toBe('https://app.example/root/graph/albums');
+  });
+
+  test('no root: the route is recorded, and resolving it is refused with the shape named', () => {
+    const ds = fakeDataset();
+    setShapeGraphs(ds, {[GRAlbum.shape.id]: dataGraph('albums'), [Person.shape.id]: G_PEOPLE});
+    expect(() => graphRoutingFor(ds)).toThrow(
+      new RegExp(`dataGraph\\('albums'\\) of <${GRAlbum.shape.id}>.*data root`),
+    );
+    expect(() => getShapeGraphs(ds)).toThrow(/SparqlOptions\.dataRoot.*DATA_ROOT/);
+    // Full IRIs need no root.
+    const iriOnly = fakeDataset();
+    setShapeGraphs(iriOnly, {[Person.shape.id]: G_PEOPLE});
+    expect(getShapeGraphs(iriOnly)).toEqual({[Person.shape.id]: G_PEOPLE});
+  });
+
+  test("refused when the route is set: 'own' for a shape no package registered, a bad slug", () => {
+    const ds = fakeDataset();
+    expect(() => setShapeGraphs(ds, {'https://example.org/unregistered/Thing': 'own'})).toThrow(
+      /'own' of <https:\/\/example\.org\/unregistered\/Thing> needs a shape class registered by a package/,
+    );
+    for (const bad of ['Articles', 'my articles', 'a//b', '/a', 'a/', '-a', 'a--b', '', 'é']) {
+      expect(() => dataGraph(bad)).toThrow(/dataGraph\(\) takes a slug/);
+    }
+    // A route that arrives as plain data is checked too.
+    expect(() => setShapeGraphs(ds, {[Person.shape.id]: {dataGraph: '../x'}})).toThrow(/invalid dataGraph slug/);
+    expect(() => setShapeGraphs(ds, {[Person.shape.id]: 'mine'})).toThrow(/'own', dataGraph\('slug'\) or an absolute graph IRI/);
+    expect(getShapeGraphs(ds)).toEqual({});
+    expect(Object.isFrozen(dataGraph('a'))).toBe(true);
+  });
+
+  test("setDatasetForShapes with {graph: 'own'}: writes, reads and .into() use the resolved IRI", async () => {
+    const store = new CaptureStore({dataRoot: ROOT, mapGraphName: jena});
+    const own = `${ROOT}/graph/graph-routing-test/GRAlbum`;
+    pinnedForms.push(GRAlbum, GRPhoto);
+    LinkedStorage.setDatasetForShapes(store, [GRAlbum], {graph: 'own'});
+    LinkedStorage.setDatasetForShapes(store, [GRPhoto], {graph: dataGraph('photos')});
+    expect(LinkedStorage.getDatasetForShapeClass(GRAlbum)).toBe(store);
+    expect(getShapeGraphs(store)).toEqual({
+      [GRAlbum.shape.id]: own,
+      [GRPhoto.shape.id]: `${ROOT}/graph/photos`,
+    });
+    await GRAlbum.create({title: 'A'}).exec(store);
+    expect(store.updates[store.updates.length - 1]).toMatch(
+      new RegExp(`^INSERT DATA \\{\\n  GRAPH <${own}> \\{`, 'm'),
+    );
+    await GRAlbum.select((a) => a.title).exec(store);
+    expect(store.last()).toContain(`GRAPH <${own}>`);
+    await GRAlbum.create({title: 'B'}).into(own).exec(store);
+    expect(store.updates[store.updates.length - 1]).toContain(`GRAPH <${own}>`);
+  });
+
+  const pinnedForms: Function[] = [];
+  afterEach(() => {
+    for (const shape of pinnedForms.splice(0)) LinkedStorage.unsetDatasetForShape(shape);
+  });
+});
+
+describe('the datasets config has no graphs key', () => {
+  test('a graphs key is not validated, and loadStores routes nothing from it and warns', async () => {
+    const raw = {
+      datasets: {
+        appData: {
+          store: '@_linked/example/shapes/RoutedStore',
+          config: {},
+          graphs: {[Person.shape.id]: 'not even an IRI'},
+        },
+      },
+    };
+    // Unknown alias keys pass through, as before: the parser no longer checks this one.
+    const config = parseDatasetsConfig(raw, {});
+    class RoutedStore {
+      constructor(readonly config: unknown) {}
+    }
+    const globals = globalThis as Record<symbol, unknown>;
+    const IMPORT_MODULE = Symbol.for('@_linked/core:importModule');
+    globals[IMPORT_MODULE] = async () => ({RoutedStore});
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const stores = await loadStores(config);
+      expect(stores.appData).toBeInstanceOf(RoutedStore);
+      expect(graphRoutingFor(stores.appData as object)).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toMatch(/alias "appData" has a "graphs" key[^]*setDatasetForShapes/);
+    } finally {
+      warn.mockRestore();
+      delete globals[IMPORT_MODULE];
+    }
+  });
+});
+
+describe('routed reads: golden SPARQL per form', () => {
+  const personAndFriend = () => Person.select((p) => [p.name, p.bestFriend.name]);
+
+  test('no routes, or routes that miss every subject: the query is unchanged', () => {
+    const plain = selectToSparql(lower(personAndFriend()));
+    expect(selectToSparql(lower(personAndFriend()), {mapGraphName: jena})).toBe(plain);
+    expect(selectToSparql(lower(personAndFriend()), routed({[Pet.shape.id]: G_PETS}))).toBe(plain);
+  });
+
+  test('every subject in one graph: GRAPH <g> around the whole pattern, no FROM NAMED', () => {
+    expect(selectToSparql(lower(personAndFriend()), routed({[Person.shape.id]: G_PEOPLE}))).toBe(
+      `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name ?a1_name ?a1
+WHERE {
+  GRAPH <${G_PEOPLE}> {
+    ?a0 rdf:type <${T}Person> .
+    OPTIONAL {
+      ?a0 <${P}bestFriend> ?a1 .
+      OPTIONAL {
+        ?a1 <${P}name> ?a1_name .
+      }
+    }
+    OPTIONAL {
+      ?a0 <${P}name> ?a0_name .
+    }
+  }
+}`,
+    );
+  });
+
+  test('a sub-shape in another graph: FROM NAMED both, one GRAPH ?g block per subject', () => {
+    expect(
+      selectToSparql(lower(personAndFriend()), routed({[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF})),
+    ).toBe(
+      `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name ?a1_name ?a1
+FROM NAMED <${G_PEOPLE}>
+FROM NAMED <${G_STAFF}>
+WHERE {
+  GRAPH ?g_a0 {
+    ?a0 rdf:type <${T}Person> .
+  }
+  OPTIONAL {
+    GRAPH ?g_a0 {
+      ?a0 <${P}bestFriend> ?a1 .
+    }
+    OPTIONAL {
+      GRAPH ?g_a1 {
+        ?a1 <${P}name> ?a1_name .
+      }
+    }
+  }
+  OPTIONAL {
+    GRAPH ?g_a0 {
+      ?a0 <${P}name> ?a0_name .
+    }
+  }
+}`,
+    );
+  });
+
+  test('subjects in different graphs: a fixed GRAPH <g> per one-graph subject under FROM NAMED', () => {
+    const sparql = selectToSparql(
+      lower(Person.select((p) => [p.name, p.pets.bestFriend])),
+      routed({[Person.shape.id]: G_PEOPLE, [Pet.shape.id]: G_PETS}),
+    );
+    expect(sparql).toContain(`FROM NAMED <${G_PEOPLE}>\nFROM NAMED <${G_PETS}>`);
+    expect(sparql).toContain(`GRAPH <${G_PEOPLE}> {\n    ?a0 rdf:type <${T}Person> .`);
+    expect(sparql).toContain(`GRAPH <${G_PETS}> {\n        ?a1 <${P}bestFriend> ?a1_bestFriend .`);
+    expect(sparql).not.toContain('VALUES');
+  });
+
+  test('a type-checked subject whose set is narrower than the others: VALUES, written once', () => {
+    // Every subject reads the whole union: no VALUES.
+    expect(
+      selectToSparql(lower(Person.select((p) => p.name)), routed({[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF})),
+    ).not.toContain('VALUES');
+    // Person reads people + staff, its pets the pets graph: the root's set is narrower than the
+    // union, and it carries a type check.
+    const join = selectToSparql(
+      lower(Person.select((p) => [p.name, p.pets.bestFriend])),
+      routed({[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF, [Pet.shape.id]: G_PETS}),
+    );
+    expect(join).toContain(`FROM NAMED <${G_PEOPLE}>\nFROM NAMED <${G_PETS}>\nFROM NAMED <${G_STAFF}>`);
+    expect(join.match(/VALUES \?g_a0/g)).toHaveLength(1);
+    expect(join).toContain(`VALUES ?g_a0 { <${G_PEOPLE}> <${G_STAFF}> }\n  GRAPH ?g_a0 {`);
+    // The pets subject has one graph: fixed, no VALUES.
+    expect(join).toContain(`GRAPH <${G_PETS}> {`);
+  });
+
+  test('the default graph with named graphs: no FROM NAMED, VALUES with the store name, plain triples for default-only subjects', () => {
+    const sparql = selectToSparql(
+      lower(Person.select((p) => [p.name, p.pets.bestFriend])),
+      routed({[Employee.shape.id]: G_STAFF}),
+    );
+    expect(sparql).not.toContain('FROM NAMED');
+    expect(sparql).toContain(`VALUES ?g_a0 { <urn:x-arq:DefaultGraph> <${G_STAFF}> }\n  GRAPH ?g_a0 {`);
+    // Pet is unrouted: plain triples, the store's default graph.
+    expect(sparql).toContain(`OPTIONAL {\n      ?a1 <${P}bestFriend> ?a1_bestFriend .\n    }`);
+  });
+
+  test('the default graph with named graphs needs a store name for it', () => {
+    expect(() =>
+      selectToSparql(lower(Person.select((p) => p.name)), routed({[Employee.shape.id]: G_STAFF}, {})),
+    ).toThrow(/mapGraphName/);
+  });
+
+  test('count and ask carry the routed scope', async () => {
+    const options = routed({[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF});
+    const count = countToSparql(lower(Person.select((p) => p.name).where((p) => p.bestFriend.name.equals('x')).toCount()), options);
+    expect(count).toContain(`FROM NAMED <${G_PEOPLE}>`);
+    expect(count).toContain('GRAPH ?g_a1 {');
+    const store = new CaptureStore({mapGraphName: jena});
+    setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF});
+    await Person.select().where((p) => p.name.equals('x')).exists(store);
+    expect(store.last()).toMatch(/^ASK\nFROM NAMED/m);
+  });
+
+  test('.from() overrides routing; the graph-record shapes keep their graph', () => {
+    const options = routed({[Person.shape.id]: G_PEOPLE});
+    const sparql = selectToSparql(lower(personAndFriend().from(G_PETS)), options);
+    expect(sparql).toContain(`GRAPH <${G_PETS}> {`);
+    expect(sparql).not.toContain(G_PEOPLE);
+    expect(selectToSparql(lower(NamedGraph.select((g) => g.contentHash)), options)).toContain(
+      `GRAPH <${graphs.registry}> {`,
+    );
+  });
+});
+
+describe('routed reads through the store', () => {
+  test('a store reads with its own routes; .from(graphs.default) reads the default graph only', async () => {
+    const store = new CaptureStore({mapGraphName: jena});
+    await Person.select((p) => p.name).exec(store);
+    const unrouted = store.last();
+    setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE});
+    await Person.select((p) => p.name).exec(store);
+    expect(store.last()).toContain(`GRAPH <${G_PEOPLE}> {`);
+    await Person.select((p) => p.name).from(graphs.default).exec(store);
+    expect(store.last()).toBe(unrouted);
+    await Person.select().toCount().exec(store);
+    expect(store.last()).toContain(`GRAPH <${G_PEOPLE}> {`);
+  });
+
+  test('a shapeless ask under routing looks in every routed graph and the default graph', async () => {
+    const store = new CaptureStore({mapGraphName: jena});
+    setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE, [Pet.shape.id]: G_PETS});
+    const {AskBuilder} = await import('../queries/AskBuilder');
+    await AskBuilder.forNode('https://e.org/x').exec(store);
+    expect(store.last()).toContain(
+      `VALUES ?g_s0 { <urn:x-arq:DefaultGraph> <${G_PEOPLE}> <${G_PETS}> }`,
+    );
+  });
+
+  test('namedGraphUriParameter: the set goes to the transport, not into the query text', async () => {
+    const store = new CaptureStore({mapGraphName: jena, namedGraphUriParameter: true}, true);
+    setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF});
+    await Person.select((p) => p.name).exec(store);
+    expect(store.last()).not.toContain('FROM NAMED');
+    expect(store.last()).toContain('GRAPH ?g_a0 {');
+    expect(store.namedGraphUris).toEqual([[G_PEOPLE, G_STAFF]]);
+    // A one-graph read needs no dataset: sent as usual.
+    setShapeGraphs(store, {[Employee.shape.id]: G_PEOPLE});
+    await Person.select((p) => p.name).exec(store);
+    expect(store.namedGraphUris).toHaveLength(1);
+  });
+
+  test('namedGraphUriParameter on a transport that does not send them is refused, never read unrestricted', async () => {
+    const store = new CaptureStore({mapGraphName: jena, namedGraphUriParameter: true});
+    setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF});
+    await expect(Person.select((p) => p.name).exec(store)).rejects.toThrow(/named-graph-uri/);
+    expect(store.selects).toEqual([]);
+  });
+});
+
+describe('routed writes', () => {
+  const G_ALBUMS = 'https://acme.example/data/graph/albums';
+  const G_PANORAMAS = 'https://acme.example/data/graph/panoramas';
+  const ALBUM = 'https://acme.example/data/album/1';
+
+  /** A store with albums (and their owned photos) routed to the albums graph, panoramas elsewhere. */
+  const routedStore = () => {
+    const store = new CaptureStore({mapGraphName: jena});
+    setShapeGraphs(store, {[GRAlbum.shape.id]: G_ALBUMS, [GRPanorama.shape.id]: G_PANORAMAS});
+    return store;
+  };
+  const lastUpdate = (store: CaptureStore) => store.updates[store.updates.length - 1];
+
+  test('create, update, upsert and every delete write in the routed graph', async () => {
+    const store = routedStore();
+    await GRAlbum.create({title: 'A'}).exec(store);
+    expect(lastUpdate(store)).toMatch(new RegExp(`^INSERT DATA \\{\\n  GRAPH <${G_ALBUMS}> \\{`, 'm'));
+    await GRAlbum.update({title: 'B'}).for({id: ALBUM}).exec(store);
+    expect(lastUpdate(store)).toMatch(new RegExp(`^WITH <${G_ALBUMS}>\\nDELETE`, 'm'));
+    await GRAlbum.upsert({title: 'C'}).for({id: ALBUM}).exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+    await UpdateBuilder.from(GRAlbum).set({title: 'D'}).forAll().exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+    await GRAlbum.delete({id: ALBUM}).exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+    await DeleteBuilder.from(GRAlbum).all().exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+    await DeleteBuilder.from(GRAlbum).where((a) => a.title.equals('x')).exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+  });
+
+  test('an unrouted shape, and a store without routes, write the default graph exactly as before', async () => {
+    const plain = new CaptureStore({mapGraphName: jena});
+    const store = routedStore();
+    for (const s of [plain, store]) await Person.update({name: 'x'}).for({id: ALBUM}).exec(s);
+    expect(lastUpdate(store)).toBe(lastUpdate(plain));
+    expect(lastUpdate(store)).not.toContain('WITH');
+    expect(lastUpdate(store)).not.toContain('GRAPH');
+  });
+
+  test('a change to an existing subject whose shape reads several graphs runs in the graph that holds it', async () => {
+    const store = new CaptureStore({mapGraphName: jena});
+    setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF});
+    const BOB = 'https://acme.example/data/bob';
+    await Person.update({name: 'Robert'}).for({id: BOB}).exec(store);
+    expect(lastUpdate(store)).toBe(`DELETE {
+  GRAPH ?g_w {
+    <${BOB}> <${P}name> ?old_name .
+  }
+}
+INSERT {
+  GRAPH ?g_w {
+    <${BOB}> <${P}name> "Robert" .
+  }
+}
+WHERE {
+  { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <${G_PEOPLE}> <${G_STAFF}> } GRAPH ?g_w { <${BOB}> ?g_w_p ?g_w_o } } }
+  GRAPH ?g_w {
+    OPTIONAL {
+      <${BOB}> <${P}name> ?old_name .
+    }
+  }
+}`);
+    await Person.upsert({name: 'Robert'}).for({id: BOB}).exec(store);
+    expect(lastUpdate(store)).toContain(`BIND(COALESCE(?g_w_found, <${G_PEOPLE}>) AS ?g_w)`);
+    await UpdateBuilder.from(Person).set({name: 'x'}).forAll().exec(store);
+    expect(lastUpdate(store)).toContain(`VALUES ?g_w { <${G_PEOPLE}> <${G_STAFF}> }\n  GRAPH ?g_w {`);
+    await Person.delete([{id: BOB}, {id: 'https://acme.example/data/alice'}]).exec(store);
+    // One operation per subject, in one request.
+    expect(lastUpdate(store).split(' ;\n')).toHaveLength(2);
+    expect(lastUpdate(store).match(/SELECT DISTINCT \?g_w/g)).toHaveLength(2);
+    // The one graph of a sub-shape that has no sub-shapes or owners: WITH, as before.
+    await Employee.update({name: 'x'}).for({id: BOB}).exec(store);
+    expect(lastUpdate(store)).toMatch(new RegExp(`^WITH <${G_STAFF}>`, 'm'));
+    // The default graph in the set needs the store's name for it.
+    const unnamed = new CaptureStore();
+    setShapeGraphs(unnamed, {[Employee.shape.id]: G_STAFF});
+    await expect(Person.update({name: 'x'}).for({id: BOB}).exec(unnamed)).rejects.toThrow(/mapGraphName/);
+  });
+
+  test('a sub-shape without a route writes its super-shape graph; a routed one its own', async () => {
+    const store = new CaptureStore({mapGraphName: jena});
+    setShapeGraphs(store, {[GRPhoto.shape.id]: G_ALBUMS, [GRPanorama.shape.id]: G_PANORAMAS});
+    await GRPanorama.create({caption: 'wide'}).exec(store);
+    expect(lastUpdate(store)).toContain(`GRAPH <${G_PANORAMAS}> {`);
+    setShapeGraphs(store, {[GRPanorama.shape.id]: graphs.default});
+    await GRPanorama.create({caption: 'wide'}).exec(store);
+    expect(lastUpdate(store)).toContain(`GRAPH <${G_ALBUMS}> {`);
+  });
+
+  test('a nested (owned) create goes into the owner graph; the owned-link check reads that graph', async () => {
+    const store = routedStore();
+    await GRAlbum.create({title: 'A', cover: {caption: 'front'}}).exec(store);
+    const insert = lastUpdate(store);
+    expect(insert.match(/GRAPH </g)).toHaveLength(1);
+    expect(insert).toContain(`${GR('caption')}> "front"`);
+    await GRAlbum.update({cover: {id: 'https://acme.example/data/photo/9'}}).for({id: ALBUM}).exec(store);
+    // Under routing the check reads the linked node's and the owner's types in every graph.
+    const check = store.selects.find((q) => q.startsWith('SELECT ?id ?type ?g'));
+    expect(check).toBe(
+      `SELECT ?id ?type ?g WHERE { VALUES ?id { <https://acme.example/data/photo/9> <${ALBUM}> } { GRAPH ?g { ?id <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type } } UNION { ?id <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type } }`,
+    );
+  });
+
+  test('.into() a graph the routing allows for the shape (its read set)', async () => {
+    const store = new CaptureStore({mapGraphName: jena});
+    setShapeGraphs(store, {[GRPhoto.shape.id]: G_ALBUMS, [GRPanorama.shape.id]: G_PANORAMAS});
+    // A photo's routed reads cover its own graph and its sub-shape's.
+    await GRPhoto.create({caption: 'x'}).into(G_PANORAMAS).exec(store);
+    expect(lastUpdate(store)).toContain(`GRAPH <${G_PANORAMAS}> {`);
+    await GRPhoto.update({caption: 'y'}).for({id: ALBUM}).into(G_PANORAMAS).exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_PANORAMAS}>`);
+    await GRPhoto.delete({id: ALBUM}).into(G_ALBUMS).exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+    // Kept through later fluent calls.
+    await CreateBuilder.from(GRPhoto).into(G_PANORAMAS).set({caption: 'z'}).exec(store);
+    expect(lastUpdate(store)).toContain(`GRAPH <${G_PANORAMAS}> {`);
+  });
+
+  test('.into() a graph the routing forbids, a portable name, the registry or a store name is refused before any write', async () => {
+    const store = routedStore();
+    const refusal = async (p: Promise<unknown>, code: string) => {
+      const err = await p.then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      const cause = (err as {cause?: unknown})?.cause ?? err;
+      expect(isGraphQueryError(cause, code as never)).toBe(true);
+    };
+    await refusal(GRAlbum.create({title: 'x'}).into(G_PANORAMAS).exec(store), 'graph-not-routed');
+    await refusal(Person.create({name: 'x'}).into(G_ALBUMS).exec(store), 'graph-not-routed');
+    await refusal(GRAlbum.create({title: 'x'}).into(graphs.allOntologies).exec(store), 'graph-name-read-only');
+    await refusal(GRAlbum.create({title: 'x'}).into(graphs.registry).exec(store), 'graph-name-read-only');
+    await refusal(GRAlbum.create({title: 'x'}).into('urn:x-arq:UnionGraph').exec(store), 'graph-name-read-only');
+    expect(store.updates).toEqual([]);
+    // The default graph is allowed where the shape reads it.
+    await Person.create({name: 'x'}).into(graphs.default).exec(store);
+    expect(lastUpdate(store)).not.toContain('GRAPH');
+  });
+
+  test('DSL-JSON never carries a write graph: toJSON refuses .into(); a received one is ignored and the receiver routes', async () => {
+    const intoRefused = /toJSON\(\): this mutation names its graph with \.into\(<https:\/\/acme\.example\/data\/graph\/panoramas>\)/;
+    expect(() => GRAlbum.update({title: 'x'}).for({id: ALBUM}).into(G_PANORAMAS).toJSON()).toThrow(intoRefused);
+    expect(() => GRAlbum.create({title: 'x'}).into(G_PANORAMAS).toJSON()).toThrow(intoRefused);
+    expect(() => GRAlbum.delete({id: ALBUM}).into(G_PANORAMAS).toJSON()).toThrow(intoRefused);
+    expect(() => JSON.stringify(GRAlbum.create({title: 'x'}).into(G_PANORAMAS))).toThrow(/CreateBuilder\.toJSON/);
+    const json = GRAlbum.update({title: 'x'}).for({id: ALBUM}).toJSON();
+    const forged = {...json, graph: G_PANORAMAS, into: G_PANORAMAS};
+    const store = routedStore();
+    await (fromJSON(forged as never) as UpdateBuilder).exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+    expect(lastUpdate(store)).not.toContain(G_PANORAMAS);
+  });
+});
+
+function GR(local: string): string {
+  return `https://example.org/graph-routing/${local}`;
+}
+
+describe('live queries carry graphs', () => {
+  const G_ALBUMS = 'https://acme.example/data/graph/albums';
+  const G_PANORAMAS = 'https://acme.example/data/graph/panoramas';
+  const pinned: Function[] = [];
+  afterEach(() => {
+    for (const shape of pinned.splice(0)) LinkedStorage.unsetDatasetForShape(shape);
+  });
+  const routeAlbums = () => {
+    const ds = fakeDataset();
+    pinned.push(GRAlbum, GRPhoto);
+    LinkedStorage.setDatasetForShapes(ds, [GRAlbum], {graph: G_ALBUMS});
+    LinkedStorage.setDatasetForShapes(ds, [GRPhoto]);
+    setShapeGraphs(ds, {[GRPanorama.shape.id]: G_PANORAMAS});
+    return ds;
+  };
+
+  test('dependencies: the .from() names, else the routed read sets of every shape read, else unknown', () => {
+    expect(queryDependencies(GRAlbum.select((a) => a.title)).graphs).toBeUndefined();
+    expect([...queryDependencies(GRAlbum.select((a) => a.title).from([G_PANORAMAS, graphs.default])).graphs!]).toEqual([
+      G_PANORAMAS,
+      graphs.default,
+    ]);
+    routeAlbums();
+    expect([...queryDependencies(GRAlbum.select((a) => a.title)).graphs!]).toEqual([G_ALBUMS]);
+    expect([...queryDependencies(GRAlbum.select((a) => a.cover.caption)).graphs!].sort()).toEqual(
+      [G_ALBUMS, G_PANORAMAS, graphs.default].sort(),
+    );
+  });
+
+  test('effects: the .into() graph, else the routed graph, else unknown', () => {
+    expect(mutationEffects(GRAlbum.create({title: 'x'})).graph).toBeUndefined();
+    expect(mutationEffects(GRAlbum.create({title: 'x'}).into(G_ALBUMS)).graph).toBe(G_ALBUMS);
+    routeAlbums();
+    expect(mutationEffects(GRAlbum.update({title: 'x'}).for({id: 'https://e.org/a'})).graph).toBe(G_ALBUMS);
+    expect(mutationEffects(GRPanorama.create({caption: 'x'})).graph).toBe(G_PANORAMAS);
+    // A panorama may live in its own graph or in an album's (it can be owned): found at write time.
+    expect(mutationEffects(GRPanorama.delete({id: 'https://e.org/p'})).graph).toBeUndefined();
+    expect(mutationEffects(GRPhoto.create({caption: 'x'})).graph).toBe(graphs.default);
+  });
+
+  test('the graph survives JSON transport; it is compared apart from the fold hash', () => {
+    const e: MutationEffects = {op: 'create', shape: GRAlbum.shape.id, props: new Set(['p']), ids: new Set(['i']), membership: new Set(), graph: G_ALBUMS};
+    const revived = normalizeChange({effects: JSON.parse(JSON.stringify({...e, props: [...e.props], ids: [...e.ids!], membership: []}))});
+    expect(revived.graph).toBe(G_ALBUMS);
+    expect(effectsHash(e)).toBe(effectsHash({...e, graph: G_PANORAMAS}));
+    expect(effectsHash(e)).toBe(effectsHash({...e, graph: undefined}));
+    expect(graphsFold(G_ALBUMS, undefined)).toBe(true);
+    expect(graphsFold(undefined, G_ALBUMS)).toBe(true);
+    expect(graphsFold(G_ALBUMS, G_ALBUMS)).toBe(true);
+    expect(graphsFold(G_ALBUMS, G_PANORAMAS)).toBe(false);
+  });
+
+  test('readsWrittenGraph: unknown on either side or a store-resolved name reads any graph', () => {
+    expect(readsWrittenGraph(undefined, G_ALBUMS)).toBe(true);
+    expect(readsWrittenGraph(new Set([G_ALBUMS]), undefined)).toBe(true);
+    expect(readsWrittenGraph(new Set([G_ALBUMS]), G_ALBUMS)).toBe(true);
+    expect(readsWrittenGraph(new Set([G_ALBUMS]), G_PANORAMAS)).toBe(false);
+    expect(readsWrittenGraph(new Set([graphs.allShapes]), G_PANORAMAS)).toBe(true);
+  });
+
+  test('the matcher skips a template that does not read the written graph', () => {
+    const template = (graphsRead?: string[]): Template => {
+      const t = {key: String(graphsRead), kind: 'select', reactive: true, pinned: false, json: {}, instances: new Map()} as unknown as Template;
+      const inst = {key: 'i', template: t, params: {}, ids: new Set(['https://e.org/a'])} as unknown as Instance;
+      (t as unknown as {instances: Map<string, Instance>}).instances.set('i', inst);
+      return t;
+    };
+    const albums = template([G_ALBUMS]);
+    const panoramas = template([G_PANORAMAS]);
+    const unknown = template(undefined);
+    const deps = (t: Template): QueryDependencies => ({
+      narrow: new Set(['title']),
+      filter: new Set(),
+      hidden: new Set(),
+      shapes: new Set([GRAlbum.shape.id]),
+      unbound: true,
+      ...(t === unknown ? {} : {graphs: new Set(t === albums ? [G_ALBUMS] : [G_PANORAMAS])}),
+    });
+    const all = [albums, panoramas, unknown];
+    const index: LiveIndexes = {
+      templatesByProp: new Map([['title', new Set(all)]]),
+      templatesByShape: new Map([[GRAlbum.shape.id, new Set(all)]]),
+      instancesById: new Map([['https://e.org/a', new Set(all.map((t) => [...(t as unknown as {instances: Map<string, Instance>}).instances.values()][0]))]]),
+      depsOf: deps,
+    };
+    const hit = (e: MutationEffects) => [...selectInstances(index, e)].map((i) => i.template);
+    const update: MutationEffects = {op: 'update', shape: GRAlbum.shape.id, props: new Set(['title']), ids: new Set(['https://e.org/a']), membership: new Set(), graph: G_ALBUMS};
+    expect(new Set(hit(update))).toEqual(new Set([albums, unknown]));
+    const create: MutationEffects = {op: 'create', shape: GRAlbum.shape.id, props: new Set(['title']), ids: new Set(), membership: new Set([GRAlbum.shape.id]), graph: G_PANORAMAS};
+    expect(new Set(hit(create))).toEqual(new Set([panoramas, unknown]));
+    const anywhere: MutationEffects = {...update, graph: undefined};
+    expect(hit(anywhere)).toHaveLength(3);
+  });
+});

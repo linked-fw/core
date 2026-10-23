@@ -53,7 +53,16 @@ import {
   mapSparqlUpdateResult,
   isSparqlSelectResults,
 } from './resultMapping.js';
-import {generateEntityUri, type SparqlOptions} from './sparqlUtils.js';
+import {
+  generateEntityUri,
+  type SparqlCompileOptions,
+  type SparqlOptions,
+} from './sparqlUtils.js';
+import {graphRoutingFor, type ShapeGraphRouting} from '../utils/graphRouting.js';
+import {askToAlgebra, countToAlgebra, selectToAlgebra} from './irToAlgebra.js';
+import {askPlanToSparql, selectPlanToSparql} from './algebraToString.js';
+import type {SparqlAskPlan, SparqlSelectPlan} from './SparqlAlgebra.js';
+import {withShapeCatalog} from '../utils/ShapeClass.js';
 import {lower} from '../queries/lower.js';
 import {attachCatalog, catalogOf} from '../utils/ShapeClass.js';
 import {graphs} from '../ontologies/graphs.js';
@@ -67,8 +76,11 @@ import {
 import {
   assertOwnedLinkTypes,
   collectOwnedLinks,
+  ownedLinkGraphTypesFromResults,
+  ownedLinkGraphTypesQuery,
   ownedLinkTypesFromResults,
   ownedLinkTypesQuery,
+  type OwnedLink,
 } from './ownedLinkCheck.js';
 
 /**
@@ -127,6 +139,99 @@ export abstract class SparqlDataset implements IDataset {
    */
   invalidateGraphRegistry(dataset?: string): void {
     invalidateGraphRegistry(dataset ?? this.graphRegistryKey());
+  }
+
+  /**
+   * The data root this store mints ids under (`SparqlOptions.dataRoot`); graph routes stated as
+   * `'own'` or `dataGraph()` resolve under it too. `undefined` → the process's `DATA_ROOT`.
+   */
+  dataRoot(): string | undefined {
+    return this.options?.dataRoot || undefined;
+  }
+
+  /**
+   * The graph routing this store compiles with: the routes registered for this instance (see
+   * `utils/graphRouting.ts`), or `undefined` when it has none, in which case every read and write
+   * is exactly what it was before graph routing. A store that takes its routes from elsewhere
+   * overrides it.
+   */
+  protected graphRouting(): ShapeGraphRouting | undefined {
+    return graphRoutingFor(this);
+  }
+
+  /** The compile options of a read: routed unless the read names its graphs (`.from()`). */
+  private readOptions(ir: {graphs?: string[]}): SparqlCompileOptions | undefined {
+    if (ir.graphs) return this.options;
+    const routing = this.graphRouting();
+    return routing ? {...this.options, routing} : this.options;
+  }
+
+  /**
+   * The compile options of a create or update: routed when the store has routes, so a nested node
+   * that is not owned is written into its own shape's graph (see `irToAlgebra.ts`).
+   */
+  private writeOptions(): SparqlCompileOptions | undefined {
+    const routing = this.graphRouting();
+    return routing ? {...this.options, routing} : this.options;
+  }
+
+  /**
+   * Send a read whose set of named graphs goes to the transport as the protocol's
+   * `named-graph-uri` parameters (`SparqlOptions.namedGraphUriParameter`). The default refuses:
+   * a transport that dropped the list would let `GRAPH ?g` match in every named graph. A store
+   * that sets the option overrides this and sends `namedGraphs` with the query.
+   */
+  protected executeSparqlSelectWithNamedGraphs(
+    _sparql: string,
+    _namedGraphs: string[],
+  ): Promise<SparqlQueryResults> {
+    return Promise.reject(
+      new Error(
+        'SparqlOptions.namedGraphUriParameter is set, but this store does not send ' +
+          'named-graph-uri parameters: override executeSparqlSelectWithNamedGraphs in its ' +
+          'transport, or leave the option off (FROM NAMED in the query text).',
+      ),
+    );
+  }
+
+  /**
+   * Compile and send a read. With `namedGraphUriParameter`, a plan's `FROM NAMED` set leaves the
+   * query text and goes to `executeSparqlSelectWithNamedGraphs`; otherwise the string compilers
+   * run exactly as before.
+   */
+  private async sendRead(
+    ir: IRSelectQuery | IRCountQuery | IRAskQuery,
+    options: SparqlCompileOptions | undefined,
+  ): Promise<SparqlQueryResults> {
+    if (!this.options?.namedGraphUriParameter) {
+      const sparql =
+        ir.kind === 'count'
+          ? countToSparql(ir, options)
+          : ir.kind === 'ask'
+            ? askToSparql(ir, options)
+            : selectToSparql(ir, options);
+      return this.executeSparqlSelect(sparql);
+    }
+    const compile = () => {
+      const plan: SparqlSelectPlan | SparqlAskPlan =
+        ir.kind === 'count'
+          ? countToAlgebra(ir, options)
+          : ir.kind === 'ask'
+            ? askToAlgebra(ir, options)
+            : selectToAlgebra(ir, options);
+      const named = plan.dataset?.fromNamed;
+      const {dataset: _dataset, ...withoutDataset} = plan;
+      const text =
+        withoutDataset.type === 'ask'
+          ? askPlanToSparql(withoutDataset as SparqlAskPlan, options)
+          : selectPlanToSparql(withoutDataset as SparqlSelectPlan, options);
+      return {sparql: text, namedGraphs: named};
+    };
+    const catalog = catalogOf(ir);
+    const {sparql, namedGraphs} = catalog === undefined ? compile() : withShapeCatalog(catalog, compile);
+    return namedGraphs && namedGraphs.length > 0
+      ? this.executeSparqlSelectWithNamedGraphs(sparql, namedGraphs)
+      : this.executeSparqlSelect(sparql);
   }
 
   /** Read this dataset's graph registry: every record's graph and class, in one SELECT. */
@@ -227,16 +332,16 @@ export abstract class SparqlDataset implements IDataset {
       // The graph set expanded to no graph (no graph of that kind is registered).
       return lowered.kind === 'count' ? 0 : mapSparqlSelectResult(NO_ROWS, lowered);
     }
+    // Routing applies to reads that name no graphs: `.from(graphs.default)` reads the default graph.
+    const options = this.readOptions(lowered);
     if (ir.kind === 'count') {
-      const sparql = countToSparql(ir, this.options);
-      const json = await this.executeSparqlSelect(sparql);
+      const json = await this.sendRead(ir, options);
       // `mapSparqlCountResult` is strict in the same way the guard below is: it
       // refuses an ASK response, an empty result set and a non-integer binding
       // rather than answering `0`.
       return mapSparqlCountResult(json, ir);
     }
-    const sparql = selectToSparql(ir, this.options);
-    const json = await this.executeSparqlSelect(sparql);
+    const json = await this.sendRead(ir, options);
     if (!isSparqlSelectResults(json)) {
       throw new Error(
         'Expected a SPARQL SELECT result set, got an ASK response. The endpoint ' +
@@ -254,35 +359,103 @@ export abstract class SparqlDataset implements IDataset {
    * of the node under any type or none. Errors reject; never reported as `false`.
    */
   async askQuery(query: AskQuery): Promise<boolean> {
-    const ir = await this.resolveReadGraphs(lower(query));
+    const lowered = lower(query);
+    const ir = await this.resolveReadGraphs(lowered);
     if (!ir) return false;
-    const sparql = askToSparql(ir, this.options);
-    const json = await this.executeSparqlSelect(sparql);
+    const json = await this.sendRead(ir, this.readOptions(lowered));
     return mapSparqlAskResult(json);
   }
 
+  /**
+   * The mutation IR to compile, with the graph it writes.
+   *
+   * - `.into(graph)`: that graph, when the routing allows it for the mutation's shape (the shape's
+   *   routed read set, where the shape's reads find it).
+   * - A create: the shape's routed graph.
+   * - An update or delete (by id or in bulk): the graph the subject lives in. When the shape's read
+   *   set is one graph that is it; when it holds several (a sub-shape's or an owner's graph), the
+   *   IR gets `writeGraphs` and the update finds the subject's graph itself (`VALUES ?g` over the
+   *   read set; a subject in none of them is left alone). An upsert of a subject found nowhere is
+   *   created in the shape's routed graph (`graph`).
+   *
+   * The default graph leaves the IR as it was. Refused: `.into()` a portable graph name or the
+   * registry, or a store-reserved name (`graph-name-read-only`), or a graph the routing does not
+   * allow for the shape (`graph-not-routed`).
+   */
+  protected resolveWriteGraph<T extends {kind: string; shape: string; graph?: string}>(ir: T): T {
+    const routing = this.graphRouting();
+    const requested = ir.graph;
+    const {graph: _requested, ...rest} = ir as T & {writeGraphs?: string[]};
+    const withGraph = (target: string, writeGraphs?: string[]): T => {
+      const out = {
+        ...rest,
+        ...(target === graphs.default ? {} : {graph: target}),
+        ...(writeGraphs ? {writeGraphs} : {}),
+      } as T;
+      return attachCatalog(out, catalogOf(ir));
+    };
+    if (requested !== undefined) {
+      if (requested !== graphs.default) {
+        assertGraphWritable(requested);
+        if (this.isReservedGraphName(requested)) {
+          throw new GraphQueryError(
+            'graph-name-read-only',
+            `<${requested}> is a name this store reserves for its own graphs; it can be read, never written.`,
+            requested,
+          );
+        }
+      }
+      const allowed = routing?.readGraphsForShape(ir.shape) ?? [graphs.default];
+      if (!allowed.includes(requested)) {
+        throw new GraphQueryError(
+          'graph-not-routed',
+          `.into(<${requested}>): the graph routing of this store does not allow that graph for ` +
+            `<${ir.shape}>; it allows ${allowed.map((g) => `<${g}>`).join(', ')}.`,
+          requested,
+        );
+      }
+      return withGraph(requested);
+    }
+    if (!routing) return withGraph(graphs.default);
+    const routed = routing.graphForShape(ir.shape);
+    for (const graph of [routed, ...routing.readGraphsForShape(ir.shape)]) {
+      if (graph !== graphs.default && this.isReservedGraphName(graph)) {
+        throw new GraphQueryError(
+          'graph-name-read-only',
+          `<${graph}> is routed to, but it is a name this store reserves for its own graphs.`,
+          graph,
+        );
+      }
+    }
+    if (ir.kind === 'create') return withGraph(routed);
+    const readSet = routing.readGraphsForShape(ir.shape);
+    if (readSet.length <= 1) return withGraph(readSet[0] ?? routed);
+    // The subject may live in any graph of the read set; an upsert creates in the routed graph.
+    return withGraph(ir.kind === 'upsert' ? routed : graphs.default, readSet);
+  }
+
   async createQuery(query: CreateQuery): Promise<CreateResult> {
-    const ir = lower(query);
+    const ir = this.resolveWriteGraph(lower(query));
     const uri = ir.data.id || generateEntityUri(ir.data.shape, this.options);
     ir.data.id = uri;
     await this.checkOwnedLinks(ir);
-    const sparql = createToSparql(ir, this.options);
+    const sparql = createToSparql(ir, this.writeOptions());
     await this.executeSparqlUpdate(sparql);
     return mapSparqlCreateResult(uri, ir);
   }
 
   async updateQuery(query: UpdateQuery): Promise<UpdateResult> {
-    const ir = lower(query);
+    const ir = this.resolveWriteGraph(lower(query));
     await this.checkOwnedLinks(ir);
     if (ir.kind === 'update_where') {
-      const sparql = updateWhereToSparql(ir, this.options);
+      const sparql = updateWhereToSparql(ir, this.writeOptions());
       await this.executeSparqlUpdate(sparql);
       return {id: ''} as UpdateResult;
     }
     const sparql =
       ir.kind === 'upsert'
-        ? upsertToSparql(ir, this.options)
-        : updateToSparql(ir, this.options);
+        ? upsertToSparql(ir, this.writeOptions())
+        : updateToSparql(ir, this.writeOptions());
     await this.executeSparqlUpdate(sparql);
     return mapSparqlUpdateResult(ir);
   }
@@ -292,21 +465,51 @@ export abstract class SparqlDataset implements IDataset {
    * (see `ownedLinkCheck.ts`). An owner deletes what it contains, so a Person linked into
    * an ImageObject slot would be deleted with its owner. Runs before the update is sent, so
    * a refused mutation writes nothing. With no such link no query is sent; otherwise one
-   * SELECT covers every linked id.
+   * SELECT covers every linked id, read in the graph the mutation writes.
    */
   protected async checkOwnedLinks(
     ir: IRCreateMutation | IRUpdateMutation | IRUpsertMutation | IRUpdateWhereMutation,
   ): Promise<void> {
     const links = collectOwnedLinks(ir);
     if (links.length === 0) return;
+    const ids = links.map((link) => link.id);
+    const routing = this.graphRouting();
+    if (!routing) {
+      const json = await this.executeSparqlSelect(ownedLinkTypesQuery(ids));
+      assertOwnedLinkTypes(links, ownedLinkTypesFromResults(json));
+      return;
+    }
+    // Under graph routing an owned node lives in its owner's graph, so an owner's cascades (which
+    // run in the graph the owner lives in) reach it. One SELECT reads the types of every linked id
+    // and of the owner in every graph; a linked node typed only in another graph is refused.
+    const owner = ir.kind === 'create' ? ir.data.id : ir.kind === 'update_where' ? undefined : ir.id;
     const json = await this.executeSparqlSelect(
-      ownedLinkTypesQuery(links.map((link) => link.id)),
+      ownedLinkGraphTypesQuery(owner ? [...ids, owner] : ids),
     );
-    assertOwnedLinkTypes(links, ownedLinkTypesFromResults(json));
+    const byGraph = ownedLinkGraphTypesFromResults(json);
+    const ownerGraphs = new Set<string>();
+    if (ir.kind === 'create') ownerGraphs.add(ir.graph ?? graphs.default);
+    else if (ir.kind !== 'update_where' && !ir.writeGraphs) ownerGraphs.add(ir.graph ?? graphs.default);
+    else if (owner) {
+      for (const [graph, types] of byGraph) if (types.has(owner)) ownerGraphs.add(graph);
+      if (ownerGraphs.size === 0 && ir.kind === 'upsert') ownerGraphs.add(ir.graph ?? graphs.default);
+    }
+    // A link declared by a nested node the mutation does not own is checked against that node's
+    // graph: it is written into its own shape's routed graph.
+    const groups = new Map<string, {graphs: Set<string>; links: typeof links}>();
+    for (const link of links) {
+      const linkGraphs = link.nestedIn ? new Set([routing.graphForShape(link.nestedIn)]) : ownerGraphs;
+      const key = link.nestedIn ? `nested ${[...linkGraphs][0]}` : 'subject';
+      let group = groups.get(key);
+      if (!group) groups.set(key, (group = {graphs: linkGraphs, links: []}));
+      group.links.push(link);
+    }
+    for (const group of groups.values()) assertOwnedLinksIn(group.links, group.graphs, byGraph);
   }
 
+
   async deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
-    const ir = lower(query);
+    const ir = this.resolveWriteGraph(lower(query));
     if (ir.kind === 'delete_all') {
       const sparql = deleteAllToSparql(ir, this.options);
       await this.executeSparqlUpdate(sparql);
@@ -415,3 +618,42 @@ export abstract class SparqlDataset implements IDataset {
 
 // Backwards-compatibility re-export — remove once all consumers are updated.
 export {SparqlDataset as SparqlStore};
+
+/**
+ * Under graph routing: refuse links to nodes typed only in another graph than `ownerGraphs` (an
+ * owned node lives in its owner's graph, where the owner's deletes reach it), then check the
+ * classes the owner's graphs hold. An empty `ownerGraphs` (an owner not found) reads every graph.
+ */
+function assertOwnedLinksIn(
+  links: OwnedLink[],
+  ownerGraphs: ReadonlySet<string>,
+  byGraph: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>,
+): void {
+  const typesById = new Map<string, Set<string>>();
+  const elsewhere = new Map<string, string>();
+  for (const [graph, types] of byGraph) {
+    for (const [id, classes] of types) {
+      if (ownerGraphs.size === 0 || ownerGraphs.has(graph)) {
+        let set = typesById.get(id);
+        if (!set) typesById.set(id, (set = new Set()));
+        for (const c of classes) set.add(c);
+      } else if (!elsewhere.has(id)) {
+        elsewhere.set(id, graph);
+      }
+    }
+  }
+  const misplaced = links.filter((link) => !typesById.has(link.id) && elsewhere.has(link.id));
+  if (misplaced.length > 0) {
+    throw new Error(
+      misplaced
+        .map(
+          (link) =>
+            `Cannot link <${link.id}> into the contains property "${link.label}" of <${link.shape}>: ` +
+            `it lives in <${elsewhere.get(link.id)}>, not in the graph its owner lives in. An owned ` +
+            'node lives in its owner\'s graph, where the owner\'s deletes reach it.',
+        )
+        .join('\n'),
+    );
+  }
+  assertOwnedLinkTypes(links, typesById);
+}

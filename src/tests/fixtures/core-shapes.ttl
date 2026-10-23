@@ -1,0 +1,814 @@
+@prefix core: <https://linked.cm/ont/core/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<https://linked.cm/shape/core/DraftGraph>
+  a sh:NodeShape ;
+  rdfs:comment "The registry record of a draft graph a dataset owns. (graph registry, draft graph)" ;
+  sh:targetClass core:DraftGraph ;
+  core:isExtending <https://linked.cm/shape/core/NamedGraph> .
+
+<https://linked.cm/shape/core/List>
+  a sh:NodeShape ;
+  sh:property <https://linked.cm/shape/core/List/first> ;
+  sh:property <https://linked.cm/shape/core/List/rest> ;
+  sh:targetClass rdf:List .
+
+<https://linked.cm/shape/core/List/first>
+  a sh:PropertyShape ;
+  rdfs:label "first" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:path rdf:first .
+
+<https://linked.cm/shape/core/List/rest>
+  a sh:PropertyShape ;
+  rdfs:label "rest" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/List> ;
+  sh:nodeKind sh:IRI ;
+  sh:path rdf:rest ;
+  core:contains "true"^^xsd:boolean .
+
+<https://linked.cm/shape/core/NamedGraph>
+  a sh:NodeShape ;
+  rdfs:comment "A named graph's record in the graph registry: name, content hash, load time, sources, whether it feeds the class hierarchy. (graph registry, named graph)" ;
+  sh:property <https://linked.cm/shape/core/NamedGraph/contentHash> ;
+  sh:property <https://linked.cm/shape/core/NamedGraph/feedsHierarchy> ;
+  sh:property <https://linked.cm/shape/core/NamedGraph/modified> ;
+  sh:property <https://linked.cm/shape/core/NamedGraph/name> ;
+  sh:property <https://linked.cm/shape/core/NamedGraph/sources> ;
+  sh:targetClass <http://www.w3.org/ns/sparql-service-description#NamedGraph> .
+
+<https://linked.cm/shape/core/NamedGraph/contentHash>
+  a sh:PropertyShape ;
+  rdfs:label "contentHash" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:contentHash .
+
+<https://linked.cm/shape/core/NamedGraph/feedsHierarchy>
+  a sh:PropertyShape ;
+  rdfs:label "feedsHierarchy" ;
+  sh:datatype xsd:boolean ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:feedsHierarchy .
+
+<https://linked.cm/shape/core/NamedGraph/modified>
+  a sh:PropertyShape ;
+  rdfs:label "modified" ;
+  sh:datatype xsd:dateTime ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path <http://purl.org/dc/terms/modified> .
+
+<https://linked.cm/shape/core/NamedGraph/name>
+  a sh:PropertyShape ;
+  rdfs:label "name" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:IRI ;
+  sh:path <http://www.w3.org/ns/sparql-service-description#name> .
+
+<https://linked.cm/shape/core/NamedGraph/sources>
+  a sh:PropertyShape ;
+  rdfs:label "sources" ;
+  sh:datatype xsd:string ;
+  sh:nodeKind sh:Literal ;
+  sh:path <http://purl.org/dc/terms/source> .
+
+<https://linked.cm/shape/core/NodeShape>
+  a sh:NodeShape ;
+  rdfs:comment "Represents a SHACL NodeShape; defines constraints for a class of RDF nodes. Links to multiple PropertyShapes. (schema, constraint, class validation)" ;
+  sh:property <https://linked.cm/shape/core/NodeShape/andShapes> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/class> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/closed> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/deactivated> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/dependent> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/description> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/extends> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/generated> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/generatedShapes> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/ignoredProperties> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/message> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/name> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/notShape> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/orShapes> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/properties> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/severity> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/shapeHash> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/sharedTargetClass> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/targetClass> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/targetNode> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/targetObjectsOf> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/targetSubjectsOf> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/type> ;
+  sh:property <https://linked.cm/shape/core/NodeShape/xoneShapes> ;
+  sh:targetClass sh:NodeShape .
+
+<https://linked.cm/shape/core/NodeShape/andShapes>
+  a sh:PropertyShape ;
+  rdfs:label "andShapes" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:and .
+
+<https://linked.cm/shape/core/NodeShape/class>
+  a sh:PropertyShape ;
+  rdfs:label "class" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:class .
+
+<https://linked.cm/shape/core/NodeShape/closed>
+  a sh:PropertyShape ;
+  rdfs:label "closed" ;
+  sh:datatype xsd:boolean ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:closed .
+
+<https://linked.cm/shape/core/NodeShape/deactivated>
+  a sh:PropertyShape ;
+  rdfs:label "deactivated" ;
+  sh:datatype xsd:boolean ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:deactivated .
+
+<https://linked.cm/shape/core/NodeShape/dependent>
+  a sh:PropertyShape ;
+  rdfs:label "dependent" ;
+  sh:datatype xsd:boolean ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:dependent .
+
+<https://linked.cm/shape/core/NodeShape/description>
+  a sh:PropertyShape ;
+  rdfs:label "description" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path rdfs:comment .
+
+<https://linked.cm/shape/core/NodeShape/extends>
+  a sh:PropertyShape ;
+  rdfs:label "extends" ;
+  sh:node <https://linked.cm/shape/core/NodeShape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path core:isExtending .
+
+<https://linked.cm/shape/core/NodeShape/generated>
+  a sh:PropertyShape ;
+  rdfs:label "generated" ;
+  sh:datatype xsd:boolean ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:generated .
+
+<https://linked.cm/shape/core/NodeShape/generatedShapes>
+  a sh:PropertyShape ;
+  rdfs:label "generatedShapes" ;
+  sh:node <https://linked.cm/shape/core/NodeShape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path core:generatedShape ;
+  core:contains "true"^^xsd:boolean .
+
+<https://linked.cm/shape/core/NodeShape/ignoredProperties>
+  a sh:PropertyShape ;
+  rdfs:label "ignoredProperties" ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:ignoredProperties .
+
+<https://linked.cm/shape/core/NodeShape/message>
+  a sh:PropertyShape ;
+  rdfs:label "message" ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:message .
+
+<https://linked.cm/shape/core/NodeShape/name>
+  a sh:PropertyShape ;
+  rdfs:label "name" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:name .
+
+<https://linked.cm/shape/core/NodeShape/notShape>
+  a sh:PropertyShape ;
+  rdfs:label "notShape" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/NodeShape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:not .
+
+<https://linked.cm/shape/core/NodeShape/orShapes>
+  a sh:PropertyShape ;
+  rdfs:label "orShapes" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:or .
+
+<https://linked.cm/shape/core/NodeShape/properties>
+  a sh:PropertyShape ;
+  rdfs:label "properties" ;
+  sh:node <https://linked.cm/shape/core/PropertyShape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:property ;
+  core:contains "true"^^xsd:boolean .
+
+<https://linked.cm/shape/core/NodeShape/severity>
+  a sh:PropertyShape ;
+  rdfs:label "severity" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:severity .
+
+<https://linked.cm/shape/core/NodeShape/shapeHash>
+  a sh:PropertyShape ;
+  rdfs:label "shapeHash" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:shapeHash .
+
+<https://linked.cm/shape/core/NodeShape/sharedTargetClass>
+  a sh:PropertyShape ;
+  rdfs:label "sharedTargetClass" ;
+  sh:datatype xsd:boolean ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:sharedTargetClass .
+
+<https://linked.cm/shape/core/NodeShape/targetClass>
+  a sh:PropertyShape ;
+  rdfs:label "targetClass" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:targetClass .
+
+<https://linked.cm/shape/core/NodeShape/targetNode>
+  a sh:PropertyShape ;
+  rdfs:label "targetNode" ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:targetNode .
+
+<https://linked.cm/shape/core/NodeShape/targetObjectsOf>
+  a sh:PropertyShape ;
+  rdfs:label "targetObjectsOf" ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:targetObjectsOf .
+
+<https://linked.cm/shape/core/NodeShape/targetSubjectsOf>
+  a sh:PropertyShape ;
+  rdfs:label "targetSubjectsOf" ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:targetSubjectsOf .
+
+<https://linked.cm/shape/core/NodeShape/type>
+  a sh:PropertyShape ;
+  rdfs:label "type" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path rdf:type .
+
+<https://linked.cm/shape/core/NodeShape/xoneShapes>
+  a sh:PropertyShape ;
+  rdfs:label "xoneShapes" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:xone .
+
+<https://linked.cm/shape/core/OntologyGraph>
+  a sh:NodeShape ;
+  rdfs:comment "The registry record of a package's ontology graph. (graph registry, ontology graph)" ;
+  sh:property <https://linked.cm/shape/core/OntologyGraph/package> ;
+  sh:property <https://linked.cm/shape/core/OntologyGraph/version> ;
+  sh:targetClass core:OntologyGraph ;
+  core:isExtending <https://linked.cm/shape/core/NamedGraph> .
+
+<https://linked.cm/shape/core/OntologyGraph/package>
+  a sh:PropertyShape ;
+  rdfs:label "package" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:package .
+
+<https://linked.cm/shape/core/OntologyGraph/version>
+  a sh:PropertyShape ;
+  rdfs:label "version" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:version .
+
+<https://linked.cm/shape/core/OntologySync>
+  a sh:NodeShape ;
+  rdfs:comment "What the ontology sync last wrote into this dataset for one package: its rdfs:subClassOf triples and their hash. (ontology sync, class hierarchy)" ;
+  sh:property <https://linked.cm/shape/core/OntologySync/ontologyHash> ;
+  sh:property <https://linked.cm/shape/core/OntologySync/ontologyTriples> ;
+  sh:property <https://linked.cm/shape/core/OntologySync/packageName> ;
+  sh:targetClass core:OntologySync .
+
+<https://linked.cm/shape/core/OntologySync/ontologyHash>
+  a sh:PropertyShape ;
+  rdfs:label "ontologyHash" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:ontologyHash .
+
+<https://linked.cm/shape/core/OntologySync/ontologyTriples>
+  a sh:PropertyShape ;
+  rdfs:label "ontologyTriples" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:ontologyTriples .
+
+<https://linked.cm/shape/core/OntologySync/packageName>
+  a sh:PropertyShape ;
+  rdfs:label "packageName" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:packageName .
+
+<https://linked.cm/shape/core/PathList>
+  a sh:NodeShape ;
+  sh:property <https://linked.cm/shape/core/PathList/first> ;
+  sh:property <https://linked.cm/shape/core/PathList/rest> ;
+  sh:targetClass rdf:List ;
+  core:sharedTargetClass "true"^^xsd:boolean .
+
+<https://linked.cm/shape/core/PathList/first>
+  a sh:PropertyShape ;
+  rdfs:label "first" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path rdf:first .
+
+<https://linked.cm/shape/core/PathList/rest>
+  a sh:PropertyShape ;
+  rdfs:label "rest" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/PathList> ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path rdf:rest ;
+  core:contains "true"^^xsd:boolean .
+
+<https://linked.cm/shape/core/PathNode>
+  a sh:NodeShape ;
+  sh:property <https://linked.cm/shape/core/PathNode/alternativePath> ;
+  sh:property <https://linked.cm/shape/core/PathNode/inversePath> ;
+  sh:property <https://linked.cm/shape/core/PathNode/oneOrMorePath> ;
+  sh:property <https://linked.cm/shape/core/PathNode/zeroOrMorePath> ;
+  sh:property <https://linked.cm/shape/core/PathNode/zeroOrOnePath> ;
+  sh:targetClass core:PathNode .
+
+<https://linked.cm/shape/core/PathNode/alternativePath>
+  a sh:PropertyShape ;
+  rdfs:label "alternativePath" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/PathList> ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:alternativePath ;
+  core:contains "true"^^xsd:boolean .
+
+<https://linked.cm/shape/core/PathNode/inversePath>
+  a sh:PropertyShape ;
+  rdfs:label "inversePath" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:inversePath .
+
+<https://linked.cm/shape/core/PathNode/oneOrMorePath>
+  a sh:PropertyShape ;
+  rdfs:label "oneOrMorePath" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:oneOrMorePath .
+
+<https://linked.cm/shape/core/PathNode/zeroOrMorePath>
+  a sh:PropertyShape ;
+  rdfs:label "zeroOrMorePath" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:zeroOrMorePath .
+
+<https://linked.cm/shape/core/PathNode/zeroOrOnePath>
+  a sh:PropertyShape ;
+  rdfs:label "zeroOrOnePath" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:zeroOrOnePath .
+
+<https://linked.cm/shape/core/PropertyGroup>
+  a sh:NodeShape ;
+  rdfs:comment "Represents a SHACL PropertyGroup: a labelled, ordered section of a shape that property shapes join through sh:group. (form section, grouping)" ;
+  sh:property <https://linked.cm/shape/core/PropertyGroup/description> ;
+  sh:property <https://linked.cm/shape/core/PropertyGroup/order> ;
+  sh:targetClass sh:PropertyGroup .
+
+<https://linked.cm/shape/core/PropertyGroup/description>
+  a sh:PropertyShape ;
+  rdfs:label "description" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path rdfs:comment .
+
+<https://linked.cm/shape/core/PropertyGroup/order>
+  a sh:PropertyShape ;
+  rdfs:label "order" ;
+  sh:datatype xsd:decimal ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:order .
+
+<https://linked.cm/shape/core/PropertyShape>
+  a sh:NodeShape ;
+  rdfs:comment "Represents a SHACL PropertyShape; specifies rules for one property of a NodeShape (path, datatype, cardinality). (validation rule, property constraint)" ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/class> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/contains> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/datatype> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/deactivated> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/defaultValue> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/description> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/disjoint> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/displayHidden> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/displayRank> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/equalsConstraint> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/flags> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/group> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/hasValue> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/in> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/languageIn> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/lessThan> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/lessThanOrEquals> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/maxCount> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/maxExclusive> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/maxInclusive> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/maxLength> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/message> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/minCount> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/minExclusive> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/minInclusive> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/minLength> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/name> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/nodeKind> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/order> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/path> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/pattern> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/properties> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/qualifiedMaxCount> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/qualifiedMinCount> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/qualifiedValueShape> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/severity> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/uniqueLang> ;
+  sh:property <https://linked.cm/shape/core/PropertyShape/valueShape> ;
+  sh:targetClass sh:PropertyShape .
+
+<https://linked.cm/shape/core/PropertyShape/class>
+  a sh:PropertyShape ;
+  rdfs:label "class" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:class .
+
+<https://linked.cm/shape/core/PropertyShape/contains>
+  a sh:PropertyShape ;
+  rdfs:label "contains" ;
+  sh:datatype xsd:boolean ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:contains .
+
+<https://linked.cm/shape/core/PropertyShape/datatype>
+  a sh:PropertyShape ;
+  rdfs:label "datatype" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:datatype .
+
+<https://linked.cm/shape/core/PropertyShape/deactivated>
+  a sh:PropertyShape ;
+  rdfs:label "deactivated" ;
+  sh:datatype xsd:boolean ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:deactivated .
+
+<https://linked.cm/shape/core/PropertyShape/defaultValue>
+  a sh:PropertyShape ;
+  rdfs:label "defaultValue" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:path sh:defaultValue .
+
+<https://linked.cm/shape/core/PropertyShape/description>
+  a sh:PropertyShape ;
+  rdfs:label "description" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:description .
+
+<https://linked.cm/shape/core/PropertyShape/disjoint>
+  a sh:PropertyShape ;
+  rdfs:label "disjoint" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:disjoint .
+
+<https://linked.cm/shape/core/PropertyShape/displayHidden>
+  a sh:PropertyShape ;
+  rdfs:label "displayHidden" ;
+  sh:datatype xsd:boolean ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:displayHidden .
+
+<https://linked.cm/shape/core/PropertyShape/displayRank>
+  a sh:PropertyShape ;
+  rdfs:label "displayRank" ;
+  sh:datatype xsd:integer ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:displayRank .
+
+<https://linked.cm/shape/core/PropertyShape/equalsConstraint>
+  a sh:PropertyShape ;
+  rdfs:label "equalsConstraint" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:equals .
+
+<https://linked.cm/shape/core/PropertyShape/flags>
+  a sh:PropertyShape ;
+  rdfs:label "flags" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:flags .
+
+<https://linked.cm/shape/core/PropertyShape/group>
+  a sh:PropertyShape ;
+  rdfs:label "group" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/PropertyGroup> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:group .
+
+<https://linked.cm/shape/core/PropertyShape/hasValue>
+  a sh:PropertyShape ;
+  rdfs:label "hasValue" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:path sh:hasValue .
+
+<https://linked.cm/shape/core/PropertyShape/in>
+  a sh:PropertyShape ;
+  rdfs:label "in" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/List> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:in ;
+  core:contains "true"^^xsd:boolean .
+
+<https://linked.cm/shape/core/PropertyShape/languageIn>
+  a sh:PropertyShape ;
+  rdfs:label "languageIn" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/List> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:languageIn ;
+  core:contains "true"^^xsd:boolean .
+
+<https://linked.cm/shape/core/PropertyShape/lessThan>
+  a sh:PropertyShape ;
+  rdfs:label "lessThan" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:lessThan .
+
+<https://linked.cm/shape/core/PropertyShape/lessThanOrEquals>
+  a sh:PropertyShape ;
+  rdfs:label "lessThanOrEquals" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:lessThanOrEquals .
+
+<https://linked.cm/shape/core/PropertyShape/maxCount>
+  a sh:PropertyShape ;
+  rdfs:label "maxCount" ;
+  sh:datatype xsd:integer ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:maxCount .
+
+<https://linked.cm/shape/core/PropertyShape/maxExclusive>
+  a sh:PropertyShape ;
+  rdfs:label "maxExclusive" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:maxExclusive .
+
+<https://linked.cm/shape/core/PropertyShape/maxInclusive>
+  a sh:PropertyShape ;
+  rdfs:label "maxInclusive" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:maxInclusive .
+
+<https://linked.cm/shape/core/PropertyShape/maxLength>
+  a sh:PropertyShape ;
+  rdfs:label "maxLength" ;
+  sh:datatype xsd:integer ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:maxLength .
+
+<https://linked.cm/shape/core/PropertyShape/message>
+  a sh:PropertyShape ;
+  rdfs:label "message" ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:message .
+
+<https://linked.cm/shape/core/PropertyShape/minCount>
+  a sh:PropertyShape ;
+  rdfs:label "minCount" ;
+  sh:datatype xsd:integer ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:minCount .
+
+<https://linked.cm/shape/core/PropertyShape/minExclusive>
+  a sh:PropertyShape ;
+  rdfs:label "minExclusive" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:minExclusive .
+
+<https://linked.cm/shape/core/PropertyShape/minInclusive>
+  a sh:PropertyShape ;
+  rdfs:label "minInclusive" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:minInclusive .
+
+<https://linked.cm/shape/core/PropertyShape/minLength>
+  a sh:PropertyShape ;
+  rdfs:label "minLength" ;
+  sh:datatype xsd:integer ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:minLength .
+
+<https://linked.cm/shape/core/PropertyShape/name>
+  a sh:PropertyShape ;
+  rdfs:label "name" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:name .
+
+<https://linked.cm/shape/core/PropertyShape/nodeKind>
+  a sh:PropertyShape ;
+  rdfs:label "nodeKind" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:nodeKind .
+
+<https://linked.cm/shape/core/PropertyShape/order>
+  a sh:PropertyShape ;
+  rdfs:label "order" ;
+  sh:datatype xsd:integer ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:order .
+
+<https://linked.cm/shape/core/PropertyShape/path>
+  a sh:PropertyShape ;
+  rdfs:label "path" ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:path .
+
+<https://linked.cm/shape/core/PropertyShape/pattern>
+  a sh:PropertyShape ;
+  rdfs:label "pattern" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:pattern .
+
+<https://linked.cm/shape/core/PropertyShape/properties>
+  a sh:PropertyShape ;
+  rdfs:label "properties" ;
+  sh:node <https://linked.cm/shape/core/PropertyShape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:property ;
+  core:contains "true"^^xsd:boolean .
+
+<https://linked.cm/shape/core/PropertyShape/qualifiedMaxCount>
+  a sh:PropertyShape ;
+  rdfs:label "qualifiedMaxCount" ;
+  sh:datatype xsd:integer ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:qualifiedMaxCount .
+
+<https://linked.cm/shape/core/PropertyShape/qualifiedMinCount>
+  a sh:PropertyShape ;
+  rdfs:label "qualifiedMinCount" ;
+  sh:datatype xsd:integer ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:qualifiedMinCount .
+
+<https://linked.cm/shape/core/PropertyShape/qualifiedValueShape>
+  a sh:PropertyShape ;
+  rdfs:label "qualifiedValueShape" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/NodeShape> ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:qualifiedValueShape .
+
+<https://linked.cm/shape/core/PropertyShape/severity>
+  a sh:PropertyShape ;
+  rdfs:label "severity" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:severity .
+
+<https://linked.cm/shape/core/PropertyShape/uniqueLang>
+  a sh:PropertyShape ;
+  rdfs:label "uniqueLang" ;
+  sh:datatype xsd:boolean ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path sh:uniqueLang .
+
+<https://linked.cm/shape/core/PropertyShape/valueShape>
+  a sh:PropertyShape ;
+  rdfs:label "valueShape" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:node <https://linked.cm/shape/core/NodeShape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path sh:node .
+
+<https://linked.cm/shape/core/Shape>
+  a sh:NodeShape ;
+  sh:property <https://linked.cm/shape/core/Shape/label> ;
+  sh:property <https://linked.cm/shape/core/Shape/type> .
+
+<https://linked.cm/shape/core/Shape/label>
+  a sh:PropertyShape ;
+  rdfs:label "label" ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path rdfs:label .
+
+<https://linked.cm/shape/core/Shape/type>
+  a sh:PropertyShape ;
+  rdfs:label "type" ;
+  sh:node <https://linked.cm/shape/core/Shape> ;
+  sh:nodeKind sh:IRI ;
+  sh:path rdf:type .
+
+<https://linked.cm/shape/core/ShapesGraph>
+  a sh:NodeShape ;
+  rdfs:comment "The registry record of a package's shapes graph. (graph registry, shapes graph)" ;
+  sh:property <https://linked.cm/shape/core/ShapesGraph/package> ;
+  sh:property <https://linked.cm/shape/core/ShapesGraph/version> ;
+  sh:targetClass core:ShapesGraph ;
+  core:isExtending <https://linked.cm/shape/core/NamedGraph> .
+
+<https://linked.cm/shape/core/ShapesGraph/package>
+  a sh:PropertyShape ;
+  rdfs:label "package" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:package .
+
+<https://linked.cm/shape/core/ShapesGraph/version>
+  a sh:PropertyShape ;
+  rdfs:label "version" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:version .

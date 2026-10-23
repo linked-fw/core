@@ -15,6 +15,10 @@
 // `config` is the store class's own concern — the runtime never inspects it.
 // `${VAR}` / `${VAR:-default}` placeholders inside string values are resolved
 // against an env map at parse time.
+//
+// Graph routing is not configured here: it lives in the app's code
+// (`LinkedStorage.setDatasetForShapes(store, shapes, {graph})`, see
+// `utils/graphRouting.ts`). This file holds what changes per deployment.
 
 /** One entry under `datasets`. Keyed by alias name in the parent object. */
 export interface DatasetEntry {

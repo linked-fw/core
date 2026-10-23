@@ -115,6 +115,12 @@ function resolveDescriptionContexts(desc: NodeDescriptionValue): NodeDescription
   };
 }
 
+/** Record a mutation's `.into()` graph on its IR. */
+function withInto<T extends {graph?: string}>(ir: T, into: string | undefined): T {
+  if (into !== undefined) ir.graph = into;
+  return ir;
+}
+
 function lowerCreate(spec: CreateLowerSpec): IRCreateQuery {
   const description = resolveDescriptionContexts(
     new MutationQueryFactory().describe(spec.shapeClass.shape, spec.data, {
@@ -317,11 +323,20 @@ export function lower(
       return lowerAsk(query.toRawInput());
     case 'count':
       return lowerCount(query.toRawInput());
-    case 'create':
-      return lowerCreate(query._lowerSpec());
-    case 'update':
-      return lowerUpdate(query._lowerSpec());
-    case 'delete':
-      return lowerDelete(query._lowerSpec());
+    // `.into()` is not part of the mutation pipeline: it rides on the IR untouched.
+    case 'create': {
+      const spec = query._lowerSpec();
+      return withInto(lowerCreate(spec), spec.into);
+    }
+    case 'update': {
+      const spec = query._lowerSpec();
+      return withInto(lowerUpdate(spec), spec.into);
+    }
+    case 'delete': {
+      const spec = query._lowerSpec();
+      const ir = withInto(lowerDelete(spec), spec.into);
+      if (spec.keepIncoming && ir.kind === 'delete') ir.keepIncoming = true;
+      return ir;
+    }
   }
 }

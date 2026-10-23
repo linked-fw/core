@@ -305,6 +305,11 @@ export type IRExistsExpression = {
 export type IRCreateMutation = {
   kind: 'create';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
   data: IRNodeData;
 };
 
@@ -317,6 +322,17 @@ export type IRTraversalPattern = {
 export type IRUpdateMutation = {
   kind: 'update';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
+  /**
+   * The graphs an existing subject may live in (its shape's routed read set), when there are
+   * several: the mutation runs in the one that holds the subject, found inside the same update.
+   * Set by the store from its graph routing; never carried in DSL-JSON.
+   */
+  writeGraphs?: string[];
   id: string;
   data: IRNodeData;
   traversalPatterns?: IRTraversalPattern[];
@@ -338,6 +354,17 @@ export type IRUpdateMutation = {
 export type IRUpsertMutation = {
   kind: 'upsert';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
+  /**
+   * The graphs an existing subject may live in (its shape's routed read set), when there are
+   * several: the mutation runs in the one that holds the subject, found inside the same update.
+   * Set by the store from its graph routing; never carried in DSL-JSON.
+   */
+  writeGraphs?: string[];
   id: string;
   data: IRNodeData;
   traversalPatterns?: IRTraversalPattern[];
@@ -346,17 +373,57 @@ export type IRUpsertMutation = {
 export type IRDeleteMutation = {
   kind: 'delete';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
+  /**
+   * The graphs an existing subject may live in (its shape's routed read set), when there are
+   * several: the mutation runs in the one that holds the subject, found inside the same update.
+   * Set by the store from its graph routing; never carried in DSL-JSON.
+   */
+  writeGraphs?: string[];
   ids: NodeReferenceValue[];
+  /**
+   * Delete only each subject's own description: its triples, its blank values and its owned
+   * subtree, but not the links other nodes hold to it (`?s ?p <id>`). Internal (the one-time
+   * cleanup of shapes that moved to their shape graph); never carried in DSL-JSON. A store that
+   * builds its own deletes from the IR must honour it or refuse the delete.
+   */
+  keepIncoming?: boolean;
 };
 
 export type IRDeleteAllMutation = {
   kind: 'delete_all';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
+  /**
+   * The graphs an existing subject may live in (its shape's routed read set), when there are
+   * several: the mutation runs in the one that holds the subject, found inside the same update.
+   * Set by the store from its graph routing; never carried in DSL-JSON.
+   */
+  writeGraphs?: string[];
 };
 
 export type IRDeleteWhereMutation = {
   kind: 'delete_where';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
+  /**
+   * The graphs an existing subject may live in (its shape's routed read set), when there are
+   * several: the mutation runs in the one that holds the subject, found inside the same update.
+   * Set by the store from its graph routing; never carried in DSL-JSON.
+   */
+  writeGraphs?: string[];
   where: IRExpression;
   wherePatterns: IRGraphPattern[];
 };
@@ -364,6 +431,17 @@ export type IRDeleteWhereMutation = {
 export type IRUpdateWhereMutation = {
   kind: 'update_where';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
+  /**
+   * The graphs an existing subject may live in (its shape's routed read set), when there are
+   * several: the mutation runs in the one that holds the subject, found inside the same update.
+   * Set by the store from its graph routing; never carried in DSL-JSON.
+   */
+  writeGraphs?: string[];
   data: IRNodeData;
   where?: IRExpression;
   wherePatterns?: IRGraphPattern[];

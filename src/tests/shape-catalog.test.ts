@@ -30,6 +30,7 @@ import type {NodeShapeWire} from '../shapes/nodeShapeWire';
 import {NodeShape, PropertyShape} from '../shapes/SHACL';
 import {Shape} from '../shapes/Shape';
 import {buildPropertyShapeData} from '../shapes/syncShapes';
+import {getPropertyShapes} from '../shapes/nodeShapeData';
 import {SelectBuilder} from '../queries/QueryBuilder';
 import {CreateBuilder} from '../queries/CreateBuilder';
 import {UpdateBuilder} from '../queries/UpdateBuilder';
@@ -352,6 +353,28 @@ describe('ShapeCatalog', () => {
       SelectBuilder.from(TYPED).select((p: any) => [p.label, p.type.label]),
     );
     const sparql = selectToSparql(lower(query));
+    expect(sparql).toContain('rdf:type');
+    expect(sparql).toContain('rdfs:label');
+  });
+
+  test('a data-only shape stored as declared inherits `label` and `type` from the root Shape', () => {
+    const PARENT = `${EX}shape/Parent`;
+    const CHILD = `${EX}shape/Child`;
+    // As shape graphs hold them: own property shapes only, `extends` to the parent.
+    const catalog = ShapeCatalog.from([
+      shapeWire(PARENT, `${EX}Parent`, [{label: 'name', path: `${EX}name`}]),
+      shapeWire(CHILD, `${EX}Child`, [{label: 'age', path: `${EX}age`}], {extends: {id: PARENT}}),
+    ]);
+    const labels = withShapeCatalog(catalog, () =>
+      getPropertyShapes(getAllNodeShapes().get(CHILD)!, true).map((ps) => ps.label),
+    );
+    expect(labels).toEqual(['age', 'name', 'label', 'type']);
+    const sparql = selectToSparql(
+      lower(withShapeCatalog(catalog, () =>
+        SelectBuilder.from(CHILD).select((p: any) => [p.name, p.label, p.type.label]),
+      )),
+    );
+    expect(sparql).toContain(`<${EX}name>`);
     expect(sparql).toContain('rdf:type');
     expect(sparql).toContain('rdfs:label');
   });

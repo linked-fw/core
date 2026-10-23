@@ -11,6 +11,10 @@
  * Bodies are parsed with N3.js and re-serialised as N-Triples before they enter the request, so
  * no text a caller sent reaches the update unparsed. N3.js is imported on demand (server only),
  * so a browser bundle that reaches this module never loads it.
+ *
+ * A patch's delete body may hold blank nodes (a shape's complex `sh:path`): each blank-node
+ * structure, with the IRI subject it hangs off, is deleted as a pattern, and the insert body adds
+ * the new one (the patch unit is the subject's concise bounded description).
  */
 import type {GraphContent, GraphQuery} from '../queries/IntermediateRepresentation.js';
 import {
@@ -49,14 +53,8 @@ const PARSER_FORMATS: Record<GraphContent['mediaType'], string> = {
   'application/n-triples': 'N-Triples',
 };
 
-/**
- * A graph body as N-Triples lines, ready to sit inside `INSERT DATA { GRAPH <g> { … } }`.
- * Refuses a body that names a graph, has a relative IRI, or (with `noBlankNodes`) a blank node.
- */
-export async function graphContentToNTriples(
-  content: GraphContent,
-  options: {noBlankNodes?: string} = {},
-): Promise<string> {
+/** Parse a graph body and check every term: no graph names, no relative IRIs. */
+async function parseGraphContent(content: GraphContent): Promise<{n3: N3Module; quads: N3Quad[]}> {
   const format = PARSER_FORMATS[content.mediaType];
   if (!format) throw new Error(`Unsupported graph content type ${JSON.stringify(content.mediaType)}.`);
   const n3 = await loadN3();
@@ -71,14 +69,29 @@ export async function graphContentToNTriples(
       throw new Error('Graph content holds triples, not quads: it names no graph.');
     }
     for (const term of [quad.subject, quad.predicate, quad.object, quad.object.datatype]) {
-      if (!term) continue;
-      if (term.termType === 'NamedNode') {
+      if (term?.termType === 'NamedNode') {
         assertSafeIri(term.value);
         if (!ABSOLUTE_IRI.test(term.value)) {
           throw new Error(`The graph content has a relative IRI <${term.value}>; use absolute IRIs.`);
         }
       }
-      if (term.termType === 'BlankNode' && options.noBlankNodes) {
+    }
+  }
+  return {n3, quads};
+}
+
+/**
+ * A graph body as N-Triples lines, ready to sit inside `INSERT DATA { GRAPH <g> { … } }`.
+ * Refuses a body that names a graph, has a relative IRI, or (with `noBlankNodes`) a blank node.
+ */
+export async function graphContentToNTriples(
+  content: GraphContent,
+  options: {noBlankNodes?: string} = {},
+): Promise<string> {
+  const {n3, quads} = await parseGraphContent(content);
+  if (options.noBlankNodes) {
+    for (const quad of quads) {
+      if (quad.subject.termType === 'BlankNode' || quad.object.termType === 'BlankNode') {
         throw new Error(options.noBlankNodes);
       }
     }
@@ -86,8 +99,110 @@ export async function graphContentToNTriples(
   return quads.length ? new n3.Writer({format: 'N-Triples'}).quadsToString(quads) : '';
 }
 
-/** The parsed bodies a graph query's update needs, as N-Triples. */
-export type GraphQueryBodies = {content?: string; insert?: string; delete?: string};
+/** A term of a delete pattern: blank nodes become the pattern's variables. */
+function patternTerm(term: N3Term, variables: Map<string, string>): string {
+  switch (term.termType) {
+    case 'NamedNode':
+      return `<${term.value}>`;
+    case 'BlankNode': {
+      let name = variables.get(term.value);
+      if (!name) variables.set(term.value, (name = `?b${variables.size}`));
+      return name;
+    }
+    case 'Literal': {
+      const text = `"${escapeSparqlString(term.value)}"`;
+      if (term.language) return `${text}@${term.language}`;
+      return term.datatype ? `${text}^^<${term.datatype.value}>` : text;
+    }
+    default:
+      throw new Error(`A graph patch cannot hold a ${term.termType} term.`);
+  }
+}
+
+/** One blank-node structure to delete: its triples with blank nodes as variables. */
+export type GraphDeletePattern = {triples: string; variables: string[]};
+
+/**
+ * Split a patch's delete body into its ground triples (N-Triples, for `DELETE DATA`) and one
+ * pattern per blank-node structure. A structure is a triple `<s> <p> _:b` with an IRI subject,
+ * plus the statements of `_:b` and, recursively, of every blank node under it (the subject's
+ * concise bounded description below that triple). SPARQL's `DELETE DATA` cannot name a blank
+ * node, so a store deletes each structure as a pattern through its IRI subject.
+ *
+ * Refused: a blank node that is the object of more than one triple, and a blank node no IRI
+ * subject reaches (every blank-node structure hangs off exactly one IRI subject).
+ */
+async function deleteBodies(content: GraphContent): Promise<{ground: string; patterns: GraphDeletePattern[]}> {
+  const {n3, quads} = await parseGraphContent(content);
+  const parents = new Map<string, number>();
+  const bySubject = new Map<string, N3Quad[]>();
+  for (const quad of quads) {
+    if (quad.object.termType === 'BlankNode') {
+      parents.set(quad.object.value, (parents.get(quad.object.value) ?? 0) + 1);
+    }
+    if (quad.subject.termType === 'BlankNode') {
+      const list = bySubject.get(quad.subject.value) ?? [];
+      list.push(quad);
+      bySubject.set(quad.subject.value, list);
+    }
+  }
+  for (const count of parents.values()) {
+    if (count > 1) {
+      throw new Error(
+        'A patch cannot delete a blank node that is the object of more than one triple: each ' +
+          'blank-node structure hangs off exactly one IRI subject.',
+      );
+    }
+  }
+  const ground: N3Quad[] = [];
+  const patterns: GraphDeletePattern[] = [];
+  const reached = new Set<string>();
+  for (const quad of quads) {
+    if (quad.subject.termType === 'BlankNode') continue;
+    if (quad.object.termType !== 'BlankNode') {
+      ground.push(quad);
+      continue;
+    }
+    const variables = new Map<string, string>();
+    const lines: string[] = [];
+    const add = (q: N3Quad) =>
+      lines.push(
+        `${patternTerm(q.subject, variables)} ${patternTerm(q.predicate, variables)} ${patternTerm(q.object, variables)} .`,
+      );
+    add(quad);
+    const queue = [quad.object.value];
+    while (queue.length) {
+      const label = queue.shift()!;
+      reached.add(label);
+      for (const q of bySubject.get(label) ?? []) {
+        add(q);
+        if (q.object.termType === 'BlankNode') queue.push(q.object.value);
+      }
+    }
+    patterns.push({triples: lines.join(' '), variables: [...variables.values()]});
+  }
+  for (const label of bySubject.keys()) {
+    if (!reached.has(label)) {
+      throw new Error(
+        'A patch cannot delete a blank node that no IRI subject reaches: send the statements ' +
+          'that link it to its IRI subject too.',
+      );
+    }
+  }
+  return {
+    ground: ground.length ? new n3.Writer({format: 'N-Triples'}).quadsToString(ground) : '',
+    patterns,
+  };
+}
+
+/** The parsed bodies a graph query's update needs, as N-Triples (and delete patterns). */
+export type GraphQueryBodies = {
+  content?: string;
+  insert?: string;
+  delete?: string;
+  /** The blank-node structures of the patch's delete body, deleted as patterns. */
+  deletePatterns?: GraphDeletePattern[];
+};
 
 /** Parse and re-serialise every body `query` carries. */
 export async function graphQueryBodies(query: GraphQuery): Promise<GraphQueryBodies> {
@@ -95,11 +210,9 @@ export async function graphQueryBodies(query: GraphQuery): Promise<GraphQueryBod
   if (query.content) bodies.content = await graphContentToNTriples(query.content);
   if (query.patch?.insert) bodies.insert = await graphContentToNTriples(query.patch.insert);
   if (query.patch?.delete) {
-    bodies.delete = await graphContentToNTriples(query.patch.delete, {
-      noBlankNodes:
-        "A patch cannot delete a blank node: SPARQL's DELETE DATA cannot name one. Delete " +
-        'the statements through the IRI subject that owns them, or replace the graph.',
-    });
+    const {ground, patterns} = await deleteBodies(query.patch.delete);
+    if (ground) bodies.delete = ground;
+    if (patterns.length) bodies.deletePatterns = patterns;
   }
   return bodies;
 }
@@ -167,6 +280,12 @@ export function graphQueryToSparql(
         insertBody(bodies.content);
       } else if (query.patch) {
         if (bodies.delete) ops.push(`DELETE DATA { GRAPH ${g} {\n${bodies.delete}} }`);
+        for (const {triples, variables} of bodies.deletePatterns ?? []) {
+          const blank = variables.map((v) => `isBlank(${v})`).join(' && ');
+          ops.push(
+            `DELETE { GRAPH ${g} { ${triples} } } WHERE { GRAPH ${g} { ${triples} } FILTER(${blank}) }`,
+          );
+        }
         insertBody(bodies.insert);
       }
       const changed = new Map([...automatic, ...own]);

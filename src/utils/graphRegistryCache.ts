@@ -124,15 +124,15 @@ export type ExpandedReadGraphs = {defaultGraph: true} | {defaultGraph: false; gr
  * - `graphs.allOntologies` / `graphs.allShapes` → every graph the registry lists with an
  *   `OntologyGraph` / `ShapesGraph` record (sorted, so the query text is stable);
  * - `graphs.default` alone → the default graph, read as without `.from()`;
+ * - `graphs.default` with other graphs → kept as `graphs.default`: the generator reads the set
+ *   through `VALUES` with the store's name for the default graph (Jena's `FROM NAMED
+ *   <urn:x-arq:DefaultGraph>` matches nothing); refused (`unsupported-query-kind`) when the store
+ *   has no name for it (`mapGraphName`);
  * - `graphs.union` alone → the store's name for it (`mapGraphName`); without one the read is
- *   refused (`unsupported-query-kind`);
+ *   refused (`unsupported-query-kind`); with other graphs it is refused (it holds them already);
  * - any other IRI (`graphs.registry` included) → itself.
  *
- * `graphs.default` or `graphs.union` together with other graphs is refused
- * (`unsupported-query-kind`): such a set is read as `FROM NAMED` graphs, and Jena's `FROM NAMED
- * <urn:x-arq:DefaultGraph>` (or `UnionGraph`) matches nothing, so the default graph would drop out
- * silently. The result may be empty (no graph of that kind is registered): the read matches
- * nothing.
+ * The result may be empty (no graph of that kind is registered): the read matches nothing.
  */
 export async function expandReadGraphs(
   names: readonly string[],
@@ -152,12 +152,24 @@ export async function expandReadGraphs(
       const registry = await context.registry();
       const listed = [...registry].filter(([, classes]) => classes.has(kind)).map(([graph]) => graph);
       listed.sort().forEach(add);
+    } else if (name === graphs.default && names.length > 1) {
+      // Read with the other graphs through VALUES under the store's name for it (the generator
+      // maps it); a store without a name for it cannot read such a set.
+      if (!context.mapGraphName?.(name)) {
+        throw new GraphQueryError(
+          'unsupported-query-kind',
+          `This store has no name for <${name}>, so it cannot read it together with other ` +
+            `graphs; a SPARQL store maps it with SparqlOptions.mapGraphName.`,
+          name,
+        );
+      }
+      add(name);
     } else if (name === graphs.default || name === graphs.union) {
       if (names.length > 1) {
         throw new GraphQueryError(
           'unsupported-query-kind',
-          `<${name}> can only be read on its own, not together with other graphs: a set of ` +
-            `graphs is read as FROM NAMED graphs, which cannot name the default or union graph.`,
+          `<${name}> can only be read on its own, not together with other graphs: the union ` +
+            `graph already holds every named graph.`,
           name,
         );
       }

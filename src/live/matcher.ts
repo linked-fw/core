@@ -11,6 +11,7 @@ import {
   withShapeCatalog,
 } from '../utils/ShapeClass.js';
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
+import {graphs} from '../ontologies/graphs.js';
 import type {Instance, Template} from './LiveQueryStore.js';
 
 /** The indexes the matcher reads. Maintained by the store. */
@@ -44,6 +45,12 @@ export type LiveIndexes = {
  * template that neither scans nor traverses any of those shapes is skipped.
  * This is what keeps a `Team` rename away from a `Person` list sorted by the
  * same `schema:name` predicate.
+ *
+ * Every rule is also scoped by graph: when the change's graph and the graphs a
+ * template reads are both known (`MutationEffects.graph`,
+ * `QueryDependencies.graphs`), a template that does not read that graph is
+ * skipped. A template reading a name the store resolves (`graphs.union`,
+ * `graphs.allOntologies`, `graphs.allShapes`) reads any graph.
  */
 export function selectInstances(
   index: LiveIndexes,
@@ -64,9 +71,10 @@ export function selectInstances(
     for (const inst of t.instances.values()) out.add(inst);
   };
 
-  // Shapes whose nodes this change can have touched.
+  // Shapes whose nodes this change can have touched, in the graph it wrote.
   const scope = expandShapes([e.shape, ...e.membership]);
-  const inScope = (t: Template) => intersects(index.depsOf(t).shapes, scope);
+  const readsGraph = (t: Template) => readsWrittenGraph(index.depsOf(t).graphs, e.graph);
+  const inScope = (t: Template) => intersects(index.depsOf(t).shapes, scope) && readsGraph(t);
 
   // Templates reading any written predicate, within the shape scope.
   const byProp = new Set<Template>();
@@ -78,6 +86,7 @@ export function selectInstances(
   if (e.ids) {
     for (const id of e.ids) {
       for (const inst of index.instancesById.get(id) ?? []) {
+        if (!readsGraph(inst.template)) continue;
         if (e.op === 'delete' || (byProp.has(inst.template) && intersects(index.depsOf(inst.template).narrow, e.props))) {
           add(inst);
         }
@@ -96,6 +105,7 @@ export function selectInstances(
   if (e.membership.size) {
     for (const shape of expandShapes(e.membership)) {
       for (const t of index.templatesByShape.get(shape) ?? []) {
+        if (!readsGraph(t)) continue;
         if (e.op === 'delete') {
           addAll(t);
         } else if (t.reactive && inCatalog(t)) {
@@ -118,6 +128,24 @@ export function isUnbound(index: LiveIndexes, inst: Instance): boolean {
     return !(inst.params.subject || inst.params.contextName || (inst.params.subjects && inst.params.subjects.length));
   }
   return index.depsOf(inst.template).unbound;
+}
+
+/** Names a store resolves to graphs at read time: a template reading one may read any graph. */
+const STORE_RESOLVED_GRAPHS: ReadonlySet<string> = new Set([
+  graphs.union,
+  graphs.allOntologies,
+  graphs.allShapes,
+]);
+
+/**
+ * Whether a template reading `read` can see a change written to `written`: unknown on either side
+ * (no routing, no `.into()`, no `.from()`) means yes, as does a name the store resolves.
+ */
+export function readsWrittenGraph(read: Set<string> | undefined, written: string | undefined): boolean {
+  if (!read || written === undefined) return true;
+  if (read.has(written)) return true;
+  for (const name of read) if (STORE_RESOLVED_GRAPHS.has(name)) return true;
+  return false;
 }
 
 /** A set of shape IRIs plus every ancestor and descendant shape of each. */

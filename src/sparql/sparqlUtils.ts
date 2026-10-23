@@ -1,4 +1,5 @@
 import {Prefix} from '../utils/Prefix.js';
+import type {ShapeGraphRouting} from '../utils/graphRouting.js';
 import {ulid} from 'ulid';
 
 export interface SparqlOptions {
@@ -19,6 +20,23 @@ export interface SparqlOptions {
    * together with other graphs is refused (see `expandReadGraphs`).
    */
   mapGraphName?: (iri: string) => string | null;
+  /**
+   * Send a read's set of named graphs as the SPARQL protocol's `named-graph-uri` parameters
+   * instead of `FROM NAMED` lines in the query text, for endpoints that take the dataset that way.
+   * The store's transport must send them (`SparqlDataset.executeSparqlSelectWithNamedGraphs`; its
+   * default refuses, since a transport that dropped them would read every named graph). Default
+   * false.
+   */
+  namedGraphUriParameter?: boolean;
+}
+
+/**
+ * What a store hands the SPARQL compiler for one query: its options, plus the graph routing of the
+ * dataset when it has routes (see `utils/graphRouting.ts`). Without `routing` every read and write
+ * compiles as it did before graph routing.
+ */
+export interface SparqlCompileOptions extends SparqlOptions {
+  routing?: ShapeGraphRouting;
 }
 
 // Characters that must never appear inside a SPARQL IRIREF (`<...>`) per the

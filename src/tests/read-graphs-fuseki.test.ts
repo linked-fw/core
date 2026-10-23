@@ -142,10 +142,11 @@ describeFuseki('reads from named graphs', () => {
     expect(alone.map((r) => r.name)).toEqual(['Frank']);
     const union = await both((s) => Person.select((p) => p.name).from(graphs.union).exec(s));
     expect(union.map((r) => r.name).sort()).toEqual(['Alice', 'Bob', 'Carol', 'Dave', 'Eve']);
-    // Jena's FROM NAMED <urn:x-arq:DefaultGraph> matches nothing: refused, never silently empty.
-    await expect(Person.select((p) => p.name).from([graphs.default, GA]).exec(off)).rejects.toMatchObject({
-      cause: {name: 'GraphQueryError', code: 'unsupported-query-kind'},
-    });
+    // The default graph with a named graph: read through VALUES (Jena's FROM NAMED
+    // <urn:x-arq:DefaultGraph> would match nothing).
+    const inA = await both((s) => Person.select((p) => p.name).from(GA).exec(s));
+    const mixed = await both((s) => Person.select((p) => p.name).from([graphs.default, GA]).exec(s));
+    expect(mixed.map((r) => r.name).sort()).toEqual([...inA.map((r) => r.name), 'Frank'].sort());
   });
 
   test('a graph created through the store is read at once, without waiting for the expiry', async () => {

@@ -204,8 +204,8 @@ It runs at app boot and through the app's control route, before shape sync.
 
 ## Named graphs and the graph registry
 
-A dataset keeps named graphs on purpose (a package's whole ontology data, later its shapes,
-ontology-editor drafts), and records each one in the **graph registry**, a named graph at
+A dataset keeps named graphs on purpose (a package's whole ontology data, its shapes,
+draft graphs), and records each one in the **graph registry**, a named graph at
 `https://linked.cm/pkg/core/graph/registry` (`graphs.registry`), the same IRI in every dataset.
 A record is described with SPARQL Service Description plus core terms; its subject is the graph
 IRI:
@@ -272,17 +272,20 @@ written, in the DSL-JSON field `graphs` and the IR field `graphs`, and the store
 | a graph IRI, `graphs.registry` | itself |
 | `graphs.allOntologies`, `graphs.allShapes` | every graph the registry lists with an `OntologyGraph` / `ShapesGraph` record |
 | `graphs.default` alone | the default graph, as without `.from()` |
+| `graphs.default` with other graphs | the default graph under the store's name for it, through `VALUES` (below) |
 | `graphs.union` alone | the store's name for it (`SparqlOptions.mapGraphName`; Fuseki `urn:x-arq:UnionGraph`) |
 
-`graphs.default` or `graphs.union` together with other graphs is refused
-(`unsupported-query-kind`): a set is read as `FROM NAMED` graphs, and Jena's `FROM NAMED
-<urn:x-arq:DefaultGraph>` matches nothing. A set that expands to no graph matches nothing; the
-store answers it without a request.
+`graphs.union` together with other graphs is refused (`unsupported-query-kind`; it holds them
+already), and so is `graphs.default` with other graphs on a store without a name for it
+(`mapGraphName`). A set that expands to no graph matches nothing; the store answers it without a
+request.
 
 `SparqlDataset` compiles one graph as `GRAPH <iri> { … }` around the whole pattern, and several
 as `FROM NAMED <g1> … <gK>` with one `GRAPH ?g_<subject> { … }` block per subject: a subject's
 data lives in one graph, so its graph variable is shared by all its blocks, OPTIONAL and EXISTS
-ones included.
+ones included. A set holding the default graph has no `FROM NAMED` (on Jena any `FROM NAMED`
+hides the default graph, even from `VALUES` and `GRAPH <urn:x-arq:DefaultGraph>`); each subject
+then reads `VALUES ?g_<subject> { <urn:x-arq:DefaultGraph> <g1> … }` with its `GRAPH` block.
 
 ```ts
 import {graphs} from '@_linked/core/ontologies/graphs';
@@ -308,7 +311,8 @@ reached through a link that carries an inferred type check gets that check in a 
 the same graph variable, after the block that reads one of its stored triples. The rows are the
 same; on Jena, which reorders the patterns inside one block and would run the type check in every
 allowed graph, it is about twice as fast (the measurements are in `graphScope.ts`). The generator
-emits no linked type check today, so the flag changes no query yet.
+emits no linked type check (graph routing does not need one: a subject's graphs come from its
+shape, see below), so the flag changes no generated query.
 
 **The registry cache.** A store reads its registry once per dataset and process (one `SELECT` on
 `graphs.registry`) and keeps it: its own graph queries update the cache in the same step, so its
@@ -317,6 +321,169 @@ package export by cache key) drops it when another process changed the graphs (C
 the apps it runs); an entry older than 30 seconds (`GRAPH_REGISTRY_MAX_AGE_MS`) is re-read. A
 store keys the cache with `graphRegistryKey()` (default: one key per instance; a store overrides
 it with its dataset's identity). Writes never depend on the cache.
+
+### Graph routing
+
+Storage rules pick the graph the way they pick the dataset: a **route** maps a shape to one named
+graph of one dataset, so ordinary code never names a graph. Without routes everything lives in the
+default graph, exactly as before routing existed.
+
+Routes live in the app's code (its `linked.backend.storage.ts`), never in the datasets config,
+which keeps what changes per deployment. A route states intent; developers do not write graph
+IRIs:
+
+```ts
+import {dataGraph} from '@_linked/core/ontologies/graphs';
+
+LinkedStorage.setDatasetForShapes(store, [Article, Comment], {graph: 'own'});
+LinkedStorage.setDatasetForShapes(store, [Tag, Category], {graph: dataGraph('taxonomy')});
+```
+
+| Route | Graph |
+|---|---|
+| `'own'` | `{DATA_ROOT}/graph/{package slug}/{shape name}` — one graph per shape |
+| `dataGraph('slug')` | `{DATA_ROOT}/graph/{slug}` — shared by the shapes routed to it |
+| an absolute graph IRI | as given (advanced use) |
+
+- **`'own'`**: the package is the one the shape class was registered by (`linkedPackage(name)`); its
+  slug is `packageNameToSlug(name)` (npm scope dropped, every run of characters other than ASCII
+  letters and digits → `-`, trimmed, lower-cased: `@acme/news-site` → `news-site`); the shape name
+  is the shape IRI's last segment, case kept (`@linkedShape({name})`, else the class name). So
+  `Article` of `@acme/news-site` → `{DATA_ROOT}/graph/news-site/Article`. A shape no package
+  registered is refused.
+- **`dataGraph(slug)`**: the slug is one or more `/`-separated segments, each
+  `^[a-z0-9]+(?:-[a-z0-9]+)*$` (`articles`, `news/archive`); anything else throws.
+- **`DATA_ROOT`** is the store's: `IDataset.dataRoot()` (a `SparqlDataset` returns its
+  `SparqlOptions.dataRoot`, the root it mints ids under), else the process's `DATA_ROOT`; trailing
+  slashes dropped (`dataRootOf(dataset)`). It is joined each time the routing is read, so a root
+  the store learns later is the one used. A route that needs a root the store lacks is refused when
+  resolved, with the shape named.
+- **Managed graphs are refused.** A route never names a graph the store manages itself: a portable
+  name, the graph registry, a package's ontology or shape graph (`…/pkg/{slug}/graph/…`), the
+  app's shape graph (`{DATA_ROOT}/graph/shapes`, so `dataGraph('shapes')`) or an imported graph
+  (`{DATA_ROOT}/graph/import/…`). The refusal is `GraphQueryError('graph-name-read-only')` and names
+  the shape and the graph: when the route is set, or, for a full IRI under the data root, when the
+  routing is read. (Draft graphs, `{DATA_ROOT}/graph/drafts/…`, stay routable: an app routes its
+  draft shapes there.)
+
+`setShapeGraphs(dataset, {<shape IRI>: route})` records routes directly (a composite dataset
+registers them on the store it forwards to); `getShapeGraphs(dataset)` returns them resolved, and
+`graphRoutingFor(dataset)` is what reads and writes compile with. Routes are kept per dataset
+object, by shape IRI.
+
+- **A shape's graph** (where its instances are written): its own route, else its nearest routed
+  super-shape's, else the default graph.
+- **A shape's read set**: its graph, every registered sub-shape's graph, and the read set of every
+  shape that owns it, or one of its super- or sub-shapes, through a `contains` property (an owned
+  node is written into its owner's graph; an album that owns a panorama cover puts its graph in the
+  read set of the photo shape the panorama extends).
+
+**Reads** with no `.from()` give each subject group the read set of its shape: the root's shape,
+an object property's value shape, or, through a `contains` property, the owner's set. A subject
+of unknown shape may be in any routed graph or the default graph. The forms:
+
+| Situation | SPARQL |
+|---|---|
+| every subject reads only the default graph | unchanged |
+| every subject reads the same single graph | `GRAPH <g> { whole pattern }` |
+| named graphs only | `FROM NAMED` their union; per subject `GRAPH <g>` (one graph), `GRAPH ?g` (the whole union) or, for a type-checked subject with a narrower set, `VALUES ?g { … }` + `GRAPH ?g` |
+| the default graph with named graphs | no `FROM NAMED`; default-only subjects plain, one-graph subjects `GRAPH <g>`, others `VALUES ?g { <store default name> … }` + `GRAPH ?g` |
+
+`VALUES` is written where a subject's graph variable is first bound, not again in the OPTIONAL
+blocks that join on it. With `SparqlOptions.namedGraphUriParameter` the `FROM NAMED` set goes to
+the transport as the protocol's `named-graph-uri` parameters instead
+(`executeSparqlSelectWithNamedGraphs`, which a store with the option overrides; the default
+refuses rather than read every named graph).
+
+**Writes.** A create goes into the shape's graph (`INSERT DATA { GRAPH <g> { … } }`); nested
+owned (`contains`) nodes are created there too. A nested node the mutation does not own is written
+into its own shape's graph, in the same update, as one `GRAPH` block per graph (plain triples for
+the default graph; under `WITH <g>`, the store's name for the default graph), while the link to it
+stays with its holder: `Article.create({author: {name: 'Ann'}})` writes the article and its
+`author` link in the articles graph and Ann in the people graph, where `Person.select()` and
+`Article.select((a) => a.author.name)` read her. The same holds for the nested creates of an
+update or upsert. An update or delete of existing subjects runs in the graph the
+subject lives in: when the shape's read set is one graph, `WITH <g>` before the
+`DELETE`/`INSERT`; when it holds several (a sub-shape's or an owner's graph), the same update finds
+the graph:
+
+```sparql
+DELETE { GRAPH ?g_w { … } } INSERT { GRAPH ?g_w { … } }
+WHERE {
+  { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <people> <staff> } GRAPH ?g_w { <bob> ?p ?o } } }
+  GRAPH ?g_w { … }
+}
+```
+
+A subject found in none of them is left alone; an upsert of one creates it in the shape's graph
+(`BIND(COALESCE(…))`); a bulk update or delete runs in every graph of the set where it matches; a
+delete of several ids is one operation per id in one request. Old values, incoming references and
+owned walks are read and removed in that graph only. Under routing an owned node lives in its
+owner's graph: the owned-link check reads the linked node's types in every graph and refuses one
+that lives elsewhere. `.into(graph)` on a create, update or delete builder overrides the graph, only
+to a graph in the shape's read set (else `GraphQueryError('graph-not-routed')`; a portable name, the
+registry or a store-reserved name is `graph-name-read-only`). `.into()` is never carried in
+DSL-JSON: a process that receives a mutation derives its graph from its own routing, and `toJSON`
+of a builder with `.into()` throws rather than drop it.
+
+**Live queries.** `QueryDependencies.graphs` (the `.from()` names, or the routed read sets) and
+`MutationEffects.graph` (the `.into()` graph, the routed graph of a create, or the one graph of a change to existing subjects; unknown when the read set holds several, or when a nested node is written into another graph) are set when the dataset `LinkedStorage`
+routes the shape to has routes; the matcher skips a template that does not read the written graph.
+A change and its remote echo fold when their graphs agree or one of them has none.
+
+### Shape graphs
+
+A package's shapes live in its shape graph, `{package IRI}/graph/shapes`
+(`ShapesGraph.iriFor(pkg)`), recorded as a `ShapesGraph` (never a hierarchy source). Readers read
+`graphs.allShapes` (every graph the registry lists as a `ShapesGraph`) plus the app's own shape
+graph.
+
+**Stored as declared.** A shape is written with its own property shapes only, plus
+`core:isExtending` to the shape it extends; inherited property shapes are not copied. A reader that
+needs a shape's full property set follows `core:isExtending` (the property readers do so through
+the registry for a shape known only as data, and end its chain at the root `Shape`, whose `label`
+and `type` every shape inherits). SHACL applies a super-shape to a sub-shape's instances through its
+`sh:targetClass` and `rdfs:subClassOf`.
+
+**`shapes.ttl`** (`@_linked/core/shapes/shapesToTurtle`, server only):
+
+- `shapesToTurtle(shapes, {prefixes?})`: the shapes (classes or node shape data) as declared, in a
+  fixed form: the prefix block `core`, `rdf`, `rdfs`, `sh`, `xsd` plus the caller's (sorted; a fixed
+  name cannot be rebound), then one block per IRI subject sorted by IRI, the subject on its own
+  line, then one `predicate object` per line (`a` first, then by predicate IRI, then by the written
+  object), `;` between, `.` at the end, a blank line between blocks. The triples are the ones core's
+  create pipeline writes for a `NodeShape`. Blank nodes only for complex `sh:path` values (SHACL
+  requires them; sequence and alternative lists are blank-celled), each the object of exactly one
+  triple and written inline on its owner's line (`[ sh:inversePath ex:p ]`, `( ex:a ex:b )`);
+  `sh:in`, `sh:languageIn`, `sh:and` and `sh:xone` lists have IRI cells (`{IRI}/in/0`, `{IRI}/and/0`).
+  Same shapes and prefixes, same bytes.
+- `packageShapes(pkg)`, `packageShapesTurtle(pkg)`: a package's registered shapes (for
+  `@_linked/core`, its built-ins) and their Turtle. `linked build` writes it to
+  `lib/esm/data/shapes.ttl`.
+- `singleOwnerShapesTurtle(shapes)`: the single-owner shapes generated from `contains` properties
+  (with the owners' `core:generatedShape` links), for the app's own shape graph
+  `{DATA_ROOT}/graph/shapes`. Their `sh:qualifiedValueShape` is an inline blank node too.
+
+**The sync** (`@_linked/core/shapes/syncShapeGraphs`): `syncShapeGraphs(ds?, {force, packages,
+turtleFor, appShapes, orphanScope})` → `{written, skipped, pruned, cleaned, appGraph?,
+defaultGraph?}`. Per package, the body is `turtleFor(pkg)` (a server passes the installed
+`shapes.ttl`) or `packageShapesTurtle(pkg)`; the hash is `sha256Hex('linked-shape-graph/1\n' +
+text)`, compared with the record's `core:contentHash`; equal → no write; else the graph is created
+or replaced whole in one graph query (`sources` `data/shapes.ttl`). `appShapes: {graph, package?}`
+writes the generated single-owner shapes of every registered shape to the app's graph the same way.
+After the graphs, the package shapes an earlier sync wrote into the default graph (`NodeShape`s with
+`core:shapeHash`) lose their own description there, once: their triples, the blank nodes under them
+and their owned subtrees. The links other default-graph shapes hold to them (`core:isExtending`,
+`sh:node`) stay. `orphanScope: 'all'` drops the
+shape graphs of packages no longer registered (never an app's graph). A store without graph queries
+gets the default-graph `syncShapes` instead (`defaultGraph` counts its writes).
+
+**Patching a shape** (`NamedGraph.patchContent`): the unit is the shape's concise bounded
+description: its statements and, through each blank object, the blank node's statements,
+recursively. A store deletes each blank-node structure as a pattern through its IRI subject
+(`DELETE { GRAPH <g> { <s> sh:path ?b0 . ?b0 sh:inversePath ex:p } } WHERE { … FILTER(isBlank(?b0)) }`)
+and inserts the new statements; a delete body whose blank node is the object of two triples, or
+hangs off no IRI subject, is refused.
 
 ## A package that mirrors a standard
 

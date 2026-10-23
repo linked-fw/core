@@ -73,12 +73,21 @@ export type {
   GraphQueryKind,
   GraphResult,
 } from './queries/graphQuery.js';
-export {graphs} from './ontologies/graphs.js';
+export {graphs, dataGraph, OWN_GRAPH} from './ontologies/graphs.js';
+export type {DataGraphRoute, GraphRoute} from './ontologies/graphs.js';
 export {
   GRAPH_REGISTRY_MAX_AGE_MS,
   invalidateGraphRegistry,
 } from './utils/graphRegistryCache.js';
 export type {ReadGraphsInput} from './queries/readGraphs.js';
+export {
+  dataRootOf,
+  getShapeGraphs,
+  graphRoutingFor,
+  setShapeGraphs,
+  unsetShapeGraph,
+} from './utils/graphRouting.js';
+export type {ShapeGraphRouting} from './utils/graphRouting.js';
 export {
   CONTEXT_REF_KEY,
   encodeContextRef,

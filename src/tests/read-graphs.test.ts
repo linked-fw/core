@@ -299,9 +299,16 @@ WHERE {
   });
 
   test('names only a store can resolve, and an empty set, are refused', () => {
-    for (const name of [graphs.allOntologies, graphs.allShapes, graphs.default, graphs.union]) {
+    for (const name of [graphs.allOntologies, graphs.allShapes, graphs.union]) {
       expect(() => selectToSparql(lower(Person.select((p) => p.name).from([name])))).toThrow(/store resolves/);
     }
+    // The default graph alone is the unrestricted read; with other graphs it needs the store's name.
+    expect(selectToSparql(lower(Person.select((p) => p.name).from([graphs.default])))).toBe(
+      selectToSparql(lower(Person.select((p) => p.name))),
+    );
+    expect(() => selectToSparql(lower(Person.select((p) => p.name).from([graphs.default, G1])))).toThrow(
+      /mapGraphName/,
+    );
     const ir = lower(Person.select((p) => p.name));
     expect(() => selectToSparql({...ir, graphs: []})).toThrow(/empty set of graphs/);
     // The registry is a real graph: read as itself.
@@ -437,15 +444,20 @@ WHERE {
     expect(store.registryLoads).toBe(0);
   });
 
-  test('graphs.default and graphs.union are read on their own only; union needs mapGraphName', async () => {
+  test('graphs.union is read on its own only and needs mapGraphName; graphs.default joins a set through VALUES', async () => {
     const jena = (iri: string) =>
       iri === graphs.default ? 'urn:x-arq:DefaultGraph' : iri === graphs.union ? 'urn:x-arq:UnionGraph' : null;
     const mapped = new StubStore({mapGraphName: jena});
-    for (const name of [graphs.default, graphs.union]) {
-      await expect(Person.select((p) => p.name).from([name, G1]).exec(mapped)).rejects.toMatchObject({
-        cause: {name: 'GraphQueryError', code: 'unsupported-query-kind'},
-      });
-    }
+    await expect(Person.select((p) => p.name).from([graphs.union, G1]).exec(mapped)).rejects.toMatchObject({
+      cause: {name: 'GraphQueryError', code: 'unsupported-query-kind'},
+    });
+    // With the default graph in the set there is no FROM NAMED (it would hide the default graph).
+    await Person.select((p) => p.name).from([graphs.default, G1]).exec(mapped);
+    expect(mapped.lastSelect()).toContain(`VALUES ?g_a0 { <urn:x-arq:DefaultGraph> <${G1}> }`);
+    expect(mapped.lastSelect()).not.toContain('FROM NAMED');
+    await expect(
+      Person.select((p) => p.name).from([graphs.default, G1]).exec(new StubStore()),
+    ).rejects.toMatchObject({cause: {name: 'GraphQueryError', code: 'unsupported-query-kind'}});
     await Person.select((p) => p.name).from(graphs.union).exec(mapped);
     expect(mapped.lastSelect()).toContain('GRAPH <urn:x-arq:UnionGraph> {');
 

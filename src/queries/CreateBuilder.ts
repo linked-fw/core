@@ -13,6 +13,7 @@ import type {NodeShapeData} from '../shapes/SHACL.js';
 import {encodeNodeData, decodeNodeDataToRaw, type CreateMutationJSON} from './MutationSerialization.js';
 import type {CreateLowerSpec} from './mutationLowerSpec.js';
 import {brandLinkedClass} from '../utils/linkedError.js';
+import {refuseSerializedInto} from './intoGraph.js';
 
 /**
  * Internal state bag for CreateBuilder.
@@ -23,6 +24,8 @@ interface CreateBuilderInit<S extends Shape> {
   catalog?: ShapeCatalog;
   data?: UpdatePartial<S>;
   fixedId?: string;
+  /** The graph `.into()` names; never serialized (`toJSON` refuses a builder that has one). */
+  into?: string;
 }
 
 /**
@@ -45,6 +48,7 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
   private readonly _shape: ShapeConstructor<S>;
   private readonly _data?: UpdatePartial<S>;
   private readonly _fixedId?: string;
+  private readonly _into?: string;
 
   private readonly _catalog: ShapeCatalog | undefined;
 
@@ -54,6 +58,7 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
     this._catalog = 'catalog' in init ? init.catalog : captureCatalog(init.shape);
     this._data = init.data;
     this._fixedId = init.fixedId;
+    this._into = init.into;
   }
 
   private clone(overrides: Partial<CreateBuilderInit<S>> = {}): CreateBuilder<S, any> {
@@ -61,6 +66,7 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
       shape: this._shape,
       data: this._data,
       fixedId: this._fixedId,
+      into: this._into,
       catalog: this._catalog,
       ...overrides,
     });
@@ -99,6 +105,20 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
     return this.clone({fixedId: id}) as unknown as CreateBuilder<S, U>;
   }
 
+  /**
+   * Write into `graph` instead of the graph the store's routing picks for this shape. Server-side
+   * only: the graph is never carried in DSL-JSON (a receiving process derives the graph itself;
+   * `toJSON` refuses a builder that has one),
+   * and the store refuses a graph its routing does not allow for the shape (its routed read set:
+   * the shape's graph and its sub-shapes' graphs) with `GraphQueryError('graph-not-routed')`.
+   */
+  into(graph: string): CreateBuilder<S, U> {
+    if (typeof graph !== 'string' || !graph) {
+      throw new Error('.into() takes a graph IRI.');
+    }
+    return this.clone({into: graph}) as unknown as CreateBuilder<S, U>;
+  }
+
   // ---------------------------------------------------------------------------
   // Build & execute
   // ---------------------------------------------------------------------------
@@ -118,9 +138,14 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
 
   /** @internal The IR-free lowering spec consumed by `lower()`. Validates inputs. */
   _lowerSpec(): CreateLowerSpec<S> {
+    const spec = this._lowerSpecWithoutGraph();
+    return this._into === undefined ? spec : {...spec, into: this._into};
+  }
+
+  private _lowerSpecWithoutGraph(): CreateLowerSpec<S> {
     const catalog = this._catalog;
     if (catalog !== getActiveShapeCatalog()) {
-      return withShapeCatalog(catalog, () => this._lowerSpec());
+      return withShapeCatalog(catalog, () => this._lowerSpecWithoutGraph());
     }
     if (!this._data) {
       throw new Error(
@@ -149,6 +174,7 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
     if (catalog !== getActiveShapeCatalog()) {
       return withShapeCatalog(catalog, () => this.toJSON());
     }
+    refuseSerializedInto('CreateBuilder', this._into);
     if (!this._data) {
       throw new Error('CreateBuilder requires .set(data) before .toJSON().');
     }

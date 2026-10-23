@@ -369,12 +369,15 @@ registerGraphRecordShape(
   "The registry record of a package's shapes graph. (graph registry, shapes graph)",
 );
 
-/** Ontology-editor drafts in a branch's app data (`{DATA_ROOT}/graph/drafts`). Never feeds the hierarchy. */
+/**
+ * A draft graph a dataset owns, under its data root (`{DATA_ROOT}/graph/drafts/…`, e.g.
+ * `…/drafts/forms`, `…/drafts/ontology`). Never feeds the hierarchy.
+ */
 export class DraftGraph extends NamedGraph {
   static targetClass = coreOntology.DraftGraph;
 }
 registerGraphRecordShape(
   DraftGraph,
   'DraftGraph',
-  'The registry record of a graph of ontology-editor drafts. (graph registry, draft graph)',
+  'The registry record of a draft graph a dataset owns. (graph registry, draft graph)',
 );

@@ -52,6 +52,7 @@
   },
   "files": [
     "lib",
+    "!lib/esm/tests",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
