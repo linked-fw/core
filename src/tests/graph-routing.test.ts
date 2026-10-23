@@ -140,6 +140,26 @@ describe('routes', () => {
   });
 });
 
+describe('owned nodes', () => {
+  const G_ALBUMS = 'https://acme.example/data/graph/albums';
+
+  test('a shape owned by a routed shape reads its owner graph too (an owned node is written there)', () => {
+    const ds = fakeDataset();
+    setShapeGraphs(ds, {[GRAlbum.shape.id]: G_ALBUMS});
+    const routing = graphRoutingFor(ds)!;
+    expect(routing.graphForShape(GRPhoto.shape.id)).toBe(graphs.default);
+    expect(routing.readGraphsForShape(GRPhoto.shape.id)).toEqual([graphs.default, G_ALBUMS]);
+    // A sub-shape of the owned value shape can be owned through the inherited property.
+    expect(routing.readGraphsForShape(GRPanorama.shape.id)).toEqual([graphs.default, G_ALBUMS]);
+  });
+
+  test('a traversal through a contains property reads the owner set', () => {
+    const sparql = selectToSparql(lower(GRAlbum.select((a) => [a.title, a.cover.caption])), routed({[GRAlbum.shape.id]: G_ALBUMS}));
+    expect(sparql).toMatch(new RegExp(`^WHERE \\{\\n  GRAPH <${G_ALBUMS}> \\{`, 'm'));
+    expect(sparql).not.toContain('FROM NAMED');
+  });
+});
+
 describe('LinkedStorage.setDatasetForShapes', () => {
   const pinned: Function[] = [];
   afterEach(() => {

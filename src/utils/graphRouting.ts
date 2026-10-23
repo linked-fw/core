@@ -17,7 +17,9 @@
  * - **A shape's graph** (where its instances are written): its own route, else its nearest routed
  *   super-shape's, else the default graph.
  * - **Its read set**: its graph plus the graph of every registered sub-shape, because a select of a
- *   shape returns the instances of its sub-shapes too.
+ *   shape returns the instances of its sub-shapes too, plus the read set of every shape that owns
+ *   it (a `contains` property whose value shape is it or a super-shape of it), because an owned
+ *   node is written into its owner's graph.
  *
  * The default graph appears in a set as `graphs.default`. The table lives on the shared global and
  * is keyed by the dataset object and the shape IRI (never a class object): a module can evaluate
@@ -25,7 +27,8 @@
  */
 import type {IDataset} from '../interfaces/IDataset.js';
 import {graphs, PORTABLE_GRAPH_NAMES} from '../ontologies/graphs.js';
-import {getSubShapes, getSuperShapes} from './ShapeClass.js';
+import {getAllNodeShapes, getSubShapes, getSuperShapes} from './ShapeClass.js';
+import {getPropertyShapes} from '../shapes/nodeShapeData.js';
 
 const routingGlobal: any = typeof globalThis !== 'undefined' ? globalThis : ({} as any);
 
@@ -112,13 +115,47 @@ export function graphRoutingFor(dataset: IDataset | object | undefined): ShapeGr
     }
     return graphs.default;
   };
+  // The shapes that own instances of a shape (declare a `contains` property whose value shape is
+  // the shape or one of its super-shapes), computed once per routing object.
+  let ownersByValueShape: Map<string, Set<string>> | undefined;
+  const ownersOf = (shapeId: string): string[] => {
+    if (!ownersByValueShape) {
+      ownersByValueShape = new Map();
+      for (const shape of getAllNodeShapes().values()) {
+        for (const ps of getPropertyShapes(shape)) {
+          const valueShape = ps.contains ? ps.valueShape?.id : undefined;
+          if (!valueShape) continue;
+          let owners = ownersByValueShape.get(valueShape);
+          if (!owners) ownersByValueShape.set(valueShape, (owners = new Set()));
+          owners.add(shape.id);
+        }
+      }
+    }
+    const out = new Set<string>();
+    for (const target of [shapeId, ...getSuperShapes(shapeId).map((s) => s.id)]) {
+      for (const owner of ownersByValueShape.get(target) ?? []) out.add(owner);
+    }
+    return [...out];
+  };
+  const readSets = new Map<string, string[]>();
+  const readGraphsForShape = (shapeId: string, visiting = new Set<string>()): string[] => {
+    const cached = readSets.get(shapeId);
+    if (cached) return cached;
+    visiting.add(shapeId);
+    const set = new Set<string>([graphForShape(shapeId)]);
+    for (const sub of getSubShapes(shapeId)) set.add(graphForShape(sub.id));
+    for (const owner of ownersOf(shapeId)) {
+      if (visiting.has(owner)) continue;
+      for (const graph of readGraphsForShape(owner, visiting)) set.add(graph);
+    }
+    visiting.delete(shapeId);
+    const sortedSet = sortGraphSet(set);
+    if (visiting.size === 0) readSets.set(shapeId, sortedSet);
+    return sortedSet;
+  };
   return {
     graphForShape,
-    readGraphsForShape(shapeId: string): string[] {
-      const set = new Set<string>([graphForShape(shapeId)]);
-      for (const sub of getSubShapes(shapeId)) set.add(graphForShape(sub.id));
-      return sortGraphSet(set);
-    },
+    readGraphsForShape: (shapeId: string) => readGraphsForShape(shapeId),
     allGraphs(): string[] {
       return sortGraphSet([graphs.default, ...table.values()]);
     },

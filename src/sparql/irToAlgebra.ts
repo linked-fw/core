@@ -645,7 +645,8 @@ function routedGraphsOfShape(shapeId: string, routing: ShapeGraphRouting): reado
  * The per-subject graph sets of a routed read: the root alias reads its shape's set, and every
  * variable bound through an object property reads the set of that property's value shape (so a
  * traversal's target, a filter's linked node and a nested select all read where their shape is
- * routed). A subject of unknown shape (an object property without a value shape) may be anywhere
+ * routed), except through a `contains` property: an owned node lives in its owner's graph, so it
+ * reads its owner's set. A subject of unknown shape (an object property without a value shape) may be anywhere
  * the routing writes. `undefined` when every subject of known shape reads only the default graph:
  * the query is then compiled exactly as without routing.
  */
@@ -655,16 +656,20 @@ function routedReadScope(
   registry: VariableRegistry,
   routing: ShapeGraphRouting,
 ): ReadGraphScope | undefined {
-  const shapeOf = new Map<string, string>([[rootAlias, rootShape]]);
+  const bySubject = new Map<string, readonly string[]>([
+    [rootAlias, routedGraphsOfShape(rootShape, routing)],
+  ]);
   // Bindings are made parent first, so one pass in order resolves every chain.
   for (const {alias, property, variable} of registry.bindings()) {
-    if (!shapeOf.has(alias) || shapeOf.has(variable)) continue;
-    const valueShape = findPropertyShapeById(property)?.valueShape?.id;
-    if (valueShape) shapeOf.set(variable, valueShape);
-  }
-  const bySubject = new Map<string, readonly string[]>();
-  for (const [variable, shapeId] of shapeOf) {
-    bySubject.set(variable, routedGraphsOfShape(shapeId, routing));
+    const ownerSet = bySubject.get(alias);
+    if (!ownerSet || bySubject.has(variable)) continue;
+    const ps = findPropertyShapeById(property);
+    if (ps?.contains && ps.valueShape?.id) {
+      // An owned node lives in its owner's graph (a nested create is written there).
+      bySubject.set(variable, ownerSet);
+    } else if (ps?.valueShape?.id) {
+      bySubject.set(variable, routedGraphsOfShape(ps.valueShape.id, routing));
+    }
   }
   const otherSubjects = routing.allGraphs();
   const onlyDefault = (set: readonly string[]) => set.length === 1 && set[0] === graphs.default;
