@@ -706,3 +706,159 @@ delete of several ids is one operation per id, and the owned-link check refuses 
 outside its owner's graph; a MINUS right side writes its own `VALUES`. Backlogs 065 and 066 are
 resolved; 067 records writes across graphs. Full gate: 2632 passed, 349/349 `[fuseki]`;
 `two-copies-built` still fails (backlog 060).
+
+## K5 — shape graphs
+
+Master §K5 is the scope; this is its plan-mode detail, written against `named-graphs` at
+`556803b` (K4 landed). Line numbers drift; search for the symbol.
+
+### Contract (provided; repeated from the master §Contracts)
+
+**Shape graphs (provider K5 + L1 + V2; consumers C4, every package)**
+
+- `shapesToTurtle(shapes, {prefixes})` (core, server-only): deterministic (fixed prefix block,
+  subjects sorted, `a` first, predicates sorted, one per line), shapes as declared plus
+  `core:isExtending`, blank nodes only for `sh:inversePath` and sequence paths, each hanging off one
+  IRI subject.
+- `lib/esm/data/shapes.ttl` in every package build (L1). Hash prefix `linked-shape-graph/1`.
+- `syncShapeGraphs(ds, {force?})` replaces `ShapesGraph.iriFor(pkg)` whole on a mismatch; the
+  app's generated single-owner shapes go in `{DATA_ROOT}/graph/shapes` (`ShapesGraph`,
+  `feedsHierarchy` false), regenerated at boot. The default-graph shape sync is removed after a
+  one-time cleanup of the shapes it wrote (by `core:shapeHash` nodes).
+- `patchContent` on a shape graph: the unit is the shape's CBD (deleted as a pattern through the
+  IRI subject, inserted anew).
+
+### How it works (inside the contract)
+
+- **One data builder.** `shapesToTurtle` reuses the create data the shape sync already builds
+  (`buildNodeShapeData`) and lowers it through core's own create pipeline (`createToAlgebra`), so
+  the triples in `shapes.ttl` are exactly the ones a `NodeShape` read expects; only the generated
+  single-owner shapes and `core:shapeHash` are left out. The Turtle writer then serialises those
+  triples deterministically.
+- **As declared (13b).** `buildNodeShapeData` writes the shape's own property shapes
+  (`getPropertyShapes(shape)`, overrides included), no inherited copies; the default-graph
+  `syncShapes` (the fallback, below) writes the same. `SHAPE_HASH_VERSION` 2 → 3 with the golden
+  and the ledger, so every default-graph store rewrites once. Readers: core reads no stored shape
+  except the sync's hash read; a data-only shape (a catalog built from stored shapes) inherits
+  through `extends` already (`getSuperShapes`), and the one thing it got only from the flattened
+  copies, the root `Shape`'s `label` and `type`, it now inherits from the built-in root: the
+  property readers (`getPropertyShapes(…, true)`, `getPropertyShape`) end a data-only chain at the
+  root `Shape`, as a class-backed chain does.
+- **Blank nodes only for paths.** Complex `sh:path` values stay blank (SHACL requires blank path
+  nodes: inverse, alternative, the repetition paths; sequence lists are blank-celled `rdf:List`s).
+  `sh:and`/`sh:xone` lists of shapes, blank today, get IRI cells (`{shape IRI}/and/0`, as `sh:in`
+  already has `{property IRI}/in/0`). Each blank structure is the object of exactly one triple;
+  the writer refuses anything else.
+- **The Turtle form.** A fixed prefix block (`core`, `rdf`, `rdfs`, `sh`, `xsd`, plus the caller's
+  `prefixes`, sorted by prefix; a caller's prefix may not rebind a fixed one), then one block per
+  IRI subject, sorted by IRI: the subject on its own line, then one `predicate object` per line
+  (`a` first, then predicates by IRI, then objects by their written form), `;`-separated, `.` at
+  the end, one blank line between blocks. A blank node is written inline on its parent's line
+  (`[ sh:inversePath ex:p ]`, `( ex:a ex:b )` for a blank-celled list), with its own predicates in
+  the same order. Literals: plain for `xsd:string`, `@lang`, else `"…"^^dt`. An IRI is compacted
+  only when the local part is a safe `PN_LOCAL` (`Prefix.isValidLocalName`). Ends with `\n`.
+- **API** (`src/shapes/shapesToTurtle.ts`, subpath `@_linked/core/shapes/shapesToTurtle`, not in the
+  browser index):
+  - `shapesToTurtle(shapes: Array<typeof Shape | NodeShapeData>, options?: {prefixes?:
+    Record<string, string>}): string` — the given shapes, as declared.
+  - `packageShapes(packageName): NodeShapeData[]` — the registered shapes of a package (for
+    `@_linked/core`, its built-ins only; core's test shapes are never included), the selection
+    `syncShapes` uses.
+  - `packageShapesTurtle(packageName, options?): string | undefined` — `shapesToTurtle` of
+    `packageShapes`, `undefined` when the package has none. This is the call L1's build and the
+    sync both make, so a built `shapes.ttl` and an in-process generation are the same bytes.
+  - `singleOwnerShapesTurtle(shapes, options?): string | undefined` — the generated single-owner
+    shapes of the given shapes (with the owners' `core:generatedShape` links), for the app graph.
+- **`syncShapeGraphs(ds?, options?)`** (`src/shapes/syncShapeGraphs.ts`) → `{written, skipped,
+  pruned, cleaned, appGraph?, defaultGraph?}`. Options: `force`, `packages` (npm names),
+  `turtleFor(pkg)` (the bytes of a package's `shapes.ttl`, or `undefined` to generate;
+  V2 reads the file), `appShapes: {graph, package?}` (the app's `{DATA_ROOT}/graph/shapes`; core
+  knows no `DATA_ROOT`), `orphanScope: 'none' | 'all'`.
+  - Per package (sorted): `hash = sha256Hex('linked-shape-graph/1\n' + text)`; compared with the
+    `ShapesGraph` record's `core:contentHash` (one `ShapesGraph.select()` per run); equal → skipped;
+    else `ShapesGraph.create({id, package, sources: 'data/shapes.ttl'}).withContent(turtle,
+    {contentHash})` or `update(id).set({sources}).replaceContent(…)`.
+  - The app graph: `singleOwnerShapesTurtle` of every registered shape, hashed the same way,
+    replaced whole on a mismatch (a `ShapesGraph` record with the caller's `package`); dropped
+    when there is nothing to write and a record exists. Without `appShapes` it is not written.
+  - **Cleanup (one-time):** after the graphs, every shape the run writes (the packages' shapes and
+    the generated ones) that the default graph still holds with a `core:shapeHash` is deleted there
+    with its owned subtree (`DeleteBuilder` on `NodeShape`, the existing cascade); one select finds
+    them, so a cleaned store costs one read. Shapes another writer put in the default graph are
+    not touched.
+  - Orphans (`orphanScope: 'all'`, no `packages`): `ShapesGraph.delete` of every record whose
+    `package` is not registered (the app graph excepted).
+  - **Fallback**, as the ontology sync: a dataset without `graphQuery`, or
+    `unsupported-query-kind` before the first graph write → the default-graph `syncShapes` (its
+    thunks run; `defaultGraph` = how many). `syncShapes`/`syncShape` stay exported for it and for
+    existing callers.
+- **CBD patches** (`graphQueryToSparql.ts`). `patch.delete` may hold blank nodes: its ground
+  triples go in `DELETE DATA` as today; each triple `<s> <p> _:b` with an IRI subject, together
+  with the statements of `_:b` and recursively of every blank node under it, becomes one
+  `DELETE { GRAPH <g> { … } } WHERE { GRAPH <g> { … } FILTER(isBlank(?b0) && …) }`, blank nodes
+  as variables. Refused (as the plain errors of the body parser today): a blank node that is the
+  object of more than one triple, a blank subject no IRI subject reaches, a cycle. The insert side
+  is unchanged (`INSERT DATA` mints fresh blank nodes).
+
+### Files
+
+| File | What changes |
+|---|---|
+| `src/shapes/syncShapes.ts` | declared property shapes only; `sh:and`/`sh:xone` with IRI cells; `buildNodeShapeData` exported (internal) with an option to leave out generated shapes; `SHAPE_HASH_VERSION` 3; doc |
+| `src/shapes/nodeShapeData.ts`, `src/utils/ShapeClass.ts` | data-only shapes inherit the root `Shape`'s property shapes in the property readers |
+| `src/shapes/shapesToTurtle.ts` (new) | the writer, `shapesToTurtle`, `packageShapes`, `packageShapesTurtle`, `singleOwnerShapesTurtle`, the fixed prefixes |
+| `src/shapes/syncShapeGraphs.ts` (new) | `syncShapeGraphs`, `SHAPE_GRAPH_HASH_PREFIX`, `shapeGraphHash`, cleanup, fallback |
+| `src/sparql/graphQueryToSparql.ts` | CBD deletes in `graph_patch` |
+| `src/index.ts` | nothing new in the browser index (the new modules are subpaths) |
+| `src/tests/shape-sync-output-equivalence.test.ts`, `shacl-syncshapes.test.ts`, others asserting flattened copies | golden and ledger for version 3; declared-only expectations |
+| `src/tests/shapes-to-turtle.test.ts` (new) | the form; byte-identical across runs; golden `src/tests/fixtures/core-shapes.ttl` for core's own shapes; blank nodes only for paths; parses back (N3.js) to the create pipeline's triples |
+| `src/tests/shape-graphs.test.ts` (new) | the sync against a recording double: create, skip, replace, force, app graph, cleanup, orphans, fallback |
+| `src/tests/graph-query.test.ts` | CBD golden SPARQL and refusals |
+| `src/tests/shape-graphs-fuseki.test.ts` (new) | `[fuseki]`: sync written then skipped; cleanup of old default-graph shapes; CBD patch on an `sh:inversePath` shape leaves no orphan blank node; SHACL targeting of a sub-shape's instances by the super-shape with shapes as declared |
+| `docs/architecture/ontologies.md` | shape graphs |
+| `.changeset/shape-graphs.md` (new) | minor, with the breaking list |
+| `docs/reports/052-shape-graphs.md` (new) | the record |
+
+### Pitfalls
+
+- **Hash churn.** The graph hash is over the Turtle bytes; anything non-deterministic in the
+  writer (map order, prefix registry, blank labels) rewrites every graph at every boot. The writer
+  uses only the fixed and passed prefixes, never `Prefix`'s global map.
+- **The default-graph golden.** Declared-only changes what `syncShapes` writes: bump
+  `SHAPE_HASH_VERSION`, update the golden, append to the ledger (never edit an entry).
+- **Two copies.** The shape enumeration reads the shared registry (`getAllShapeClasses`), as
+  `syncShapes` does; nothing keyed by class objects.
+- **Readers in other repositories** (CN's catalogs, server) read the default graph until V2/C4;
+  inherited properties stored as copies disappear from what the default-graph sync writes. CN's
+  catalog follows `extends` through its registry (C4, CN backlog 131).
+- **CBD deletes and inference.** The pattern's `rdf:type` triples could match by inference; the
+  `DELETE` template only removes stored triples, so an inferred match deletes nothing extra.
+- **K4 shares `syncShapes.ts`/`irToAlgebra.ts`**: this step changes no routing code; it rebases
+  on `named-graphs` before landing.
+
+### Tests
+
+- Quick gate (after each phase), with the env below exported first:
+  `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs <files>`, plus
+  `npm run typecheck`.
+- Full gate (before landing): `npm test` (jest; `two-copies-built` is backlog 060), `npm run
+  typecheck`, `npm run test:fuseki`, `npm run check:dts`, `npx linked build`.
+- Isolation: `FUSEKI_TEST_PORT=3183`, `FUSEKI_BASE_URL=http://localhost:3183`,
+  `LINKED_CORE_TEST_COMPOSE_PROJECT=fuseki-071-k5`, `LINKED_FUSEKI_IMAGE=ghcr.io/linked-fw/fuseki:6.2.0-2`.
+- Verify (master): golden `shapes.ttl` for core's own shapes (byte-identical across runs); sync
+  written then skipped; a CBD patch on a shape with an `sh:inversePath` leaves no orphan blank
+  node; a select of a sub-shape's instances still validates against the super-shape (SHACL
+  targeting).
+
+### Phases
+
+1. **Declared shapes and the writer:** declared-only data, IRI-celled `sh:and`/`sh:xone`, version
+   3, root inheritance for data-only shapes, `shapesToTurtle` and friends, the core golden. Quick
+   gate: `shapes-to-turtle`, `shape-sync-output-equivalence`, `shacl-syncshapes`,
+   `shape-sync-hash`, `shape-catalog`, `tighten-only`.
+2. **CBD patches:** `graphQueryToSparql`, unit and `[fuseki]` tests. Quick gate: `graph-query`,
+   `graph-query-fuseki`, the CBD part of `shape-graphs-fuseki`.
+3. **Shape graph sync:** `syncShapeGraphs`, cleanup, fallback, orphans; unit and `[fuseki]` tests
+   (written then skipped, cleanup, SHACL targeting). Quick gate: `shape-graphs`,
+   `shape-graphs-fuseki`, `sparql-fuseki-shape-sync`.
+4. **Docs and record:** `ontologies.md`, changeset, report 052, Outcome; full gate and Verify.
