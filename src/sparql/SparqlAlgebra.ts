@@ -250,7 +250,15 @@ export type SparqlDeleteInsertPlan = {
   deletePatterns: SparqlTriple[];
   insertPatterns: SparqlTriple[];
   whereAlgebra: SparqlAlgebraNode;
+  /** `WITH <graph>`: the one graph the templates and the WHERE run in. */
   graph?: string;
+  /**
+   * The templates and the WHERE run in the graph `?variable` binds to, one of `graphs` (store
+   * names): the graph holding `subject` (a subject in none of them matches nothing), or, without a
+   * subject, every graph of the set in which the WHERE matches. With `fallback` (an upsert), a
+   * subject found in none of them is written to `fallback`.
+   */
+  graphIn?: {variable: string; graphs: string[]; subject?: string; fallback?: string};
 };
 
 export type SparqlDeleteWherePlan = {

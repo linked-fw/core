@@ -364,17 +364,32 @@ the transport as the protocol's `named-graph-uri` parameters instead
 (`executeSparqlSelectWithNamedGraphs`, which a store with the option overrides; the default
 refuses rather than read every named graph).
 
-**Writes** go into the shape's graph: `INSERT DATA { GRAPH <g> { … } }`, or `WITH <g>` before a
-`DELETE`/`INSERT`, so an update's old values, a delete's incoming references and an owned walk are
-read and removed in that graph only; nested (owned) nodes are created there too, and the
-owned-link check reads the linked ids' types there. `.into(graph)` on a create, update or delete
-builder overrides the graph, only to a graph in the shape's read set (else
-`GraphQueryError('graph-not-routed')`; a portable name, the registry or a store-reserved name is
-`graph-name-read-only`). `.into()` is never carried in DSL-JSON: a process that receives a
-mutation derives its graph from its own routing.
+**Writes.** A create goes into the shape's graph (`INSERT DATA { GRAPH <g> { … } }`); nested
+(owned) nodes are created there too. An update or delete of existing subjects runs in the graph the
+subject lives in: when the shape's read set is one graph, `WITH <g>` before the
+`DELETE`/`INSERT`; when it holds several (a sub-shape's or an owner's graph), the same update finds
+the graph:
+
+```sparql
+DELETE { GRAPH ?g_w { … } } INSERT { GRAPH ?g_w { … } }
+WHERE {
+  { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <people> <staff> } GRAPH ?g_w { <bob> ?p ?o } } }
+  GRAPH ?g_w { … }
+}
+```
+
+A subject found in none of them is left alone; an upsert of one creates it in the shape's graph
+(`BIND(COALESCE(…))`); a bulk update or delete runs in every graph of the set where it matches; a
+delete of several ids is one operation per id in one request. Old values, incoming references and
+owned walks are read and removed in that graph only. Under routing an owned node lives in its
+owner's graph: the owned-link check reads the linked node's types in every graph and refuses one
+that lives elsewhere. `.into(graph)` on a create, update or delete builder overrides the graph, only
+to a graph in the shape's read set (else `GraphQueryError('graph-not-routed')`; a portable name, the
+registry or a store-reserved name is `graph-name-read-only`). `.into()` is never carried in
+DSL-JSON: a process that receives a mutation derives its graph from its own routing.
 
 **Live queries.** `QueryDependencies.graphs` (the `.from()` names, or the routed read sets) and
-`MutationEffects.graph` (the `.into()` or routed graph) are set when the dataset `LinkedStorage`
+`MutationEffects.graph` (the `.into()` graph, the routed graph of a create, or the one graph of a change to existing subjects; unknown when the read set holds several) are set when the dataset `LinkedStorage`
 routes the shape to has routes; the matcher skips a template that does not read the written graph.
 
 ## A package that mirrors a standard

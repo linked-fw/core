@@ -67,6 +67,7 @@ import {
 import {UnresolvedContextError} from '../queries/QueryContext.js';
 import {scopeAlgebraToGraphs, type ReadGraphScope} from './graphScope.js';
 import {graphs} from '../ontologies/graphs.js';
+import {GraphQueryError} from '../queries/graphQuery.js';
 
 // The `*ToAlgebra` / `*ToSparql` exports compile in the catalog the IR was lowered in (its
 // non-enumerable `catalog` field). An IR without one — built by hand, or copied with a spread,
@@ -2112,6 +2113,44 @@ function inGraph<P extends SparqlInsertDataPlan | SparqlDeleteInsertPlan>(plan: 
 }
 
 /**
+ * A DELETE/INSERT plan of a mutation on existing subjects. With `writeGraphs` (the subject may
+ * live in any graph of its shape's read set) the plan runs in the graph that holds it, found in
+ * the same update (`graphIn`, see `deleteInsertPlanToSparql`); an upsert of a subject found in
+ * none of them writes the shape's routed graph. Otherwise `inGraph`.
+ */
+function inWriteGraph(
+  plan: SparqlDeleteInsertPlan,
+  query: {kind: string; graph?: string; writeGraphs?: string[]},
+  options: SparqlCompileOptions | undefined,
+  subject?: string,
+): SparqlDeleteInsertPlan {
+  if (!query.writeGraphs || query.writeGraphs.length === 0) return inGraph(plan, query.graph);
+  const storeName = (graph: string): string => {
+    if (graph !== graphs.default) return graph;
+    const name = options?.mapGraphName ? options.mapGraphName(graphs.default) : null;
+    if (!name) {
+      throw new GraphQueryError(
+        'unsupported-query-kind',
+        'This write may find its subject in the default graph or in named graphs, which a SPARQL ' +
+          'store addresses through its own name for the default graph; this store has none ' +
+          '(SparqlOptions.mapGraphName).',
+        graphs.default,
+      );
+    }
+    return name;
+  };
+  return {
+    ...plan,
+    graphIn: {
+      variable: 'g_w',
+      graphs: query.writeGraphs.map(storeName),
+      ...(subject ? {subject} : {}),
+      ...(query.kind === 'upsert' ? {fallback: storeName(query.graph ?? graphs.default)} : {}),
+    },
+  };
+}
+
+/**
  * Converts an IRCreateMutation to a SparqlInsertDataPlan.
  */
 export function createToAlgebra(
@@ -2445,7 +2484,7 @@ export function updateToAlgebra(
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => updateToAlgebra(query, options));
   }
-  return inGraph(buildDeleteInsertPlan(query, options), query.graph);
+  return inWriteGraph(buildDeleteInsertPlan(query, options), query, options, query.id);
 }
 
 /**
@@ -2465,11 +2504,11 @@ export function upsertToAlgebra(
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => upsertToAlgebra(query, options));
   }
-  return inGraph(buildDeleteInsertPlan(query, options, {
+  return inWriteGraph(buildDeleteInsertPlan(query, options, {
     // Must match the IRI `create` asserts and `select` scans for; the raw shape id is
     // not the same thing, and a node typed with it would be invisible to queries.
     ensureType: resolveShapeScanIri(query.shape),
-  }), query.graph);
+  }), query, options, query.id);
 }
 
 /**
@@ -3414,12 +3453,12 @@ export function deleteToAlgebra(
     right: unionOf(blocks),
   };
 
-  return inGraph({
+  return inWriteGraph({
     type: 'delete_insert',
     deletePatterns,
     insertPatterns: [],
     whereAlgebra,
-  }, query.graph);
+  }, query, _options, query.ids[0]?.id);
 }
 
 /**
@@ -3484,12 +3523,12 @@ export function deleteAllToAlgebra(
     ? {type: 'join', left: {type: 'bgp', triples: [typeTriple]}, right: union}
     : {type: 'bgp', triples: [typeTriple, rootWildcard]};
 
-  return inGraph({
+  return inWriteGraph({
     type: 'delete_insert',
     deletePatterns,
     insertPatterns: [],
     whereAlgebra,
-  }, query.graph);
+  }, query, _options);
 }
 
 /**
@@ -3552,12 +3591,12 @@ export function deleteWhereToAlgebra(
     whereAlgebra = {type: 'join', left: whereAlgebra, right: union};
   }
 
-  return inGraph({
+  return inWriteGraph({
     type: 'delete_insert',
     deletePatterns,
     insertPatterns: [],
     whereAlgebra,
-  }, query.graph);
+  }, query, _options);
 }
 
 /**
@@ -3613,12 +3652,12 @@ export function updateWhereToAlgebra(
   // that split for both update paths.
   whereAlgebra = buildUpdateWhere(whereAlgebra, result, query.traversalPatterns, subjectTerm);
 
-  return inGraph({
+  return inWriteGraph({
     type: 'delete_insert',
     deletePatterns: result.deletePatterns,
     insertPatterns: result.insertPatterns,
     whereAlgebra,
-  }, query.graph);
+  }, query, options);
 }
 
 // ---------------------------------------------------------------------------
@@ -3907,6 +3946,13 @@ export function deleteToSparql(
   const catalog = catalogOf(query);
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => deleteToSparql(query, options));
+  }
+  if (query.writeGraphs && query.ids.length > 1) {
+    // Each subject may live in another graph of the read set: one operation per id, in one
+    // update request (one transaction).
+    return query.ids
+      .map((id) => deleteToSparql(attachCatalog({...query, ids: [id]}, catalog), options))
+      .join(' ;\n');
   }
   const plan = deleteToAlgebra(query, options);
   return deleteInsertPlanToSparql(plan, options);

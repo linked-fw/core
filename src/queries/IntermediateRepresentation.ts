@@ -327,6 +327,12 @@ export type IRUpdateMutation = {
    * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
    */
   graph?: string;
+  /**
+   * The graphs an existing subject may live in (its shape's routed read set), when there are
+   * several: the mutation runs in the one that holds the subject, found inside the same update.
+   * Set by the store from its graph routing; never carried in DSL-JSON.
+   */
+  writeGraphs?: string[];
   id: string;
   data: IRNodeData;
   traversalPatterns?: IRTraversalPattern[];
@@ -353,6 +359,12 @@ export type IRUpsertMutation = {
    * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
    */
   graph?: string;
+  /**
+   * The graphs an existing subject may live in (its shape's routed read set), when there are
+   * several: the mutation runs in the one that holds the subject, found inside the same update.
+   * Set by the store from its graph routing; never carried in DSL-JSON.
+   */
+  writeGraphs?: string[];
   id: string;
   data: IRNodeData;
   traversalPatterns?: IRTraversalPattern[];
@@ -366,6 +378,12 @@ export type IRDeleteMutation = {
    * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
    */
   graph?: string;
+  /**
+   * The graphs an existing subject may live in (its shape's routed read set), when there are
+   * several: the mutation runs in the one that holds the subject, found inside the same update.
+   * Set by the store from its graph routing; never carried in DSL-JSON.
+   */
+  writeGraphs?: string[];
   ids: NodeReferenceValue[];
 };
 
@@ -377,6 +395,12 @@ export type IRDeleteAllMutation = {
    * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
    */
   graph?: string;
+  /**
+   * The graphs an existing subject may live in (its shape's routed read set), when there are
+   * several: the mutation runs in the one that holds the subject, found inside the same update.
+   * Set by the store from its graph routing; never carried in DSL-JSON.
+   */
+  writeGraphs?: string[];
 };
 
 export type IRDeleteWhereMutation = {
@@ -387,6 +411,12 @@ export type IRDeleteWhereMutation = {
    * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
    */
   graph?: string;
+  /**
+   * The graphs an existing subject may live in (its shape's routed read set), when there are
+   * several: the mutation runs in the one that holds the subject, found inside the same update.
+   * Set by the store from its graph routing; never carried in DSL-JSON.
+   */
+  writeGraphs?: string[];
   where: IRExpression;
   wherePatterns: IRGraphPattern[];
 };
@@ -399,6 +429,12 @@ export type IRUpdateWhereMutation = {
    * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
    */
   graph?: string;
+  /**
+   * The graphs an existing subject may live in (its shape's routed read set), when there are
+   * several: the mutation runs in the one that holds the subject, found inside the same update.
+   * Set by the store from its graph routing; never carried in DSL-JSON.
+   */
+  writeGraphs?: string[];
   data: IRNodeData;
   where?: IRExpression;
   wherePatterns?: IRGraphPattern[];

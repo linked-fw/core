@@ -451,9 +451,18 @@ function routedReadGraphs(rootShape: string, shapes: Set<string>): Set<string> |
   return out;
 }
 
-/** The graph a mutation writes: its `.into()` graph, else its shape's routed graph, if known. */
-function writtenGraph(ir: {shape: string; graph?: string}): string | undefined {
-  return ir.graph ?? routingForShape(ir.shape)?.graphForShape(ir.shape);
+/**
+ * The graph a mutation writes, if known: its `.into()` graph; else, under routing, the shape's
+ * routed graph for a create, and for a change to existing subjects the one graph of the shape's
+ * read set (unknown when it holds several: the store finds the subject's graph at write time).
+ */
+function writtenGraph(ir: {kind: string; shape: string; graph?: string}): string | undefined {
+  if (ir.graph !== undefined) return ir.graph;
+  const routing = routingForShape(ir.shape);
+  if (!routing) return undefined;
+  if (ir.kind === 'create') return routing.graphForShape(ir.shape);
+  const readSet = routing.readGraphsForShape(ir.shape);
+  return readSet.length === 1 ? readSet[0] : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -524,7 +533,7 @@ class EffectCollector {
 }
 
 /** The `graph` field of a mutation's effects, when the graph is known. */
-function withGraph(ir: {shape: string; graph?: string}): {graph?: string} {
+function withGraph(ir: {kind: string; shape: string; graph?: string}): {graph?: string} {
   const graph = writtenGraph(ir);
   return graph === undefined ? {} : {graph};
 }

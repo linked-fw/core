@@ -446,6 +446,46 @@ describe('routed writes', () => {
     expect(lastUpdate(store)).not.toContain('GRAPH');
   });
 
+  test('a change to an existing subject whose shape reads several graphs runs in the graph that holds it', async () => {
+    const store = new CaptureStore({mapGraphName: jena});
+    setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF});
+    const BOB = 'https://acme.example/data/bob';
+    await Person.update({name: 'Robert'}).for({id: BOB}).exec(store);
+    expect(lastUpdate(store)).toBe(`DELETE {
+  GRAPH ?g_w {
+    <${BOB}> <${P}name> ?old_name .
+  }
+}
+INSERT {
+  GRAPH ?g_w {
+    <${BOB}> <${P}name> "Robert" .
+  }
+}
+WHERE {
+  { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <${G_PEOPLE}> <${G_STAFF}> } GRAPH ?g_w { <${BOB}> ?g_w_p ?g_w_o } } }
+  GRAPH ?g_w {
+    OPTIONAL {
+      <${BOB}> <${P}name> ?old_name .
+    }
+  }
+}`);
+    await Person.upsert({name: 'Robert'}).for({id: BOB}).exec(store);
+    expect(lastUpdate(store)).toContain(`BIND(COALESCE(?g_w_found, <${G_PEOPLE}>) AS ?g_w)`);
+    await UpdateBuilder.from(Person).set({name: 'x'}).forAll().exec(store);
+    expect(lastUpdate(store)).toContain(`VALUES ?g_w { <${G_PEOPLE}> <${G_STAFF}> }\n  GRAPH ?g_w {`);
+    await Person.delete([{id: BOB}, {id: 'https://acme.example/data/alice'}]).exec(store);
+    // One operation per subject, in one request.
+    expect(lastUpdate(store).split(' ;\n')).toHaveLength(2);
+    expect(lastUpdate(store).match(/SELECT DISTINCT \?g_w/g)).toHaveLength(2);
+    // The one graph of a sub-shape that has no sub-shapes or owners: WITH, as before.
+    await Employee.update({name: 'x'}).for({id: BOB}).exec(store);
+    expect(lastUpdate(store)).toMatch(new RegExp(`^WITH <${G_STAFF}>`, 'm'));
+    // The default graph in the set needs the store's name for it.
+    const unnamed = new CaptureStore();
+    setShapeGraphs(unnamed, {[Employee.shape.id]: G_STAFF});
+    await expect(Person.update({name: 'x'}).for({id: BOB}).exec(unnamed)).rejects.toThrow(/mapGraphName/);
+  });
+
   test('a sub-shape without a route writes its super-shape graph; a routed one its own', async () => {
     const store = new CaptureStore({mapGraphName: jena});
     setShapeGraphs(store, {[GRPhoto.shape.id]: G_ALBUMS, [GRPanorama.shape.id]: G_PANORAMAS});
@@ -463,9 +503,10 @@ describe('routed writes', () => {
     expect(insert.match(/GRAPH </g)).toHaveLength(1);
     expect(insert).toContain(`${GR('caption')}> "front"`);
     await GRAlbum.update({cover: {id: 'https://acme.example/data/photo/9'}}).for({id: ALBUM}).exec(store);
-    const check = store.selects.find((q) => q.startsWith('SELECT ?id ?type'));
+    // Under routing the check reads the linked node's and the owner's types in every graph.
+    const check = store.selects.find((q) => q.startsWith('SELECT ?id ?type ?g'));
     expect(check).toBe(
-      `SELECT ?id ?type WHERE { VALUES ?id { <https://acme.example/data/photo/9> } GRAPH <${G_ALBUMS}> { ?id <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type } }`,
+      `SELECT ?id ?type ?g WHERE { VALUES ?id { <https://acme.example/data/photo/9> <${ALBUM}> } { GRAPH ?g { ?id <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type } } UNION { ?id <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type } }`,
     );
   });
 
@@ -557,7 +598,9 @@ describe('live queries carry graphs', () => {
     expect(mutationEffects(GRAlbum.create({title: 'x'}).into(G_ALBUMS)).graph).toBe(G_ALBUMS);
     routeAlbums();
     expect(mutationEffects(GRAlbum.update({title: 'x'}).for({id: 'https://e.org/a'})).graph).toBe(G_ALBUMS);
-    expect(mutationEffects(GRPanorama.delete({id: 'https://e.org/p'})).graph).toBe(G_PANORAMAS);
+    expect(mutationEffects(GRPanorama.create({caption: 'x'})).graph).toBe(G_PANORAMAS);
+    // A panorama may live in its own graph or in an album's (it can be owned): found at write time.
+    expect(mutationEffects(GRPanorama.delete({id: 'https://e.org/p'})).graph).toBeUndefined();
     expect(mutationEffects(GRPhoto.create({caption: 'x'})).graph).toBe(graphs.default);
   });
 

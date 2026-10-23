@@ -127,7 +127,9 @@ export abstract class LinkedStorage {
    *   and their instances live in `graph` there (see `graphRouting.ts`: a shape's graph covers its
    *   unrouted sub-shapes, and a read of a shape covers its sub-shapes' graphs). Without `graph`,
    *   the default graph, as before routing existed.
-   * - `setDatasetForShapes(dataset, ShapeA, ShapeB)`: the same pins, in the default graph.
+   * - `setDatasetForShapes(dataset, ShapeA, ShapeB)` or an array without `graph`: the same pins,
+   *   leaving any graph route the shapes already have in `dataset` as it is (a new pin is in the
+   *   default graph). `{graph: graphs.default}` removes a route.
    */
   static setDatasetForShapes(
     dataset: IDataset,

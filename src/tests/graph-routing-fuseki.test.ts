@@ -28,6 +28,7 @@ import {Employee, Person, Pet, employeeClass, personClass, propBase} from '../te
 import {GR, GRAlbum, GRPanorama, GRPhoto} from '../test-helpers/graph-routing-fixtures';
 import {setShapeGraphs} from '../utils/graphRouting';
 import {isGraphQueryError} from '../queries/graphQuery';
+import {DeleteBuilder} from '../queries/DeleteBuilder';
 import {isSparqlSelectResults} from '../sparql/resultMapping';
 
 import '../ontologies/rdf';
@@ -106,6 +107,22 @@ describeFuseki('graph routing', () => {
     expect(rows).toEqual([{id: ALBUM, title: 'Holiday', cover: {id: COVER, caption: 'beach'}}]);
   });
 
+  test('an owned node changed through its own shape is changed in its owner graph; an owned link to a node in another graph is refused', async () => {
+    // A photo reads the default graph, the panoramas graph and (owned) the albums graph.
+    await GRPhoto.update({caption: 'sand'}).for({id: COVER}).exec(off);
+    expect(await graphsOf(COVER)).toEqual([G_ALBUMS]);
+    const caption = await off.rawQuery(`SELECT ?g ?c WHERE { GRAPH ?g { <${COVER}> <${GR}caption> ?c } }`);
+    if (!caption || !isSparqlSelectResults(caption)) throw new Error('expected a result set');
+    expect(caption.results.bindings.map((b) => [b.g!.value, b.c!.value])).toEqual([[G_ALBUMS, 'sand']]);
+    // A photo created on its own lives in the default graph: it cannot become an album's cover.
+    await GRPhoto.create({__id: `${D}photo/loose`, caption: 'loose'} as never).exec(off);
+    await expect(GRAlbum.update({cover: {id: `${D}photo/loose`}}).for({id: ALBUM}).exec(off)).rejects.toThrow(
+      /lives in .*not in the graph its owner lives in/,
+    );
+    expect(await graphsOf(ALBUM, `<${GR}cover>`)).toEqual([G_ALBUMS]);
+    expect(await graphsOf(COVER)).toEqual([G_ALBUMS]);
+  });
+
   test('reads join across routed graphs, through a sub-shape graph, and leave the decoys out', async () => {
     await Employee.create({__id: `${D}bob`, name: 'Bob'} as never).exec(off);
     await Person.create({__id: `${D}alice`, name: 'Alice', bestFriend: {id: `${D}bob`}} as never).exec(off);
@@ -120,6 +137,34 @@ describeFuseki('graph routing', () => {
     expect(await both((s) => Person.select().where((p) => p.name.equals('Mallory')).exists(s))).toBe(false);
     // An employee read covers the staff graph only.
     expect((await both((s) => Employee.select((e) => e.name).exec(s))).map((r) => r.name)).toEqual(['Bob']);
+  });
+
+  test('an Employee changed or deleted as a Person changes only the staff graph', async () => {
+    const BOB = `${D}bob`;
+    await Person.update({name: 'Robert'}).for({id: BOB}).exec(off);
+    expect(await graphsOf(BOB)).toEqual([G_STAFF]);
+    expect((await both((s) => Employee.select((e) => e.name).exec(s))).map((r) => r.name)).toEqual(['Robert']);
+    await Person.upsert({name: 'Bob'}).for({id: BOB}).exec(off);
+    expect(await graphsOf(BOB)).toEqual([G_STAFF]);
+    const names = await off.rawQuery(`SELECT ?g ?n WHERE { GRAPH ?g { <${BOB}> <${propBase}name> ?n } }`);
+    if (!names || !isSparqlSelectResults(names)) throw new Error('expected a result set');
+    expect(names.results.bindings.map((b) => [b.g!.value, b.n!.value])).toEqual([[G_STAFF, 'Bob']]);
+    // An upsert of a person found nowhere creates it in the person's routed graph.
+    await Person.upsert({name: 'Nina'}).for({id: `${D}nina`}).exec(off);
+    expect(await graphsOf(`${D}nina`)).toEqual([G_PEOPLE]);
+    // Deletes through the super-shape, by id and in bulk, reach the staff graph.
+    await Employee.create({__id: `${D}carl`, name: 'Carl'} as never).exec(off);
+    await Employee.create({__id: `${D}dan`, name: 'Dan'} as never).exec(off);
+    await Person.delete([{id: `${D}carl`}, {id: `${D}nina`}]).exec(off);
+    expect(await graphsOf(`${D}carl`)).toEqual([]);
+    expect(await graphsOf(`${D}nina`)).toEqual([]);
+    await DeleteBuilder.from(Person).where((p) => p.name.equals('Dan')).exec(off);
+    expect(await graphsOf(`${D}dan`)).toEqual([]);
+    // Nothing strayed into the people graph, and the decoys are untouched.
+    expect(await graphsOf(BOB)).toEqual([G_STAFF]);
+    expect(await graphsOf(`${D}alice`)).toEqual([G_PEOPLE]);
+    expect(await graphsOf(`${D}mallory`)).toEqual([G_OTHER]);
+    expect((await both((s) => Person.select((p) => p.name).exec(s))).map((r) => r.name).sort()).toEqual(['Alice', 'Bob']);
   });
 
   test('a routed subject joined to a default-graph subject (VALUES, no FROM NAMED)', async () => {

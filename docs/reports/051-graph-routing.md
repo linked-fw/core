@@ -65,13 +65,28 @@ and a linked subject's data lives in one graph, so `FROM NAMED` (or `VALUES`) fi
 type check; adding one would change every select. `isolateLinkedTypeChecks` stays inert for
 generated queries.
 
-**Routed writes.** The mutation IR kinds carry `graph?`. `SparqlDataset.resolveWriteGraph` sets
-it: the `.into()` graph when the routing allows it for the shape (its read set), else the shape's
-routed graph; the default graph leaves the IR as it was. Every mutation plan carries it
-(`inGraph`): `INSERT DATA { GRAPH <g> { … } }` for a create, `WITH <g>` before `DELETE`/`INSERT`
-for update, upsert, `update_where`, delete, `delete_all` and `delete_where`, so old values, incoming
-references and owned walks are read and removed in that graph only; nested (owned) creates go into
-it, and `checkOwnedLinks` reads the linked ids' types there (`ownedLinkTypesQuery(ids, graph)`).
+**Routed writes** (the write rule as decided on the review, master §Contracts at CN `48d5865ff`).
+The mutation IR kinds carry `graph?` and, for changes to existing subjects, `writeGraphs?`;
+`SparqlDataset.resolveWriteGraph` sets them:
+
+- a create goes to the shape's routed graph: `INSERT DATA { GRAPH <g> { … } }`; nested (owned)
+  nodes are created there too;
+- an update, upsert or delete (by id or in bulk) of a shape whose read set is one graph runs in it,
+  `WITH <g>` before `DELETE`/`INSERT`;
+- when the read set holds several graphs (a sub-shape's or an owner's), the plan gets `graphIn` and
+  the same update finds the subject's graph: templates in `GRAPH ?g_w { … }`, and in the WHERE
+  `{ SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <read set> } GRAPH ?g_w { <s> ?p ?o } } }` then
+  `GRAPH ?g_w { where }` (a subject in none of them matches nothing). An upsert makes the lookup
+  OPTIONAL and binds `COALESCE(?g_w_found, <routed graph>)`, so a subject found nowhere is created
+  in the routed graph. A bulk update or delete is `VALUES ?g_w { … } GRAPH ?g_w { where }`. A
+  delete of several ids is one operation per id in one request (one transaction). The default
+  graph in the set goes under the store's name for it (probed on `6.2.0-2`: `GRAPH ?g` templates
+  with `?g = urn:x-arq:DefaultGraph` write the default graph and create no named graph);
+- owned cascades run inside the subject's graph. Under routing an owned node lives in its owner's
+  graph, which the owned-link check now enforces: one SELECT reads the types of the linked ids and
+  of the owner in every graph, and a linked node typed only in another graph than the owner's is
+  refused ("an owned node lives in its owner's graph"); class checks use the owner graph's types.
+  So each owned child's own graph is its owner's, and the cascade reaches it.
 
 **`.into(graph)`** on `CreateBuilder`, `UpdateBuilder` and `DeleteBuilder`: immutable, kept by
 every fluent call, carried to the IR by `lower()`, never written by `toJSON` and never read by
@@ -80,7 +95,9 @@ a new code), a portable name or the registry, a store-reserved name (`graph-name
 
 **Live queries.** `QueryDependencies.graphs` (the `.from()` names, or, when the dataset
 `LinkedStorage` routes the root shape to has routes, the read sets of every shape the query
-reads) and `MutationEffects.graph` (the `.into()` graph or the routed graph, same condition). The
+reads) and `MutationEffects.graph` (the `.into()` graph, a create's routed graph, or the one graph
+of a change to existing subjects; unknown when the read set holds several, so every template that
+reads the shape is matched). The
 matcher skips a template only when both are known, the template reads no store-resolved name, and
 the graph is not among its graphs; `effectsHash` and the JSON revival carry the graph.
 
@@ -219,7 +236,7 @@ PASS src/tests/zz-k4-fixture.test.ts (19.738 s)
 Independent read-only review (opus) of the diff against the step section and §Contracts. Verdict,
 quoted: "**Verdict: not clean. There is 1 high finding and 1 medium finding.**"
 
-- **High (needs a design choice, open): routed writes target only the shape's own graph, while
+- **High (decided by the owner, then fixed): routed writes target only the shape's own graph, while
   reads of the same shape cover several graphs.** `resolveWriteGraph` writes by-id and bulk
   mutations into `graphForShape(shape)`, but a subject may live in another graph of the shape's
   read set: a sub-shape's graph (`Person.update(…).for(bob)` where bob was created as an `Employee`
@@ -229,20 +246,28 @@ quoted: "**Verdict: not clean. There is 1 high finding and 1 medium finding.**"
   (a) find the subject's graph within the read set first (by id) and use `GRAPH ?g` with `VALUES`
   for bulk writes, `MutationEffects.graph` becoming a set; (b) refuse writes through a shape whose
   read set has more than one graph unless `.into()` names one; (c) accept and record it (backlog 067
-  and the changeset). **The step stops here, unlanded, for the owner to choose.**
+  and the changeset). The step stopped unlanded; the owner chose (a), resolved inside the same
+  update, recorded in master §Contracts at CN `48d5865ff`; implemented as above, with `[fuseki]`
+  tests "an Employee changed or deleted as a Person changes only the staff graph" (update, upsert,
+  upsert of a missing subject, delete of two ids, bulk delete through the super-shape) and "an
+  owned node changed through its own shape is changed in its owner graph; an owned link to a node
+  in another graph is refused".
 - **Medium (fixed): MINUS with the default graph in the mix never removed default-graph rows.** A
   MINUS right side is evaluated on its own, so its bare `GRAPH ?g` ranged over named graphs only.
   It now starts from an empty binding scope and writes its own `VALUES`; `[fuseki]` test "a MINUS
   with the default graph in the set removes default-graph rows" fails without the fix and passes
   with it.
-- Low, open (to fix or record with the high finding's choice): OPTIONAL in the default-mixed mode
+- Low: fixed — the owned-link check now reads every graph (above); re-pinning without `{graph}`
+  keeps the route, now documented (`{graph: graphs.default}` removes it); the
+  `namedGraphUriParameter` path no longer enters `withShapeCatalog(undefined)`; a route to a
+  store-reserved name is refused at write time. Recorded — the server's
+  `Record<GraphQueryErrorCode, number>` in `queryPlane.ts` breaks its typecheck on
+  `graph-not-routed` (owned by V2, master §V2; also in the changeset). Accepted as is: OPTIONAL in the default-mixed mode
   relies on Jena substituting into a linear left join; a subject of unknown shape is read in the
-  default graph only when every known subject is default-only; the owned-link check reads types
-  only in the written graph (a Person in another graph can be linked into an owned slot); the
-  published server's `queryPlane.ts` has `Record<GraphQueryErrorCode, number>`, which breaks its
-  typecheck on `graph-not-routed`; re-pinning a shape without `{graph}` keeps its old route;
-  `graphRoutingFor` (and the owner scan) is rebuilt on every read; the `namedGraphUriParameter`
-  path enters `withShapeCatalog(undefined)`; a route to a store-reserved name is not refused.
+  default graph only when every known subject is default-only (it keeps the query unchanged for
+  routes that touch none of its shapes); `graphRoutingFor` (and the owner scan) is rebuilt on every
+  read (one pass over the registered shapes; a cache needs invalidation on route and shape
+  changes).
 
 Observed while testing (outside this step): `.minus((p) => p.name.equals('x'))` compiles to a MINUS
 whose FILTER reads `?a0_name` without binding it inside the MINUS, so it removes nothing, with or

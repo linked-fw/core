@@ -39,6 +39,7 @@ import {
   withShapeCatalog,
 } from '../utils/ShapeClass.js';
 import {rdf} from '../ontologies/rdf.js';
+import {graphs} from '../ontologies/graphs.js';
 import {assertSafeIri} from './sparqlUtils.js';
 import {isBareNodeReference} from './irToAlgebra.js';
 import {getSimplePathId} from '../paths/normalizePropertyPath.js';
@@ -157,6 +158,42 @@ export function ownedLinkTypesQuery(ids: string[], graph?: string): string {
   // In the graph the mutation writes: an owned node lives in its owner's graph.
   assertSafeIri(graph);
   return `SELECT ?id ?type WHERE { VALUES ?id { ${values} } GRAPH <${graph}> { ${typeTriple} } }`;
+}
+
+/**
+ * Under graph routing: the `rdf:type`s of `ids` in every graph, the default graph included (its
+ * rows have no `?g`), in one SELECT.
+ */
+export function ownedLinkGraphTypesQuery(ids: string[]): string {
+  const distinct = [...new Set(ids)];
+  for (const id of distinct) assertSafeIri(id);
+  const values = distinct.map((id) => `<${id}>`).join(' ');
+  const typeTriple = `?id <${RDF_TYPE}> ?type`;
+  return `SELECT ?id ?type ?g WHERE { VALUES ?id { ${values} } { GRAPH ?g { ${typeTriple} } } UNION { ${typeTriple} } }`;
+}
+
+/** Graph (`graphs.default` for the default graph) → id → `rdf:type`s, from {@link ownedLinkGraphTypesQuery}. */
+export function ownedLinkGraphTypesFromResults(
+  json: SparqlQueryResults,
+): Map<string, Map<string, Set<string>>> {
+  if (!isSparqlSelectResults(json)) {
+    throw new Error(
+      'Expected a SPARQL SELECT result set for the owned-link type check, got an ASK response.',
+    );
+  }
+  const out = new Map<string, Map<string, Set<string>>>();
+  for (const binding of json.results.bindings) {
+    const id = binding.id?.value;
+    const type = binding.type?.value;
+    if (!id || !type) continue;
+    const graph = binding.g?.value ?? graphs.default;
+    let ids = out.get(graph);
+    if (!ids) out.set(graph, (ids = new Map()));
+    let set = ids.get(id);
+    if (!set) ids.set(id, (set = new Set()));
+    set.add(type);
+  }
+  return out;
 }
 
 /** The `rdf:type`s per id from the answer to {@link ownedLinkTypesQuery}. */
