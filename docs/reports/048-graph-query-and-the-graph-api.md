@@ -148,8 +148,16 @@ on :3171, compose project `core-071-k1`):
   existing `ontology/hierarchy.js`); `shapes/NamedGraph.js` and `queries/graphRecords.js` have no
   `node:crypto`.
 
-After the review fixes: `graph-query`, `query-builder`, `graph-query-fuseki`: `Tests: 179 passed`,
-4.1 s; typecheck clean.
+Full gate at landing (after the review fixes and the decided refusal), same store:
+
+- `npm test`: `Test Suites: 1 failed, 4 skipped, 125 passed, 126 of 130 total`, `Tests: 120
+  skipped, 2530 passed, 2650 total`, `Time: 30.658 s`, `[fuseki] live tests: 330 total — 330
+  passed, 0 failed, 0 skipped` (the failing suite is backlog 060's, as above).
+- `npm run typecheck`: clean, 3.5 s. `npm run test:fuseki`: `Tests: 2358 skipped, 330 passed,
+  2688 total`, `Time: 8.029 s`. `npm run check:dts`: clean, 1.5 s. `npx linked build`:
+  `✔ Build successful`, 6.0 s.
+- Measurement in these runs: schema.org one update 2784 ms (all suites in parallel) and 1332 ms
+  (`test:fuseki`); GSP `PUT` + record update 809 ms and 400 ms.
 
 ## Review
 

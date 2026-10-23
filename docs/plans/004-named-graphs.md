@@ -280,4 +280,10 @@ Master §K1 is the scope; this is its plan-mode detail. Found in the code at `na
 
 ### Outcome
 
-(Filled in when K1 lands.)
+Landed (report [048](../reports/048-graph-query-and-the-graph-api.md)). Deviations from this
+section: the review added the store-reserved name hook (`isReservedGraphName`, master §Contracts
+updated at CN `d10d95b69`), made `feedsHierarchy` an `OntologyGraph` field only, and made replace
+and patch through a subclass check the stored record's class. The registration check also
+refuses relative graph names and empty patches. Full gate: 2530 passed, 330/330 `[fuseki]`;
+`two-copies-built` still fails (backlog 060). Open note for K4: routing takes the first shape that
+targets the record class.
