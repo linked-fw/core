@@ -29,16 +29,22 @@ For ontology modules the second copy is cosmetic (they hold no classes). For any
 shapes — for example a future sync of installed packages' shapes, like the ontology sync — it is a
 real split: a second shape registry and failing `instanceof`.
 
+## Status
+
+The root case is fixed on main by #372: `registerInstalledOntologies` imports each register module
+through the host loader **by package specifier** (`<name>/ontologies/<prefix>.register`), so it is
+the module the app's own import of it gets. That is the reference pattern for any framework code
+that loads package modules: load by specifier through the host loader, never by file path. The
+public `importPackageModule` that both `loadStores` and `registerInstalledOntologies` use, with its
+docs page, is #375 (items 1 and 2 below). Items 3–5 remain open.
+
 ## What to do
 
-1. **One public loader in core**, e.g. `importPackageModule(fileOrSpecifier)`, backed by the loader
-   `linked start` already installs at `Symbol.for('@_linked/core:importModule')`. With no loader
-   installed (production builds, plain Node, tests) it is native `import()`, as today.
-   - The cli's loader takes file paths as well as specifiers: it maps a file to its package
-     (the dual-copy guard's matcher), sends a package Vite bundles through `ssrLoadModule`, and
-     maps a source package's `lib/esm/<path>.js` to `src/<path>.ts`.
-   - `registerInstalledOntologies` uses it for built files too; `loadStores` and server's
-     `nativeImport` move onto it.
+1. **One public loader in core**, `importPackageModule(specifier)`, backed by the loader `linked
+   start` installs at `Symbol.for('@_linked/core:importModule')`; with no loader (production
+   builds, plain Node, tests) it is native `import()`. `loadStores` and `registerInstalledOntologies`
+   use it (#375). Server's `nativeImport` for installed backends stays native by design (an
+   installed package is external).
 2. **Document it** in `docs/architecture/` (a short "Loading package modules" page, linked from
    `ontologies.md` and `runtime-instances.md`): why the loader exists, when to use it (any
    framework code that discovers and imports modules of installed or workspace packages: stores,
