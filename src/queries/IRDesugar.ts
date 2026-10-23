@@ -39,6 +39,8 @@ export type RawSelectInput = {
   offset?: number;
   singleResult?: boolean;
   minusEntries?: RawMinusEntry[];
+  /** `.from()`: the graphs the read is restricted to (checked, as the caller named them). */
+  graphs?: string[];
 };
 
 export type DesugaredPropertyStep = {

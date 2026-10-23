@@ -191,7 +191,12 @@ function lowerAsk(input: RawAskInput): IRAskQuery {
       isLinkedInstance(subject, PendingQueryContext)
         ? resolveContextId(subject.contextName, true)!
         : (subject as {id?: string} | undefined)?.id;
-    return attachCatalog<IRAskQuery>({kind: 'ask', patterns: [], subjectId: id});
+    return attachCatalog<IRAskQuery>({
+      kind: 'ask',
+      patterns: [],
+      subjectId: id,
+      ...(input.graphs ? {graphs: input.graphs} : {}),
+    });
   }
   const selected = buildSelectQuery({
     entries: [],
@@ -208,6 +213,7 @@ function lowerAsk(input: RawAskInput): IRAskQuery {
     where: selected.where,
     subjectId: selected.subjectId,
     subjectIds: selected.subjectIds,
+    ...(input.graphs ? {graphs: input.graphs} : {}),
   });
 }
 
@@ -274,6 +280,7 @@ function lowerCount(input: RawCountInput): IRCountQuery {
     subjectId: selected.subjectId,
     subjectIds: selected.subjectIds,
     alias: COUNT_ALIAS,
+    ...(input.graphs ? {graphs: input.graphs} : {}),
   });
 }
 
@@ -299,8 +306,13 @@ export function lower(
     return withShapeCatalog(catalog, () => lower(query as LowerableSelect));
   }
   switch (query.__queryKind) {
-    case 'select':
-      return buildSelectQuery(query.toRawInput());
+    case 'select': {
+      const input = query.toRawInput();
+      const ir = buildSelectQuery(input);
+      // `.from()` is not part of the pattern pipeline: it rides on the IR untouched.
+      if (input.graphs) ir.graphs = input.graphs;
+      return ir;
+    }
     case 'ask':
       return lowerAsk(query.toRawInput());
     case 'count':

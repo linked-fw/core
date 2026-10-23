@@ -88,6 +88,11 @@ export function unsupportedGraphQuery(query: {kind?: unknown; graph?: unknown}, 
 /** Absolute IRI with a scheme and none of the characters that end an IRIREF. */
 const IRI_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"{}|^`\\]*$/;
 
+/** Whether `value` is an absolute IRI usable as a graph name. */
+export function isGraphIri(value: unknown): value is string {
+  return typeof value === 'string' && IRI_PATTERN.test(value);
+}
+
 /**
  * Refuse a graph name that is not an absolute IRI, and a write to a portable graph name (`graphs.default`, `graphs.union`, `graphs.allOntologies`,
  * `graphs.allShapes`) or to the registry itself: names are read-only, and the registry is written

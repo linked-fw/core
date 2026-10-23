@@ -53,6 +53,8 @@ export type RawCountInput = {
   subjects?: NodeReferenceValue[];
   where?: WherePath;
   minusEntries?: RawMinusEntry[];
+  /** `.from()`: the graphs the read is restricted to. */
+  graphs?: string[];
 };
 
 /**
@@ -84,4 +86,6 @@ export type CountQueryJSON = {
   minusEntries?: RawMinusEntryJSON[];
   /** `.for(null)` — no subject to count; the answer is `0` without querying. */
   nullSubject?: boolean;
+  /** `.from()`: the graphs the read is restricted to, as absolute IRIs (portable names included). */
+  graphs?: string[];
 };

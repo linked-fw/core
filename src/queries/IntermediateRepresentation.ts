@@ -31,6 +31,11 @@ export type IRSelectQuery = {
   subjectIds?: string[];
   singleResult?: boolean;
   resultMap?: IRResultMapEntry[];
+  /**
+   * The graphs the read is restricted to (`.from()`), as the caller named them, portable names
+   * included; the store expands them before compiling. Absent = the default graph.
+   */
+  graphs?: string[];
 };
 
 /**
@@ -53,6 +58,11 @@ export type IRAskQuery = {
   where?: IRExpression;
   subjectId?: string;
   subjectIds?: string[];
+  /**
+   * The graphs the read is restricted to (`.from()`), as the caller named them, portable names
+   * included; the store expands them before compiling. Absent = the default graph.
+   */
+  graphs?: string[];
 };
 
 /**
@@ -84,6 +94,11 @@ export type IRCountQuery = {
    * mapping cannot disagree about it.
    */
   alias: IRAlias;
+  /**
+   * The graphs the read is restricted to (`.from()`), as the caller named them, portable names
+   * included; the store expands them before compiling. Absent = the default graph.
+   */
+  graphs?: string[];
 };
 
 export type IRProjectionItem = {

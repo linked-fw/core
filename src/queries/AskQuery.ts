@@ -50,6 +50,8 @@ export type RawAskInput = {
   subjects?: NodeReferenceValue[];
   where?: WherePath;
   minusEntries?: RawMinusEntry[];
+  /** `.from()`: the graphs the read is restricted to. */
+  graphs?: string[];
 };
 
 /**
@@ -84,4 +86,6 @@ export type AskQueryJSON = {
   minusEntries?: RawMinusEntryJSON[];
   /** `.for(null)` — no subject to ask about; the answer is `false` without querying. */
   nullSubject?: boolean;
+  /** `.from()`: the graphs the read is restricted to, as absolute IRIs (portable names included). */
+  graphs?: string[];
 };
