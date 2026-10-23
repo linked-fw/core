@@ -64,6 +64,7 @@ import {
   withShapeCatalog,
 } from '../utils/ShapeClass.js';
 import {UnresolvedContextError} from '../queries/QueryContext.js';
+import {scopeAlgebraToGraphs} from './graphScope.js';
 
 // The `*ToAlgebra` / `*ToSparql` exports compile in the catalog the IR was lowered in (its
 // non-enumerable `catalog` field). An IR without one — built by hand, or copied with a spread,
@@ -611,6 +612,16 @@ function containsAggregate(expr: SparqlExpression): boolean {
 // ---------------------------------------------------------------------------
 // Select conversion
 // ---------------------------------------------------------------------------
+
+/**
+ * The named graph a shape's instances are stored in, when its class declares one
+ * (`static storedInGraph`, inherited by subclasses). Only the graph-registry record shapes do;
+ * other shapes read the default graph.
+ */
+function storedGraphOf(shapeId: string): string | undefined {
+  const cls = getShapeClass(shapeId) as {storedInGraph?: unknown} | undefined;
+  return typeof cls?.storedInGraph === 'string' && cls.storedInGraph ? cls.storedInGraph : undefined;
+}
 
 /**
  * Converts an IRSelectQuery to a SparqlSelectPlan.
@@ -1179,9 +1190,19 @@ export function selectToAlgebra(
       ? undefined
       : query.limit;
 
+  // `.from()` scopes the read to its graphs (expanded by the store); without it, a shape whose
+  // instances live in one named graph (the graph-registry records, `NamedGraph.storedInGraph`)
+  // is read there. Counts and asks reuse this algebra and its dataset clause.
+  const storedIn = storedGraphOf(query.root.shape);
+  const scoped = scopeAlgebraToGraphs(
+    algebra,
+    query.graphs ?? (storedIn ? [storedIn] : undefined),
+    _options,
+  );
   return {
     type: 'select',
-    algebra,
+    algebra: scoped.algebra,
+    ...(scoped.dataset ? {dataset: scoped.dataset} : {}),
     projection,
     distinct: !hasAggregates ? true : undefined,
     orderBy,
@@ -3572,7 +3593,12 @@ export function askToAlgebra(
         tripleOf(iriTerm(query.subjectId), varTerm('p'), varTerm('o')),
       ],
     };
-    return {type: 'ask', algebra: bgp};
+    const scoped = scopeAlgebraToGraphs(bgp, query.graphs, options);
+    return {
+      type: 'ask',
+      algebra: scoped.algebra,
+      ...(scoped.dataset ? {dataset: scoped.dataset} : {}),
+    };
   }
   const inner = selectToAlgebra(
     attachCatalog<IRSelectQuery>(
@@ -3584,6 +3610,7 @@ export function askToAlgebra(
         where: query.where,
         subjectId: query.subjectId,
         subjectIds: query.subjectIds,
+        ...(query.graphs ? {graphs: query.graphs} : {}),
       },
       catalog,
     ),
@@ -3606,7 +3633,11 @@ export function askToAlgebra(
       'run the select and check for rows.',
     );
   }
-  return {type: 'ask', algebra: inner.algebra};
+  return {
+    type: 'ask',
+    algebra: inner.algebra,
+    ...(inner.dataset ? {dataset: inner.dataset} : {}),
+  };
 }
 
 /**
@@ -3658,6 +3689,7 @@ export function countToAlgebra(
         where: query.where,
         subjectId: query.subjectId,
         subjectIds: query.subjectIds,
+        ...(query.graphs ? {graphs: query.graphs} : {}),
       },
       catalog,
     ),
@@ -3690,6 +3722,7 @@ export function countToAlgebra(
     algebra: inner.algebra,
     projection: [{kind: 'aggregate', expression: aggregate, alias: query.alias}],
     aggregates: [{variable: query.alias, aggregate}],
+    ...(inner.dataset ? {dataset: inner.dataset} : {}),
   };
 }
 

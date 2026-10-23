@@ -4,6 +4,21 @@ import {ulid} from 'ulid';
 export interface SparqlOptions {
   dataRoot?: string;
   prefixes?: Record<string, string>;
+  /**
+   * For reads across several named graphs (`.from()`): put the inferred type check of a subject
+   * reached through a link in a second `GRAPH ?g { ?x a C }` block on the same graph variable,
+   * after the block that reads one of its stored triples. Same rows; faster on a store that
+   * reorders the patterns inside one block (Jena). Set per store, never per query. Default false.
+   * See `graphScope.ts`.
+   */
+  isolateLinkedTypeChecks?: boolean;
+  /**
+   * Map a portable graph name (`graphs.default`, `graphs.union`) to the store's own name for it
+   * (Fuseki: `urn:x-arq:DefaultGraph`, `urn:x-arq:UnionGraph`); `null` refuses the name. A read of
+   * `graphs.default` alone reads the default graph without it; `graphs.union` alone needs it; either
+   * together with other graphs is refused (see `expandReadGraphs`).
+   */
+  mapGraphName?: (iri: string) => string | null;
 }
 
 // Characters that must never appear inside a SPARQL IRIREF (`<...>`) per the

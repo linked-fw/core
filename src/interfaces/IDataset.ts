@@ -8,6 +8,8 @@ import type {
   SelectResult,
   CreateResult,
   UpdateResult,
+  GraphQuery,
+  GraphResult,
 } from '../queries/IntermediateRepresentation.js';
 import type {ChangeEvent} from '../live/changes.js';
 
@@ -54,14 +56,14 @@ export interface IDataset {
   /**
    * Answer an ask query — a boolean, not a result set.
    *
-   * **Required.** An {@link AskQuery} carries a pattern and nothing else: no
-   * projection, no sorting, no pagination. A SPARQL-backed store emits
-   * `ASK WHERE { … }`; another backend answers it however it can.
+   * **The one optional query method.** An {@link AskQuery} carries a pattern and nothing else:
+   * no projection, no sorting, no pagination. A SPARQL-backed store emits `ASK WHERE { … }`;
+   * another backend answers it however it can.
    *
-   * It is required rather than optional, and this package contains **no path that
-   * rewrites an ask as a select**. A store that has no boolean primitive decides
-   * for itself how to answer — that decision belongs to the store, and defaulting
-   * it here would hide it.
+   * A dataset without it is still asked: `resolveExistence` (which `LinkedStorage` and
+   * `AskBuilder.exec` go through) sends the same pattern to {@link selectQuery} as a select with
+   * `LIMIT 1` and answers `true` when a row comes back. A **shapeless** ask (no shape, so no
+   * select to write) is refused on such a dataset.
    *
    * `query.shape` is optional: absent means no `rdf:type` constraint at all
    * ("does a node with this IRI exist"), which lowers to `ASK { <iri> ?p ?o }`.
@@ -71,16 +73,36 @@ export interface IDataset {
    * failure: reporting an unreachable store as `false` is the failure mode this
    * API was built to remove.
    */
-  askQuery(query: AskQuery): Promise<boolean>;
+  askQuery?(query: AskQuery): Promise<boolean>;
   /**
    * Receives update AND upsert mutations — `lower(query)` yields `kind: 'update'`,
    * `'update_where'` or `'upsert'`. An implementation that does not handle `'upsert'`
    * should throw rather than fall through to the update path: an upsert lowered as a
    * plain update writes an untyped node and reports success.
+   *
+   * Required. A read-only dataset implements it by throwing.
    */
-  updateQuery?(query: UpdateQuery): Promise<UpdateResult>;
-  createQuery?(query: CreateQuery): Promise<CreateResult>;
-  deleteQuery?(query: DeleteQuery): Promise<DeleteResponse>;
+  updateQuery(query: UpdateQuery): Promise<UpdateResult>;
+  /** Required. A read-only dataset implements it by throwing. */
+  createQuery(query: CreateQuery): Promise<CreateResult>;
+  /** Required. A read-only dataset implements it by throwing. */
+  deleteQuery(query: DeleteQuery): Promise<DeleteResponse>;
+  /**
+   * Run a whole-graph operation and keep the graph's registry record in step with it, in one
+   * transaction: `graph_create`, `graph_replace`, `graph_patch`, `graph_drop` (see
+   * {@link GraphQuery}). The graph statics on `NamedGraph` and its subclasses build these.
+   *
+   * **Required.** A dataset without graph support implements it by throwing
+   * `GraphQueryError('unsupported-query-kind')` (`unsupportedGraphQuery(query)`), and callers
+   * that can fall back (the ontology sync) check for that code. Because a dataset class built
+   * against an older core has no such method, core's callers guard at runtime
+   * (`resolveGraphQuery`) and treat a missing method as the same refusal.
+   *
+   * Refusals a graph-capable store makes, all `GraphQueryError`s: `graph-name-read-only` (a
+   * portable graph name or the registry itself), `graph-not-registered` (replace or patch of a
+   * graph with no record), `graph-exists` (create of a registered graph).
+   */
+  graphQuery(query: GraphQuery): Promise<GraphResult>;
 
   /**
    * Optional change feed. A dataset that learns about changes made elsewhere

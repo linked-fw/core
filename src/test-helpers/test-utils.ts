@@ -1,5 +1,7 @@
 import {tmpEntityBase} from './query-fixtures';
 import {captureQuery} from './query-capture-store';
+import type {GraphQuery} from '../queries/IntermediateRepresentation';
+import {unsupportedGraphQuery} from '../queries/graphQuery';
 
 /**
  * Create an entity reference with the given suffix.
@@ -32,4 +34,24 @@ export const sanitize = (value: unknown): unknown => {
     );
   }
   return value;
+};
+
+/**
+ * The `IDataset` methods a test double does not exercise. Spread it first into a double
+ * (`{...unusedDatasetMethods, selectQuery, askQuery}`) so the double's own methods win: the
+ * mutation methods reject, and `graphQuery` refuses like a dataset without graph support.
+ */
+export const unusedDatasetMethods = {
+  updateQuery: async (): Promise<never> => {
+    throw new Error('updateQuery is not used by this test double');
+  },
+  createQuery: async (): Promise<never> => {
+    throw new Error('createQuery is not used by this test double');
+  },
+  deleteQuery: async (): Promise<never> => {
+    throw new Error('deleteQuery is not used by this test double');
+  },
+  graphQuery: async (query: GraphQuery): Promise<never> => {
+    throw unsupportedGraphQuery(query);
+  },
 };

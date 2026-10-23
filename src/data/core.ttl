@@ -6,12 +6,25 @@
 @prefix dcterms: <http://purl.org/dc/terms/> .
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 @prefix schema: <http://schema.org/> .
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
 
 core:
     a owl:Ontology ;
     dcterms:description "The framework vocabulary of @_linked/core: package and shape metadata, containment, display hints and sync records."@en ;
     dcterms:title "Linked core"@en ;
     owl:versionInfo "2.37.0" .
+
+core:DraftGraph
+    a owl:Class ;
+    rdfs:comment "A named graph of ontology-editor drafts in a branch's app data; it never feeds the class hierarchy."@en ;
+    rdfs:label "draft graph"@en ;
+    rdfs:subClassOf sd:NamedGraph .
+
+core:OntologyGraph
+    a owl:Class ;
+    rdfs:comment "A named graph holding one package's whole ontology data, at {package IRI}/graph/ontology; it feeds the class hierarchy."@en ;
+    rdfs:label "ontology graph"@en ;
+    rdfs:subClassOf sd:NamedGraph .
 
 core:OntologySync
     a owl:Class ;
@@ -33,10 +46,22 @@ core:ShapeClass
     rdfs:comment "The class of shape classes, from core's earlier package metadata model."@en ;
     rdfs:label "shape class"@en .
 
+core:ShapesGraph
+    a owl:Class ;
+    rdfs:comment "A named graph holding one package's shapes, at {package IRI}/graph/shapes."@en ;
+    rdfs:label "shapes graph"@en ;
+    rdfs:subClassOf sd:NamedGraph .
+
 core:contains
     a owl:DatatypeProperty ;
     rdfs:comment "Marks a property shape whose subject owns its values (composition), so the owned walk follows it and deleting the subject deletes them."@en ;
     rdfs:label "contains"@en .
+
+core:contentHash
+    a owl:DatatypeProperty ;
+    rdfs:comment "The SHA-256 (hex) of a named graph's content as last written, recorded in the graph registry."@en ;
+    rdfs:label "content hash"@en ;
+    rdfs:range xsd:string .
 
 core:definesShape
     a owl:ObjectProperty ;
@@ -62,6 +87,12 @@ core:editInline
     a owl:DatatypeProperty ;
     rdfs:comment "Marks a property whose value is edited inline rather than on its own page."@en ;
     rdfs:label "edit inline"@en .
+
+core:feedsHierarchy
+    a owl:DatatypeProperty ;
+    rdfs:comment "Whether a named graph's rdfs:subClassOf triples feed the store's class hierarchy, recorded in the graph registry."@en ;
+    rdfs:label "feeds hierarchy"@en ;
+    rdfs:range xsd:boolean .
 
 core:generated
     a owl:DatatypeProperty ;
@@ -93,6 +124,12 @@ core:ontologyTriples
     rdfs:comment "The class hierarchy ontology sync last wrote for a package, as sorted N-Triples lines."@en ;
     rdfs:label "ontology triples"@en .
 
+core:package
+    a owl:DatatypeProperty ;
+    rdfs:comment "The npm name of the package a named graph belongs to, recorded in the graph registry."@en ;
+    rdfs:label "package"@en ;
+    rdfs:range xsd:string .
+
 core:packageName
     a owl:DatatypeProperty ;
     rdfs:comment "The npm name of the package an ontology sync record is for."@en ;
@@ -112,3 +149,9 @@ core:usesShapeClass
     a owl:ObjectProperty ;
     rdfs:comment "Links a node to the shape class it uses, from core's earlier package metadata model."@en ;
     rdfs:label "uses shape class"@en .
+
+core:version
+    a owl:DatatypeProperty ;
+    rdfs:comment "The version of the package whose data a named graph holds, recorded in the graph registry."@en ;
+    rdfs:label "version"@en ;
+    rdfs:range xsd:string .

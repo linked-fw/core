@@ -8,6 +8,7 @@ import type {
   SparqlInsertDataPlan,
   SparqlDeleteInsertPlan,
   SparqlDeleteWherePlan,
+  SparqlDatasetClause,
 } from './SparqlAlgebra.js';
 import {
   type SparqlOptions,
@@ -17,6 +18,7 @@ import {
   collectPrefixes,
   assertSafeCallName,
   sanitizeVarName,
+  assertSafeIri,
 } from './sparqlUtils.js';
 
 // ---------------------------------------------------------------------------
@@ -277,8 +279,11 @@ export function serializeAlgebraNode(
     }
 
     case 'graph': {
-      if (collector) collectUri(collector, node.iri);
       const inner = serializeAlgebraNode(node.inner, collector);
+      if (node.variable !== undefined) {
+        return `GRAPH ?${sanitizeVarName(node.variable)} {\n${indent(inner)}\n}`;
+      }
+      if (collector) collectUri(collector, node.iri);
       return `GRAPH ${formatUri(node.iri)} {\n${indent(inner)}\n}`;
     }
 
@@ -344,6 +349,24 @@ function buildPrefixBlock(usedUris: Set<string>): string {
 // Top-level plan serializers
 // ---------------------------------------------------------------------------
 
+/**
+ * `FROM NAMED <g>` lines for a plan's dataset clause, written as full IRIs. An empty list is
+ * refused: it would leave `GRAPH ?g` free to match in every named graph.
+ */
+function datasetClauseLines(dataset: SparqlDatasetClause | undefined): string[] {
+  if (!dataset) return [];
+  if (dataset.fromNamed.length === 0) {
+    throw new Error(
+      'A dataset clause needs at least one named graph: without FROM NAMED, GRAPH ?g matches ' +
+        'in every named graph of the store.',
+    );
+  }
+  return dataset.fromNamed.map((iri) => {
+    assertSafeIri(iri);
+    return `FROM NAMED <${iri}>`;
+  });
+}
+
 export function selectPlanToSparql(
   plan: SparqlSelectPlan,
   _options?: SparqlOptions,
@@ -407,6 +430,7 @@ export function selectPlanToSparql(
   const parts: string[] = [];
   if (prefixBlock) parts.push(prefixBlock);
   parts.push(selectLine);
+  parts.push(...datasetClauseLines(plan.dataset));
   parts.push(whereBlock);
   parts.push(...clauses);
 
@@ -434,7 +458,12 @@ export function askPlanToSparql(
   // 3. Assemble
   const parts: string[] = [];
   if (prefixBlock) parts.push(prefixBlock);
-  parts.push(`ASK WHERE {\n${indent(body)}\n}`);
+  const datasetLines = datasetClauseLines(plan.dataset);
+  parts.push(
+    datasetLines.length > 0
+      ? `ASK\n${datasetLines.join('\n')}\nWHERE {\n${indent(body)}\n}`
+      : `ASK WHERE {\n${indent(body)}\n}`,
+  );
 
   return parts.join('\n');
 }
@@ -484,9 +513,17 @@ export function deleteInsertPlanToSparql(
   const whereBody = serializeAlgebraNode(plan.whereAlgebra, collector);
   const wherePart = `WHERE {\n${indent(whereBody)}\n}`;
 
+  // `WITH <g>` makes the graph the target of DELETE and INSERT and the dataset of WHERE.
+  let withPart = '';
+  if (plan.graph) {
+    collectUri(collector, plan.graph);
+    withPart = `WITH ${formatUri(plan.graph)}`;
+  }
+
   const prefixBlock = buildPrefixBlock(collector.uris);
   const parts: string[] = [];
   if (prefixBlock) parts.push(prefixBlock);
+  if (withPart) parts.push(withPart);
   parts.push(deletePart);
   if (insertPart) parts.push(insertPart.trimEnd());
   parts.push(wherePart);

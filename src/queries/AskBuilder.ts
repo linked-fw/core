@@ -37,6 +37,7 @@ import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
 import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
+import {normalizeReadGraphs, parseReadGraphsJSON, type ReadGraphsInput} from './readGraphs.js';
 
 /** Everything an ask can carry. Assembled by `.exists()` or by `Shape.exists()`. */
 export type AskSpec = {
@@ -48,6 +49,8 @@ export type AskSpec = {
   subjects?: NodeReferenceValue[];
   where?: WherePath;
   minusEntries?: RawMinusEntry[];
+  /** `.from()`: the graphs the read is restricted to (checked). */
+  graphs?: string[];
   /** `.for(null)` was called — there is no subject to ask about. */
   nullSubject?: boolean;
 };
@@ -89,6 +92,14 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
     return new AskBuilder({subject: ref});
   }
 
+  /**
+   * Read only these graphs (a graph IRI or a list, portable names included); returns a new
+   * builder. See `SelectBuilder.from`.
+   */
+  from(graphs: ReadGraphsInput): AskBuilder {
+    return new AskBuilder({...this._spec, catalog: this._catalog, graphs: normalizeReadGraphs(graphs)});
+  }
+
   /** Discriminator for the free `lower()` function and dataset routing. */
   readonly __queryKind = 'ask' as const;
 
@@ -115,6 +126,7 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
     if (subjects && subjects.length > 0) input.subjects = subjects;
     if (where) input.where = where;
     if (minusEntries && minusEntries.length > 0) input.minusEntries = minusEntries;
+    if (this._spec.graphs) input.graphs = this._spec.graphs;
     return input;
   }
 
@@ -152,6 +164,9 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
     }
     if (nullSubject) {
       json.nullSubject = true;
+    }
+    if (this._spec.graphs) {
+      json.graphs = [...this._spec.graphs];
     }
     return json;
   }
@@ -191,6 +206,9 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
       }
     }
     if (json.nullSubject) spec.nullSubject = true;
+    if (json.graphs !== undefined) {
+      spec.graphs = parseReadGraphsJSON(json.graphs, 'ask');
+    }
     return new AskBuilder(spec);
   }
 

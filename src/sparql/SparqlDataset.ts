@@ -8,6 +8,7 @@ import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
 import type {
   IRSelectQuery,
   IRCountQuery,
+  IRAskQuery,
   IRCreateMutation,
   IRUpdateMutation,
   IRUpdateWhereMutation,
@@ -15,7 +16,22 @@ import type {
   SelectResult,
   CreateResult,
   UpdateResult,
+  GraphQuery,
+  GraphResult,
 } from '../queries/IntermediateRepresentation.js';
+import {
+  assertGraphWritable,
+  GraphQueryError,
+  isGraphQueryKind,
+  unsupportedGraphQuery,
+} from '../queries/graphQuery.js';
+import {sd} from '../ontologies/sd.js';
+import {getGraphRecordClass, graphContentHash, hasPatchBody} from '../queries/graphRecords.js';
+import {
+  graphQueryBodies,
+  graphQueryToSparql,
+  graphRegisteredAsk,
+} from './graphQueryToSparql.js';
 import type {SparqlQueryResults} from './resultMapping.js';
 import {
   selectToSparql,
@@ -39,6 +55,15 @@ import {
 } from './resultMapping.js';
 import {generateEntityUri, type SparqlOptions} from './sparqlUtils.js';
 import {lower} from '../queries/lower.js';
+import {attachCatalog, catalogOf} from '../utils/ShapeClass.js';
+import {graphs} from '../ontologies/graphs.js';
+import {
+  expandReadGraphs,
+  invalidateGraphRegistry,
+  noteGraphQuery,
+  readGraphRegistry,
+  type GraphRegistryRow,
+} from '../utils/graphRegistryCache.js';
 import {
   assertOwnedLinkTypes,
   collectOwnedLinks,
@@ -72,11 +97,75 @@ import {
  * }
  * ```
  */
+let nextRegistryKey = 0;
+
+/** An empty SELECT answer, for a read whose graph set expanded to no graph. */
+const NO_ROWS = {head: {vars: []}, results: {bindings: []}};
+
 export abstract class SparqlDataset implements IDataset {
   protected options?: SparqlOptions;
+  private readonly instanceRegistryKey = `sparql-dataset:${nextRegistryKey++}`;
 
   constructor(options?: SparqlOptions) {
     this.options = options;
+  }
+
+  /**
+   * The key this store's graph-registry cache is kept under (see `graphRegistryCache.ts`): one per
+   * dataset per process. The default is unique to this instance; a store that knows its dataset's
+   * identity (a Fuseki dataset URL, a dataset name CN pushes invalidations for) overrides it, so
+   * every instance for that dataset shares one entry.
+   */
+  protected graphRegistryKey(): string {
+    return this.instanceRegistryKey;
+  }
+
+  /**
+   * Drop the cached graph registry of `dataset` (default: this store's, see `graphRegistryKey`):
+   * the next read that expands `graphs.allOntologies` re-reads it. For a process told that another
+   * one changed the dataset's graphs; this store's own graph queries update the cache themselves.
+   */
+  invalidateGraphRegistry(dataset?: string): void {
+    invalidateGraphRegistry(dataset ?? this.graphRegistryKey());
+  }
+
+  /** Read this dataset's graph registry: every record's graph and class, in one SELECT. */
+  protected async loadGraphRegistry(): Promise<GraphRegistryRow[]> {
+    const json = await this.executeSparqlSelect(
+      `SELECT ?g ?c WHERE { GRAPH <${graphs.registry}> { ?g <${sd.name.id}> ?g ; a ?c } }`,
+    );
+    if (!isSparqlSelectResults(json)) {
+      throw new Error('Expected a SPARQL SELECT result set when reading the graph registry.');
+    }
+    const rows: GraphRegistryRow[] = [];
+    for (const binding of json.results.bindings) {
+      const graph = binding.g?.value;
+      const recordClass = binding.c?.value;
+      if (graph && recordClass) rows.push({graph, recordClass});
+    }
+    return rows;
+  }
+
+  /**
+   * Expand a read's `.from()` set before compiling it: portable names through `mapGraphName`,
+   * `graphs.allOntologies`/`graphs.allShapes` from the cached registry. Returns the IR to compile
+   * (a copy carrying the expanded set), or `null` when the set expanded to no graph and the read
+   * matches nothing.
+   */
+  protected async resolveReadGraphs<T extends IRSelectQuery | IRCountQuery | IRAskQuery>(
+    ir: T,
+  ): Promise<T | null> {
+    if (!ir.graphs) return ir;
+    const expanded = await expandReadGraphs(ir.graphs, {
+      registry: () => readGraphRegistry(this.graphRegistryKey(), () => this.loadGraphRegistry()),
+      mapGraphName: this.options?.mapGraphName,
+    });
+    if (!('graphs' in expanded)) {
+      const {graphs: _named, ...rest} = ir;
+      return attachCatalog(rest as T, catalogOf(ir));
+    }
+    if (expanded.graphs.length === 0) return null;
+    return attachCatalog({...ir, graphs: expanded.graphs}, catalogOf(ir));
   }
 
   /**
@@ -132,7 +221,12 @@ export abstract class SparqlDataset implements IDataset {
     // Cast once for the call rather than lowering in each branch: `lower` is
     // overloaded per query kind and cannot resolve a union, and lowering twice
     // would be the thing this method most needs not to do.
-    const ir = lower(query as SelectQuery) as IRSelectQuery | IRCountQuery;
+    const lowered = lower(query as SelectQuery) as IRSelectQuery | IRCountQuery;
+    const ir = await this.resolveReadGraphs(lowered);
+    if (!ir) {
+      // The graph set expanded to no graph (no graph of that kind is registered).
+      return lowered.kind === 'count' ? 0 : mapSparqlSelectResult(NO_ROWS, lowered);
+    }
     if (ir.kind === 'count') {
       const sparql = countToSparql(ir, this.options);
       const json = await this.executeSparqlSelect(sparql);
@@ -160,7 +254,8 @@ export abstract class SparqlDataset implements IDataset {
    * of the node under any type or none. Errors reject; never reported as `false`.
    */
   async askQuery(query: AskQuery): Promise<boolean> {
-    const ir = lower(query);
+    const ir = await this.resolveReadGraphs(lower(query));
+    if (!ir) return false;
     const sparql = askToSparql(ir, this.options);
     const json = await this.executeSparqlSelect(sparql);
     return mapSparqlAskResult(json);
@@ -228,6 +323,79 @@ export abstract class SparqlDataset implements IDataset {
       deleted: ir.ids,
       count: ir.ids.length,
     };
+  }
+
+  /**
+   * Run a graph query as **one SPARQL update** (body and registry record in one request, so one
+   * transaction): `graph_create`, `graph_replace`, `graph_patch`, `graph_drop`.
+   *
+   * Refusals (`GraphQueryError`): a portable graph name or the registry itself
+   * (`graph-name-read-only`); create of a registered graph (`graph-exists`); replace or patch of
+   * a graph with no record (`graph-not-registered`); any other kind (`unsupported-query-kind`).
+   * Whether the graph is registered is read first, with one `ASK` on the registry; the write
+   * itself is the single update.
+   *
+   * Bodies are parsed and re-serialised as N-Triples (see `graphQueryToSparql.ts`). A body is
+   * sent inside the update rather than by the Graph Store Protocol: a GSP `PUT` and the record's
+   * update would be two transactions.
+   */
+  /**
+   * Whether `iri` names a graph of the store itself, which a graph query never writes. Checked on
+   * every graph query before any SPARQL is built. The default refuses Jena's `urn:x-arq:` names
+   * (`urn:x-arq:DefaultGraph` is the real default graph; an insert into `urn:x-arq:UnionGraph`
+   * creates a real graph). A store with other reserved names overrides it.
+   */
+  protected isReservedGraphName(iri: string): boolean {
+    return iri.startsWith('urn:x-arq:');
+  }
+
+  async graphQuery(query: GraphQuery): Promise<GraphResult> {
+    if (!isGraphQueryKind(query?.kind)) throw unsupportedGraphQuery(query ?? {});
+    assertGraphWritable(query.graph);
+    if (this.isReservedGraphName(query.graph)) {
+      throw new GraphQueryError(
+        'graph-name-read-only',
+        `<${query.graph}> is a name this store reserves for its own graphs; it can be read, never written.`,
+        query.graph,
+      );
+    }
+    getGraphRecordClass(query.recordClass);
+    if (query.kind !== 'graph_drop') {
+      // Replace and patch through a record class (OntologyGraph.update(…)) need a record of that
+      // class; through NamedGraph any record will do.
+      const classCheck =
+        query.kind !== 'graph_create' && query.recordClass !== sd.NamedGraph.id
+          ? query.recordClass
+          : undefined;
+      const registered = mapSparqlAskResult(
+        await this.executeSparqlSelect(graphRegisteredAsk(query.graph, classCheck)),
+      );
+      if (query.kind === 'graph_create' && registered) {
+        throw new GraphQueryError(
+          'graph-exists',
+          `<${query.graph}> is already registered; change it with update(), replaceContent() or patchContent().`,
+          query.graph,
+        );
+      }
+      if (query.kind !== 'graph_create' && !registered) {
+        throw new GraphQueryError(
+          'graph-not-registered',
+          classCheck
+            ? `<${query.graph}> has no record of class <${classCheck}> in the graph registry.`
+            : `<${query.graph}> has no record in the graph registry; register it with create() first.`,
+          query.graph,
+        );
+      }
+    }
+    const modified = new Date().toISOString();
+    const sparql = graphQueryToSparql(query, await graphQueryBodies(query), modified);
+    if (sparql) await this.executeSparqlUpdate(sparql);
+    noteGraphQuery(this.graphRegistryKey(), query);
+    const contentHash = graphContentHash(query);
+    const changed = query.kind !== 'graph_patch' || hasPatchBody(query);
+    return contentHash === undefined
+      ? {graph: query.graph, changed}
+      : {graph: query.graph, contentHash, modified, changed};
   }
 
   /**

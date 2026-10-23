@@ -31,6 +31,11 @@ export type IRSelectQuery = {
   subjectIds?: string[];
   singleResult?: boolean;
   resultMap?: IRResultMapEntry[];
+  /**
+   * The graphs the read is restricted to (`.from()`), as the caller named them, portable names
+   * included; the store expands them before compiling. Absent = the default graph.
+   */
+  graphs?: string[];
 };
 
 /**
@@ -53,6 +58,11 @@ export type IRAskQuery = {
   where?: IRExpression;
   subjectId?: string;
   subjectIds?: string[];
+  /**
+   * The graphs the read is restricted to (`.from()`), as the caller named them, portable names
+   * included; the store expands them before compiling. Absent = the default graph.
+   */
+  graphs?: string[];
 };
 
 /**
@@ -84,6 +94,11 @@ export type IRCountQuery = {
    * mapping cannot disagree about it.
    */
   alias: IRAlias;
+  /**
+   * The graphs the read is restricted to (`.from()`), as the caller named them, portable names
+   * included; the store expands them before compiling. Absent = the default graph.
+   */
+  graphs?: string[];
 };
 
 export type IRProjectionItem = {
@@ -467,3 +482,51 @@ export type UpdateFieldValue =
  * - Unset multi-value field (passing `undefined`): empty array `[]`.
  */
 export type UpdateResult = {id: string; [key: string]: UpdateFieldValue};
+
+// ---------------------------------------------------------------------------
+// Graph queries: whole-graph operations (`IDataset.graphQuery`)
+// ---------------------------------------------------------------------------
+
+/**
+ * The kinds of graph query. Each is one operation on a whole named graph and its record in the
+ * graph registry (`graphs.registry`), applied by a store in one transaction.
+ */
+export type GraphQueryKind = 'graph_create' | 'graph_replace' | 'graph_patch' | 'graph_drop';
+
+/** A graph body as RDF text. */
+export interface GraphContent {
+  mediaType: 'text/turtle' | 'application/n-triples';
+  text: string;
+}
+
+/**
+ * A graph query: what the graph statics (`NamedGraph`, `OntologyGraph`, …) send to
+ * `IDataset.graphQuery`. Plain data, so it is its own wire form (see `parseGraphQuery`) and needs
+ * no lowering.
+ */
+export interface GraphQuery {
+  kind: GraphQueryKind;
+  /** The graph IRI. */
+  graph: string;
+  /** The class IRI of the graph's record, from the static's receiver (`OntologyGraph` → `core:OntologyGraph`). */
+  recordClass: string;
+  /** The record class's own fields (`{package, version}`); the automatic fields are never passed. */
+  record?: Record<string, unknown>;
+  /** The body, for `graph_create` and `graph_replace`. */
+  content?: GraphContent;
+  /** The change, for `graph_patch`. */
+  patch?: {insert?: GraphContent; delete?: GraphContent};
+  /** A hash the caller computed (for instance a file's new hash); otherwise the store hashes the content. */
+  contentHash?: string;
+}
+
+/** What a store answers a graph query with. */
+export interface GraphResult {
+  graph: string;
+  /** The record's content hash after the query (absent after a drop). */
+  contentHash?: string;
+  /** The record's load time after the query, ISO `xsd:dateTime`. */
+  modified?: string;
+  /** Whether the graph's body was written or dropped; false for a record-only update. */
+  changed: boolean;
+}

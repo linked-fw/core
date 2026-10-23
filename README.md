@@ -24,17 +24,19 @@ npm install @_linked/core
 ### Store requirements
 
 Core requires a SPARQL store with **RDFS class inference** over the stored `rdfs:subClassOf`
-triples, and the ontology hierarchy synced into each dataset:
+triples, built from the graphs the graph registry marks plus the default graph, and each
+package's ontology data synced into each dataset:
 
 - **Inference:** a node stored as `ex:Project` must also answer as every superclass
   (`schema:CreativeWork`, `schema:Thing`). Class-scoped selects, counts, asks and `EXISTS`, bulk
   mutations (`deleteAll`, `deleteWhere`, `update().forAll()` / `.where()`), the owned-link class
   check, the owned walk's cycle hops and the single-owner SHACL constraint all rely on it. With
-  Fuseki, run the inferring image `ghcr.io/linked-fw/fuseki` (its `tdb2` datasets infer; see
-  `@_linked/fuseki`). Without inference these silently miss or refuse subclass instances.
+  Fuseki, run the inferring image `ghcr.io/linked-fw/fuseki:6.2.0-2` or later (its `tdb2`
+  datasets infer, with the hierarchy of the registry's ontology graphs; see `@_linked/fuseki`).
+  Without inference these silently miss or refuse subclass instances.
 - **The hierarchy:** `syncOntologies` (`@_linked/core/ontology/syncOntologies`) writes every
-  registered package's `rdfs:subClassOf` triples into the dataset; `@_linked/server` runs it at
-  boot. See [ontologies](./docs/architecture/ontologies.md).
+  registered package's ontology data into its own named graph, recorded in the graph registry;
+  `@_linked/server` runs it at boot. See [ontologies](./docs/architecture/ontologies.md).
 
 Only classes are inferred: `rdfs:subPropertyOf`, `rdfs:domain` and `rdfs:range` are not.
 

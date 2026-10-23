@@ -40,6 +40,7 @@ import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
 import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
+import {normalizeReadGraphs, parseReadGraphsJSON, type ReadGraphsInput} from './readGraphs.js';
 
 /**
  * Everything a count can carry. Assembled by `SelectBuilder.toCount()` or
@@ -55,6 +56,8 @@ export type CountSpec = {
   subjects?: NodeReferenceValue[];
   where?: WherePath;
   minusEntries?: RawMinusEntry[];
+  /** `.from()`: the graphs the read is restricted to (checked). */
+  graphs?: string[];
   /** `.for(null)` was called — there is no subject to count. */
   nullSubject?: boolean;
 };
@@ -76,6 +79,14 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
   /** Build from an assembled spec — used by `.toCount()` and `Shape.count()`. */
   static of(spec: CountSpec): CountBuilder {
     return new CountBuilder(spec);
+  }
+
+  /**
+   * Read only these graphs (a graph IRI or a list, portable names included); returns a new
+   * builder. See `SelectBuilder.from`.
+   */
+  from(graphs: ReadGraphsInput): CountBuilder {
+    return new CountBuilder({...this._spec, catalog: this._catalog, graphs: normalizeReadGraphs(graphs)});
   }
 
   /** Discriminator for the free `lower()` function and dataset routing. */
@@ -103,6 +114,7 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
     if (subjects && subjects.length > 0) input.subjects = subjects;
     if (where) input.where = where;
     if (minusEntries && minusEntries.length > 0) input.minusEntries = minusEntries;
+    if (this._spec.graphs) input.graphs = this._spec.graphs;
     return input;
   }
 
@@ -150,6 +162,9 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
     if (nullSubject) {
       json.nullSubject = true;
     }
+    if (this._spec.graphs) {
+      json.graphs = [...this._spec.graphs];
+    }
     return json;
   }
 
@@ -181,6 +196,9 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
       );
     }
     if (json.nullSubject) spec.nullSubject = true;
+    if (json.graphs !== undefined) {
+      spec.graphs = parseReadGraphsJSON(json.graphs, 'count');
+    }
     return new CountBuilder(spec);
   }
 

@@ -14,4 +14,5 @@ import './PathList.js';
 import './PathNode.js';
 import './PropertyGroup.js';
 import './OntologySync.js';
+import './NamedGraph.js';
 import './ClassAxioms.js';

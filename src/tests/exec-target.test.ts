@@ -23,14 +23,16 @@ function makeStore(on: 'global' | 'target', supports: Set<string>): IDataset {
     hits.push({kind, on});
     return {} as any;
   };
-  const store: IDataset = {
+  // Partial on purpose: a dataset class built against an older core may lack the mutation
+  // methods, and exec(target) must refuse such a target.
+  const store: Partial<IDataset> = {
     askQuery: async () => false,
     selectQuery: async () => record('select'),
   };
   if (supports.has('create')) store.createQuery = async () => record('create');
   if (supports.has('update')) store.updateQuery = async () => record('update');
   if (supports.has('delete')) store.deleteQuery = async () => record('delete');
-  return store;
+  return store as IDataset;
 }
 
 const ALL = new Set(['create', 'update', 'delete']);

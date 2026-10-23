@@ -40,6 +40,7 @@ import {requireLiveQueryStore} from '../live/registry.js';
 import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import {brandLinkedClass, isLinkedError, isLinkedInstance} from '../utils/linkedError.js';
+import {normalizeReadGraphs, parseReadGraphsJSON, type ReadGraphsInput} from './readGraphs.js';
 import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryStore.js';
 
 /** JSON representation of a SelectBuilder. */
@@ -59,6 +60,8 @@ export type QueryBuilderJSON = {
   sortBy?: SortByPathJSON;
   minusEntries?: RawMinusEntryJSON[];
   nullSubject?: boolean;
+  /** `.from()`: the graphs the read is restricted to, as absolute IRIs (portable names included). */
+  graphs?: string[];
 };
 
 /** A preload entry binding a property path to a component's query. */
@@ -93,6 +96,7 @@ interface QueryBuilderInit<S extends Shape, R> {
   minusEntries?: MinusEntry<S>[];
   _nullSubject?: boolean;
   _pendingContextName?: string;
+  graphs?: string[];
   // Pre-evaluated data (restored from JSON; used when callbacks are not available)
   _where?: WherePath;
   _sortBy?: SortByPath;
@@ -132,6 +136,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   private readonly _minusEntries?: MinusEntry<S>[];
   private readonly _nullSubject?: boolean;
   private readonly _pendingContextName?: string;
+  private readonly _graphs?: string[];
   // Pre-evaluated data (restored from JSON; used when callbacks are not available)
   private readonly _where?: WherePath;
   private readonly _sortBy?: SortByPath;
@@ -156,6 +161,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     this._minusEntries = init.minusEntries;
     this._nullSubject = init._nullSubject;
     this._pendingContextName = init._pendingContextName;
+    this._graphs = init.graphs;
     this._where = init._where;
     this._sortBy = init._sortBy;
     this._rawMinusEntries = init._rawMinusEntries;
@@ -180,6 +186,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       minusEntries: this._minusEntries,
       _nullSubject: this._nullSubject,
       _pendingContextName: this._pendingContextName,
+      graphs: this._graphs,
       _where: this._where,
       _sortBy: this._sortBy,
       _rawMinusEntries: this._rawMinusEntries,
@@ -284,6 +291,16 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   }
 
   /** Set result limit. */
+  /**
+   * Read only these graphs: a graph IRI or a list of them, portable names included
+   * (`graphs.allOntologies`, `graphs.default`, `graphs.union`, `graphs.registry`, from
+   * `@_linked/core/ontologies/graphs`). The store expands the portable names. Without `.from()`
+   * a read uses the default graph. `.count()` and `.exists()` keep it.
+   */
+  from(graphs: ReadGraphsInput): SelectBuilder<S, R, Result> {
+    return this.clone({graphs: normalizeReadGraphs(graphs)});
+  }
+
   limit(n: number): SelectBuilder<S, R, Result> {
     return this.clone({limit: n});
   }
@@ -479,6 +496,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     where?: WherePath;
     minusEntries?: RawMinusEntry[];
     nullSubject?: boolean;
+    graphs?: string[];
   } {
     const catalog = this._catalog;
     if (catalog !== getActiveShapeCatalog()) {
@@ -515,6 +533,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       where,
       minusEntries,
       nullSubject: this._nullSubject,
+      ...(this._graphs ? {graphs: this._graphs} : {}),
     };
   }
 
@@ -727,6 +746,10 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       json.nullSubject = true;
     }
 
+    if (this._graphs) {
+      json.graphs = [...this._graphs];
+    }
+
     return json;
   }
 
@@ -793,6 +816,10 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     // Restore nullSubject flag
     if (json.nullSubject) {
       overrides._nullSubject = true;
+    }
+
+    if (json.graphs !== undefined) {
+      overrides.graphs = parseReadGraphsJSON(json.graphs, 'select');
     }
 
     if (Object.keys(overrides).length > 0) {
@@ -863,6 +890,9 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     }
     if (this._subjects && this._subjects.length > 0) {
       input.subjects = this._subjects;
+    }
+    if (this._graphs) {
+      input.graphs = this._graphs;
     }
     if (this._minusEntries && this._minusEntries.length > 0) {
       input.minusEntries = this._evaluateMinusEntries();

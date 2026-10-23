@@ -15,6 +15,7 @@ import {
 } from '../queries/queryDispatch';
 import type {QueryDispatchEvent} from '../queries/queryDispatch';
 import type {IDataset} from '../interfaces/IDataset';
+import {unusedDatasetMethods} from '../test-helpers/test-utils';
 
 const {linkedShape} = linkedPackage('dispatch-subscribe-test');
 
@@ -41,6 +42,7 @@ const createStore = () => {
   const calls: StoreCalls = {select: 0, ask: 0, create: 0, update: 0, delete: 0};
   const received: {update?: unknown} = {};
   const store: IDataset = {
+    ...unusedDatasetMethods,
     selectQuery: async () => {
       calls.select += 1;
       return [] as any;

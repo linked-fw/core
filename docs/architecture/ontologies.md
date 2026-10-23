@@ -1,5 +1,5 @@
 ---
-summary: Why core ships its own copies of rdf, rdfs, owl, shacl and xsd, how they differ from the ontologies in packages (Turtle data, the registry, the hierarchy reader, the ontology sync, mirror packages), and the rule for which kind you are writing.
+summary: Why core ships its own copies of rdf, rdfs, owl, shacl and xsd, how they differ from the ontologies in packages (Turtle data, the registry, the hierarchy reader, the ontology sync, named graphs and the graph registry, mirror packages), and the rule for which kind you are writing.
 ---
 
 # Ontologies in core, and ontologies in packages
@@ -170,26 +170,153 @@ and `sh:class`, and a subclass instance through its inferred type), the owned wa
 (`?n a <C>`) and the single-owner constraint (one `sh:class`) carry no list of subclasses of
 their own. The owned walk also reads the in-memory hierarchy (`subClassesOf`) to find every shape
 its guards match. `syncOntologies(ds?, {force, packages,
-orphanScope})` (`@_linked/core/ontology/syncOntologies`, server only) writes it:
+orphanScope})` (`@_linked/core/ontology/syncOntologies`, server only) writes each package's
+**whole ontology data** (labels, comments and the rest along with the hierarchy) into its own
+ontology graph (see the next section):
 
-- per package, the kept triples (its hierarchy) as sorted N-Triples lines, hashed with SHA-256
-  (`linked-ontology-sync/1\n` + the lines);
-- the hash and the lines are stored on a sync node per package,
-  `https://linked.cm/ont/core/ontologySync/<encodeURIComponent(packageName)>`, of the built-in
-  shape `OntologySync`;
-- an unchanged hash writes nothing (an unforked branch stays unforked); a changed package is
-  updated one subject class at a time (`add` = new − old, `remove` = old − new minus the triples
-  another package lists), the sync node last, so an interrupted sync is redone by the next one;
-- `force` writes every package as if nothing were stored: it inserts every kept triple (so it
-  repairs a dataset whose triples were removed while its sync nodes stayed) and removes the stored
-  lines the package no longer lists;
-- only triples a sync node lists are ever removed: a triple no package listed stays, while one a
-  package listed goes when the package drops it (and no other package lists it), even if the
-  dataset held it before that package's first sync; packages no longer registered are pruned only
-  under `orphanScope: 'all'`.
+- the graph is `OntologyGraph.iriFor(packageName)` (`{package IRI}/graph/ontology`), recorded in
+  the graph registry as an `OntologyGraph` (`package`, `sources`: the data files), which feeds
+  the store's hierarchy; the store needs to build its hierarchy from the registry
+  (`ghcr.io/linked-fw/fuseki:6.2.0-2` or later);
+- the hash is `ontologyGraphHash(texts)`: SHA-256 of `linked-ontology-sync/2\n` + the package's
+  raw data file texts in registration order, joined with `\n`, recorded as the graph's
+  `core:contentHash`; bumping the prefix makes every dataset rewrite its graphs once;
+- an unchanged hash writes nothing (an unforked branch stays unforked); a changed or new package
+  is created or replaced whole in one graph query, the body sent as N-Triples (each file parsed
+  with its own blank-node prefix, so prefixes and blank-node labels of several files never
+  clash); `force` replaces every package;
+- after a package's graph is written (or found unchanged), what the earlier default-graph sync
+  kept for it is removed: the lines its `OntologySync` node lists, except those another
+  remaining node lists, then the node; a hand-written default-graph axiom no node lists stays,
+  and the store keeps inferring through it;
+- `orphanScope: 'all'` (without `packages`) drops the ontology graph of every package no longer
+  registered, and removes the default-graph lines and node of such a package.
 
-It runs at app boot and through the app's control route, before shape sync. Everything goes
-through Linked Queries, in the default graph.
+A store without graph queries (`unsupported-query-kind`, or a dataset class without
+`graphQuery`) gets the earlier **default-graph sync**: each package's `rdfs:subClassOf` triples
+as sorted N-Triples lines, hashed with `linked-ontology-sync/1\n` + the lines, stored on a sync
+node per package (`https://linked.cm/ont/core/ontologySync/<encodeURIComponent(packageName)>`,
+the built-in shape `OntologySync`, deprecated) and diffed into the default graph one subject
+class at a time (`ClassAxioms`); only lines a node lists are ever removed, and a triple another
+package lists is kept.
+
+It runs at app boot and through the app's control route, before shape sync.
+
+## Named graphs and the graph registry
+
+A dataset keeps named graphs on purpose (a package's whole ontology data, later its shapes,
+ontology-editor drafts), and records each one in the **graph registry**, a named graph at
+`https://linked.cm/pkg/core/graph/registry` (`graphs.registry`), the same IRI in every dataset.
+A record is described with SPARQL Service Description plus core terms; its subject is the graph
+IRI:
+
+```turtle
+# in GRAPH <https://linked.cm/pkg/core/graph/registry>
+<https://linked.cm/pkg/schema/graph/ontology> a core:OntologyGraph ;
+  sd:name <https://linked.cm/pkg/schema/graph/ontology> ;
+  core:package "@_linked/schema" ; core:version "1.7.0" ;
+  core:contentHash "3f9c…" ; core:feedsHierarchy true ;
+  dcterms:modified "2026-10-30T10:12:00Z"^^xsd:dateTime ;
+  dcterms:source "data/schema.ttl" .
+```
+
+The record's class is the graph's kind, a built-in shape in `@_linked/core/shapes/NamedGraph`:
+`NamedGraph` (`sd:NamedGraph`, fields `name`, `contentHash`, `feedsHierarchy`, `modified`,
+`sources`), `OntologyGraph` and `ShapesGraph` (adding `package`, `version`) and `DraftGraph`, each
+class `rdfs:subClassOf sd:NamedGraph` in `core.ttl`. Selecting `NamedGraph` returns every kind's
+records through the store's inference; its `select()` reads the registry (the shapes declare
+`static storedInGraph`), so callers never name it. `feedsHierarchy` is true for an
+`OntologyGraph` unless its creator sets it false, and always false for the other kinds; a store that builds its hierarchy from the registry reads
+it to decide which graphs feed inference.
+
+Package graphs are `{package IRI}/graph/{kind}` (`OntologyGraph.iriFor('@_linked/schema')` →
+`https://linked.cm/pkg/schema/graph/ontology`); graphs a dataset owns hang under its data root,
+`{DATA_ROOT}/graph/{kind}`.
+
+**Graph queries.** A graph and its record change together, through `IDataset.graphQuery`
+(required; a store without graph support throws `GraphQueryError('unsupported-query-kind')`).
+The statics build one graph query per call, and a SPARQL store runs it as one update (one
+transaction):
+
+| Call | Graph query |
+|---|---|
+| `OntologyGraph.create({id, package, version}).withContent(c)` | `graph_create` (refused when registered: `graph-exists`) |
+| `NamedGraph.replaceContent(iri, c)` | `graph_replace` (refused when not registered: `graph-not-registered`) |
+| `NamedGraph.patchContent(iri, {insert, delete})` | `graph_patch` |
+| `OntologyGraph.update(iri).set({version})` | `graph_patch` with a record and no body (hash kept) |
+| `OntologyGraph.update(iri).set({version}).replaceContent(c)` | `graph_replace` with the record |
+| `OntologyGraph.delete(iri)` | `graph_drop` (graph and record) |
+
+Content is `{mediaType: 'text/turtle' | 'application/n-triples', text}`. Core fills the record's
+automatic fields: `sd:name`, `core:contentHash` (`sha256Hex` of the content text, or a hash the
+caller passes; for a patch, of its delete text, a newline and its insert text) and
+`dcterms:modified`. The calls are server-only (a browser call throws; the import does not), and a
+store parses each body before it enters a request. A receiving process checks a graph query that
+arrived as JSON with `parseGraphQuery`.
+
+**Portable names** (`@_linked/core/ontologies/graphs`): `graphs.default`, `graphs.union`,
+`graphs.allOntologies`, `graphs.allShapes` and `graphs.registry`, under
+`https://linked.cm/pkg/core/graph/`. A store maps them to its own names; every write to one is
+refused (`graph-name-read-only`), the registry included: it is written only as part of a graph
+query on another graph. A store also refuses its own reserved names (`SparqlDataset`'s
+`isReservedGraphName`, by default Jena's `urn:x-arq:` names).
+
+### Reading graphs
+
+A read names its graphs with `.from(graph | graph[])` on a select, count or ask (`.count()` and
+`.exists()` keep it); without it a read uses the default graph, as before. The names travel as
+written, in the DSL-JSON field `graphs` and the IR field `graphs`, and the store expands them:
+
+| Name | Read as |
+|---|---|
+| a graph IRI, `graphs.registry` | itself |
+| `graphs.allOntologies`, `graphs.allShapes` | every graph the registry lists with an `OntologyGraph` / `ShapesGraph` record |
+| `graphs.default` alone | the default graph, as without `.from()` |
+| `graphs.union` alone | the store's name for it (`SparqlOptions.mapGraphName`; Fuseki `urn:x-arq:UnionGraph`) |
+
+`graphs.default` or `graphs.union` together with other graphs is refused
+(`unsupported-query-kind`): a set is read as `FROM NAMED` graphs, and Jena's `FROM NAMED
+<urn:x-arq:DefaultGraph>` matches nothing. A set that expands to no graph matches nothing; the
+store answers it without a request.
+
+`SparqlDataset` compiles one graph as `GRAPH <iri> { … }` around the whole pattern, and several
+as `FROM NAMED <g1> … <gK>` with one `GRAPH ?g_<subject> { … }` block per subject: a subject's
+data lives in one graph, so its graph variable is shared by all its blocks, OPTIONAL and EXISTS
+ones included.
+
+```ts
+import {graphs} from '@_linked/core/ontologies/graphs';
+const people = await Person.select((p) => [p.name, p.knows.name]).from(graphs.allOntologies);
+```
+
+```sparql
+SELECT DISTINCT ?a0 ?a0_name ?a1_name ?a1
+FROM NAMED <https://linked.cm/pkg/a/graph/ontology>
+FROM NAMED <https://linked.cm/pkg/b/graph/ontology>
+WHERE {
+  GRAPH ?g_a0 { ?a0 rdf:type schema:Person . }
+  OPTIONAL {
+    GRAPH ?g_a0 { ?a0 schema:knows ?a1 . }
+    OPTIONAL { GRAPH ?g_a1 { ?a1 schema:name ?a1_name . } }
+  }
+  OPTIONAL { GRAPH ?g_a0 { ?a0 schema:name ?a0_name . } }
+}
+```
+
+**`isolateLinkedTypeChecks`** (a `SparqlOptions` flag, set per store, never per query): a subject
+reached through a link that carries an inferred type check gets that check in a second block on
+the same graph variable, after the block that reads one of its stored triples. The rows are the
+same; on Jena, which reorders the patterns inside one block and would run the type check in every
+allowed graph, it is about twice as fast (the measurements are in `graphScope.ts`). The generator
+emits no linked type check today, so the flag changes no query yet.
+
+**The registry cache.** A store reads its registry once per dataset and process (one `SELECT` on
+`graphs.registry`) and keeps it: its own graph queries update the cache in the same step, so its
+next read sees a new or dropped graph; `invalidateGraphRegistry(dataset?)` (on the store, and as a
+package export by cache key) drops it when another process changed the graphs (CN pushes this to
+the apps it runs); an entry older than 30 seconds (`GRAPH_REGISTRY_MAX_AGE_MS`) is re-read. A
+store keys the cache with `graphRegistryKey()` (default: one key per instance; a store overrides
+it with its dataset's identity). Writes never depend on the cache.
 
 ## A package that mirrors a standard
 

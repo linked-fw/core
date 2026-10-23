@@ -1,5 +1,10 @@
 # Named Graph Support
 
+**Status:** in progress through CN plan 071 and core sub-plan
+[004](../plans/004-named-graphs.md). Whole-graph operations (`IDataset.graphQuery`, the
+`NamedGraph` statics, the graph registry) landed with report 048; reads with `.from()` follow,
+then graph routing for writes. This item's DSL sketch below predates that design.
+
 ## Summary
 
 Add DSL support for querying and mutating data within specific SPARQL named graphs. This enables multi-tenancy, access control, provenance tracking, and data partitioning scenarios where triples are organized into named graphs.

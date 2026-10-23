@@ -19,6 +19,7 @@ import {sha256Hex} from '../utils/sha256';
 import type {IDataset} from '../interfaces/IDataset';
 import '../shapes/List';
 import '../shapes/PathNode';
+import {unusedDatasetMethods} from '../test-helpers/test-utils';
 
 const {linkedShape} = linkedPackage('shapehash-test');
 const ex = (n: string) => ({id: `https://example.org/h#${n}`});
@@ -73,6 +74,7 @@ function makeStore(seed: Record<string, string | undefined> = {}) {
   const shapes = new Map<string, string | undefined>(Object.entries(seed));
   const calls: Call[] = [];
   const store: IDataset = {
+    ...unusedDatasetMethods,
     askQuery: async () => false,
     selectQuery: async () => {
       calls.push({kind: 'select'});
