@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.39.1
+
+### Patch Changes
+
+- [#377](https://github.com/linked-fw/core/pull/377) [`4999d98`](https://github.com/linked-fw/core/commit/4999d985a04a4b23973b27b6732635fa4b4e9ce3) Thanks [@flyon](https://github.com/flyon)! - Ships `lib/esm/data/shapes.ttl` (core's own shapes) in the package.
+
 ## 2.39.0
 
 ### Minor Changes
