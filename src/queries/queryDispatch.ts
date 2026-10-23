@@ -321,6 +321,18 @@ function instrumentDispatch(d: QueryDispatch, target?: IDataset): QueryDispatch 
   return wrapped;
 }
 
+/**
+ * Send a graph query through the explicit `target` dataset (observed like the global path), or
+ * through the global dispatch. Either way a missing `graphQuery` is refused with
+ * `unsupported-query-kind` (see {@link resolveGraphQuery}).
+ */
+export function dispatchGraphQuery(query: GraphQuery, target?: IDataset): Promise<GraphResult> {
+  const dispatch = target
+    ? instrumentDispatch(target as unknown as QueryDispatch, target)
+    : getQueryDispatch();
+  return resolveGraphQuery(dispatch, query);
+}
+
 export function setQueryDispatch(d: QueryDispatch): void {
   dispatchGlobal.__linkedQueryDispatch.current = instrumentDispatch(d);
 }

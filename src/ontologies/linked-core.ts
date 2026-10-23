@@ -81,6 +81,16 @@ const packageName = ns('packageName');
 const ontologyHash = ns('ontologyHash');
 const ontologyTriples = ns('ontologyTriples');
 
+// Named graphs (`shapes/NamedGraph.ts`): the classes of graph-registry records (each
+// `rdfs:subClassOf sd:NamedGraph`) and the record fields core adds to SPARQL Service Description.
+const OntologyGraph = ns('OntologyGraph');
+const ShapesGraph = ns('ShapesGraph');
+const DraftGraph = ns('DraftGraph');
+const contentHash = ns('contentHash');
+const feedsHierarchy = ns('feedsHierarchy');
+const packageTerm = ns('package');
+const version = ns('version');
+
 export const coreOntology = {
   Package,
   ShapeClass,
@@ -102,4 +112,11 @@ export const coreOntology = {
   packageName,
   ontologyHash,
   ontologyTriples,
+  OntologyGraph,
+  ShapesGraph,
+  DraftGraph,
+  contentHash,
+  feedsHierarchy,
+  package: packageTerm,
+  version,
 };

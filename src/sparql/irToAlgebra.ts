@@ -613,6 +613,16 @@ function containsAggregate(expr: SparqlExpression): boolean {
 // ---------------------------------------------------------------------------
 
 /**
+ * The named graph a shape's instances are stored in, when its class declares one
+ * (`static storedInGraph`, inherited by subclasses). Only the graph-registry record shapes do;
+ * other shapes read the default graph.
+ */
+function storedGraphOf(shapeId: string): string | undefined {
+  const cls = getShapeClass(shapeId) as {storedInGraph?: unknown} | undefined;
+  return typeof cls?.storedInGraph === 'string' && cls.storedInGraph ? cls.storedInGraph : undefined;
+}
+
+/**
  * Converts an IRSelectQuery to a SparqlSelectPlan.
  */
 export function selectToAlgebra(
@@ -1179,9 +1189,12 @@ export function selectToAlgebra(
       ? undefined
       : query.limit;
 
+  // A shape whose instances live in one named graph (the graph-registry records,
+  // `NamedGraph.storedInGraph`) is read there; counts and asks reuse this algebra.
+  const storedIn = storedGraphOf(query.root.shape);
   return {
     type: 'select',
-    algebra,
+    algebra: storedIn ? {type: 'graph', iri: storedIn, inner: algebra} : algebra,
     projection,
     distinct: !hasAggregates ? true : undefined,
     orderBy,
