@@ -971,8 +971,7 @@ search for the symbol.
 
 ### Outcome
 
-Implemented, not landed (report [053](../reports/053-graph-routing-forms.md)). Core as planned;
-no deviation. Stopped before landing: CN's `parseAppGraphRoutes` reads `graphs` back through
-core's `DatasetEntry` type and expects core's IRI check (`TS2339` and `appGraphRoutes.test.ts:73`),
-so landing turns CN's gate red until CN stops relying on it. Backlog 069 records per-instance graph
+Landed (report [053](../reports/053-graph-routing-forms.md)). Core as planned; no deviation. CN's
+`parseAppGraphRoutes` read `graphs` back through core's `DatasetEntry` type and relied on core's IRI
+check; CN `2004766be` fixed that before this landed. Backlog 069 records per-instance graph
 functions. Full gate: 2664 passed, 353/353 `[fuseki]`; `two-copies-built` still fails (backlog 060).

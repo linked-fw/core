@@ -68,7 +68,7 @@ not read it (grep of their sources on `named-graphs`).
 
 ## Deviations from the sub-plan
 
-None in core. One finding about CN contradicts the step's brief (below, "Not landed").
+None in core. One finding about CN contradicted the step's brief (below); CN was fixed first.
 
 ## Breaking changes (changeset `graph-routing-forms.md`, minor)
 
@@ -79,24 +79,22 @@ None in core. One finding about CN contradicts the step's brief (below, "Not lan
 The unreleased `graph-routing.md` changeset no longer mentions the config key. No export was
 removed.
 
-## Not landed: CN still reads the key through core's types and validation
+## CN relied on the key: fixed in CN before this landed
 
 The brief assumed "removing the key from core does not break that CN code, because CN parses the
-file itself". CN's C3 `parseAppGraphRoutes` (`src/data/appGraphRoutes.ts`) parses the JSON itself
-but then passes `graphs` through core's `parseDatasetsConfig` and reads
-`parsed.datasets[APP_DATA_ALIAS]?.graphs` back. With this step:
-
-- **Typecheck:** `error TS2339: Property 'graphs' does not exist on type 'DatasetEntry'.` (checked
-  against this step's built `lib/esm/utils/parseDatasetsConfig.d.ts` with the same expression), so
-  CN's `npm run typecheck:gate` turns red once core is built in the main checkout.
-- **Vitest:** `appGraphRoutes.test.ts:73` expects core to throw `/graph IRIs/` for
-  `'graph/articles'`; core no longer validates the key, so it would not throw.
-- At run time CN keeps working (the key passes through `parseDatasetsConfig` unchanged).
-
-Landing core would make the integration branch's CN gate red for every running CN step (C4a runs
-it). The step stopped before landing; the master decides between a small CN change first (read
-`graphs` from the raw entry and check IRIs in CN, or move the check into `refusedRouteReason`) or
-landing with CN red until C6.
+file itself". CN's C3 `parseAppGraphRoutes` (`src/data/appGraphRoutes.ts`) parsed the JSON itself
+but passed `graphs` through core's `parseDatasetsConfig` and read
+`parsed.datasets.appData.graphs` back. Against this step's core that was `error TS2339: Property
+'graphs' does not exist on type 'DatasetEntry'.`, and `appGraphRoutes.test.ts:73` expected core to
+throw `/graph IRIs/`. The step stopped; the master chose to fix CN first. CN `2004766be` ("fix: app
+graph routes read graphs from the raw datasets entry and check the IRIs in CN") reads `graphs` from
+the raw entry, resolves its placeholders through core's parser (in the `config` slot, typed in both
+cores) and checks shape IRI → graph IRI in CN with core's old rule and message. Its gate:
+`typecheck:gate` "No new type errors." (current core), the same file compiled against this step's
+`lib` with no error in it, Vitest `appGraphRoutes.test.ts` `Tests 11 passed`,
+`tests/integration/graph-routing.spec.ts` `9 passed (25.7s)` on :3190 with `CN_TEST_PORT=4192`
+(4190, the port first assigned, is on the fetch spec's blocked-port list: undici answers "bad
+port", so CN never looks healthy).
 
 ## Verification
 
@@ -143,9 +141,8 @@ Verify:
 ## Follow-ups
 
 - Backlog [069](../backlog/069-per-instance-graph-functions.md): per-instance graph functions.
-- CN (C6, or a fix before this lands): `parseAppGraphRoutes` stops relying on core for `graphs`
-  (above); `AppDataFusekiStore` must resolve its data root before a read that uses intent routes
-  (today it does so on reads only when it has `ownRoutes`), or `dataRoot()` falls back to CN's own
-  `DATA_ROOT`.
+- CN (C6): `AppDataFusekiStore` must resolve its data root before reads that use intent routes
+  (today it does so on reads only when it has `ownRoutes`); otherwise `dataRoot()` falls back to
+  CN's own `DATA_ROOT`. C6 also moves `routesForProject` from the datasets file to the storage file.
 - To confirm (master, 1c-ii): the root is stable across a project's branches, so fork copies keep
   graph names.
