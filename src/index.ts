@@ -75,6 +75,11 @@ export type {
 } from './queries/graphQuery.js';
 export {graphs} from './ontologies/graphs.js';
 export {
+  GRAPH_REGISTRY_MAX_AGE_MS,
+  invalidateGraphRegistry,
+} from './utils/graphRegistryCache.js';
+export type {ReadGraphsInput} from './queries/readGraphs.js';
+export {
   CONTEXT_REF_KEY,
   encodeContextRef,
   isContextRefJSON,

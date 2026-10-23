@@ -261,6 +261,63 @@ refused (`graph-name-read-only`), the registry included: it is written only as p
 query on another graph. A store also refuses its own reserved names (`SparqlDataset`'s
 `isReservedGraphName`, by default Jena's `urn:x-arq:` names).
 
+### Reading graphs
+
+A read names its graphs with `.from(graph | graph[])` on a select, count or ask (`.count()` and
+`.exists()` keep it); without it a read uses the default graph, as before. The names travel as
+written, in the DSL-JSON field `graphs` and the IR field `graphs`, and the store expands them:
+
+| Name | Read as |
+|---|---|
+| a graph IRI, `graphs.registry` | itself |
+| `graphs.allOntologies`, `graphs.allShapes` | every graph the registry lists with an `OntologyGraph` / `ShapesGraph` record |
+| `graphs.default` alone | the default graph, as without `.from()` |
+| `graphs.union` alone | the store's name for it (`SparqlOptions.mapGraphName`; Fuseki `urn:x-arq:UnionGraph`) |
+
+`graphs.default` or `graphs.union` together with other graphs is refused
+(`unsupported-query-kind`): a set is read as `FROM NAMED` graphs, and Jena's `FROM NAMED
+<urn:x-arq:DefaultGraph>` matches nothing. A set that expands to no graph matches nothing; the
+store answers it without a request.
+
+`SparqlDataset` compiles one graph as `GRAPH <iri> { … }` around the whole pattern, and several
+as `FROM NAMED <g1> … <gK>` with one `GRAPH ?g_<subject> { … }` block per subject: a subject's
+data lives in one graph, so its graph variable is shared by all its blocks, OPTIONAL and EXISTS
+ones included.
+
+```ts
+import {graphs} from '@_linked/core/ontologies/graphs';
+const people = await Person.select((p) => [p.name, p.knows.name]).from(graphs.allOntologies);
+```
+
+```sparql
+SELECT DISTINCT ?a0 ?a0_name ?a1_name ?a1
+FROM NAMED <https://linked.cm/pkg/a/graph/ontology>
+FROM NAMED <https://linked.cm/pkg/b/graph/ontology>
+WHERE {
+  GRAPH ?g_a0 { ?a0 rdf:type schema:Person . }
+  OPTIONAL {
+    GRAPH ?g_a0 { ?a0 schema:knows ?a1 . }
+    OPTIONAL { GRAPH ?g_a1 { ?a1 schema:name ?a1_name . } }
+  }
+  OPTIONAL { GRAPH ?g_a0 { ?a0 schema:name ?a0_name . } }
+}
+```
+
+**`isolateLinkedTypeChecks`** (a `SparqlOptions` flag, set per store, never per query): a subject
+reached through a link that carries an inferred type check gets that check in a second block on
+the same graph variable, after the block that reads one of its stored triples. The rows are the
+same; on Jena, which reorders the patterns inside one block and would run the type check in every
+allowed graph, it is about twice as fast (the measurements are in `graphScope.ts`). The generator
+emits no linked type check today, so the flag changes no query yet.
+
+**The registry cache.** A store reads its registry once per dataset and process (one `SELECT` on
+`graphs.registry`) and keeps it: its own graph queries update the cache in the same step, so its
+next read sees a new or dropped graph; `invalidateGraphRegistry(dataset?)` (on the store, and as a
+package export by cache key) drops it when another process changed the graphs (CN pushes this to
+the apps it runs); an entry older than 30 seconds (`GRAPH_REGISTRY_MAX_AGE_MS`) is re-read. A
+store keys the cache with `graphRegistryKey()` (default: one key per instance; a store overrides
+it with its dataset's identity). Writes never depend on the cache.
+
 ## A package that mirrors a standard
 
 A package that mirrors a published vocabulary (`@_linked/schema`, `dcat`, `org`, `rdfs`, …) holds

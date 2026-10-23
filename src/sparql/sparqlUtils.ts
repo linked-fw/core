@@ -14,9 +14,9 @@ export interface SparqlOptions {
   isolateLinkedTypeChecks?: boolean;
   /**
    * Map a portable graph name (`graphs.default`, `graphs.union`) to the store's own name for it
-   * (Fuseki: `urn:x-arq:DefaultGraph`, `urn:x-arq:UnionGraph`); `null` refuses the name. Without
-   * the hook a read of `graphs.default` alone reads the default graph and every other use of the
-   * two names is refused.
+   * (Fuseki: `urn:x-arq:DefaultGraph`, `urn:x-arq:UnionGraph`); `null` refuses the name. A read of
+   * `graphs.default` alone reads the default graph without it; `graphs.union` alone needs it; either
+   * together with other graphs is refused (see `expandReadGraphs`).
    */
   mapGraphName?: (iri: string) => string | null;
 }

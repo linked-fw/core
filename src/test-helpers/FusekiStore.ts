@@ -1,6 +1,7 @@
 import {SparqlDataset} from '../sparql/SparqlDataset.js';
 import type {SparqlQueryResults} from '../sparql/resultMapping.js';
 import type {SparqlOptions} from '../sparql/sparqlUtils.js';
+import {graphs} from '../ontologies/graphs.js';
 
 /**
  * Concrete SparqlDataset implementation for Apache Jena Fuseki.
@@ -15,6 +16,13 @@ import type {SparqlOptions} from '../sparql/sparqlUtils.js';
  * const result = await store.selectQuery(irSelectQuery);
  * ```
  */
+/** Jena's names for the portable default and union graphs. */
+function jenaGraphName(iri: string): string | null {
+  if (iri === graphs.default) return 'urn:x-arq:DefaultGraph';
+  if (iri === graphs.union) return 'urn:x-arq:UnionGraph';
+  return null;
+}
+
 export class FusekiStore extends SparqlDataset {
   private readonly queryEndpoint: string;
   private readonly updateEndpoint: string;
@@ -27,7 +35,7 @@ export class FusekiStore extends SparqlDataset {
     dataset: string,
     options?: SparqlOptions & {adminPassword?: string},
   ) {
-    super(options);
+    super({mapGraphName: jenaGraphName, ...options});
     this.baseUrl = baseUrl;
     this.dataset = dataset;
     this.queryEndpoint = `${baseUrl}/${dataset}/sparql`;
@@ -36,6 +44,11 @@ export class FusekiStore extends SparqlDataset {
     if (options?.adminPassword) {
       this.adminAuth = `Basic ${Buffer.from(`admin:${options.adminPassword}`).toString('base64')}`;
     }
+  }
+
+  /** One registry cache per Fuseki dataset, shared by every store instance for it. */
+  protected override graphRegistryKey(): string {
+    return `${this.baseUrl}/${this.dataset}`;
   }
 
   async init(): Promise<void> {

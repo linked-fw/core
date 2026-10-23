@@ -8,7 +8,7 @@
  * Reads from named graphs: `.from()` on select, count and ask builders, its DSL-JSON field and
  * its IR field.
  */
-import {describe, expect, test} from '@jest/globals';
+import {describe, expect, jest, test} from '@jest/globals';
 import {Person} from '../test-helpers/query-fixtures';
 import {SelectBuilder} from '../queries/QueryBuilder';
 import {AskBuilder} from '../queries/AskBuilder';
@@ -21,7 +21,15 @@ import {askToSparql, countToSparql, selectToAlgebra, selectToSparql} from '../sp
 import {selectPlanToSparql} from '../sparql/algebraToString';
 import {scopeAlgebraToGraphs} from '../sparql/graphScope';
 import type {SparqlAlgebraNode, SparqlBGP, SparqlFilter, SparqlLeftJoin} from '../sparql/SparqlAlgebra';
-import {NamedGraph} from '../shapes/NamedGraph';
+import {NamedGraph, OntologyGraph} from '../shapes/NamedGraph';
+import {SparqlDataset} from '../sparql/SparqlDataset';
+import type {SparqlOptions} from '../sparql/sparqlUtils';
+import type {SparqlQueryResults} from '../sparql/resultMapping';
+import {
+  GRAPH_REGISTRY_MAX_AGE_MS,
+  invalidateGraphRegistry,
+  readGraphRegistry,
+} from '../utils/graphRegistryCache';
 
 import '../ontologies/rdf';
 import '../ontologies/xsd';
@@ -309,5 +317,238 @@ WHERE {
     expect(selectToSparql(lower(NamedGraph.select((g) => g.contentHash).from([G1, G2])))).toContain(
       'FROM NAMED',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The store: expansion and the registry cache
+// ---------------------------------------------------------------------------
+
+const CORE = 'https://linked.cm/ont/core/';
+const SD_NAMED_GRAPH = 'http://www.w3.org/ns/sparql-service-description#NamedGraph';
+const ONT_A = 'https://linked.cm/pkg/a/graph/ontology';
+const ONT_B = 'https://linked.cm/pkg/b/graph/ontology';
+const ONT_C = 'https://linked.cm/pkg/c/graph/ontology';
+const DRAFTS = 'https://acme.example/data/graph/drafts';
+
+/** A SPARQL store whose transport answers from a fake registry and records every request. */
+class StubStore extends SparqlDataset {
+  registryLoads = 0;
+  selects: string[] = [];
+  updates: string[] = [];
+  registry: Array<[string, string]> = [
+    [ONT_B, `${CORE}OntologyGraph`],
+    [ONT_B, SD_NAMED_GRAPH],
+    [ONT_A, `${CORE}OntologyGraph`],
+    [DRAFTS, `${CORE}DraftGraph`],
+  ];
+
+  constructor(options?: SparqlOptions, private readonly key?: string) {
+    super(options);
+  }
+
+  protected override graphRegistryKey(): string {
+    return this.key ?? super.graphRegistryKey();
+  }
+
+  protected async executeSparqlSelect(sparql: string): Promise<SparqlQueryResults> {
+    if (sparql.startsWith('ASK {')) return {head: {}, boolean: false};
+    if (sparql.startsWith('SELECT ?g ?c WHERE')) {
+      this.registryLoads++;
+      return {
+        head: {vars: ['g', 'c']},
+        results: {
+          bindings: this.registry.map(([g, c]) => ({
+            g: {type: 'uri', value: g},
+            c: {type: 'uri', value: c},
+          })),
+        },
+      };
+    }
+    this.selects.push(sparql);
+    if (sparql.includes('COUNT(')) {
+      return {
+        head: {vars: ['count']},
+        results: {bindings: [{count: {type: 'literal', value: '0', datatype: 'http://www.w3.org/2001/XMLSchema#integer'}}]},
+      };
+    }
+    if (sparql.startsWith('ASK') || sparql.includes('\nASK')) return {head: {}, boolean: false};
+    return {head: {vars: []}, results: {bindings: []}};
+  }
+
+  protected async executeSparqlUpdate(sparql: string): Promise<void> {
+    this.updates.push(sparql);
+  }
+
+  lastSelect(): string {
+    return this.selects[this.selects.length - 1];
+  }
+}
+
+const ontologies = () => Person.select((p) => p.name).from(graphs.allOntologies);
+
+describe('the store expands the graph set', () => {
+  test('graphs.allOntologies: every OntologyGraph the registry lists, sorted', async () => {
+    const store = new StubStore();
+    await ontologies().exec(store);
+    expect(store.lastSelect()).toBe(
+      `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name
+FROM NAMED <${ONT_A}>
+FROM NAMED <${ONT_B}>
+WHERE {
+  GRAPH ?g_a0 {
+    ?a0 rdf:type <${PERSON}> .
+  }
+  OPTIONAL {
+    GRAPH ?g_a0 {
+      ?a0 <${PROPS}name> ?a0_name .
+    }
+  }
+}`,
+    );
+    expect(store.registryLoads).toBe(1);
+  });
+
+  test('one listed graph reads as GRAPH <iri>; listed graphs join explicit ones', async () => {
+    const store = new StubStore();
+    store.registry = [[ONT_A, `${CORE}OntologyGraph`]];
+    await ontologies().exec(store);
+    expect(store.lastSelect()).toContain(`GRAPH <${ONT_A}> {`);
+    await Person.select((p) => p.name).from([G1, graphs.allOntologies]).exec(store);
+    expect(store.lastSelect()).toContain(`FROM NAMED <${G1}>\nFROM NAMED <${ONT_A}>\n`);
+  });
+
+  test('no graph of that kind registered: the read matches nothing, without a query', async () => {
+    const store = new StubStore();
+    store.registry = [[DRAFTS, `${CORE}DraftGraph`]];
+    expect(await ontologies().exec(store)).toEqual([]);
+    expect(await Person.select().from(graphs.allShapes).toCount().exec(store)).toBe(0);
+    expect(await Person.select().from(graphs.allOntologies).exists(store)).toBe(false);
+    expect(store.selects).toEqual([]);
+    expect(store.registryLoads).toBe(1);
+  });
+
+  test('graphs.default alone reads the default graph as without .from()', async () => {
+    const store = new StubStore();
+    await Person.select((p) => p.name).from(graphs.default).exec(store);
+    const plain = selectToSparql(lower(Person.select((p) => p.name)));
+    expect(store.lastSelect()).toBe(plain);
+    expect(store.registryLoads).toBe(0);
+  });
+
+  test('graphs.default and graphs.union are read on their own only; union needs mapGraphName', async () => {
+    const jena = (iri: string) =>
+      iri === graphs.default ? 'urn:x-arq:DefaultGraph' : iri === graphs.union ? 'urn:x-arq:UnionGraph' : null;
+    const mapped = new StubStore({mapGraphName: jena});
+    for (const name of [graphs.default, graphs.union]) {
+      await expect(Person.select((p) => p.name).from([name, G1]).exec(mapped)).rejects.toMatchObject({
+        cause: {name: 'GraphQueryError', code: 'unsupported-query-kind'},
+      });
+    }
+    await Person.select((p) => p.name).from(graphs.union).exec(mapped);
+    expect(mapped.lastSelect()).toContain('GRAPH <urn:x-arq:UnionGraph> {');
+
+    const unmapped = new StubStore();
+    await expect(Person.select((p) => p.name).from(graphs.union).exec(unmapped)).rejects.toMatchObject({
+      cause: {name: 'GraphQueryError', code: 'unsupported-query-kind'},
+    });
+    const refusing = new StubStore({mapGraphName: () => null});
+    await expect(Person.select((p) => p.name).from(graphs.union).exec(refusing)).rejects.toThrow(/mapGraphName/);
+  });
+
+  test('the store option reaches the generator', async () => {
+    const on = new StubStore({isolateLinkedTypeChecks: true});
+    const off = new StubStore();
+    const q = Person.select((p) => [p.name, p.bestFriend.name]).from([G1, G2]);
+    await q.exec(on);
+    await q.exec(off);
+    expect(on.lastSelect()).toBe(off.lastSelect());
+  });
+});
+
+describe('the registry cache', () => {
+  test('a graph query through the store updates its cache: no re-read, the next read sees it', async () => {
+    const store = new StubStore();
+    await ontologies().exec(store);
+    expect(store.registryLoads).toBe(1);
+
+    await OntologyGraph.create({id: ONT_C, package: '@acme/c', version: '1.0.0'}).exec(store);
+    await ontologies().exec(store);
+    expect(store.registryLoads).toBe(1);
+    expect(store.lastSelect()).toContain(`FROM NAMED <${ONT_C}>`);
+
+    await OntologyGraph.delete(ONT_A).exec(store);
+    await ontologies().exec(store);
+    expect(store.registryLoads).toBe(1);
+    expect(store.lastSelect()).not.toContain(ONT_A);
+    expect(store.lastSelect()).toContain(`FROM NAMED <${ONT_B}>\nFROM NAMED <${ONT_C}>\n`);
+  });
+
+  test('invalidateGraphRegistry forces a re-read', async () => {
+    const store = new StubStore();
+    await ontologies().exec(store);
+    store.registry = [[ONT_C, `${CORE}OntologyGraph`]];
+    await ontologies().exec(store);
+    expect(store.registryLoads).toBe(1);
+    store.invalidateGraphRegistry();
+    await ontologies().exec(store);
+    expect(store.registryLoads).toBe(2);
+    expect(store.lastSelect()).toContain(`GRAPH <${ONT_C}> {`);
+
+    // The package-level call, by dataset key; and with no key, every dataset.
+    const keyed = new StubStore(undefined, 'dataset-x');
+    await ontologies().exec(keyed);
+    invalidateGraphRegistry('dataset-x');
+    await ontologies().exec(keyed);
+    expect(keyed.registryLoads).toBe(2);
+    invalidateGraphRegistry();
+    await ontologies().exec(keyed);
+    await ontologies().exec(store);
+    expect(keyed.registryLoads).toBe(3);
+    expect(store.registryLoads).toBe(3);
+  });
+
+  test('stores keyed by the same dataset share one entry; others keep their own', async () => {
+    const first = new StubStore(undefined, 'shared-dataset');
+    const second = new StubStore(undefined, 'shared-dataset');
+    await ontologies().exec(first);
+    await ontologies().exec(second);
+    expect(first.registryLoads + second.registryLoads).toBe(1);
+    await OntologyGraph.create({id: ONT_C, package: '@acme/c', version: '1.0.0'}).exec(first);
+    await ontologies().exec(second);
+    expect(second.lastSelect()).toContain(`FROM NAMED <${ONT_C}>`);
+    const other = new StubStore();
+    await ontologies().exec(other);
+    expect(other.registryLoads).toBe(1);
+  });
+
+  test('an entry older than 30 seconds is re-read (fake clock)', async () => {
+    jest.useFakeTimers({now: 1_000_000});
+    try {
+      const store = new StubStore();
+      await ontologies().exec(store);
+      jest.setSystemTime(1_000_000 + GRAPH_REGISTRY_MAX_AGE_MS);
+      await ontologies().exec(store);
+      expect(store.registryLoads).toBe(1);
+      jest.setSystemTime(1_000_000 + GRAPH_REGISTRY_MAX_AGE_MS + 1);
+      await ontologies().exec(store);
+      expect(store.registryLoads).toBe(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('concurrent reads share one load; an invalidation during a load is not undone by it', async () => {
+    const store = new StubStore();
+    await Promise.all([ontologies().exec(store), ontologies().exec(store), ontologies().exec(store)]);
+    expect(store.registryLoads).toBe(1);
+
+    const racing = new StubStore(undefined, 'racing');
+    const pending = readGraphRegistry('racing', async () => [{graph: ONT_A, recordClass: `${CORE}OntologyGraph`}]);
+    invalidateGraphRegistry('racing');
+    await pending;
+    await ontologies().exec(racing);
+    expect(racing.registryLoads).toBe(1);
   });
 });
