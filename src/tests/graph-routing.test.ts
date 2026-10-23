@@ -16,6 +16,12 @@ import {SparqlDataset} from '../sparql/SparqlDataset';
 import type {SparqlCompileOptions, SparqlOptions} from '../sparql/sparqlUtils';
 import type {SparqlQueryResults} from '../sparql/resultMapping';
 import {NamedGraph} from '../shapes/NamedGraph';
+import {GRAlbum, GRPanorama, GRPhoto} from '../test-helpers/graph-routing-fixtures';
+import {CreateBuilder} from '../queries/CreateBuilder';
+import {UpdateBuilder} from '../queries/UpdateBuilder';
+import {DeleteBuilder} from '../queries/DeleteBuilder';
+import {fromJSON} from '../queries/fromJSON';
+import {isGraphQueryError} from '../queries/graphQuery';
 import {LinkedStorage} from '../utils/LinkedStorage';
 import {
   getShapeGraphs,
@@ -375,3 +381,120 @@ describe('routed reads through the store', () => {
     expect(store.selects).toEqual([]);
   });
 });
+
+describe('routed writes', () => {
+  const G_ALBUMS = 'https://acme.example/data/graph/albums';
+  const G_PANORAMAS = 'https://acme.example/data/graph/panoramas';
+  const ALBUM = 'https://acme.example/data/album/1';
+
+  /** A store with albums (and their owned photos) routed to the albums graph, panoramas elsewhere. */
+  const routedStore = () => {
+    const store = new CaptureStore({mapGraphName: jena});
+    setShapeGraphs(store, {[GRAlbum.shape.id]: G_ALBUMS, [GRPanorama.shape.id]: G_PANORAMAS});
+    return store;
+  };
+  const lastUpdate = (store: CaptureStore) => store.updates[store.updates.length - 1];
+
+  test('create, update, upsert and every delete write in the routed graph', async () => {
+    const store = routedStore();
+    await GRAlbum.create({title: 'A'}).exec(store);
+    expect(lastUpdate(store)).toMatch(new RegExp(`^INSERT DATA \\{\\n  GRAPH <${G_ALBUMS}> \\{`, 'm'));
+    await GRAlbum.update({title: 'B'}).for({id: ALBUM}).exec(store);
+    expect(lastUpdate(store)).toMatch(new RegExp(`^WITH <${G_ALBUMS}>\\nDELETE`, 'm'));
+    await GRAlbum.upsert({title: 'C'}).for({id: ALBUM}).exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+    await UpdateBuilder.from(GRAlbum).set({title: 'D'}).forAll().exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+    await GRAlbum.delete({id: ALBUM}).exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+    await DeleteBuilder.from(GRAlbum).all().exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+    await DeleteBuilder.from(GRAlbum).where((a) => a.title.equals('x')).exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+  });
+
+  test('an unrouted shape, and a store without routes, write the default graph exactly as before', async () => {
+    const plain = new CaptureStore({mapGraphName: jena});
+    const store = routedStore();
+    for (const s of [plain, store]) await Person.update({name: 'x'}).for({id: ALBUM}).exec(s);
+    expect(lastUpdate(store)).toBe(lastUpdate(plain));
+    expect(lastUpdate(store)).not.toContain('WITH');
+    expect(lastUpdate(store)).not.toContain('GRAPH');
+  });
+
+  test('a sub-shape without a route writes its super-shape graph; a routed one its own', async () => {
+    const store = new CaptureStore({mapGraphName: jena});
+    setShapeGraphs(store, {[GRPhoto.shape.id]: G_ALBUMS, [GRPanorama.shape.id]: G_PANORAMAS});
+    await GRPanorama.create({caption: 'wide'}).exec(store);
+    expect(lastUpdate(store)).toContain(`GRAPH <${G_PANORAMAS}> {`);
+    setShapeGraphs(store, {[GRPanorama.shape.id]: graphs.default});
+    await GRPanorama.create({caption: 'wide'}).exec(store);
+    expect(lastUpdate(store)).toContain(`GRAPH <${G_ALBUMS}> {`);
+  });
+
+  test('a nested (owned) create goes into the owner graph; the owned-link check reads that graph', async () => {
+    const store = routedStore();
+    await GRAlbum.create({title: 'A', cover: {caption: 'front'}}).exec(store);
+    const insert = lastUpdate(store);
+    expect(insert.match(/GRAPH </g)).toHaveLength(1);
+    expect(insert).toContain(`${GR('caption')}> "front"`);
+    await GRAlbum.update({cover: {id: 'https://acme.example/data/photo/9'}}).for({id: ALBUM}).exec(store);
+    const check = store.selects.find((q) => q.startsWith('SELECT ?id ?type'));
+    expect(check).toBe(
+      `SELECT ?id ?type WHERE { VALUES ?id { <https://acme.example/data/photo/9> } GRAPH <${G_ALBUMS}> { ?id <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type } }`,
+    );
+  });
+
+  test('.into() a graph the routing allows for the shape (its read set)', async () => {
+    const store = new CaptureStore({mapGraphName: jena});
+    setShapeGraphs(store, {[GRPhoto.shape.id]: G_ALBUMS, [GRPanorama.shape.id]: G_PANORAMAS});
+    // A photo's routed reads cover its own graph and its sub-shape's.
+    await GRPhoto.create({caption: 'x'}).into(G_PANORAMAS).exec(store);
+    expect(lastUpdate(store)).toContain(`GRAPH <${G_PANORAMAS}> {`);
+    await GRPhoto.update({caption: 'y'}).for({id: ALBUM}).into(G_PANORAMAS).exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_PANORAMAS}>`);
+    await GRPhoto.delete({id: ALBUM}).into(G_ALBUMS).exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+    // Kept through later fluent calls.
+    await CreateBuilder.from(GRPhoto).into(G_PANORAMAS).set({caption: 'z'}).exec(store);
+    expect(lastUpdate(store)).toContain(`GRAPH <${G_PANORAMAS}> {`);
+  });
+
+  test('.into() a graph the routing forbids, a portable name, the registry or a store name is refused before any write', async () => {
+    const store = routedStore();
+    const refusal = async (p: Promise<unknown>, code: string) => {
+      const err = await p.then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      const cause = (err as {cause?: unknown})?.cause ?? err;
+      expect(isGraphQueryError(cause, code as never)).toBe(true);
+    };
+    await refusal(GRAlbum.create({title: 'x'}).into(G_PANORAMAS).exec(store), 'graph-not-routed');
+    await refusal(Person.create({name: 'x'}).into(G_ALBUMS).exec(store), 'graph-not-routed');
+    await refusal(GRAlbum.create({title: 'x'}).into(graphs.allOntologies).exec(store), 'graph-name-read-only');
+    await refusal(GRAlbum.create({title: 'x'}).into(graphs.registry).exec(store), 'graph-name-read-only');
+    await refusal(GRAlbum.create({title: 'x'}).into('urn:x-arq:UnionGraph').exec(store), 'graph-name-read-only');
+    expect(store.updates).toEqual([]);
+    // The default graph is allowed where the shape reads it.
+    await Person.create({name: 'x'}).into(graphs.default).exec(store);
+    expect(lastUpdate(store)).not.toContain('GRAPH');
+  });
+
+  test('DSL-JSON never carries a write graph; a received one is ignored and the receiver routes', async () => {
+    const builder = GRAlbum.update({title: 'x'}).for({id: ALBUM}).into(G_PANORAMAS);
+    const json = builder.toJSON();
+    expect(JSON.stringify(json)).not.toContain(G_PANORAMAS);
+    expect(JSON.stringify(GRAlbum.create({title: 'x'}).into(G_PANORAMAS).toJSON())).not.toContain(G_PANORAMAS);
+    expect(JSON.stringify(GRAlbum.delete({id: ALBUM}).into(G_PANORAMAS).toJSON())).not.toContain(G_PANORAMAS);
+    const forged = {...json, graph: G_PANORAMAS, into: G_PANORAMAS};
+    const store = routedStore();
+    await (fromJSON(forged as never) as UpdateBuilder).exec(store);
+    expect(lastUpdate(store)).toContain(`WITH <${G_ALBUMS}>`);
+    expect(lastUpdate(store)).not.toContain(G_PANORAMAS);
+  });
+});
+
+function GR(local: string): string {
+  return `https://example.org/graph-routing/${local}`;
+}

@@ -148,11 +148,15 @@ export function collectOwnedLinks(ir: OwnedLinkMutation): OwnedLink[] {
 }
 
 /** `SELECT ?id ?type WHERE { VALUES ?id { … } ?id rdf:type ?type }` for the distinct ids. */
-export function ownedLinkTypesQuery(ids: string[]): string {
+export function ownedLinkTypesQuery(ids: string[], graph?: string): string {
   const distinct = [...new Set(ids)];
   for (const id of distinct) assertSafeIri(id);
   const values = distinct.map((id) => `<${id}>`).join(' ');
-  return `SELECT ?id ?type WHERE { VALUES ?id { ${values} } ?id <${RDF_TYPE}> ?type }`;
+  const typeTriple = `?id <${RDF_TYPE}> ?type`;
+  if (graph === undefined) return `SELECT ?id ?type WHERE { VALUES ?id { ${values} } ${typeTriple} }`;
+  // In the graph the mutation writes: an owned node lives in its owner's graph.
+  assertSafeIri(graph);
+  return `SELECT ?id ?type WHERE { VALUES ?id { ${values} } GRAPH <${graph}> { ${typeTriple} } }`;
 }
 
 /** The `rdf:type`s per id from the answer to {@link ownedLinkTypesQuery}. */

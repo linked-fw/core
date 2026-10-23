@@ -344,8 +344,50 @@ export abstract class SparqlDataset implements IDataset {
     return mapSparqlAskResult(json);
   }
 
+  /**
+   * The mutation IR to compile, with the graph it writes: its `.into()` graph when the routing
+   * allows it for the mutation's shape (the shape's routed read set, where the shape's reads find
+   * it), else the shape's routed graph; the default graph leaves the IR as it was (no `graph`).
+   *
+   * Refused: `.into()` a portable graph name or the registry (`graph-name-read-only`), a
+   * store-reserved name (`graph-name-read-only`), a graph the routing does not allow for the
+   * shape (`graph-not-routed`).
+   */
+  protected resolveWriteGraph<T extends {shape: string; graph?: string}>(ir: T): T {
+    const routing = this.graphRouting();
+    const requested = ir.graph;
+    let target: string;
+    if (requested !== undefined && requested !== graphs.default) {
+      assertGraphWritable(requested);
+      if (this.isReservedGraphName(requested)) {
+        throw new GraphQueryError(
+          'graph-name-read-only',
+          `<${requested}> is a name this store reserves for its own graphs; it can be read, never written.`,
+          requested,
+        );
+      }
+      target = requested;
+    } else {
+      target = requested ?? routing?.graphForShape(ir.shape) ?? graphs.default;
+    }
+    if (requested !== undefined) {
+      const allowed = routing?.readGraphsForShape(ir.shape) ?? [graphs.default];
+      if (!allowed.includes(target)) {
+        throw new GraphQueryError(
+          'graph-not-routed',
+          `.into(<${requested}>): the graph routing of this store does not allow that graph for ` +
+            `<${ir.shape}>; it allows ${allowed.map((g) => `<${g}>`).join(', ')}.`,
+          requested,
+        );
+      }
+    }
+    const {graph: _requested, ...rest} = ir;
+    const out = (target === graphs.default ? rest : {...rest, graph: target}) as T;
+    return attachCatalog(out, catalogOf(ir));
+  }
+
   async createQuery(query: CreateQuery): Promise<CreateResult> {
-    const ir = lower(query);
+    const ir = this.resolveWriteGraph(lower(query));
     const uri = ir.data.id || generateEntityUri(ir.data.shape, this.options);
     ir.data.id = uri;
     await this.checkOwnedLinks(ir);
@@ -355,7 +397,7 @@ export abstract class SparqlDataset implements IDataset {
   }
 
   async updateQuery(query: UpdateQuery): Promise<UpdateResult> {
-    const ir = lower(query);
+    const ir = this.resolveWriteGraph(lower(query));
     await this.checkOwnedLinks(ir);
     if (ir.kind === 'update_where') {
       const sparql = updateWhereToSparql(ir, this.options);
@@ -375,7 +417,7 @@ export abstract class SparqlDataset implements IDataset {
    * (see `ownedLinkCheck.ts`). An owner deletes what it contains, so a Person linked into
    * an ImageObject slot would be deleted with its owner. Runs before the update is sent, so
    * a refused mutation writes nothing. With no such link no query is sent; otherwise one
-   * SELECT covers every linked id.
+   * SELECT covers every linked id, read in the graph the mutation writes.
    */
   protected async checkOwnedLinks(
     ir: IRCreateMutation | IRUpdateMutation | IRUpsertMutation | IRUpdateWhereMutation,
@@ -383,13 +425,16 @@ export abstract class SparqlDataset implements IDataset {
     const links = collectOwnedLinks(ir);
     if (links.length === 0) return;
     const json = await this.executeSparqlSelect(
-      ownedLinkTypesQuery(links.map((link) => link.id)),
+      ownedLinkTypesQuery(
+        links.map((link) => link.id),
+        ir.graph,
+      ),
     );
     assertOwnedLinkTypes(links, ownedLinkTypesFromResults(json));
   }
 
   async deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
-    const ir = lower(query);
+    const ir = this.resolveWriteGraph(lower(query));
     if (ir.kind === 'delete_all') {
       const sparql = deleteAllToSparql(ir, this.options);
       await this.executeSparqlUpdate(sparql);

@@ -34,6 +34,8 @@ interface DeleteBuilderInit<S extends Shape> {
   whereFn?: WhereClause<S>;
   /** A pre-resolved where path (used by fromJSON; no live callback). */
   where?: WherePath;
+  /** The graph `.into()` names; never serialized. */
+  into?: string;
 }
 
 /**
@@ -56,6 +58,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
   private readonly _mode?: DeleteMode;
   private readonly _whereFn?: WhereClause<S>;
   private readonly _where?: WherePath;
+  private readonly _into?: string;
 
   private readonly _catalog: ShapeCatalog | undefined;
 
@@ -67,6 +70,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     this._mode = init.mode;
     this._whereFn = init.whereFn;
     this._where = init.where;
+    this._into = init.into;
   }
 
   private clone(overrides: Partial<DeleteBuilderInit<S>> = {}): DeleteBuilder<S, any> {
@@ -76,6 +80,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
       mode: this._mode,
       whereFn: this._whereFn,
       where: this._where,
+      into: this._into,
       catalog: this._catalog,
       ...overrides,
     });
@@ -150,11 +155,29 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     return this._catalog;
   }
 
+  /**
+   * Write into `graph` instead of the graph the store's routing picks for this shape. Server-side
+   * only: the graph is never carried in DSL-JSON (a receiving process derives the graph itself),
+   * and the store refuses a graph its routing does not allow for the shape (its routed read set:
+   * the shape's graph and its sub-shapes' graphs) with `GraphQueryError('graph-not-routed')`.
+   */
+  into(graph: string): DeleteBuilder<S, R> {
+    if (typeof graph !== 'string' || !graph) {
+      throw new Error('.into() takes a graph IRI.');
+    }
+    return this.clone({into: graph}) as unknown as DeleteBuilder<S, R>;
+  }
+
   /** @internal The IR-free lowering spec consumed by `lower()`. Validates inputs. */
   _lowerSpec(): DeleteLowerSpec<S> {
+    const spec = this._lowerSpecWithoutGraph();
+    return this._into === undefined ? spec : {...spec, into: this._into};
+  }
+
+  private _lowerSpecWithoutGraph(): DeleteLowerSpec<S> {
     const catalog = this._catalog;
     if (catalog !== getActiveShapeCatalog()) {
-      return withShapeCatalog(catalog, () => this._lowerSpec());
+      return withShapeCatalog(catalog, () => this._lowerSpecWithoutGraph());
     }
     const mode = this._mode || (this._ids ? 'ids' : undefined);
 

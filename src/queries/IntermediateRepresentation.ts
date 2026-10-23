@@ -305,6 +305,11 @@ export type IRExistsExpression = {
 export type IRCreateMutation = {
   kind: 'create';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
   data: IRNodeData;
 };
 
@@ -317,6 +322,11 @@ export type IRTraversalPattern = {
 export type IRUpdateMutation = {
   kind: 'update';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
   id: string;
   data: IRNodeData;
   traversalPatterns?: IRTraversalPattern[];
@@ -338,6 +348,11 @@ export type IRUpdateMutation = {
 export type IRUpsertMutation = {
   kind: 'upsert';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
   id: string;
   data: IRNodeData;
   traversalPatterns?: IRTraversalPattern[];
@@ -346,17 +361,32 @@ export type IRUpsertMutation = {
 export type IRDeleteMutation = {
   kind: 'delete';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
   ids: NodeReferenceValue[];
 };
 
 export type IRDeleteAllMutation = {
   kind: 'delete_all';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
 };
 
 export type IRDeleteWhereMutation = {
   kind: 'delete_where';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
   where: IRExpression;
   wherePatterns: IRGraphPattern[];
 };
@@ -364,6 +394,11 @@ export type IRDeleteWhereMutation = {
 export type IRUpdateWhereMutation = {
   kind: 'update_where';
   shape: string;
+  /**
+   * The named graph the mutation writes (`.into()`, or set by the store from its graph routing);
+   * absent = the default graph. Never carried in DSL-JSON: a receiving process derives it.
+   */
+  graph?: string;
   data: IRNodeData;
   where?: IRExpression;
   wherePatterns?: IRGraphPattern[];

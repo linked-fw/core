@@ -20,6 +20,8 @@ export interface CreateLowerSpec<S extends Shape = Shape> {
   shapeClass: ShapeConstructor<S>;
   /** The create data, with any fixed id already injected as `__id`. */
   data: UpdatePartial<S>;
+  /** The graph `.into()` names (server-side only; never serialized). */
+  into?: string;
 }
 
 export interface UpdateLowerSpec<S extends Shape = Shape> {
@@ -32,6 +34,8 @@ export interface UpdateLowerSpec<S extends Shape = Shape> {
   wherePath?: WherePath;
   /** Create-or-replace: lowers to an upsert mutation. Only valid with mode 'for'. */
   upsert?: boolean;
+  /** The graph `.into()` names (server-side only; never serialized). */
+  into?: string;
 }
 
 export interface DeleteLowerSpec<S extends Shape = Shape> {
@@ -40,4 +44,6 @@ export interface DeleteLowerSpec<S extends Shape = Shape> {
   ids?: (NodeId | PendingQueryContext)[];
   mode: 'ids' | 'all' | 'where';
   wherePath?: WherePath;
+  /** The graph `.into()` names (server-side only; never serialized). */
+  into?: string;
 }

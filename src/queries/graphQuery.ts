@@ -43,13 +43,16 @@ export function isGraphQueryKind(kind: unknown): kind is GraphQueryKind {
  * - `unsupported-query-kind`: the dataset has no graph support (or not for this graph or kind);
  * - `graph-not-registered`: a replace or patch of a graph with no registry record;
  * - `graph-name-read-only`: a write to a portable graph name or to the registry itself;
- * - `graph-exists`: a create of a graph that is already registered.
+ * - `graph-exists`: a create of a graph that is already registered;
+ * - `graph-not-routed`: a mutation's `.into()` names a graph the store's graph routing does not
+ *   allow for its shape.
  */
 export type GraphQueryErrorCode =
   | 'unsupported-query-kind'
   | 'graph-not-registered'
   | 'graph-name-read-only'
-  | 'graph-exists';
+  | 'graph-exists'
+  | 'graph-not-routed';
 
 /** A refused graph query. Recognised across copies of core with {@link isGraphQueryError}. */
 export class GraphQueryError extends Error {

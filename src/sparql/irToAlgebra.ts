@@ -2096,6 +2096,17 @@ function generateNodeDataTriples(
 }
 
 /**
+ * A mutation plan writing into `graph` (the mutation's `.into()` graph or the store's routed one):
+ * `INSERT DATA { GRAPH <g> { … } }`, or `WITH <g>` before a DELETE/INSERT, which makes the graph
+ * the target of both templates and the dataset of the WHERE, so an update's old values, a
+ * delete's incoming references and an owned walk are all read and removed in that graph only.
+ * Without a graph the plan is unchanged (the default graph).
+ */
+function inGraph<P extends SparqlInsertDataPlan | SparqlDeleteInsertPlan>(plan: P, graph: string | undefined): P {
+  return graph === undefined ? plan : {...plan, graph};
+}
+
+/**
  * Converts an IRCreateMutation to a SparqlInsertDataPlan.
  */
 export function createToAlgebra(
@@ -2107,10 +2118,8 @@ export function createToAlgebra(
     return withShapeCatalog(catalog, () => createToAlgebra(query, options));
   }
   const {triples} = generateNodeDataTriples(query.data, options, {next: 0});
-  return {
-    type: 'insert_data',
-    triples,
-  };
+  const plan: SparqlInsertDataPlan = {type: 'insert_data', triples};
+  return inGraph(plan, query.graph);
 }
 
 // ---------------------------------------------------------------------------
@@ -2431,7 +2440,7 @@ export function updateToAlgebra(
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => updateToAlgebra(query, options));
   }
-  return buildDeleteInsertPlan(query, options);
+  return inGraph(buildDeleteInsertPlan(query, options), query.graph);
 }
 
 /**
@@ -2451,11 +2460,11 @@ export function upsertToAlgebra(
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => upsertToAlgebra(query, options));
   }
-  return buildDeleteInsertPlan(query, options, {
+  return inGraph(buildDeleteInsertPlan(query, options, {
     // Must match the IRI `create` asserts and `select` scans for; the raw shape id is
     // not the same thing, and a node typed with it would be invisible to queries.
     ensureType: resolveShapeScanIri(query.shape),
-  });
+  }), query.graph);
 }
 
 /**
@@ -3400,12 +3409,12 @@ export function deleteToAlgebra(
     right: unionOf(blocks),
   };
 
-  return {
+  return inGraph({
     type: 'delete_insert',
     deletePatterns,
     insertPatterns: [],
     whereAlgebra,
-  };
+  }, query.graph);
 }
 
 /**
@@ -3470,12 +3479,12 @@ export function deleteAllToAlgebra(
     ? {type: 'join', left: {type: 'bgp', triples: [typeTriple]}, right: union}
     : {type: 'bgp', triples: [typeTriple, rootWildcard]};
 
-  return {
+  return inGraph({
     type: 'delete_insert',
     deletePatterns,
     insertPatterns: [],
     whereAlgebra,
-  };
+  }, query.graph);
 }
 
 /**
@@ -3538,12 +3547,12 @@ export function deleteWhereToAlgebra(
     whereAlgebra = {type: 'join', left: whereAlgebra, right: union};
   }
 
-  return {
+  return inGraph({
     type: 'delete_insert',
     deletePatterns,
     insertPatterns: [],
     whereAlgebra,
-  };
+  }, query.graph);
 }
 
 /**
@@ -3599,12 +3608,12 @@ export function updateWhereToAlgebra(
   // that split for both update paths.
   whereAlgebra = buildUpdateWhere(whereAlgebra, result, query.traversalPatterns, subjectTerm);
 
-  return {
+  return inGraph({
     type: 'delete_insert',
     deletePatterns: result.deletePatterns,
     insertPatterns: result.insertPatterns,
     whereAlgebra,
-  };
+  }, query.graph);
 }
 
 // ---------------------------------------------------------------------------
