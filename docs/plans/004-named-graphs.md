@@ -26,8 +26,8 @@ Integration branch: `named-graphs` (this repository's main checkout
 merge --ff-only named-graphs--<step>`, then `npx linked build` in that main checkout. No PR per
 step; one release PR per phase (master R1, R2).
 
-Records: K1 → report 048, K2 → 049, K3 → 050, K4 → 051, K5 → 052 (`docs/reports/`). Backlog
-follow-ups from 063 (K5: from 068).
+Records: K1 → report 048, K2 → 049, K3 → 050, K4 → 051, K5 → 052, K6 → 053 (`docs/reports/`). Backlog
+follow-ups from 063 (K5: from 068; K6: 069).
 
 ## Contracts
 
@@ -873,3 +873,98 @@ labels scoped per create in the writer; the root `Shape` inheritance went into t
 readers (`inheritedShapes`), not `getSuperShapes`. Backlog 068 records default-graph shapes of
 removed packages. Full gate: 2659 passed, 352/352 `[fuseki]`; `two-copies-built` still fails
 (backlog 060).
+
+## K6 — routing forms (`'own'`, `dataGraph()`); the datasets config's `graphs` key removed
+
+Master §Open questions 5 ("1a decided", "1c-i", "1c-ii", "New steps") is the scope; this is its
+plan-mode detail, written against `named-graphs` at `200037d` (K5 landed). Line numbers drift;
+search for the symbol.
+
+### Contract (provided; master §Contracts "Graph routing", as amended by open question 5)
+
+- Graph routing lives only in code (`linked.backend.storage.ts`, arch-04 Layer 1). The datasets
+  config keeps endpoints and credentials; its per-alias `graphs` key is gone (it was never
+  released).
+- A route states intent: `setDatasetForShapes(ds, shapes, {graph: 'own'})` →
+  `{DATA_ROOT}/graph/{package slug}/{shape name}`; `{graph: dataGraph('slug')}` →
+  `{DATA_ROOT}/graph/{slug}`; both resolved with the store's `DATA_ROOT`. A full graph IRI stays
+  accepted (advanced use). Per-instance graph functions are a backlog item.
+
+### How it works (inside the contract)
+
+- **`DATA_ROOT` source.** The one a store already mints ids under (`generateEntityUri`):
+  the store's `SparqlOptions.dataRoot`, else `process.env.DATA_ROOT`. A dataset exposes its own
+  through a new optional `IDataset.dataRoot?()` (`SparqlDataset.dataRoot()` returns
+  `options.dataRoot`; CN's `AppDataFusekiStore` sets that option to the project's app data root
+  once resolved); `dataRootOf(dataset)` falls back to the env, trims it and drops trailing
+  slashes (as the server's `appShapesGraph` does). No `example.org` fallback: an intent route on a
+  dataset with no root is refused when it is resolved, with an error naming the shape.
+- **When it resolves.** `setShapeGraphs` checks the route and, for `'own'`, derives the path
+  under the root at once (the shape must be registered then); the root is joined in
+  `graphRoutingFor(dataset)`, which every read, write, `.into()` check and live-query dependency
+  calls, so a root the store learns later (CN resolves it lazily) is the one used. The table keeps
+  either an absolute IRI or a root-relative path.
+- **The `'own'` rule.** `{root}/graph/{packageNameToSlug(packageName)}/{shape name}`: the package is
+  the one the shape class was registered by (`linkedPackage(name)`, the class's `packageName`), its
+  slug is arch-02's (scope dropped, runs of non-alphanumerics → `-`, trimmed, lower-cased:
+  `@acme/news-site` → `news-site`); the shape name is the shape IRI's last path segment (the
+  `@linkedShape({name})` or the class name, case kept: `Article`). A shape with no registered
+  package is refused. A sub-shape without a route of its own inherits the routed super-shape's
+  graph (unchanged rule), so `'own'` on `Article` puts an unrouted `NewsArticle` in `…/Article`.
+- **`dataGraph(slug)`** (in `ontologies/graphs.ts`, next to `graphs`, and the index): returns a
+  frozen `{dataGraph: slug}`; the slug is one or more `/`-separated segments, each
+  `^[a-z0-9]+(?:-[a-z0-9]+)*$` (arch-02's slug rule); anything else throws (no silent
+  normalisation of a name the developer chose).
+- **The JSON key.** `parseDatasetsConfig` no longer knows `graphs` (unknown alias keys pass through,
+  as before); `loadStores` no longer applies it and warns once per alias that has one, pointing to
+  `setDatasetForShapes`. `DatasetEntry.graphs` leaves the type.
+
+### Files
+
+| File | What changes |
+|---|---|
+| `src/ontologies/graphs.ts` | `dataGraph(slug)`, `DataGraphRoute`, `OWN_GRAPH`, `GraphRoute`, `isDataGraphRoute` |
+| `src/utils/graphRouting.ts` | routes accept `GraphRoute`; `'own'` path from the registration; root-relative entries joined in `graphRoutingFor`; `dataRootOf(dataset)`; `getShapeGraphs` returns resolved IRIs |
+| `src/utils/LinkedStorage.ts` | `setDatasetForShapes(…, {graph?: GraphRoute})` |
+| `src/interfaces/IDataset.ts`, `src/sparql/SparqlDataset.ts` | optional `dataRoot()`; `SparqlDataset.dataRoot()` |
+| `src/utils/parseDatasetsConfig.ts`, `src/utils/loadStores.ts` | the `graphs` key removed; a warning when present |
+| `src/index.ts` | export `dataGraph` (and its types) next to `graphs`, `dataRootOf` |
+| `src/tests/graph-routing.test.ts` | golden IRIs for `'own'` and `dataGraph`; refusals; the JSON key ignored |
+| `src/tests/graph-routing-fuseki.test.ts` | `[fuseki]`: a write and read through `'own'` |
+| `docs/architecture/ontologies.md` | routing forms; no config key |
+| `docs/backlog/069-per-instance-graph-functions.md` (new) | per-instance graph functions |
+| `.changeset/graph-routing.md`, `.changeset/graph-routing-forms.md` (new) | the config mention dropped; minor with the breaking list |
+| `docs/reports/053-graph-routing-forms.md` (new) | the record |
+
+### Pitfalls
+
+- **CN still reads the key.** CN's C3 `parseAppGraphRoutes` passes the clone's `graphs` through
+  core's `parseDatasetsConfig` and reads it back; ignoring (not refusing) the key keeps that working
+  at run time; its `DatasetEntry.graphs` type access is C6's to remove.
+- **The root is per store.** Never cache a resolved IRI in the table; resolve per routing object.
+- **No root, no guess.** Unlike `generateEntityUri`, no `example.org` fallback.
+- **Two copies.** The `'own'` lookup reads the shared registry (`getRegisteredShapeClass`) by IRI.
+- **Published dependents.** No export is removed; `DatasetEntry.graphs` and the key were never
+  released (core 2.38.1 has neither).
+
+### Tests
+
+- Quick gate (after each phase), with the env below exported first:
+  `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs <files>`, plus
+  `npm run typecheck`.
+- Full gate (before landing): `npm test` (jest; `two-copies-built` is backlog 060), `npm run
+  typecheck`, `npm run test:fuseki`, `npm run check:dts`, `npx linked build`.
+- Isolation: `FUSEKI_TEST_PORT=3190`, `FUSEKI_BASE_URL=http://localhost:3190`,
+  `LINKED_CORE_TEST_COMPOSE_PROJECT=fuseki-071-k6`, `LINKED_FUSEKI_IMAGE=ghcr.io/linked-fw/fuseki:6.2.0-2`.
+- Verify: golden IRIs for `'own'` and `dataGraph` (store root, env root, trailing slash, no root
+  refused, unregistered package refused, bad slug refused); a routed write and read via `'own'` on
+  Fuseki; the JSON `graphs` key is ignored with a warning and routes nothing.
+
+### Phases
+
+1. **The JSON key removed:** parser, `loadStores`, tests. Quick gate: `graph-routing`,
+   `load-stores-loader`, `dataset-pin-identity`.
+2. **Routing forms:** `dataGraph`, `'own'`, `dataRootOf`, `dataRoot()`, exports, golden tests.
+   Quick gate: `graph-routing`, `dataset-pin-identity`, `read-graphs`.
+3. **Live store, docs and record:** `[fuseki]` test, `ontologies.md`, backlog 069, changesets,
+   report 053, Outcome; full gate.
