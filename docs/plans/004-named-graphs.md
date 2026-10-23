@@ -98,6 +98,14 @@ interface GraphResult { graph: string; contentHash?: string; modified?: string; 
 - Refusals (typed, branded with `linkedError`): `unsupported-query-kind` (store), `graph-not-registered`
   (replace or patch of a graph with no record), `graph-name-read-only` (any write to a portable
   name or to `graphs.registry` itself), `graph-exists` (create of a registered graph).
+  Store-native names are refused the same way: `SparqlDataset` has a protected hook
+  `isReservedGraphName(iri): boolean`, checked on every graph write before any SPARQL is built;
+  the default refuses the `urn:x-arq:` prefix (Jena's `DefaultGraph`, `UnionGraph`), and a store
+  extends it (F2's `FusekiStore` keeps the default; another store adds its own names). Decided
+  2026-10-23 on K1's review.
+- `feedsHierarchy` is an `OntologyGraph` field, not settable on `DraftGraph`/`ShapesGraph`
+  (always false there). `replaceContent`/`patchContent` through a subclass check the stored
+  record's class (`graph-not-registered` when it differs); `NamedGraph.*` accepts any record.
 - Automatic record fields: `sd:name`, `core:contentHash` = `sha256Hex` of the content text (or the
   caller's `contentHash`), `dcterms:modified` = now; `feedsHierarchy` default: `OntologyGraph`
   true, `ShapesGraph`, `DraftGraph` false.
@@ -190,11 +198,14 @@ Master §K1 is the scope; this is its plan-mode detail. Found in the code at `na
 
 ### `SparqlDataset.graphQuery`
 
-1. `assertGraphWritable(q.graph)` (portable names and the registry → `graph-name-read-only`).
+1. `assertGraphWritable(q.graph)` (an absolute IRI; portable names and the registry →
+   `graph-name-read-only`), then `isReservedGraphName(q.graph)` (default: `urn:x-arq:` →
+   `graph-name-read-only`).
 2. Kinds other than the four → `unsupported-query-kind`.
 3. `graph_create`, `graph_replace`, `graph_patch`: one `ASK { GRAPH <registry> { <g> <sd:name> <g> } }`;
    create on a registered graph → `graph-exists`; replace or patch on an unregistered one →
-   `graph-not-registered`. (The check and the write are two requests; the write itself is one
+   `graph-not-registered`. Through a record class other than `sd:NamedGraph` the ASK also
+   requires `a <recordClass>`, so a record of another class is `graph-not-registered`. (The check and the write are two requests; the write itself is one
    update and one transaction. A concurrent create between them is the only race, and it ends in
    two identical records being written over each other.)
 4. One update per call:

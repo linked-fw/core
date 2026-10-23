@@ -214,8 +214,8 @@ The record's class is the graph's kind, a built-in shape in `@_linked/core/shape
 `sources`), `OntologyGraph` and `ShapesGraph` (adding `package`, `version`) and `DraftGraph`, each
 class `rdfs:subClassOf sd:NamedGraph` in `core.ttl`. Selecting `NamedGraph` returns every kind's
 records through the store's inference; its `select()` reads the registry (the shapes declare
-`static storedInGraph`), so callers never name it. `feedsHierarchy` defaults per class
-(`OntologyGraph` true, the others false); a store that builds its hierarchy from the registry reads
+`static storedInGraph`), so callers never name it. `feedsHierarchy` is true for an
+`OntologyGraph` unless its creator sets it false, and always false for the other kinds; a store that builds its hierarchy from the registry reads
 it to decide which graphs feed inference.
 
 Package graphs are `{package IRI}/graph/{kind}` (`OntologyGraph.iriFor('@_linked/schema')` →
@@ -247,7 +247,8 @@ arrived as JSON with `parseGraphQuery`.
 `graphs.allOntologies`, `graphs.allShapes` and `graphs.registry`, under
 `https://linked.cm/pkg/core/graph/`. A store maps them to its own names; every write to one is
 refused (`graph-name-read-only`), the registry included: it is written only as part of a graph
-query on another graph.
+query on another graph. A store also refuses its own reserved names (`SparqlDataset`'s
+`isReservedGraphName`, by default Jena's `urn:x-arq:` names).
 
 ## A package that mirrors a standard
 

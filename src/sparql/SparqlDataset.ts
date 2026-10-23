@@ -24,6 +24,7 @@ import {
   isGraphQueryKind,
   unsupportedGraphQuery,
 } from '../queries/graphQuery.js';
+import {sd} from '../ontologies/sd.js';
 import {getGraphRecordClass, graphContentHash, hasPatchBody} from '../queries/graphRecords.js';
 import {
   graphQueryBodies,
@@ -258,13 +259,36 @@ export abstract class SparqlDataset implements IDataset {
    * sent inside the update rather than by the Graph Store Protocol: a GSP `PUT` and the record's
    * update would be two transactions.
    */
+  /**
+   * Whether `iri` names a graph of the store itself, which a graph query never writes. Checked on
+   * every graph query before any SPARQL is built. The default refuses Jena's `urn:x-arq:` names
+   * (`urn:x-arq:DefaultGraph` is the real default graph; an insert into `urn:x-arq:UnionGraph`
+   * creates a real graph). A store with other reserved names overrides it.
+   */
+  protected isReservedGraphName(iri: string): boolean {
+    return iri.startsWith('urn:x-arq:');
+  }
+
   async graphQuery(query: GraphQuery): Promise<GraphResult> {
     if (!isGraphQueryKind(query?.kind)) throw unsupportedGraphQuery(query ?? {});
     assertGraphWritable(query.graph);
+    if (this.isReservedGraphName(query.graph)) {
+      throw new GraphQueryError(
+        'graph-name-read-only',
+        `<${query.graph}> is a name this store reserves for its own graphs; it can be read, never written.`,
+        query.graph,
+      );
+    }
     getGraphRecordClass(query.recordClass);
     if (query.kind !== 'graph_drop') {
+      // Replace and patch through a record class (OntologyGraph.update(…)) need a record of that
+      // class; through NamedGraph any record will do.
+      const classCheck =
+        query.kind !== 'graph_create' && query.recordClass !== sd.NamedGraph.id
+          ? query.recordClass
+          : undefined;
       const registered = mapSparqlAskResult(
-        await this.executeSparqlSelect(graphRegisteredAsk(query.graph)),
+        await this.executeSparqlSelect(graphRegisteredAsk(query.graph, classCheck)),
       );
       if (query.kind === 'graph_create' && registered) {
         throw new GraphQueryError(
@@ -276,7 +300,9 @@ export abstract class SparqlDataset implements IDataset {
       if (query.kind !== 'graph_create' && !registered) {
         throw new GraphQueryError(
           'graph-not-registered',
-          `<${query.graph}> has no record in the graph registry; register it with create() first.`,
+          classCheck
+            ? `<${query.graph}> has no record of class <${classCheck}> in the graph registry.`
+            : `<${query.graph}> has no record in the graph registry; register it with create() first.`,
           query.graph,
         );
       }

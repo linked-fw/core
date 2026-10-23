@@ -21,7 +21,7 @@ import {
 } from '../test-helpers/fuseki-test-store';
 import {describeFuseki} from '../test-helpers/fuseki-live';
 import {FusekiStore} from '../test-helpers/FusekiStore';
-import {NamedGraph, OntologyGraph} from '../shapes/NamedGraph';
+import {DraftGraph, NamedGraph, OntologyGraph} from '../shapes/NamedGraph';
 import {graphs} from '../ontologies/graphs';
 import {isGraphQueryError} from '../queries/graphQuery';
 import type {GraphContent} from '../queries/IntermediateRepresentation';
@@ -182,6 +182,26 @@ describeFuseki('graph queries on the inferring store', () => {
       version?: string;
     }>;
     expect(typed).toEqual([expect.objectContaining({package: '@_linked/graph-query-live', version: '1.2.0'})]);
+  });
+
+  test('replace through a subclass refuses a record of another class', async () => {
+    const draft = `${G}-draft`;
+    await DraftGraph.create({id: draft}).exec(store);
+    const err = await OntologyGraph.update(draft).set({version: '9'}).exec(store).catch((e) => e);
+    expect(isGraphQueryError(err, 'graph-not-registered')).toBe(true);
+    await NamedGraph.replaceContent(draft, body).exec(store);
+    expect(await tripleCount(draft)).toBe(2);
+    expect((await record(draft))['core:feedsHierarchy']).toEqual(['false']);
+    await DraftGraph.delete(draft).exec(store);
+  });
+
+  test('the store names urn:x-arq:DefaultGraph and urn:x-arq:UnionGraph are refused', async () => {
+    store.updates = 0;
+    for (const name of ['urn:x-arq:DefaultGraph', 'urn:x-arq:UnionGraph']) {
+      const err = await NamedGraph.replaceContent(name, body).exec(store).catch((e) => e);
+      expect(isGraphQueryError(err, 'graph-name-read-only')).toBe(true);
+    }
+    expect(store.updates).toBe(0);
   });
 
   test('a write to graphs.union is refused', async () => {

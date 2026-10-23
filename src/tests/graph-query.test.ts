@@ -429,6 +429,77 @@ describe('SparqlDataset.graphQuery', () => {
   });
 });
 
+describe('store-reserved names, feedsHierarchy, record classes', () => {
+  class ScriptedSparql extends SparqlDataset {
+    updates: string[] = [];
+    asks: string[] = [];
+    constructor(private registered: boolean) {
+      super();
+    }
+    protected async executeSparqlSelect(sparql: string): Promise<any> {
+      this.asks.push(sparql);
+      return {head: {}, boolean: this.registered};
+    }
+    protected async executeSparqlUpdate(sparql: string): Promise<void> {
+      this.updates.push(sparql);
+    }
+  }
+  const nt: GraphContent = {mediaType: 'application/n-triples', text: '<urn:a> <urn:b> <urn:c> .'};
+
+  test.each(['urn:x-arq:DefaultGraph', 'urn:x-arq:UnionGraph'])(
+    'a graph query on %s is refused before any SPARQL is sent',
+    async (name) => {
+      const ds = new ScriptedSparql(true);
+      for (const call of [
+        () => DraftGraph.create({id: name}).withContent(nt).exec(ds),
+        () => NamedGraph.replaceContent(name, nt).exec(ds),
+        () => NamedGraph.patchContent(name, {insert: nt}).exec(ds),
+        () => NamedGraph.delete(name).exec(ds),
+      ]) {
+        expect(isGraphQueryError(await call().catch((e) => e), 'graph-name-read-only')).toBe(true);
+      }
+      expect(ds.asks).toEqual([]);
+      expect(ds.updates).toEqual([]);
+    },
+  );
+
+  test('a store can reserve other names', async () => {
+    class Reserving extends ScriptedSparql {
+      protected override isReservedGraphName(iri: string): boolean {
+        return iri.startsWith('urn:store:');
+      }
+    }
+    const err = await NamedGraph.delete('urn:store:x').exec(new Reserving(true)).catch((e) => e);
+    expect(isGraphQueryError(err, 'graph-name-read-only')).toBe(true);
+  });
+
+  test('feedsHierarchy is an OntologyGraph field only; drafts and shapes graphs record false', async () => {
+    const ds = new ScriptedSparql(false);
+    await OntologyGraph.create({id: G, package: 'p', feedsHierarchy: false}).exec(ds);
+    expect(ds.updates[0]).toContain('feedsHierarchy> "false"');
+    for (const call of [
+      () => DraftGraph.create({id: G, feedsHierarchy: true} as any).exec(ds),
+      () => ShapesGraph.create({id: G, package: 'p', feedsHierarchy: true} as any).exec(ds),
+    ]) {
+      expect(String(await call().catch((e) => e))).toMatch(/no field "feedsHierarchy"/);
+    }
+    await ShapesGraph.create({id: G, package: 'p'}).exec(ds);
+    expect(ds.updates[1]).toContain('feedsHierarchy> "false"');
+  });
+
+  test('replace and patch through a subclass ask for a record of that class; NamedGraph does not', async () => {
+    const ds = new ScriptedSparql(true);
+    await OntologyGraph.update(G).set({version: '2'}).exec(ds);
+    expect(ds.asks[0]).toContain(`; a <${ONTOLOGY_GRAPH}>`);
+    await NamedGraph.replaceContent(G, nt).exec(ds);
+    expect(ds.asks[1]).not.toContain('; a <');
+    const mismatch = new ScriptedSparql(false);
+    const err = await OntologyGraph.update(G).set({version: '2'}).replaceContent(nt).exec(mismatch).catch((e) => e);
+    expect(isGraphQueryError(err, 'graph-not-registered')).toBe(true);
+    expect(err.message).toMatch(/no record of class/);
+  });
+});
+
 describe('review fixes', () => {
   /** A SPARQL dataset without askQuery: asks go through its selectQuery and core's result mapping. */
   class NoAskSparql extends SparqlDataset {

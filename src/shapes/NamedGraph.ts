@@ -182,7 +182,7 @@ export class NamedGraph extends GraphRecordBase {
   /** Records live in the graph registry; reads of this shape and its subclasses go there. */
   static storedInGraph: string = graphs.registry;
   /** The own record fields of this class, for typing the statics only. */
-  declare static readonly recordFields?: {sources?: string | string[]; feedsHierarchy?: boolean};
+  declare static readonly recordFields?: {sources?: string | string[]};
 
   /** The graph's name (its IRI; the record's subject repeats it). */
   @objectProperty({path: sd.name, maxCount: 1, nodeKind: shacl.IRI})
@@ -344,7 +344,6 @@ export class ShapesGraph extends NamedGraph {
     package: string;
     version?: string;
     sources?: string | string[];
-    feedsHierarchy?: boolean;
   };
 
   /** The npm name of the package. */

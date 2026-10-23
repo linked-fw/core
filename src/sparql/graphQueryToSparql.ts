@@ -185,7 +185,11 @@ export function graphQueryToSparql(
   return ops.length ? ops.join(' ;\n') : undefined;
 }
 
-/** `ASK` whether `graph` has a record in the registry. */
-export function graphRegisteredAsk(graph: string): string {
-  return `ASK { GRAPH ${iri(graphs.registry)} { ${iri(graph)} ${iri(sd.name.id)} ${iri(graph)} } }`;
+/**
+ * `ASK` whether `graph` has a record in the registry, and with `recordClass` whether that record
+ * is of the class (the store's inference answers a subclass record for a superclass).
+ */
+export function graphRegisteredAsk(graph: string, recordClass?: string): string {
+  const typed = recordClass ? ` ; a ${iri(recordClass)}` : '';
+  return `ASK { GRAPH ${iri(graphs.registry)} { ${iri(graph)} ${iri(sd.name.id)} ${iri(graph)}${typed} } }`;
 }

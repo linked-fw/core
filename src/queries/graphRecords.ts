@@ -45,17 +45,21 @@ export type GraphRecordClass = {
 
 const namedGraphFields: Record<string, GraphRecordField> = {
   sources: {path: dcterms.source, datatype: xsd.string.id, many: true},
-  feedsHierarchy: {path: coreOntology.feedsHierarchy.id, datatype: xsd.boolean.id},
 };
 const packageGraphFields: Record<string, GraphRecordField> = {
   ...namedGraphFields,
   package: {path: coreOntology.package.id, datatype: xsd.string.id},
   version: {path: coreOntology.version.id, datatype: xsd.string.id},
 };
+// Only an ontology graph may opt out of feeding the hierarchy; every other kind never feeds it.
+const ontologyGraphFields: Record<string, GraphRecordField> = {
+  ...packageGraphFields,
+  feedsHierarchy: {path: coreOntology.feedsHierarchy.id, datatype: xsd.boolean.id},
+};
 
 const recordClasses = new Map<string, GraphRecordClass>([
   [sd.NamedGraph.id, {feedsHierarchy: false, fields: namedGraphFields}],
-  [coreOntology.OntologyGraph.id, {feedsHierarchy: true, fields: packageGraphFields}],
+  [coreOntology.OntologyGraph.id, {feedsHierarchy: true, fields: ontologyGraphFields}],
   [coreOntology.ShapesGraph.id, {feedsHierarchy: false, fields: packageGraphFields}],
   [coreOntology.DraftGraph.id, {feedsHierarchy: false, fields: namedGraphFields}],
 ]);

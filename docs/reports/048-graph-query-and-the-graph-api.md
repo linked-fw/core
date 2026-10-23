@@ -169,21 +169,14 @@ Fixed: the ask fallback (a row or `null` is answered; test against a `SparqlData
 patch refused at the boundary and treated as record-only by the store, the "leaf module" comment,
 the sub-plan's `sources` wording, the changeset's dispatch-event line.
 
-**Open, needs a decision (medium):** store-native graph names (`urn:x-arq:*`). Options: a
-`SparqlDataset` hook (`protected isReservedGraphName(iri)`, default refusing `urn:x-arq:`) throwing
-`graph-name-read-only`, or the refusal in F2's `FusekiStore` (`mapGraphName` is already F2's).
+**Decided and fixed** (coordinator, recorded in master §Contracts at CN `d10d95b69`):
+store-native names are refused by `SparqlDataset`'s protected `isReservedGraphName(iri)`, checked
+on every graph query before any SPARQL is built (default: `urn:x-arq:` → `graph-name-read-only`;
+tests for `urn:x-arq:DefaultGraph` and `urn:x-arq:UnionGraph`, unit and `[fuseki]`).
+`feedsHierarchy` is an `OntologyGraph` field only (always false on `DraftGraph`, `ShapesGraph`).
+Replace and patch through a subclass check the stored record's class (`graph-not-registered` on a
+mismatch); `NamedGraph.*` accepts any record.
 
-**Open, low:** `feedsHierarchy` is caller-settable on every class, `DraftGraph` included (drop it
-from the own fields, or record it as an override for C1's rule); replace and patch do not check
-that the stored record's class is the receiver's; `LinkedStorage.graphQuery` routes through the
-first shape targeting `recordClass` (an app shape on `sd:NamedGraph` could win).
-
-## Follow-ups
-
-- `.from()` reads, the registry cache, `isolateLinkedTypeChecks`: K2 (sub-plan 004).
-- The ontology sync on package graphs: K3.
-- `graphQuery` through `RemoteDataset`, the generic plane and CN's gateway: U1, V1, C1.
-- Blank-node deletes in a patch (the CBD rule): K5.
-- react and shape-ui test doubles: they implement `IDataset` in tests only; they break at
-  typecheck when those repos take the new core (Renovate bump): core backlog 063.
-- `two-copies-built.test.ts` still does not run (backlog 060, unchanged by this step).
+**Left as a note (low):** `LinkedStorage.graphQuery` routes through the first shape that targets
+`recordClass`; an app shape that also targets `sd:NamedGraph` or a core graph class could be
+picked first and change where graph queries go. Graph routing is K4's; revisit there.
