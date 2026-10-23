@@ -161,16 +161,16 @@ Quick gates:
 - Phase 4 (live; 7 suites): `Tests: 141 passed, 141 total`, `Time: 3.806 s`; typecheck clean, 3.0 s.
 - Phase 5 (`graph-routing` unit and `[fuseki]`): `Tests: 43 passed, 43 total`.
 
-Full gate (after the review's MINUS fix, `npx linked build` first, since a fresh worktree has no
-`lib/`):
+Full gate (final, after both reviews, on `named-graphs--k4` rebased on `named-graphs` at
+`8b4c4db`, `npx linked build` first):
 
 - `npm test`: `Test Suites: 1 failed, 4 skipped, 129 passed, 130 of 134 total`, `Tests: 120
-  skipped, 2628 passed, 2748 total`, `Time: 17.829 s` (20.5 s wall), `[fuseki] live tests: 346
-  total — 346 passed, 0 failed, 0 skipped`. The failing suite is `two-copies-built.test.ts`
+  skipped, 2632 passed, 2752 total`, `Time: 23.108 s` (26.1 s wall), `[fuseki] live tests: 349
+  total — 349 passed, 0 failed, 0 skipped`. The failing suite is `two-copies-built.test.ts`
   ("Module cache already has entry …/lib/esm/shapes/SHACL.js. This is a bug in Jest"), backlog 060.
-- `npm run typecheck`: clean, 3.1 s. `npm run check:dts`: clean, 1.4 s. `npx linked build`:
-  `✔ Build successful`, 5.9 s; `lib/esm/utils/graphRouting.js`, `sparql/graphScope.js`: no `n3` or
-  `node:` import.
+- `npm run typecheck`: clean, 3.7 s. `npm run test:fuseki`: `349 total — 349 passed`, 14.6 s.
+  `npm run check:dts`: clean, 1.7 s. `npx linked build`: `✔ Build successful`, 7.4 s;
+  `lib/esm/utils/graphRouting.js`, `sparql/graphScope.js`: no `n3` or `node:` import.
 - `npm run test:fuseki` (before the review): five runs `345 total — 345 passed`; one earlier run,
   and two of six further full `jest` runs, had `344 passed, 1 failed`: always
   `graph-query-fuseki.test.ts` comparing `dcterms:modified` as text (above); fixed in this step.
@@ -205,7 +205,8 @@ Verify (master §K4):
   schema ontology graph. Each DSL query ran against the routed `k4g100` and, as the expected rows,
   against `k4b10` without routes; "merged" reads every named graph of `k4g100`
   (`.from(graphs.union)`, decision 9's "merge every graph"). Median of 20 warm runs, end to end
-  through `SparqlDataset` (compile, HTTP, result mapping), after two warm-up runs:
+  through `SparqlDataset` (compile, HTTP, result mapping), after two warm-up runs (first run, before
+  the write-rule fix):
 
 ```
 | query | ideal rows | routed, isolate on | routed, isolate off | routed on ms | routed off ms | ideal ms | merged every graph ms (rows) |
@@ -218,6 +219,20 @@ Verify (master §K4):
 | walk | 14235 | exact | exact | 275.6 | 277.7 | 197.7 | 1331.0 (wrong: 93653) |
 | label | 1 | exact | exact | 4.6 | 4.7 | 5.0 | 4.3 (same rows) |
 PASS src/tests/zz-k4-fixture.test.ts (19.738 s)
+```
+
+  Re-run after the write-rule fix (the read path is unchanged; the store was busier, so all forms
+  are slower):
+
+```
+| point | 1 | exact | exact | 5.1 | 4.6 | 4.4 | 4.8 (same rows) |
+| page | 50 | exact | exact | 102.4 | 98.0 | 80.6 | 733.5 (same rows) |
+| page off 1000 | 50 | exact | exact | 147.0 | 143.6 | 150.9 | 1493.9 (wrong: 50) |
+| count | 14235 | exact | exact | 50.2 | 30.2 | 27.9 | 190.3 (wrong: 93653) |
+| join | 2162 | exact | exact | 83.6 | 77.7 | 50.4 | 469.1 (wrong: 16713) |
+| walk | 14235 | exact | exact | 332.9 | 330.2 | 221.1 | 1540.5 (wrong: 93653) |
+| label | 1 | exact | exact | 6.9 | 5.1 | 11.4 | 6.6 (same rows) |
+PASS src/tests/zz-k4-fixture.test.ts (148.464 s)
 ```
 
   Every routed query returned exactly the ideal rows (compared deep, order-free). Queries: point
@@ -278,7 +293,11 @@ test "a subject in the default graph, under a mixed read set, is changed and del
 landing there, nothing in a named graph). Its lows: `deleteToAlgebra` with several ids and
 `writeGraphs` now refuses (`deleteToSparql` splits); the graph variable `g_w` avoids the plan's
 variables; the `update_where` owned-link gap and the upsert-with-traversal wrapper are recorded in
-backlog 067.
+backlog 067. Final verdict, quoted: "**Verdict: no open medium or high findings.** Commit e1b2d02
+closes my last medium."
+
+Notes: the published server's `Record<GraphQueryErrorCode, number>` in `queryPlane.ts` needs
+`graph-not-routed` on its next core bump; master §V2 owns it.
 
 Observed while testing (outside this step): `.minus((p) => p.name.equals('x'))` compiles to a MINUS
 whose FILTER reads `?a0_name` without binding it inside the MINUS, so it removes nothing, with or

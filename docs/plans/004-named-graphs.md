@@ -694,3 +694,15 @@ Master §K4 is the scope; this is its plan-mode detail, written against `named-g
    `query-dependencies`, `mutation-effects`, `live-matching`.
 5. **Live store, fixture, docs and record:** the `[fuseki]` suite, decision 9's fixture,
    `ontologies.md`, backlogs, changeset, report 051, Outcome.
+
+### Outcome
+
+Landed (report [051](../reports/051-graph-routing.md)). Deviations from this section: a shape's
+read set includes its owners' graphs, and a traversal through `contains` reads the owner's set
+(owned nodes live in their owner's graph); on review the owner decided the write rule (master
+§Contracts, Graph routing, "As decided on K4's review"): a change to an existing subject runs in the
+graph that holds it, found in the same update (`graphIn`: `SELECT DISTINCT ?g_w … GRAPH ?g_w`), a
+delete of several ids is one operation per id, and the owned-link check refuses a node that lives
+outside its owner's graph; a MINUS right side writes its own `VALUES`. Backlogs 065 and 066 are
+resolved; 067 records writes across graphs. Full gate: 2632 passed, 349/349 `[fuseki]`;
+`two-copies-built` still fails (backlog 060).
