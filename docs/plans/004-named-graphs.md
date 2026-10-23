@@ -149,6 +149,32 @@ await OntologyGraph.update(g).set({version: '1.7.0'}).replaceContent({mediaType:
   hash prefix `/1`).
 - `OntologySync`, `ClassAxioms` and their exports stay (deprecated) for the fallback.
 
+### Reads with `.from()` and the generator (provider K2, extended by K4; consumers F2, C2, C4)
+
+- DSL: `.from(graph | graph[])` on select, count and ask builders; DSL-JSON field `graphs:
+  string[]`; IR field `graphs?: string[]` on `IRSelectQuery`, `IRAskQuery`, `IRCountQuery`. Reads
+  may carry it over the wire (decision 8).
+- The generator per decision 9: one `GRAPH ?gN` block per subject group; the store adds
+  `FROM NAMED` for the expanded set; one graph → `GRAPH <iri>`.
+- `SparqlOptions` gains `isolateLinkedTypeChecks?: boolean` (default false) and a hook
+  `mapGraphName(iri): string | null` (portable name → store name; `null` refuses).
+- The store expands `graphs.allOntologies` (and in phase 2 `graphs.allShapes`) from a registry cache
+  (owner, 2026-10-23):
+  - **per process, per dataset:** one `SELECT ?g` over `graphs.registry` by class, cached for each
+    dataset the process reads;
+  - **own writes:** a process that changes a graph (any `graphQuery` through its store) updates its
+    own cache for that dataset in the same step, so its next read sees the change;
+  - **CN-managed apps:** every graph write of an app under CN passes through CN's gateway, so CN
+    pushes an invalidation for that dataset to the app over its control channel after the write
+    (arch-07 §Host Agent ↔ app control: the app's `/admin/*` routes with `CN_APP_ADMIN_SECRET`).
+    C1 sends it, V1 adds the route and drops the cache; core exposes the drop as a public call
+    on the store (`invalidateGraphRegistry(dataset?)`, K2) for V1 to use;
+  - **backstop:** an entry older than 30 seconds is re-read, for writes that bypass CN (scripts,
+    standalone apps, and an app in a Docker container, which has no control channel yet);
+  - writes never depend on the cache.
+- Test (core, `[fuseki]`): the same queries with `isolateLinkedTypeChecks` on and off return
+  identical rows.
+
 ## K1 — `graphQuery` and the graph API (sensitive)
 
 Master §K1 is the scope; this is its plan-mode detail. Found in the code at `named-graphs`
@@ -427,3 +453,82 @@ Landed (report [050](../reports/050-ontology-sync-on-package-graphs.md)). Deviat
 another remaining node lists it (the reading written above); the cleanup moved into phase 1. Full
 gate: 2547 passed, 333/333 `[fuseki]`; `two-copies-built` still fails (backlog 060). schema.org's
 first sync: one update, 743 ms.
+
+## K2 — reads from graphs
+
+Master §K2 is the scope; this is its plan-mode detail, written against `named-graphs` at
+`75162c1` (K1 landed). Line numbers drift; search for the symbol.
+
+### Files
+
+| File | What changes |
+|---|---|
+| `src/queries/IntermediateRepresentation.ts` | `graphs?: string[]` on `IRSelectQuery`, `IRAskQuery`, `IRCountQuery` (the names as the caller wrote them; a store expands them) |
+| `src/queries/readGraphs.ts` (new) | `normalizeReadGraphs(input)`: the one check of a `.from()` argument and of a JSON `graphs` field (a non-empty list of absolute IRIs, deduplicated, order kept) |
+| `src/queries/QueryBuilder.ts` | `SelectBuilder.from(graph \| graph[])` (instance method; the static `from(shape)` stays), cloned like every field; `toJSON`/`fromJSON` carry `graphs`; `toRawInput` passes it; `toCount()` and `.exists()` keep it (`_patternSpec`) |
+| `src/queries/CountBuilder.ts`, `CountQuery.ts`, `AskBuilder.ts`, `AskQuery.ts` | `graphs` in the spec, raw input and JSON envelope; `.from()` on both builders returns a new builder |
+| `src/queries/IRDesugar.ts` (`RawSelectInput`), `IRPipeline`/`buildSelectQuery`, `src/queries/lower.ts` | the raw input's `graphs` reaches the IR of select, count and ask (shapeless asks included) |
+| `src/sparql/SparqlAlgebra.ts` | `SparqlGraph` takes an IRI or a variable; `SparqlSelectPlan` and `SparqlAskPlan` gain `dataset?: {fromNamed: string[]}` |
+| `src/sparql/algebraToString.ts` | `GRAPH ?g { … }`; `FROM NAMED <g>` lines after `SELECT …` and after `ASK` |
+| `src/sparql/graphScope.ts` (new) | `scopeAlgebraToGraphs(algebra, graphs, options)`: no names → unchanged; one name → `GRAPH <iri> { whole pattern }`; several → each BGP split into one `GRAPH ?g_<subject> { … }` block per subject (every BGP, inside OPTIONAL, MINUS, UNION, sub-selects and EXISTS filters), plus the `FROM NAMED` set; with `isolateLinkedTypeChecks`, a linked subject's `rdf:type` triples go in a second block on the same variable after its stored triples. Refuses an empty set and names only a store can expand (`graphs.default`, `union`, `allOntologies`, `allShapes`). The "why the second block" explanation lives here |
+| `src/sparql/irToAlgebra.ts` | `selectToAlgebra` reads `query.graphs`, else the shape's `storedInGraph` (P2: `NamedGraph.select()` reads `graphs.registry` through the same path), and returns the `dataset` field; `askToAlgebra` (shapeless asks too) and `countToAlgebra` carry it |
+| `src/sparql/sparqlUtils.ts` | `SparqlOptions.isolateLinkedTypeChecks?: boolean`, `SparqlOptions.mapGraphName?(iri): string \| null` |
+| `src/utils/graphRegistryCache.ts` (new, pure) | per process, keyed by dataset: `readGraphRegistry(key, load)` (one load at a time, re-read after `GRAPH_REGISTRY_MAX_AGE_MS` = 30 s), `noteGraphQuery(key, query)` (own writes: a create adds the graph under its record class, a drop removes it), `invalidateGraphRegistry(key?)`, `expandReadGraphs(names, {registry, mapGraphName})` |
+| `src/sparql/SparqlDataset.ts` | `selectQuery`/`askQuery` expand `ir.graphs` before compiling (portable names through `mapGraphName`, `allOntologies`/`allShapes` from the cache, `graphs.registry` as itself); `[graphs.default]` alone reads the default graph plainly; an empty expansion answers `[]`/`0`/`false` without a request; the registry load is one `SELECT ?g ?c` on `graphs.registry`; `graphQuery` notes its own write; public `invalidateGraphRegistry(dataset?)`; protected `graphRegistryKey()` (default: one key per instance; a store overrides it with its dataset's identity) |
+| `src/test-helpers/FusekiStore.ts` | maps `graphs.default`/`union` to Jena's names (what F2's `FusekiStore` will do) and keys the cache by its dataset |
+| `src/index.ts` | export `invalidateGraphRegistry`, `GRAPH_REGISTRY_MAX_AGE_MS` |
+| `src/tests/read-graphs.test.ts` (new) | builders, JSON round trip, lowering, golden SPARQL (one block per subject, two blocks, one graph, `FROM NAMED` on select/count/ask, `storedInGraph`), store expansion with a stub transport (`allOntologies` expanded, `mapGraphName`, refusals, empty set), cache (own write, `invalidateGraphRegistry`, 30 s expiry with a fake clock) |
+| `src/tests/read-graphs-fuseki.test.ts` (new) | `[fuseki]`: two package graphs registered with `OntologyGraph.create(...).withContent`, a third unlisted graph; joins through a link to a subclass instance; identical rows with the option on and off; a class in an unlisted graph never returns |
+| `docs/architecture/ontologies.md` | reading graphs: `.from()`, the expansion, the cache, the option |
+| `.changeset/*.md` (new) | minor, with the breaking list |
+| `docs/reports/049-reads-from-graphs.md` (new) | the record |
+
+### Pitfalls
+
+- **Linked type checks.** Decision 9's second block applies to "a group reached through a link
+  that needs an inferred type check". Today's generator emits `rdf:type` only for the root (and
+  `MINUS` shape exclusions on the root); a traversal never type-checks its target. The option is
+  implemented for any linked subject block that holds a type triple, so it changes no query the
+  DSL builds today; its unit and `[fuseki]` tests add such a triple to a generated algebra. The
+  DSL-level identical-rows test therefore compares identical text. Recorded as a follow-up
+  (backlog 065) for whoever adds linked type checks (K4's routing by sub-shape, if it needs them).
+- **An empty `FROM NAMED` is no restriction.** `GRAPH ?g` without `FROM NAMED` ranges over every
+  named graph; an expansion to no graph must never compile. The store answers without a request,
+  and the generator refuses an empty set.
+- **The default graph is not named.** `FROM NAMED` makes the query's default graph empty, so a
+  set naming `graphs.default` needs the store's name for it (`urn:x-arq:DefaultGraph`) through
+  `mapGraphName`; without the hook only `[graphs.default]` alone is readable (as today).
+- **Variable scope.** A graph variable is per subject and the same in every block of that
+  subject, so an OPTIONAL block for a bound subject joins on its graph. Inside a sub-select the
+  variable is local (the sub-select projects only its child).
+- **Catalog field.** The IR's catalog is non-enumerable: a store that copies the IR to swap the
+  expanded set must re-attach it (`attachCatalog`).
+- **Property paths** follow a path inside the subject's graph only (one graph per subject).
+- **K3 works in parallel** on `SparqlDataset.ts`, `irToAlgebra.ts` and the ontology files;
+  whoever lands second rebases.
+
+### Tests
+
+- Quick gate (after each phase), from the core worktree, with the env below exported first:
+  `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs <files>`, plus
+  `npm run typecheck`.
+- Full gate (before landing): `npm test` (jest; `two-copies-built` is backlog 060), `npm run
+  typecheck`, `npm run test:fuseki`, `npm run check:dts`, `npx linked build`.
+- Isolation: `FUSEKI_TEST_PORT=3173`, `FUSEKI_BASE_URL=http://localhost:3173`,
+  `LINKED_CORE_TEST_COMPOSE_PROJECT=fuseki-071-k2`, `LINKED_FUSEKI_IMAGE=linked-fuseki:071`.
+- Verify (master): golden SPARQL for one block, two blocks, one graph, `graphs.allOntologies`
+  expanded; cache: a `graphQuery` through the store makes the next read see the new graph without
+  a re-read by expiry, `invalidateGraphRegistry` forces a re-read, an entry older than 30 s is
+  re-read (fake clock); `[fuseki]`: identical rows both ways, a class in an unlisted graph never
+  returns.
+
+### Phases
+
+1. **DSL, JSON and IR:** `readGraphs.ts`, `.from()` on the three builders, JSON, raw inputs,
+   lowering. Quick gate: the new unit tests for builders, JSON and lowering; the wire and builder
+   suites.
+2. **The generator:** algebra types, `graphScope.ts`, `irToAlgebra.ts`, `algebraToString.ts`,
+   `SparqlOptions`. Quick gate: golden tests; the select, ask, count and graph-query suites.
+3. **The store, docs and record:** `graphRegistryCache.ts`, `SparqlDataset`, the test
+   `FusekiStore`, exports, the `[fuseki]` suite, `ontologies.md`, changeset, report 049, backlogs
+   065 and 066, Outcome.
