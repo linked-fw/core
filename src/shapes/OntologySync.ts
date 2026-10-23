@@ -14,6 +14,10 @@ import {xsd} from '../ontologies/xsd.js';
  * one package: the package's class hierarchy as sorted N-Triples lines and their content hash.
  * One node per package, at `https://linked.cm/ont/core/ontologySync/<encodeURIComponent(name)>`.
  * A built-in shape: every dataset holds it, like the SHACL metamodel.
+ *
+ * @deprecated The sync writes package ontology graphs; this node is written only by its
+ * default-graph fallback (a store without graph queries), and removed by the sync once the
+ * package's graph is written.
  */
 // Named explicitly: the class shares its name with the ontology term coreOntology.OntologySync.
 @linkedShape({

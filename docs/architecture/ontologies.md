@@ -170,26 +170,37 @@ and `sh:class`, and a subclass instance through its inferred type), the owned wa
 (`?n a <C>`) and the single-owner constraint (one `sh:class`) carry no list of subclasses of
 their own. The owned walk also reads the in-memory hierarchy (`subClassesOf`) to find every shape
 its guards match. `syncOntologies(ds?, {force, packages,
-orphanScope})` (`@_linked/core/ontology/syncOntologies`, server only) writes it:
+orphanScope})` (`@_linked/core/ontology/syncOntologies`, server only) writes each package's
+**whole ontology data** (labels, comments and the rest along with the hierarchy) into its own
+ontology graph (see the next section):
 
-- per package, the kept triples (its hierarchy) as sorted N-Triples lines, hashed with SHA-256
-  (`linked-ontology-sync/1\n` + the lines);
-- the hash and the lines are stored on a sync node per package,
-  `https://linked.cm/ont/core/ontologySync/<encodeURIComponent(packageName)>`, of the built-in
-  shape `OntologySync`;
-- an unchanged hash writes nothing (an unforked branch stays unforked); a changed package is
-  updated one subject class at a time (`add` = new − old, `remove` = old − new minus the triples
-  another package lists), the sync node last, so an interrupted sync is redone by the next one;
-- `force` writes every package as if nothing were stored: it inserts every kept triple (so it
-  repairs a dataset whose triples were removed while its sync nodes stayed) and removes the stored
-  lines the package no longer lists;
-- only triples a sync node lists are ever removed: a triple no package listed stays, while one a
-  package listed goes when the package drops it (and no other package lists it), even if the
-  dataset held it before that package's first sync; packages no longer registered are pruned only
-  under `orphanScope: 'all'`.
+- the graph is `OntologyGraph.iriFor(packageName)` (`{package IRI}/graph/ontology`), recorded in
+  the graph registry as an `OntologyGraph` (`package`, `sources`: the data files), which feeds
+  the store's hierarchy; the store needs to build its hierarchy from the registry
+  (`ghcr.io/linked-fw/fuseki:6.2.0-2` or later);
+- the hash is `ontologyGraphHash(texts)`: SHA-256 of `linked-ontology-sync/2\n` + the package's
+  raw data file texts in registration order, joined with `\n`, recorded as the graph's
+  `core:contentHash`; bumping the prefix makes every dataset rewrite its graphs once;
+- an unchanged hash writes nothing (an unforked branch stays unforked); a changed or new package
+  is created or replaced whole in one graph query, the body sent as N-Triples (each file parsed
+  with its own blank-node prefix, so prefixes and blank-node labels of several files never
+  clash); `force` replaces every package;
+- after a package's graph is written (or found unchanged), what the earlier default-graph sync
+  kept for it is removed: the lines its `OntologySync` node lists, except those another
+  remaining node lists, then the node; a hand-written default-graph axiom no node lists stays,
+  and the store keeps inferring through it;
+- `orphanScope: 'all'` (without `packages`) drops the ontology graph of every package no longer
+  registered, and removes the default-graph lines and node of such a package.
 
-It runs at app boot and through the app's control route, before shape sync. Everything goes
-through Linked Queries, in the default graph.
+A store without graph queries (`unsupported-query-kind`, or a dataset class without
+`graphQuery`) gets the earlier **default-graph sync**: each package's `rdfs:subClassOf` triples
+as sorted N-Triples lines, hashed with `linked-ontology-sync/1\n` + the lines, stored on a sync
+node per package (`https://linked.cm/ont/core/ontologySync/<encodeURIComponent(packageName)>`,
+the built-in shape `OntologySync`, deprecated) and diffed into the default graph one subject
+class at a time (`ClassAxioms`); only lines a node lists are ever removed, and a triple another
+package lists is kept.
+
+It runs at app boot and through the app's control route, before shape sync.
 
 ## Named graphs and the graph registry
 

@@ -15,6 +15,8 @@ import {rdfs} from '../ontologies/rdfs.js';
  * shape takes no part in class resolution or the shape check. Not a built-in, so shape sync
  * never writes it into a dataset.
  *
+ * Used by the sync's default-graph fallback and by the removal of what that fallback wrote.
+ *
  * @internal
  */
 @linkedShape({name: 'ClassAxioms'})

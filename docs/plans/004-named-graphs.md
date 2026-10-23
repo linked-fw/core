@@ -414,9 +414,16 @@ symbol.
 
 ### Phases
 
-1. **Graph path and fallback:** hash, body, records, create/replace, orphans, the fallback
-   switch; unit tests.
-2. **P4 cleanup and the live tests:** the cleanup, unit tests for it, the `[fuseki]` suite and
-   the measurement on `linked-fuseki:071`.
+1. **Graph path, cleanup and fallback:** hash, body, records, create/replace, P4 cleanup,
+   orphans, the fallback switch; unit tests.
+2. **The live tests:** the `[fuseki]` suite and the measurement on `linked-fuseki:071`.
 3. **Docs and record:** `ontologies.md`, deprecations, backlog 064, changeset, report 050,
    Outcome.
+
+### Outcome
+
+Landed (report [050](../reports/050-ontology-sync-on-package-graphs.md)). Deviations: no
+`version` in the record (core knows none; backlog 064); P4 removes every line a node lists unless
+another remaining node lists it (the reading written above); the cleanup moved into phase 1. Full
+gate: 2547 passed, 333/333 `[fuseki]`; `two-copies-built` still fails (backlog 060). schema.org's
+first sync: one update, 743 ms.
