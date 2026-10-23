@@ -541,3 +541,156 @@ Landed (report [049](../reports/049-reads-from-graphs.md)). Deviations from this
 `graphs.union` alone; `graphs.allShapes` is expanded already; the store method is
 `resolveReadGraphs`; backlogs are 065 (linked type checks) and 066 (K3 took 064). Full gate:
 2580 passed, 339/339 `[fuseki]`; `two-copies-built` still fails (backlog 060).
+
+## K4 — graph routing (sensitive)
+
+Master §K4 is the scope; this is its plan-mode detail, written against `named-graphs` at
+`8b4c4db` (core 2.38.1 released, phase 1 complete). Line numbers drift; search for the symbol.
+
+### Contract (provided; repeated from the master §Contracts)
+
+**Graph routing (provider K4; consumers V2, C3, C4)**
+
+- `LinkedStorage.setDatasetForShapes(dataset, shapes, {graph?})` and the datasets config's
+  per-shape `graph` key (`linked.backend.datasets.json`: `{datasets: {alias: {store, config,
+  graphs?: {<shape IRI>: <graph IRI>}}}}`, settled: open question 5); default: the default
+  graph, as today.
+- Reads: routing gives each subject group its graph set (sub-shapes included); generator per
+  decision 9 with `VALUES` and the default graph's store name in the set — through `VALUES ?g`,
+  since Jena's `FROM NAMED <urn:x-arq:DefaultGraph>` matches nothing (core backlog 066).
+- Writes: mutation plans carry the routed graph; `.into(graph)` only server-side and only to a
+  graph the routing allows for that shape; DSL-JSON never carries a write graph (the receiver
+  derives it). Owned walks and `checkOwnedLinks` run in the subject's graph; live-query
+  dependencies and change events carry the graph.
+
+### How it works (inside the contract)
+
+- **Where the routes live.** A per-dataset table on the shared global (beside `LinkedStorage`'s
+  routing state, for the same two-copies reason), keyed by the dataset object, mapping a shape
+  IRI to one graph IRI. `setDatasetForShapes(dataset, [shapes], {graph})` pins the shapes and
+  records their graph; the old variadic form `setDatasetForShapes(dataset, ...shapes)` stays.
+  `loadStores` records an alias's `graphs` for the store it builds. A store reads the routes of
+  its own instance; a composite dataset (CN's router, C3) registers routes on the store it
+  forwards to with the exported `setShapeGraphs(dataset, {shape: graph})`.
+- **A shape's graph** is its own route, else its nearest routed super-shape's, else the default
+  graph. **Its read set** is its graph plus the graph of every registered sub-shape (decision 9:
+  "including the graphs of sub-shapes"). The graph-record shapes keep `storedInGraph` (reads of
+  `NamedGraph` read `graphs.registry`; writes of records go through `graphQuery` only).
+- **Reads.** With no `.from()` and routes registered, the store hands the compiler a routing
+  object; each subject group's set comes from its alias's shape (the root's shape, a traversal's
+  value shape; a subject with no known shape gets the union of the query's sets). No group with a
+  named graph → the query is unchanged (today's SPARQL, byte for byte). Otherwise:
+  - every group in one same single graph → `GRAPH <g> { whole pattern }` (as K2's one graph);
+  - all sets named: `FROM NAMED` the union; a group with one graph → `GRAPH <g>`; a group whose
+    set is the union → `GRAPH ?g_x`; a group with a narrower set and a type check (the root's
+    scan, a `MINUS` exclusion) → `VALUES ?g_x { … }` with `GRAPH ?g_x` (decision 9's "overlaps
+    their classes": core cannot know which classes another graph holds, so a type-checked group
+    is restricted whenever its set is narrower); a linked group without a type check needs no
+    `VALUES` (its data lives in one graph, `FROM NAMED` bounds it);
+  - some set holds the default graph and some a named graph: **no `FROM NAMED`** (probed on
+    `6.2.0-2`: with any `FROM NAMED` the default graph is unreachable, in `VALUES`, in
+    `GRAPH <urn:x-arq:DefaultGraph>` and as plain triples); a default-only group is plain
+    triples, a one-graph group `GRAPH <g>`, any other group `VALUES ?g_x { … }` with the default
+    graph's store name (`mapGraphName(graphs.default)`; refused without it).
+  - `.from()` sets use the same code with one set for every group, so `graphs.default` with other
+    graphs now reads (backlog 066 closed); `graphs.union` with other graphs stays refused.
+- **Linked type checks (backlog 065): not needed.** A group's set comes from its value shape, and
+  a linked subject's data lives in one graph, so `FROM NAMED` (or `VALUES`) finds it without a
+  type check; adding one would be a semantic change to every select. `isolateLinkedTypeChecks`
+  stays as it is (inert for generated queries).
+- **`named-graph-uri`.** `SparqlOptions.namedGraphUriParameter` (default false): the set goes to
+  the transport instead of `FROM NAMED` text, through a protected
+  `executeSparqlSelectWithNamedGraphs(sparql, graphs)` whose default throws (a transport that
+  ignored the list would read every named graph).
+- **Writes.** Mutation IR kinds gain `graph?: string`. The store sets the plan's graph: the
+  `.into()` graph if given, else the shape's routed graph; the default graph leaves the plan as
+  today. `insert_data` writes `GRAPH <g>`, `delete_insert` `WITH <g>` (K1), so an update's
+  `WHERE`, an owned walk and a delete's incoming-reference cleanup run in the subject's graph.
+  `checkOwnedLinks` reads the linked ids' types in that graph.
+- **`.into(graph)`** on create, update and delete builders: carried to the IR, never into
+  DSL-JSON (`toJSON` omits it, `fromJSON` never reads one), so only code in the store's own
+  process can use it. "A graph the routing allows for that shape" = the shape's read set (a write
+  there is found by the shape's routed reads); anything else, a portable name, the registry or a
+  store-reserved name → `GraphQueryError('graph-not-routed')` (new code) or the existing
+  `graph-name-read-only`.
+- **Live queries.** `QueryDependencies.graphs?: Set<string>` (the `.from()` names, or the routed
+  sets' union when the dataset `LinkedStorage` resolves for the root has routes; absent =
+  unknown) and `MutationEffects.graph?: string` (the `.into()` graph or the routed graph, same
+  condition; `graphs.default` for an unrouted shape of a routed dataset). The matcher skips a
+  template only when both are known, the dependencies hold no store-resolved name, and the graph
+  is not among them. `effectsHash` and the JSON revival carry the graph.
+
+### Files
+
+| File | What changes |
+|---|---|
+| `src/utils/graphRouting.ts` (new) | the per-dataset table on the shared global; `setShapeGraphs(dataset, map)`, `getShapeGraphs(dataset)`, `unsetShapeGraphs(shapeIri)`; `graphRoutingFor(dataset)` → `{graphForShape(id), readGraphsForShape(id)}` or `undefined` when the dataset has no routes; graph IRIs checked (absolute, not portable, not the registry) |
+| `src/utils/LinkedStorage.ts` | `setDatasetForShapes(dataset, shapes[], {graph?})` beside the variadic form; `unsetDatasetForShape` drops that shape's graph routes |
+| `src/utils/parseDatasetsConfig.ts`, `src/utils/loadStores.ts` | `DatasetEntry.graphs?: Record<string, string>` validated; `loadStores` records it for the store |
+| `src/sparql/sparqlUtils.ts` | `SparqlOptions.namedGraphUriParameter?`; `SparqlCompileOptions` (= options + `routing`) |
+| `src/sparql/graphScope.ts` | per-subject graph sets: union `FROM NAMED`, fixed `GRAPH <g>`, `VALUES`, the default graph without `FROM NAMED`; `.from()` through the same path |
+| `src/sparql/irToAlgebra.ts` | alias → shape → set for select (count and ask reuse it); mutation `graph` → `plan.graph` for every mutation kind |
+| `src/sparql/SparqlDataset.ts` | `protected graphRouting()`; reads compiled with it; write graph resolution and the `.into()` check; `checkOwnedLinks` in the graph; the `named-graph-uri` path |
+| `src/sparql/ownedLinkCheck.ts` | `ownedLinkTypesQuery(ids, graph?)` |
+| `src/utils/graphRegistryCache.ts` | `expandReadGraphs` keeps `graphs.default` in a mixed set when the store maps it |
+| `src/queries/IntermediateRepresentation.ts`, `mutationLowerSpec.ts`, `lower.ts`, `CreateBuilder.ts`, `UpdateBuilder.ts`, `DeleteBuilder.ts` | `graph?` on the mutation IR kinds; `.into(graph)` on the builders (immutable, kept by every fluent call, not serialized) |
+| `src/queries/graphQuery.ts` | refusal code `graph-not-routed` |
+| `src/queries/queryDependencies.ts`, `src/live/changes.ts`, `src/live/matcher.ts` | `graphs` in dependencies, `graph` in effects, the matcher's graph filter |
+| `src/index.ts` | export `setShapeGraphs`, `getShapeGraphs`, `graphRoutingFor` |
+| `src/tests/graph-routing.test.ts` (new) | table and config; golden SPARQL per form (unchanged without routes, one graph, `FROM NAMED` + `GRAPH ?g`, `VALUES`, default graph mixed, sub-shapes, `.from()` with the default graph, `named-graph-uri`); writes per mutation kind; `.into()` allowed and refused, not in JSON; owned-link check in the graph; dependencies, effects and matcher |
+| `src/tests/graph-routing-fuseki.test.ts` (new) | `[fuseki]`: a write lands in the routed graph; routed reads (join across graphs, sub-shape graph, default graph mixed, count, ask); an owned delete stays in its graph; `.into()` refused; identical rows with `isolateLinkedTypeChecks` on and off |
+| `docs/architecture/ontologies.md` | graph routing |
+| `docs/backlog/065…`, `066…` | resolved by this step |
+| `.changeset/graph-routing.md` (new) | minor, with the breaking list |
+| `docs/reports/051-graph-routing.md` (new) | the record |
+
+### Pitfalls
+
+- **Nothing may change without routes.** Every golden suite must pass untouched: the routing
+  object is only passed when the dataset has routes, and a query whose groups all read the
+  default graph compiles exactly as today.
+- **`FROM NAMED` empties the default graph** (probed above): a query that mixes the default graph
+  with named graphs must not carry `FROM NAMED`, and then every named group needs `VALUES` or a
+  fixed graph (`GRAPH ?g` alone would range over every named graph).
+- **Two copies.** The table lives on the shared global and is keyed by the dataset object and the
+  shape IRI, never by a class object.
+- **Across graphs, writes stay in one graph.** A delete by id removes incoming references only in
+  the subject's graph; an `update_where`/`delete_where` filter or a computed update that traverses
+  into a linked node in another graph does not see it. Recorded as a backlog item.
+- **Owned nodes live in the owner's graph** (decision 9's fixture does the same): nested creates go
+  into the plan's graph, whatever their own shape's route.
+- **`.into()` over the wire.** A builder with `.into()` sent through a remote dataset loses it by
+  design; the receiving side derives the graph.
+- **The registry and portable names** are never write targets; reserved store names
+  (`isReservedGraphName`) neither.
+- **K5** shares `irToAlgebra.ts` and `syncShapes.ts`: it rebases on this step.
+
+### Tests
+
+- Quick gate (after each phase), with the env below exported first:
+  `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs <files>`, plus
+  `npm run typecheck`.
+- Full gate (before landing): `npm test` (jest; `two-copies-built` is backlog 060), `npm run
+  typecheck`, `npm run test:fuseki`, `npm run check:dts`, `npx linked build`.
+- Isolation: `FUSEKI_TEST_PORT=3182`, `FUSEKI_BASE_URL=http://localhost:3182`,
+  `LINKED_CORE_TEST_COMPOSE_PROJECT=fuseki-071-k4`, `LINKED_FUSEKI_IMAGE=ghcr.io/linked-fw/fuseki:6.2.0-2`.
+- Verify (master): golden SPARQL per form; `[fuseki]`: decision 9's fixture (10 of 100 graphs,
+  ~1M quads, loaded into a dataset of the step's own store) read through routed DSL queries
+  returns exactly the rows the same queries return on the ideal dataset (only the 10 graphs' data
+  in the default graph), for point, page, count, join, walk and label, with median timings of
+  both; a write lands in the routed graph; an owned delete stays in its graph; `.into()` to a
+  graph the routing forbids refused.
+
+### Phases
+
+1. **Routes:** `graphRouting.ts`, `LinkedStorage`, config and `loadStores`, exports. Quick gate:
+   the routing-table and config tests; `load-stores-loader`, `dataset-pin-identity`.
+2. **Routed reads:** `graphScope.ts`, `irToAlgebra.ts` reads, `SparqlDataset` reads, the
+   `named-graph-uri` path, `expandReadGraphs`. Quick gate: the golden routing tests; the select,
+   ask, count, `read-graphs` suites.
+3. **Routed writes:** IR `graph`, `.into()`, plan graphs, the write check, owned-link check.
+   Quick gate: the write tests; the mutation suites.
+4. **Live queries:** dependencies, effects, matcher. Quick gate: the live tests and
+   `query-dependencies`, `mutation-effects`, `live-matching`.
+5. **Live store, fixture, docs and record:** the `[fuseki]` suite, decision 9's fixture,
+   `ontologies.md`, backlogs, changeset, report 051, Outcome.
