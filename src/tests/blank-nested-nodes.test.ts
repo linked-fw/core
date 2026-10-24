@@ -25,6 +25,7 @@ import {serializePathToNodeData} from '../shapes/serializePathToNodeData';
 import {
   createToSparql,
   deleteToSparql,
+  mintNestedIds,
   updateToSparql,
   upsertToSparql,
   updateWhereToSparql,
@@ -205,6 +206,31 @@ describe('nested creates minted from the property sh:nodeKind', () => {
       expect(sparql).not.toContain('_:');
       expect(sparql).toContain('rdf:type core:PathNode');
     }
+  });
+
+  test('minting nested ids gives the IRI-named values an id and leaves the blank ones without', () => {
+    const ir = lower(
+      (BKinds.create({
+        blankOnly: inverse(`${X}p`),
+        blankOrLiteral: inverse(`${X}p`),
+        iriOrLiteral: inverse(`${X}p`),
+        iri: inverse(`${X}p`),
+        unset: inverse(`${X}p`),
+      } as never) as any).withId(`${X}k1`),
+    ) as unknown as IRCreateMutation;
+    mintNestedIds(ir, {dataRoot: 'https://acme.example/data'});
+    const ids = Object.fromEntries(
+      ir.data.fields.map((f) => [f.property.slice(f.property.lastIndexOf('/') + 1), (f.value as {id?: string}).id]),
+    );
+    expect(Object.keys(ids).sort()).toEqual(['blankOnly', 'blankOrLiteral', 'iri', 'iriOrLiteral', 'unset']);
+    expect(ids.blankOnly).toBeUndefined();
+    expect(ids.blankOrLiteral).toBeUndefined();
+    for (const key of ['iriOrLiteral', 'iri', 'unset']) {
+      expect(ids[key]).toMatch(/^https:\/\/acme\.example\/data\/pathnode_[0-9A-Z]{26}$/);
+    }
+    const sparql = createToSparql(ir);
+    expect(sparql).toContain(`<${X}k1> <${X}blankOnly> _:b0 .`);
+    expect(sparql).toContain(`<${X}k1> <${X}iri> <${ids.iri}> .`);
   });
 
   test('round-trips over the DSL-JSON wire with nothing about blank nodes on it', () => {

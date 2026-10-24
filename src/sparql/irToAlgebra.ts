@@ -2064,6 +2064,53 @@ function nestedNodeKind(propertyId: string, data: IRNodeData): NestedNodeKind {
 }
 
 /**
+ * Give every nested create of a mutation that will be written as an IRI and has no id a minted
+ * one, in place, the way the store mints the id of a create's subject. The compiler then writes
+ * the node under that id and the result mapper returns it, so the caller can address the node it
+ * created. A node written as a blank node (see {@link nestedNodeKind}) keeps no id.
+ */
+export function mintNestedIds(
+  query: IRCreateMutation | IRUpdateMutation | IRUpsertMutation | IRUpdateWhereMutation,
+  options?: SparqlCompileOptions,
+): void {
+  const catalog = catalogOf(query);
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
+    withShapeCatalog(catalog, () => mintNestedIds(query, options));
+    return;
+  }
+  mintNodeIds(query.data, options);
+}
+
+function mintNodeIds(data: IRNodeData, options?: SparqlCompileOptions): void {
+  for (const field of data.fields) {
+    for (const item of nestedCreatesOf(field.value)) {
+      if (!item.id && mintsAsIri(field.property)) {
+        item.id = generateEntityUri(item.shape, options);
+      }
+      mintNodeIds(item, options);
+    }
+  }
+}
+
+/** The nested creates a field value writes: itself, the items of an array, or a set's `add` items. */
+function nestedCreatesOf(value: IRFieldValue): IRNodeData[] {
+  const isNode = (v: unknown): v is IRNodeData =>
+    !!v && typeof v === 'object' && 'shape' in v && 'fields' in v;
+  if (Array.isArray(value)) return value.filter(isNode);
+  if (isNode(value)) return [value];
+  if (value && typeof value === 'object' && !(value instanceof Date) && 'add' in value) {
+    return ((value as IRSetModificationValue).add ?? []).filter(isNode);
+  }
+  return [];
+}
+
+/** True when a nested create without an id under `propertyId` is written as a (minted) IRI. */
+function mintsAsIri(propertyId: string): boolean {
+  const ps = findPropertyShapeById(propertyId);
+  return !isBlankCapable(ps) && ps?.nodeKind?.id !== shacl.Literal.id;
+}
+
+/**
  * The triples of a nested create held by `subjectTerm` through `propertyId`: the edge, then the
  * nested node's own triples. `blanks` is the create's label minter; without one (the update
  * paths) a value that would be minted blank throws, see `generateNodeDataTriples`.
@@ -2099,8 +2146,10 @@ function nestedCreateTriples(
 
 /**
  * The placement of a nested node (see {@link NestedPlacement}): an owned or blank node stays
- * with its holder; any other node goes to its shape's routed graph, which is the plan's own
- * graph when the two are the same and the plan's graph is known.
+ * with its holder; any other node goes to its shape's routed graph. That graph is the plan's own
+ * (`null`) when the two are the same, the plan's graph is known and the holder is written there
+ * too; below a holder written elsewhere, the plan's graph is named, so the node's triples are
+ * collected in a block of their own rather than with the holder's.
  */
 function childPlacement(
   placement: NestedPlacement,
@@ -2110,7 +2159,7 @@ function childPlacement(
 ): NestedPlacement {
   if (kind === 'blank' || findPropertyShapeById(propertyId)?.contains) return placement;
   const graph = placement.routing.graphForShape(data.shape);
-  return {...placement, target: graph === placement.planGraph ? null : graph};
+  return {...placement, target: graph === placement.planGraph && placement.target === null ? null : graph};
 }
 
 /**

@@ -44,6 +44,7 @@ import {
   deleteToSparql,
   deleteAllToSparql,
   deleteWhereToSparql,
+  mintNestedIds,
 } from './irToAlgebra.js';
 import {
   mapSparqlSelectResult,
@@ -438,6 +439,7 @@ export abstract class SparqlDataset implements IDataset {
     const ir = this.resolveWriteGraph(lower(query));
     const uri = ir.data.id || generateEntityUri(ir.data.shape, this.options);
     ir.data.id = uri;
+    mintNestedIds(ir, this.options);
     await this.checkOwnedLinks(ir);
     const sparql = createToSparql(ir, this.writeOptions());
     await this.executeSparqlUpdate(sparql);
@@ -446,6 +448,7 @@ export abstract class SparqlDataset implements IDataset {
 
   async updateQuery(query: UpdateQuery): Promise<UpdateResult> {
     const ir = this.resolveWriteGraph(lower(query));
+    mintNestedIds(ir, this.options);
     await this.checkOwnedLinks(ir);
     if (ir.kind === 'update_where') {
       const sparql = updateWhereToSparql(ir, this.writeOptions());
