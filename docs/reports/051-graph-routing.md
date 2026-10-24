@@ -374,7 +374,9 @@ Also (coordinator's request): `DraftGraph`'s comment, its registered description
 Observed, not changed: a nested create without `__id` returns `id: ''` for the nested node in the
 create result (`mapSparqlCreateResult` maps the IR, whose nested ids are minted only in the
 compiler); the default-graph `syncShape` delete → create also removes incoming links of the
-rewritten shape (the same cascade as finding 3, outside the cleanup).
+rewritten shape (the same cascade as finding 3, outside the cleanup). The first is fixed in report
+[054](054-nested-create-ids.md); the second was closed without change (it concerns shapes stored
+in the default graph, which apps on current dependency ranges no longer do).
 
 Gate (worktree `named-graphs--fixcore` on `named-graphs` at `0797ff3`; own Fuseki
 `ghcr.io/linked-fw/fuseki:6.2.0-2` on :3197, compose project `fuseki-071-fixcore`, env exported

@@ -20,6 +20,7 @@ export {
   updateToAlgebra,
   upsertToAlgebra,
   deleteToAlgebra,
+  mintNestedIds,
 } from './irToAlgebra.js';
 
 // High-level IR → SPARQL string (convenience wrappers)

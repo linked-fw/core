@@ -174,6 +174,108 @@ describe('a nested node the mutation does not own is written into its own shape 
   });
 });
 
+describe('a nested create without an id', () => {
+  const ARTICLE = `${D}article/1`;
+  const minted = (label: string) => new RegExp(`^${D}${label}_[0-9A-Z]{26}$`);
+
+  test('returns the id it is written under, in its own shape graph', async () => {
+    const s = store();
+    const result = (await NGArticle.create({
+      title: 'Hello',
+      author: {name: 'Ann', avatar: {url: 'a.png'}},
+    } as never).exec(s)) as {id: string; author: {id: string; avatar: {id: string}}};
+    expect(result.author.id).toMatch(minted('ngperson'));
+    expect(result.author.avatar.id).toMatch(minted('ngimage'));
+    const {graphs: byGraph} = blocks(s.last());
+    expect(byGraph[G_ARTICLES]).toContain(`<${result.id}> <${NG}author> <${result.author.id}>`);
+    expect(byGraph[G_PEOPLE]).toContain(`<${result.author.id}> <${NG}name> "Ann"`);
+    expect(byGraph[G_PEOPLE]).toContain(`<${result.author.avatar.id}> <${NG}url> "a.png"`);
+  });
+
+  test('each run of the same create mints new ids', async () => {
+    const s = store();
+    const create = NGArticle.create({author: {name: 'Ann'}} as never);
+    const first = (await create.exec(s)) as {author: {id: string}};
+    const second = (await create.exec(s)) as {author: {id: string}};
+    expect(second.author.id).not.toBe(first.author.id);
+  });
+
+  test('update and upsert return the minted id they write; a set add writes one', async () => {
+    const s = store();
+    const updated = (await NGArticle.update({author: {name: 'Bo'}} as never).for({id: ARTICLE}).exec(s)) as {
+      author: {id: string};
+    };
+    expect(updated.author.id).toMatch(minted('ngperson'));
+    expect(blocks(s.last()).graphs[G_PEOPLE]).toContain(`<${updated.author.id}> <${NG}name> "Bo"`);
+    const upserted = (await NGArticle.upsert({author: {name: 'Cy'}} as never).for({id: ARTICLE}).exec(s)) as {
+      author: {id: string};
+    };
+    expect(upserted.author.id).toMatch(minted('ngperson'));
+    expect(blocks(s.last()).graphs[G_PEOPLE]).toContain(`<${upserted.author.id}> <${NG}name> "Cy"`);
+    await NGPerson.update({friends: {add: [{name: 'Di'}]}} as never).for({id: `${D}person/ann`}).exec(s);
+    expect(s.last()).toMatch(new RegExp(`<${D}person/ann> <${NG}friend> <${D}ngperson_[0-9A-Z]{26}>`));
+  });
+});
+
+describe('a nested create two levels deep across graphs', () => {
+  const ARTICLE = `${D}article/1`;
+  const ANN = `${D}person/ann`;
+  const PHOTO = `${D}photo/1`;
+  // The article and the photo in the default graph, the author between them in hers.
+  const routes = {[NGPerson.shape.id]: G_PEOPLE};
+  const value = {__id: ANN, name: 'Ann', favoritePhoto: {__id: PHOTO, caption: 'beach'}};
+
+  /** The grandchild in the plan's (default) graph, apart from the author's block. */
+  function expectPlaced(sparql: string, holder = `<${ARTICLE}>`): void {
+    const {graphs: byGraph, outside} = blocks(sparql);
+    expect(Object.keys(byGraph)).toEqual([G_PEOPLE]);
+    expect(byGraph[G_PEOPLE]).toContain(`<${ANN}> <${NG}favoritePhoto> <${PHOTO}>`);
+    expect(byGraph[G_PEOPLE]).not.toContain(`<${PHOTO}> <${NG}caption>`);
+    expect(outside).toContain(`${holder} <${NG}author> <${ANN}>`);
+    expect(outside).toContain(`<${PHOTO}> <${NG}caption> "beach"`);
+  }
+
+  test('create', async () => {
+    const s = store(routes);
+    await NGArticle.create({__id: ARTICLE, author: value} as never).exec(s);
+    expectPlaced(s.last());
+  });
+
+  test('update and upsert', async () => {
+    const s = store(routes);
+    await NGArticle.update({author: value} as never).for({id: ARTICLE}).exec(s);
+    expectPlaced(s.last().slice(s.last().indexOf('INSERT {')));
+    await NGArticle.upsert({author: value} as never).for({id: ARTICLE}).exec(s);
+    expectPlaced(s.last().slice(s.last().indexOf('INSERT {')));
+  });
+
+  test('update-where', async () => {
+    const s = store(routes);
+    await NGArticle.update({author: value} as never).forAll().exec(s);
+    const update = s.last();
+    expectPlaced(update.slice(update.indexOf('INSERT {'), update.indexOf('WHERE {')), '?a0');
+  });
+
+  test('a grandchild back in a named plan graph gets a block of that graph', async () => {
+    const s = store({[NGArticle.shape.id]: G_ARTICLES, [NGPerson.shape.id]: G_PEOPLE, [NGPhoto.shape.id]: G_ARTICLES});
+    await NGArticle.create({__id: ARTICLE, author: value} as never).exec(s);
+    const created = s.last();
+    expect(created).not.toContain('null');
+    const articleBlocks = [...created.matchAll(new RegExp(`GRAPH <${G_ARTICLES}> \\{\\n([\\s\\S]*?)\\n  \\}`, 'g'))]
+      .map((m) => m[1])
+      .join('\n');
+    expect(articleBlocks).toContain(`<${ARTICLE}> <${NG}author> <${ANN}>`);
+    expect(articleBlocks).toContain(`<${PHOTO}> <${NG}caption> "beach"`);
+    await NGArticle.update({author: value} as never).for({id: ARTICLE}).exec(s);
+    const update = s.last();
+    expect(update).toMatch(new RegExp(`^WITH <${G_ARTICLES}>`, 'm'));
+    const insert = update.slice(update.indexOf('INSERT {'), update.indexOf('WHERE {'));
+    expect(blocks(insert).graphs[G_PEOPLE]).not.toContain(`<${PHOTO}> <${NG}caption>`);
+    expect(blocks(insert).graphs[G_ARTICLES]).toContain(`<${PHOTO}> <${NG}caption> "beach"`);
+    expect(update).not.toContain('null');
+  });
+});
+
 describe('live effects of a write into several graphs', () => {
   afterEach(() => {
     LinkedStorage.unsetDatasetForShape(NGArticle);

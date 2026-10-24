@@ -112,4 +112,49 @@ describeFuseki('graph routing of nested writes and sub-shape owners', () => {
     expect(await graphsOf(COVER)).toEqual([]);
     expect((await NGPhoto.select((p) => p.caption).exec(store)).map((p) => p.caption)).toEqual(['loose']);
   });
+
+  test('a nested author created without an id is returned with the id she is written under', async () => {
+    const created = (await NGArticle.create({title: 'No ids', author: {name: 'Eve'}} as never).exec(store)) as {
+      id: string;
+      author: {id: string};
+    };
+    const eve = created.author.id;
+    expect(eve).not.toBe('');
+    expect(await graphsOf(eve)).toEqual([G_PEOPLE]);
+    expect(await NGPerson.select((p) => p.name).for({id: eve}).exec(store)).toEqual({id: eve, name: 'Eve'});
+    expect(await NGArticle.select((a) => a.author.name).for({id: created.id}).exec(store)).toEqual({
+      id: created.id,
+      author: {id: eve, name: 'Eve'},
+    });
+  });
+
+  test('two levels deep: an unrouted article, its author in hers, her photo back in the default graph', async () => {
+    // Only persons are routed here: the article and the photo live in the default graph.
+    const plain = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME);
+    setShapeGraphs(plain, {[NGPerson.shape.id]: G_PEOPLE});
+    const write = async (kind: 'create' | 'update' | 'upsert', n: number) => {
+      const article = `${D}deep/article/${kind}`;
+      const value = {name: `P${n}`, favoritePhoto: {caption: `photo ${n}`}};
+      const result = (await (kind === 'create'
+        ? NGArticle.create({__id: article, author: value} as never)
+        : NGArticle[kind]({author: value} as never).for({id: article})
+      ).exec(plain)) as {author: {id: string; favoritePhoto: {id: string}}};
+      const person = result.author.id;
+      const photo = result.author.favoritePhoto.id;
+      expect(await graphsOf(article)).toEqual(['default']);
+      expect(await graphsOf(person)).toEqual([G_PEOPLE]);
+      expect(await graphsOf(photo)).toEqual(['default']);
+      expect(await NGPhoto.select((p) => p.caption).for({id: photo}).exec(plain)).toEqual({
+        id: photo,
+        caption: `photo ${n}`,
+      });
+      expect(
+        await NGArticle.select((a) => a.author.favoritePhoto.caption).for({id: article}).exec(plain),
+      ).toEqual({id: article, author: {id: person, favoritePhoto: {id: photo, caption: `photo ${n}`}}});
+    };
+    await write('create', 1);
+    await NGArticle.create({__id: `${D}deep/article/update`, title: 'u'} as never).exec(plain);
+    await write('update', 2);
+    await write('upsert', 3);
+  });
 });

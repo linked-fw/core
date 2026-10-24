@@ -6,8 +6,9 @@
 
 /**
  * Shapes for graph routing across nested writes and sub-shape owners: an article that links (does
- * not own) its author, a person who owns (`contains`) an avatar, and an album that owns a cover
- * typed by a sub-shape (`NGPanorama`) of a shape read on its own (`NGPhoto`).
+ * not own) its author, a person who owns (`contains`) an avatar and links a favourite photo, and
+ * an album that owns a cover typed by a sub-shape (`NGPanorama`) of a shape read on its own
+ * (`NGPhoto`).
  */
 import {linkedPackage} from '../utils/Package.js';
 import {Shape} from '../shapes/Shape.js';
@@ -24,6 +25,16 @@ export class NGImage extends Shape {
 
   @literalProperty({path: ex('url'), maxCount: 1})
   get url(): string {
+    return '';
+  }
+}
+
+@linkedShape
+export class NGPhoto extends Shape {
+  static targetClass = ex('Photo');
+
+  @literalProperty({path: ex('caption'), maxCount: 1})
+  get caption(): string {
     return '';
   }
 }
@@ -46,6 +57,11 @@ export class NGPerson extends Shape {
   get friends(): NGPerson[] {
     return [];
   }
+
+  @objectProperty({path: ex('favoritePhoto'), shape: NGPhoto, maxCount: 1})
+  get favoritePhoto(): NGPhoto {
+    return null as unknown as NGPhoto;
+  }
 }
 
 @linkedShape
@@ -60,16 +76,6 @@ export class NGArticle extends Shape {
   @objectProperty({path: ex('author'), shape: NGPerson, maxCount: 1})
   get author(): NGPerson {
     return null as unknown as NGPerson;
-  }
-}
-
-@linkedShape
-export class NGPhoto extends Shape {
-  static targetClass = ex('Photo');
-
-  @literalProperty({path: ex('caption'), maxCount: 1})
-  get caption(): string {
-    return '';
   }
 }
 
