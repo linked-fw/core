@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.39.2
+
+### Patch Changes
+
+- [#379](https://github.com/linked-fw/core/pull/379) [`9a1e874`](https://github.com/linked-fw/core/commit/9a1e874dbc48d9263b43e30dce0bdc6391b0a3e2) Thanks [@flyon](https://github.com/flyon)! - Shape-graph cleanup works over remote datasets: keep-incoming deletes are now carried in DSL-JSON
+
 ## 2.39.1
 
 ### Patch Changes
