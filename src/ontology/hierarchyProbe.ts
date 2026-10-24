@@ -9,28 +9,32 @@
  * sync moves the hierarchy out of the default graph. Core never checks a store's product or
  * version: it writes a probe and reads it back through the dataset's normal query path.
  *
- * The probe, in a temporary graph registered as an `OntologyGraph` (so it feeds the hierarchy):
+ * The probe uses two temporary graphs, both recorded as `OntologyGraph`s: a hierarchy graph that
+ * feeds the hierarchy, and a data graph that does not (`feedsHierarchy false`):
  *
  * ```turtle
- * probe:Named rdfs:subClassOf sd:NamedGraph .   # the hierarchy, in the registered graph
- * probe:named a probe:Named .
- * probe:default a probe:Default .
+ * probe:Named rdfs:subClassOf sd:NamedGraph .   # in the hierarchy graph
+ * probe:named a probe:Named .                   # in the data graph
+ * probe:default a probe:Default .               # in the data graph
  * ```
  *
  * 1. `probe:named` read as an `sd:NamedGraph` (an ask through the `NamedGraph` shape, `.from()`
- *    the probe graph) → **`'named-graphs'`**: the store infers from the hierarchy of registered
- *    graphs (a store that infers over every graph answers the same).
+ *    the data graph) → **`'named-graphs'`**: the hierarchy of a registered graph reaches nodes
+ *    stored in other graphs (a store that infers over every graph answers the same).
  * 2. Else `probe:Default rdfs:subClassOf sd:NamedGraph` is written into the default graph and
  *    `probe:default` asked the same way → **`'default-graph'`**: the store infers only from the
  *    default graph's hierarchy.
  * 3. Else **`'none'`**: the store does not infer classes.
  *
- * The default-graph axiom is removed and the probe graph dropped afterwards, whatever the answer.
- * The probe graph is `{data root}/graph/import/linked-inference-probe-{random}` (the store's data
- * root, else `DATA_ROOT`, else linked.cm): a graph name of the import kind, which no graph route
- * writes and an app's gateway admits; its record names the package `@_linked/inference-probe`,
- * which no app registers, so a probe a crash left behind is pruned by the next sync with
- * `orphanScope: 'all'`.
+ * The default-graph axiom is removed and both graphs dropped afterwards, whatever the answer
+ * (`finally`, best effort). A probe a crashed process left behind is swept by the next probe:
+ * every probe record older than {@link STALE_PROBE_MS} is dropped, with its default-graph axiom
+ * (when the axiom cannot be removed, the graphs are kept as the marker for that sweep). The graphs
+ * are `{data root}/graph/import/linked-inference-probe-{random}` and `…-{random}-data` (the store's
+ * data root, else `DATA_ROOT`, else linked.cm): names of the import kind, which no graph route
+ * writes (import graphs are ontologies fetched by URL, `OntologyGraph` records); the records name
+ * the package `@_linked/inference-probe`, which no app registers (so `orphanScope: 'all'` prunes a
+ * leftover too).
  *
  * The answer is cached per dataset object for the process (on `globalThis`, so every copy of core
  * shares it); {@link resetHierarchyInference} drops it.
@@ -58,6 +62,11 @@ export type HierarchyInference = 'named-graphs' | 'default-graph' | 'none';
 /** The package name a probe graph's record carries; no app registers it. */
 export const INFERENCE_PROBE_PACKAGE = '@_linked/inference-probe';
 
+/** A probe record older than this (five minutes) belongs to a probe that did not clean up. */
+export const STALE_PROBE_MS = 5 * 60_000;
+
+const PROBE_GRAPH = /\/graph\/import\/linked-inference-probe-([a-z0-9]+)(?:-data)?$/;
+
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
 
 type Exec = {exec: (target?: IDataset) => Promise<unknown>};
@@ -67,6 +76,8 @@ const GLOBAL_ROUTER = {};
 
 const probeState = sharedState('@_linked/core', 'hierarchyProbe', () => ({
   results: new WeakMap<object, Promise<HierarchyInference>>(),
+  /** The datasets the sync has warned about (one warning per probe answer). */
+  warned: new WeakSet<object>(),
 }));
 
 const cacheKey = (ds?: IDataset): object =>
@@ -104,40 +115,108 @@ export function probeHierarchyInference(ds?: IDataset): Promise<HierarchyInferen
  */
 export function resetHierarchyInference(ds?: IDataset): void {
   probeState.results.delete(cacheKey(ds));
+  probeState.warned?.delete(cacheKey(ds));
+}
+
+/**
+ * Log `message` once per dataset (the same key the probe answer is cached under), until
+ * {@link resetHierarchyInference}. For the warnings the ontology sync gives on a probe's answer.
+ */
+export function warnOnceForDataset(ds: IDataset | undefined, message: string): void {
+  // A copy of core older than this field shares the container: fill the gap.
+  const warned = (probeState.warned ??= new WeakSet<object>());
+  const key = cacheKey(ds);
+  if (warned.has(key)) return;
+  warned.add(key);
+  console.warn(message);
+}
+
+/** The class IRIs of the probe with `token`. */
+const probeTerms = (token: string) => {
+  const base = `${LINKED_DATA_ROOT}ont/core/inferenceProbe/${token}`;
+  return {
+    named: {cls: `${base}/Named`, instance: `${base}/named`},
+    inDefault: {cls: `${base}/Default`, instance: `${base}/default`},
+  };
+};
+
+const defaultAxiom = (token: string, change: 'add' | 'remove', ds?: IDataset) =>
+  (ClassAxioms.update({subClassOf: {[change]: [{id: sd.NamedGraph.id}]}} as never).for({
+    id: probeTerms(token).inDefault.cls,
+  }) as unknown as Exec).exec(ds);
+
+/**
+ * Drop the probe graphs older than {@link STALE_PROBE_MS} (a probe that crashed before its
+ * `finally`), and the default-graph axiom each may have left. Best effort: a sweep that fails
+ * leaves the probe to run, and the next probe sweeps again.
+ */
+async function sweepStaleProbes(ds?: IDataset): Promise<void> {
+  try {
+    const rows =
+      ((await OntologyGraph.select((r) => [r.package, r.modified]).exec(ds)) as Array<{
+        id: string;
+        package?: unknown;
+        modified?: unknown;
+      }> | null) ?? [];
+    const now = Date.now();
+    for (const row of rows) {
+      const match = row?.id ? PROBE_GRAPH.exec(row.id) : null;
+      if (!match || row.package !== INFERENCE_PROBE_PACKAGE) continue;
+      const at = row.modified instanceof Date ? row.modified.getTime() : Date.parse(String(row.modified));
+      if (Number.isFinite(at) && now - at < STALE_PROBE_MS) continue;
+      await defaultAxiom(match[1], 'remove', ds);
+      await OntologyGraph.delete(row.id).exec(ds);
+    }
+  } catch {
+    // Best effort (above).
+  }
 }
 
 async function runProbe(ds?: IDataset): Promise<HierarchyInference> {
+  await sweepStaleProbes(ds);
   const token = randomToken();
   const root = (dataRootOf(ds) ?? LINKED_DATA_ROOT).replace(/\/+$/, '');
-  const graph = `${root}/graph/import/linked-inference-probe-${token}`;
-  const base = `${LINKED_DATA_ROOT}ont/core/inferenceProbe/${token}`;
-  const named = {cls: `${base}/Named`, instance: `${base}/named`};
-  const inDefault = {cls: `${base}/Default`, instance: `${base}/default`};
-  const text =
-    `<${named.cls}> <${RDFS_SUBCLASSOF}> <${sd.NamedGraph.id}> .\n` +
-    `<${named.instance}> <${RDF_TYPE}> <${named.cls}> .\n` +
-    `<${inDefault.instance}> <${RDF_TYPE}> <${inDefault.cls}> .\n`;
+  const hierarchyGraph = `${root}/graph/import/linked-inference-probe-${token}`;
+  const dataGraph = `${hierarchyGraph}-data`;
+  const {named, inDefault} = probeTerms(token);
+  const nt = (text: string) => ({mediaType: 'application/n-triples' as const, text});
   const found = async (instance: string): Promise<boolean> =>
-    (await (QueryBuilder.from(NamedGraph as never).for(instance).from(graph) as unknown as {
+    (await (QueryBuilder.from(NamedGraph as never).for(instance).from(dataGraph) as unknown as {
       exists: (target?: IDataset) => Promise<boolean>;
     }).exists(ds)) === true;
-  const axiom = (change: 'add' | 'remove') =>
-    (ClassAxioms.update({subClassOf: {[change]: [{id: sd.NamedGraph.id}]}} as never).for({
-      id: inDefault.cls,
-    }) as unknown as Exec).exec(ds);
 
-  await OntologyGraph.create({id: graph, package: INFERENCE_PROBE_PACKAGE})
-    .withContent({mediaType: 'application/n-triples', text})
-    .exec(ds);
+  let axiomAdded = false;
   try {
+    // The instances live in a graph that does not feed the hierarchy: the hierarchy of a feeding
+    // graph must reach nodes stored elsewhere, not only its own.
+    await OntologyGraph.create({id: dataGraph, package: INFERENCE_PROBE_PACKAGE, feedsHierarchy: false})
+      .withContent(
+        nt(
+          `<${named.instance}> <${RDF_TYPE}> <${named.cls}> .\n` +
+            `<${inDefault.instance}> <${RDF_TYPE}> <${inDefault.cls}> .\n`,
+        ),
+      )
+      .exec(ds);
+    await OntologyGraph.create({id: hierarchyGraph, package: INFERENCE_PROBE_PACKAGE})
+      .withContent(nt(`<${named.cls}> <${RDFS_SUBCLASSOF}> <${sd.NamedGraph.id}> .\n`))
+      .exec(ds);
     if (await found(named.instance)) return 'named-graphs';
-    await axiom('add');
-    try {
-      return (await found(inDefault.instance)) ? 'default-graph' : 'none';
-    } finally {
-      await axiom('remove');
-    }
+    axiomAdded = true;
+    await defaultAxiom(token, 'add', ds);
+    return (await found(inDefault.instance)) ? 'default-graph' : 'none';
   } finally {
-    await OntologyGraph.delete(graph).exec(ds);
+    // Best effort, never masking the probe's own answer or error. When the default-graph axiom
+    // cannot be removed the graphs stay, so the next probe's sweep finds the token and removes it.
+    let axiomLeft = false;
+    if (axiomAdded) {
+      await defaultAxiom(token, 'remove', ds).catch(() => {
+        axiomLeft = true;
+      });
+    }
+    if (!axiomLeft) {
+      for (const graph of [hierarchyGraph, dataGraph]) {
+        await OntologyGraph.delete(graph).exec(ds).catch(() => undefined);
+      }
+    }
   }
 }

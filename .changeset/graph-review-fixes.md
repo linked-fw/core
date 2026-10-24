@@ -5,10 +5,11 @@
 Fixes from the named-graphs review.
 
 - The ontology sync probes the store once per dataset before it moves the class hierarchy out of
-  the default graph: a probe `subClassOf` and a typed instance in a temporary registered graph,
-  read back through the normal query path. A store that infers from the registered graphs gets the
-  move; one that infers only from the default graph keeps the default-graph sync; one that does not
-  infer gets the package graphs and keeps the default-graph hierarchy too. The last two warn once.
+  the default graph: a probe `subClassOf` in a temporary registered graph and a typed instance in
+  a second graph, read back through the normal query path. The ontology data always goes into
+  package graphs; the default-graph hierarchy is removed only when the store infers from the
+  registered graphs. Otherwise it stays, and the sync warns once. Stale probes are swept. A package
+  graph create that another process won is replaced instead of failing the sync.
   `probeHierarchyInference` and `resetHierarchyInference` are in `@_linked/core/ontology/hierarchyProbe`.
   The README's "Store requirements" now says what core needs from a store.
 - Graph queries carry their conditions inside the update. Of two concurrent `graph_create`s exactly

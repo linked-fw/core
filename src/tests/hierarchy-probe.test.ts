@@ -1,8 +1,8 @@
 /*
  * The inference probe and what the ontology sync does with each answer, against stub stores:
- * `'named-graphs'` moves the hierarchy into package graphs, `'default-graph'` keeps the
- * default-graph sync only, `'none'` writes package graphs and keeps the default-graph hierarchy;
- * one warning per dataset, the answer cached per dataset, the probe cleaned up even when it fails.
+ * `'named-graphs'` moves the hierarchy into package graphs; `'default-graph'` and `'none'` write
+ * package graphs and keep the default-graph hierarchy; one warning per dataset, the answer cached
+ * per dataset, the probe cleaned up even when it fails, and stale probes swept.
  */
 import {beforeEach, describe, expect, jest, test} from '@jest/globals';
 import {linkedPackage} from '../utils/Package';
@@ -14,6 +14,7 @@ import {
   INFERENCE_PROBE_PACKAGE,
   probeHierarchyInference,
   resetHierarchyInference,
+  STALE_PROBE_MS,
   type HierarchyInference,
 } from '../ontology/hierarchyProbe';
 import {OntologyGraph} from '../shapes/NamedGraph';
@@ -46,6 +47,8 @@ class StubStore extends SparqlDataset {
   asks = 0;
   nodes: Array<{id: string; packageName: string; ontologyHash: string; ontologyTriples: string}> = [];
   failAsk = false;
+  /** OntologyGraph records the store holds (a stale probe's, for the sweep). */
+  records: Array<{id: string; package: string; modified?: Date}> = [];
   constructor(public inference: HierarchyInference) {
     super();
   }
@@ -57,7 +60,7 @@ class StubStore extends SparqlDataset {
     return answer;
   }
   override async selectQuery(query: any): Promise<any> {
-    if (shapeOf(query) === OntologyGraph.shape.id) return [];
+    if (shapeOf(query) === OntologyGraph.shape.id) return this.records.map((r) => ({...r}));
     if (shapeOf(query) === OntologySync.shape.id) return this.nodes.map((n) => ({...n}));
     throw new Error(`unexpected select of ${shapeOf(query)}`);
   }
@@ -97,12 +100,17 @@ describe('probeHierarchyInference', () => {
     const store = new StubStore(inference);
     expect(await probeHierarchyInference(store)).toBe(inference);
     expect(store.asks).toBe(asks);
-    // A temporary registered graph, created then dropped.
-    expect(store.probeQueries.map((q) => q.kind)).toEqual(['graph_create', 'graph_drop']);
-    const [create] = store.probeQueries;
-    expect(create.recordClass).toBe(OntologyGraph.targetClass.id);
-    expect(create.record).toEqual({package: INFERENCE_PROBE_PACKAGE});
-    expect(create.content?.text).toContain(`<${SUB}> <http://www.w3.org/ns/sparql-service-description#NamedGraph>`);
+    // Two temporary graphs, created then dropped: the instances in one that does not feed the
+    // hierarchy, the hierarchy in one that does.
+    expect(store.probeQueries.map((q) => q.kind)).toEqual(['graph_create', 'graph_create', 'graph_drop', 'graph_drop']);
+    const [data, hierarchy] = store.probeQueries;
+    expect(data.graph).toBe(`${hierarchy.graph}-data`);
+    expect(data.record).toEqual({package: INFERENCE_PROBE_PACKAGE, feedsHierarchy: false});
+    expect(data.content?.text).not.toContain(SUB);
+    expect(hierarchy.recordClass).toBe(OntologyGraph.targetClass.id);
+    expect(hierarchy.record).toEqual({package: INFERENCE_PROBE_PACKAGE});
+    expect(hierarchy.content?.text).toContain(`<${SUB}> <http://www.w3.org/ns/sparql-service-description#NamedGraph>`);
+    expect(store.probeQueries.slice(2).map((q) => q.graph)).toEqual([hierarchy.graph, data.graph]);
     // The default-graph axiom is written only when the registered graph did not infer, and
     // removed again.
     expect(probeAxiomUpdates(store)).toHaveLength(inference === 'named-graphs' ? 0 : 2);
@@ -112,18 +120,36 @@ describe('probeHierarchyInference', () => {
     const store = new StubStore('named-graphs');
     await probeHierarchyInference(store);
     await probeHierarchyInference(store);
-    expect(store.probeQueries).toHaveLength(2);
+    expect(store.probeQueries).toHaveLength(4);
     await probeHierarchyInference(new StubStore('none'));
     resetHierarchyInference(store);
     await probeHierarchyInference(store);
-    expect(store.probeQueries).toHaveLength(4);
+    expect(store.probeQueries).toHaveLength(8);
+  });
+
+  test('a probe sweeps the probe graphs a crashed probe left, older than five minutes', async () => {
+    const store = new StubStore('named-graphs');
+    const stale = 'https://linked.cm/graph/import/linked-inference-probe-abc123-data';
+    const fresh = 'https://linked.cm/graph/import/linked-inference-probe-def456';
+    store.records = [
+      {id: stale, package: INFERENCE_PROBE_PACKAGE, modified: new Date(Date.now() - STALE_PROBE_MS - 1000)},
+      {id: fresh, package: INFERENCE_PROBE_PACKAGE, modified: new Date()},
+      {id: OntologyGraph.iriFor(PKG), package: PKG, modified: new Date(0)},
+    ];
+    await probeHierarchyInference(store);
+    const drops = store.probeQueries.filter((q) => q.kind === 'graph_drop').map((q) => q.graph);
+    expect(drops).toContain(stale);
+    expect(drops).not.toContain(fresh);
+    expect(store.graphQueries).toEqual([]); // the package's own graph is left alone
+    // Its default-graph axiom is removed with it.
+    expect(store.updates.some((u) => u.includes('inferenceProbe/abc123/Default'))).toBe(true);
   });
 
   test('a probe that fails cleans up and is not cached', async () => {
     const store = new StubStore('default-graph');
     store.failAsk = true;
     await expect(probeHierarchyInference(store)).rejects.toThrow('ask failed');
-    expect(store.probeQueries.map((q) => q.kind)).toEqual(['graph_create', 'graph_drop']);
+    expect(store.probeQueries.map((q) => q.kind)).toEqual(['graph_create', 'graph_create', 'graph_drop', 'graph_drop']);
     store.failAsk = false;
     expect(await probeHierarchyInference(store)).toBe('default-graph');
     expect(probeAxiomUpdates(store)).toHaveLength(2); // added and removed
@@ -143,17 +169,17 @@ describe('syncOntologies by the probe answer', () => {
     expect(syncWarnings()).toEqual([]);
   });
 
-  test("'default-graph': the default-graph sync only, one warning, the probe run once", async () => {
+  test("'default-graph': the package graph and the default-graph hierarchy both, one warning, the probe run once", async () => {
     const store = new StubStore('default-graph');
     const first = await syncOntologies(store, {packages: [PKG]});
     expect(first.written).toEqual([PKG]);
-    expect(store.graphQueries).toEqual([]);
+    expect(store.graphQueries.map((q) => q.kind)).toEqual(['graph_create']);
     const updates = syncUpdates(store);
     expect(updates.some((u) => u.includes(`<${NS}A> rdfs:subClassOf <${NS}B>`))).toBe(true);
     expect(updates.at(-1)).toContain(`ontologySync/${PKG}`);
     store.nodes = [oldNode()];
     await syncOntologies(store, {packages: [PKG]});
-    expect(store.probeQueries).toHaveLength(2);
+    expect(store.probeQueries).toHaveLength(4);
     expect(syncWarnings()).toHaveLength(1);
     expect(syncWarnings()[0]).toMatch(/only from the default graph/);
     expect(syncWarnings()[0]).toMatch(/Store requirements/);

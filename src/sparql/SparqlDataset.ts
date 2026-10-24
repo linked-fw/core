@@ -74,6 +74,7 @@ import {withShapeCatalog} from '../utils/ShapeClass.js';
 import {lower} from '../queries/lower.js';
 import {attachCatalog, catalogOf} from '../utils/ShapeClass.js';
 import {graphs} from '../ontologies/graphs.js';
+import {sharedState} from '../utils/sharedState.js';
 import {
   expandReadGraphs,
   invalidateGraphRegistry,
@@ -117,7 +118,11 @@ import {
  * }
  * ```
  */
-let nextRegistryKey = 0;
+/**
+ * The counter behind each store's default registry key, on `globalThis` like the registry cache
+ * itself: two copies of core in one process must not both mint `sparql-dataset:0`.
+ */
+const registryKeys = sharedState('@_linked/core', 'SparqlDataset.registryKey', () => ({next: 0}));
 
 /** A value unique to one `graph_create` request (see `GRAPH_CREATE_CLAIM`). */
 function newCreateClaim(): string {
@@ -130,7 +135,7 @@ const NO_ROWS = {head: {vars: []}, results: {bindings: []}};
 
 export abstract class SparqlDataset implements IDataset {
   protected options?: SparqlOptions;
-  private readonly instanceRegistryKey = `sparql-dataset:${nextRegistryKey++}`;
+  private readonly instanceRegistryKey = `sparql-dataset:${registryKeys.next++}`;
 
   constructor(options?: SparqlOptions) {
     this.options = options;
@@ -628,12 +633,15 @@ export abstract class SparqlDataset implements IDataset {
   private async confirmGraphCreate(graph: string, claim: string): Promise<void> {
     const json = await this.executeSparqlSelect(graphCreateOutcomeQuery(graph, claim));
     const row = isSparqlSelectResults(json) ? json.results.bindings[0] : undefined;
-    const flag = (name: string) => row?.[name]?.value === 'true';
+    // `true`, or `1` from a store that writes an xsd:boolean BIND in its numeric form.
+    const flag = (name: string) => row?.[name]?.value === 'true' || row?.[name]?.value === '1';
     if (!row) {
       throw new Error('Expected a SPARQL SELECT result set when confirming a graph create.');
     }
     if (flag('claimed')) {
-      await this.executeSparqlUpdate(graphCreateClaimRemoval(graph, claim));
+      // Best effort: the create has written. A claim left on the record is ignored by readers and
+      // removed with the record.
+      await this.executeSparqlUpdate(graphCreateClaimRemoval(graph, claim)).catch(() => undefined);
       return;
     }
     if (!flag('registered') && flag('populated')) {

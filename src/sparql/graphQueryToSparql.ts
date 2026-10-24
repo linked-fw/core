@@ -298,12 +298,15 @@ export function graphQueryToSparql(
       const typed =
         query.recordClass === sd.NamedGraph.id ? '' : ` ; a ${iri(query.recordClass)}`;
       const recorded = inRegistry(`${named}${typed}`);
+      // An insert's WHERE gives at most one solution, so a body's blank nodes are written once
+      // even by a store that derives the record pattern more than one way.
+      const onlyIfRecorded = `FILTER EXISTS { ${recorded} }`;
       const clearGraph = () =>
         ops.push(
           `DELETE { GRAPH ${g} { ?s_c ?p_c ?o_c } } WHERE { ${recorded} GRAPH ${g} { ?s_c ?p_c ?o_c } }`,
         );
       const insertBody = (body: string | undefined) => {
-        if (body) ops.push(`INSERT { GRAPH ${g} {\n${body}} } WHERE { ${recorded} }`);
+        if (body) ops.push(`INSERT { GRAPH ${g} {\n${body}} } WHERE { ${onlyIfRecorded} }`);
       };
       if (query.kind === 'graph_replace') {
         clearGraph();
@@ -328,7 +331,7 @@ export function graphQueryToSparql(
       }
       if (changed.size) {
         ops.push(
-          `INSERT { ${inRegistry(`${g} ${recordFields(changed).join(' ; ')} .`)} } WHERE { ${recorded} }`,
+          `INSERT { ${inRegistry(`${g} ${recordFields(changed).join(' ; ')} .`)} } WHERE { ${onlyIfRecorded} }`,
         );
       }
       break;

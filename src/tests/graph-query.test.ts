@@ -388,14 +388,14 @@ describe('SparqlDataset.graphQuery', () => {
     expect(ops[0]).toBe(
       `DELETE { GRAPH <${G}> { ?s_c ?p_c ?o_c } } WHERE { ${rec} GRAPH <${G}> { ?s_c ?p_c ?o_c } }`,
     );
-    expect(ops[1]).toBe(`INSERT { GRAPH <${G}> {\n<urn:a> <urn:b> "x\\ny" .\n} } WHERE { ${rec} }`);
+    expect(ops[1]).toBe(`INSERT { GRAPH <${G}> {\n<urn:a> <urn:b> "x\\ny" .\n} } WHERE { FILTER EXISTS { ${rec} } }`);
     const field = (p: string, n: number) => `GRAPH <${REG}> { <${G}> <${p}> ?v${n} }`;
     expect(ops.slice(2, 5)).toEqual([
       `DELETE { ${field('https://linked.cm/ont/core/contentHash', 0)} } WHERE { ${rec} ${field('https://linked.cm/ont/core/contentHash', 0)} }`,
       `DELETE { ${field('http://purl.org/dc/terms/modified', 1)} } WHERE { ${rec} ${field('http://purl.org/dc/terms/modified', 1)} }`,
       `DELETE { ${field('https://linked.cm/ont/core/version', 2)} } WHERE { ${rec} ${field('https://linked.cm/ont/core/version', 2)} }`,
     ]);
-    expect(ops[5].endsWith(`WHERE { ${rec} }`)).toBe(true);
+    expect(ops[5].endsWith(`WHERE { FILTER EXISTS { ${rec} } }`)).toBe(true);
     expect(ops[5]).toContain('"filehash"');
     expect(ops[5]).toContain('<https://linked.cm/ont/core/version> "2.0.0"');
     expect(ops).toHaveLength(6);
@@ -409,7 +409,7 @@ describe('SparqlDataset.graphQuery', () => {
     const rec = `GRAPH <${REG}> { <${G}> <http://www.w3.org/ns/sparql-service-description#name> <${G}> }`;
     expect(ops[0]).toBe(`DELETE { GRAPH <${G}> {\n<urn:a> <urn:b> <urn:old> .\n} } WHERE { ${rec} }`);
     expect(ops[1]).toContain(`INSERT { GRAPH <${G}> {`);
-    expect(ops[1].endsWith(`WHERE { ${rec} }`)).toBe(true);
+    expect(ops[1].endsWith(`WHERE { FILTER EXISTS { ${rec} } }`)).toBe(true);
     expect(result.contentHash).toBe(sha256Hex(`${del.text}\n${nt.text}`));
     expect(ops.join('\n')).not.toContain('version');
   });
@@ -421,7 +421,7 @@ describe('SparqlDataset.graphQuery', () => {
     const field = `GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/version> ?v0 }`;
     expect(ds.updates).toEqual([
       `DELETE { ${field} } WHERE { ${rec} ${field} } ;\n` +
-        `INSERT { GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/version> "3"^^<http://www.w3.org/2001/XMLSchema#string> . } } WHERE { ${rec} }`,
+        `INSERT { GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/version> "3"^^<http://www.w3.org/2001/XMLSchema#string> . } } WHERE { FILTER EXISTS { ${rec} } }`,
     ]);
     expect(result).toEqual({graph: G, changed: true});
   });

@@ -47,14 +47,16 @@ product or version.
 
 How the ontology sync adapts (`syncOntologies`, `@_linked/core/ontology/syncOntologies`; run by
 `@_linked/server` at boot): before it writes, it probes the store once per dataset. It writes a
-probe `rdfs:subClassOf` and a typed instance into a temporary registered graph, asks through the
-normal query path whether the instance is found by its superclass, then removes the probe. See
+probe `rdfs:subClassOf` into a temporary registered graph and a typed instance into a second graph
+that does not feed the hierarchy, asks through the normal query path whether the instance is found
+by its superclass, then removes the probe. The ontology data is written into package graphs on
+every store with named graphs, so readers of `graphs.allOntologies` see the same everywhere. See
 [ontologies](./docs/architecture/ontologies.md).
 
 | The store infers from | The sync does |
 |---|---|
 | the registered graphs | writes each package's ontology data into its own graph, and removes the hierarchy an earlier sync kept in the default graph |
-| the default graph only | keeps the hierarchy in the default graph and does not move it into package graphs; warns once |
+| the default graph only | writes the package graphs and keeps the hierarchy in the default graph too; warns once |
 | nothing | writes the package graphs and keeps the hierarchy in the default graph too; warns once that class-scoped reads miss subclass instances |
 
 **Without inference** core still reads and writes, but everything that matches by class sees

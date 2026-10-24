@@ -200,20 +200,25 @@ class at a time (`ClassAxioms`); only lines a node lists are ever removed, and a
 package lists is kept.
 
 **The inference probe** (`probeHierarchyInference(ds?)`, `@_linked/core/ontology/hierarchyProbe`)
-decides whether the hierarchy may leave the default graph. Before the sync writes, it creates a
-temporary graph registered as an `OntologyGraph` (record `package` `@_linked/inference-probe`,
-graph `{data root}/graph/import/linked-inference-probe-{random}`) holding
-`probe:Named rdfs:subClassOf sd:NamedGraph`, `probe:named a probe:Named` and
-`probe:default a probe:Default`, and asks through the `NamedGraph` shape, `.from()` that graph:
+decides whether the hierarchy may leave the default graph. Before the sync writes, it creates two
+temporary graphs recorded as `OntologyGraph`s (record `package` `@_linked/inference-probe`): the
+hierarchy graph `{data root}/graph/import/linked-inference-probe-{random}`, which feeds the
+hierarchy and holds `probe:Named rdfs:subClassOf sd:NamedGraph`, and the data graph `…-data`
+(`feedsHierarchy false`), which holds `probe:named a probe:Named` and `probe:default a
+probe:Default`. It asks through the `NamedGraph` shape, `.from()` the data graph, so the answer is
+about a hierarchy reaching nodes stored in other graphs:
 
 | Answer | How it is found | The sync |
 |---|---|---|
 | `'named-graphs'` | `probe:named` is an `sd:NamedGraph` | package graphs; the default-graph hierarchy removed |
-| `'default-graph'` | not; after `probe:Default rdfs:subClassOf sd:NamedGraph` is written into the default graph, `probe:default` is | the default-graph sync only; one warning |
+| `'default-graph'` | not; after `probe:Default rdfs:subClassOf sd:NamedGraph` is written into the default graph, `probe:default` is | package graphs and the default-graph sync; one warning |
 | `'none'` | neither | package graphs and the default-graph sync; one warning that class-scoped reads miss subclass instances |
 
-The default-graph axiom is removed and the probe graph dropped whatever the answer, and a probe a
-crash left behind is an orphan record that `orphanScope: 'all'` prunes. The answer is cached per
+The default-graph axiom is removed and both graphs dropped whatever the answer (best effort; when
+the axiom cannot be removed the graphs stay as the marker). The next probe sweeps probe records
+older than five minutes, with their default-graph axioms, and `orphanScope: 'all'` prunes them
+too. A package graph whose create is refused (`graph-exists`: another process created it, or it
+holds triples without an `OntologyGraph` record) is replaced, or dropped and created again. The answer is cached per
 dataset object for the process (`resetHierarchyInference(ds?)` drops it). A probe that fails
 with `unsupported-query-kind` takes the default-graph sync, as a store without graph queries; any
 other failure is warned about and handled as `'none'`. Measured on the stores core is tested

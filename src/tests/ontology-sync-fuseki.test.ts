@@ -323,11 +323,10 @@ function degradedStoreTests(baseUrl: () => string, dataset: string, expects: () 
     expect(defaultAxiom.boolean).toBe(true);
     const node = await queryOn(baseUrl(), dataset, `ASK { <${ontologySyncNodeIri('ontology-sync-live-test')}> ?p ?o }`);
     expect(node.boolean).toBe(true);
-    // The package graph is written when the store does not infer at all ('none'); a store that
-    // infers from the default graph only gets the default-graph sync alone.
+    // The ontology data is in the package graph on every store.
     const graph = OntologyGraph.iriFor('ontology-sync-live-test');
     const inGraph = await queryOn(baseUrl(), dataset, `ASK { GRAPH <${graph}> { <${EX}Dog> <${SUB}> <${EX}Animal> } }`);
-    expect(inGraph.boolean).toBe(expects() === 'none');
+    expect(inGraph.boolean).toBe(true);
     const probes = await queryOn(baseUrl(), dataset, 'ASK { { ?s ?p ?o FILTER(CONTAINS(STR(?s), "inferenceProbe")) } UNION { GRAPH ?g { ?s ?p ?o } FILTER(CONTAINS(STR(?g), "linked-inference-probe")) } }');
     expect(probes.boolean).toBe(false);
   });

@@ -24,10 +24,9 @@
  * hierarchy it infers from, and the move out of the default graph happens only when it is the
  * registered graphs':
  * - `'named-graphs'`: package graphs, and the default-graph hierarchy is removed (above).
- * - `'default-graph'`: the default-graph sync only, as for a store without graph queries; one
- *   warning.
- * - `'none'`: package graphs and the default-graph sync both (the hierarchy stays in the default
- *   graph too); one warning that class-scoped reads miss subclass instances.
+ * - `'default-graph'` and `'none'`: package graphs and the default-graph sync both (the hierarchy
+ *   stays in the default graph too, so the ontology data is in package graphs on every store);
+ *   one warning, for `'none'` that class-scoped reads miss subclass instances.
  *
  * Runs at app boot and through the app's control route, before shape sync. Server only (the
  * readers load `n3`).
@@ -42,9 +41,13 @@ import {assertNoActiveCatalog} from '../utils/ShapeClass.js';
 import {sha256Hex} from '../utils/sha256.js';
 import {OntologySync} from '../shapes/OntologySync.js';
 import {ClassAxioms} from '../shapes/ClassAxioms.js';
-import {OntologyGraph} from '../shapes/NamedGraph.js';
+import {NamedGraph, OntologyGraph} from '../shapes/NamedGraph.js';
 import {isGraphQueryError} from '../queries/graphQuery.js';
-import {probeHierarchyInference, type HierarchyInference} from './hierarchyProbe.js';
+import {
+  probeHierarchyInference,
+  warnOnceForDataset,
+  type HierarchyInference,
+} from './hierarchyProbe.js';
 import {nTriplesFromTurtle, RDFS_SUBCLASSOF, type HierarchyTriple} from './hierarchy.js';
 import {
   readPackageOntologies,
@@ -288,7 +291,7 @@ export async function syncOntologies(
     // A store either runs graph queries or refuses the first one (the probe's), before anything
     // was written.
     if (isGraphQueryError(error, 'unsupported-query-kind')) return syncDefaultGraph(run);
-    warnOnce(
+    warnOnceForDataset(
       ds,
       `[syncOntologies] Could not measure which class hierarchy the store infers from ` +
         `(${(error as Error)?.message ?? error}); the hierarchy stays in the default graph as ` +
@@ -297,17 +300,15 @@ export async function syncOntologies(
     inference = 'none';
   }
   if (inference === 'default-graph') {
-    warnOnce(
+    warnOnceForDataset(
       ds,
       '[syncOntologies] The store infers classes only from the default graph, not from the ' +
-        "graphs the registry marks feedsHierarchy: the class hierarchy stays in the default " +
-        'graph and the ontology data is not moved into package graphs. See "Store requirements" ' +
-        "in @_linked/core's README.",
+        "graphs the registry marks feedsHierarchy: the ontology data is written into package " +
+        'graphs and the class hierarchy kept in the default graph as well. See "Store ' +
+        `requirements" in @_linked/core's README.`,
     );
-    return syncDefaultGraph(run);
-  }
-  if (inference === 'none') {
-    warnOnce(
+  } else if (inference === 'none') {
+    warnOnceForDataset(
       ds,
       '[syncOntologies] The store does not infer rdf:type through rdfs:subClassOf: a read of a ' +
         "class will not return its subclasses' instances. The ontology data is written into " +
@@ -332,16 +333,6 @@ function mergeResults(a: SyncOntologiesResult, b: SyncOntologiesResult): SyncOnt
   };
 }
 
-const warnedDatasets = new WeakSet<object>();
-const WARNED_GLOBAL = {};
-
-/** One warning per dataset per process: the probe's answer is cached as long. */
-function warnOnce(ds: IDataset | undefined, message: string): void {
-  const key = ds ?? WARNED_GLOBAL;
-  if (warnedDatasets.has(key)) return;
-  warnedDatasets.add(key);
-  console.warn(message);
-}
 
 /**
  * The sync on package graphs. With `keepDefaultGraph` (a store that does not infer from the
@@ -391,9 +382,7 @@ async function syncGraphs(run: SyncRun, keepDefaultGraph = false): Promise<SyncO
           .replaceContent(content, {contentHash: hash})
           .exec(ds);
       } else {
-        await OntologyGraph.create({id: graph, package: name, sources})
-          .withContent(content, {contentHash: hash})
-          .exec(ds);
+        await createPackageGraph(graph, name, sources, content, hash, ds);
       }
       result.written.push(name);
     }
@@ -421,6 +410,40 @@ async function syncGraphs(run: SyncRun, keepDefaultGraph = false): Promise<SyncO
 
   result.skipped.sort();
   return result;
+}
+
+/**
+ * Create a package's ontology graph that had no `OntologyGraph` record when the sync read the
+ * registry. When the create is refused (`graph-exists`): another process created it meanwhile
+ * (two apps booting at once), so it is replaced instead; or the graph holds triples without an
+ * `OntologyGraph` record (an older tool's load, a record of another class), and since the
+ * package's ontology graph is the sync's own, it is dropped and created again.
+ */
+async function createPackageGraph(
+  graph: string,
+  name: string,
+  sources: string[],
+  content: {mediaType: 'application/n-triples'; text: string},
+  hash: string,
+  ds?: IDataset,
+): Promise<void> {
+  const create = () =>
+    OntologyGraph.create({id: graph, package: name, sources})
+      .withContent(content, {contentHash: hash})
+      .exec(ds);
+  try {
+    await create();
+    return;
+  } catch (error) {
+    if (!isGraphQueryError(error, 'graph-exists')) throw error;
+  }
+  try {
+    await OntologyGraph.update(graph).set({sources}).replaceContent(content, {contentHash: hash}).exec(ds);
+  } catch (error) {
+    if (!isGraphQueryError(error, 'graph-not-registered')) throw error;
+    await NamedGraph.delete(graph).exec(ds);
+    await create();
+  }
 }
 
 /**
