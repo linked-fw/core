@@ -471,7 +471,9 @@ and removed in that graph only. Two reads leave it, inside the same update:
   graph, `VALUES ?g { … } GRAPH ?g { … }` for several (the routed reads' forms with the default
   graph in the mix; an update has no `FROM NAMED`). A node reached through `contains` stays with
   its owner, and a link inside the subject's own one graph compiles as before. The templates stay
-  in the subject's graph.
+  in the subject's graph. An inverse path `^<p>` into another graph is written the stored way round
+  (`?linked <p> ?subject`) and read with the linked node; any other complex path into a node in
+  another graph is refused (`GraphQueryError('unsupported-query-kind')`; reads: backlog 073).
 
 Under routing an owned node lives in its owner's graph: the owned-link check reads the linked
 node's types in every graph and refuses one that lives elsewhere. For an update-where that links

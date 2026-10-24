@@ -27,6 +27,11 @@ path twice: `resolveWriteGraph`, then the compile options); `queryDependencies` 
 the life of one routing object, so the work is repeated on each query. With a few hundred shapes
 it is one pass over the registry per query; nothing measured it yet.
 
+A delete by id adds one more scan (report 055): `referringGraphsForShape` walks every node shape's
+property shapes to find the shapes that may link to the deleted shape, once when the delete is
+compiled and once more in `mutationEffects`. A value shape → referring shapes index, built once per
+cached routing object (like `ownersOf`), removes both.
+
 ## First questions
 
 - Cache the routing object per dataset, keyed by a version that changes when a route is set or

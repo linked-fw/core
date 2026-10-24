@@ -186,8 +186,10 @@ export abstract class SparqlDataset implements IDataset {
   }
 
   /**
-   * The compile options of a create or update: routed when the store has routes, so a nested node
-   * that is not owned is written into its own shape's graph (see `irToAlgebra.ts`).
+   * The compile options of a create, update or delete: routed when the store has routes, so a
+   * nested node that is not owned is written into its own shape's graph, a linked node is read in
+   * its own shape's graphs, and a delete by id removes the links to its subject in every graph
+   * that may hold one (see `irToAlgebra.ts`).
    */
   private writeOptions(): SparqlCompileOptions | undefined {
     const routing = this.graphRouting();

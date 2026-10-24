@@ -154,6 +154,8 @@ export type MutationSubjectGraph =
 export type MutationGraphScope = {
   subjectGraph: MutationSubjectGraph;
   linked: ReadonlyMap<string, readonly string[]>;
+  /** Variable names the plan uses outside the algebra (its own graph variable), never reused. */
+  reserved?: readonly string[];
 };
 
 /**
@@ -225,6 +227,7 @@ class SubjectGraphScoper {
   private planMutationForms(scope: MutationGraphScope, options?: SparqlOptions): void {
     // A subject that is not linked stays in the plan's graph.
     this.defaultForm = {kind: 'plain'};
+    for (const name of scope.reserved ?? []) this.used.add(name);
     const subject = scope.subjectGraph;
     const storeName = (graph: string): string => {
       if (graph !== graphs.default) return graph;
