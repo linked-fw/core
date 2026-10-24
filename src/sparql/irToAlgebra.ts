@@ -2395,14 +2395,14 @@ function complexPathOf(traversal: MutationTraversal): PathExpr | undefined {
 function inverseTraversals(
   traversals: MutationTraversal[],
   linkedElsewhere: (variable: string) => boolean,
-): {from: string; to: string; predicate: SparqlTerm}[] {
-  const out: {from: string; to: string; predicate: SparqlTerm}[] = [];
+): {to: string; predicate: SparqlTerm}[] {
+  const out: {to: string; predicate: SparqlTerm}[] = [];
   for (const traversal of traversals) {
     if (!linkedElsewhere(traversal.to)) continue;
     const path = complexPathOf(traversal);
     if (!path) continue;
     if (typeof path === 'object' && path !== null && 'inv' in path && getSimplePathId(path.inv) !== null) {
-      out.push({from: traversal.from, to: traversal.to, predicate: iriTerm(getSimplePathId(path.inv)!)});
+      out.push({to: traversal.to, predicate: iriTerm(getSimplePathId(path.inv)!)});
       continue;
     }
     throw new GraphQueryError(
@@ -2499,15 +2499,12 @@ function readLinkedNodesInTheirGraphs(
   const inverses = inverseTraversals(traversals, elsewhere);
   let whereAlgebra = plan.whereAlgebra;
   if (inverses.length > 0) {
-    // `?from ^<p> ?to` → `?to <p> ?from`, grouped (and read) with the linked node.
+    // `?from ^<p> ?to` → `?to <p> ?from`, grouped (and read) with the linked node. Matched on the
+    // target alias, which one traversal binds: a computed field's first hop starts from the plan's
+    // subject term (`<id>` or `?a0`), not from its alias.
     whereAlgebra = mapAlgebraTriples(whereAlgebra, (t) => {
       const inverse = inverses.find(
-        (i) =>
-          t.predicate.kind === 'path' &&
-          t.subject.kind === 'variable' &&
-          t.subject.name === i.from &&
-          t.object.kind === 'variable' &&
-          t.object.name === i.to,
+        (i) => t.predicate.kind === 'path' && t.object.kind === 'variable' && t.object.name === i.to,
       );
       return inverse ? tripleOf(t.object, inverse.predicate, t.subject) : t;
     });

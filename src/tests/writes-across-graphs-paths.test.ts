@@ -47,6 +47,11 @@ class WAWriter extends NGPerson {
     return [];
   }
 
+  @objectProperty({path: {inv: {id: `${NG}author`}}, shape: NGArticle, maxCount: 1})
+  get firstArticle(): NGArticle {
+    return null as unknown as NGArticle;
+  }
+
   @objectProperty({path: {seq: [{inv: {id: `${NG}author`}}, {id: `${NG}reviewer`}]}, shape: NGPhoto})
   get reviewedPhotos(): NGPhoto[] {
     return [];
@@ -105,6 +110,12 @@ const nestedExists = (s: CaptureStore | FusekiStore) =>
   NGArticle.update({title: 'z'}).where((a: any) => a.author.friends.some((f: any) => f.name.equals('x'))).exec(s);
 const ownedBelowLinked = (s: CaptureStore | FusekiStore) =>
   NGArticle.update({title: 'z'}).where((a: any) => a.author.avatar.url.equals('x')).exec(s);
+const computedThroughInverse = (s: CaptureStore | FusekiStore, id = `${D}writer/w`) =>
+  WAWriter.update((w: any) => ({name: w.firstArticle.title.ucase()})).for({id}).exec(s);
+const computedWhereThroughInverse = (s: CaptureStore | FusekiStore) =>
+  WAWriter.update((w: any) => ({name: w.firstArticle.title.lcase()}))
+    .where((w: any) => w.firstArticle.title.equals('one'))
+    .exec(s);
 const computedFoundAtWriteTime = (s: CaptureStore | FusekiStore, id = `${D}bob`) =>
   Person.update((p: any) => ({hobby: p.bestFriend.name.ucase()})).for({id}).exec(s);
 
@@ -240,6 +251,17 @@ WHERE {
 }`);
   });
 
+  test('a computed field through an inverse path reads the stored triple in the linked node\'s graph', async () => {
+    for (const run of [computedThroughInverse, computedWhereThroughInverse]) {
+      const sparql = await sparqlOf((s) => run(s));
+      expect(sparql).toContain(`WITH <${G_PEOPLE}>`);
+      expect(sparql).not.toContain('^<');
+      expect(sparql).toMatch(
+        new RegExp(`GRAPH <${G_ARTICLES}> \\{\\n\\s+\\?__trav_0__ <${NG}author> (<${D}writer/w>|\\?a0) \\.`),
+      );
+    }
+  });
+
   test('a linked node in the default graph, without a store name for it, is refused before anything is sent', async () => {
     const s = capture({});
     const error = await errorOf(defaultUnderWith(s));
@@ -319,5 +341,12 @@ describeFuseki('writes across graphs through more than one hop', () => {
     await ownedBelowLinked(store);
     expect(await valuesOf(`${D}article/2`, `${NG}title`)).toEqual(['z']);
     expect(await valuesOf(A1, `${NG}title`)).toEqual(['one']);
+  });
+
+  test('a computed field through an inverse path into the articles graph reads the article', async () => {
+    await computedThroughInverse(store);
+    expect(await valuesOf(W, `${NG}name`)).toEqual(['ONE']);
+    await computedWhereThroughInverse(store);
+    expect(await valuesOf(W, `${NG}name`)).toEqual(['one']);
   });
 });
