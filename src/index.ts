@@ -150,6 +150,7 @@ export type {
   DeleteMutationJSON,
   MutationValueJSON,
   MutationNodeDataJSON,
+  InboundMutationOptions,
 } from './queries/MutationSerialization.js';
 
 

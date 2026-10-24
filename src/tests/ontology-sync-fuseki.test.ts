@@ -6,13 +6,22 @@
  * default-graph sync wrote ends with no hierarchy of synced packages in the default graph, a
  * hand-written axiom kept and inference intact; a store without graph queries takes the old path.
  * Plus the measurement of a first sync of schema.org's data, and of the second, skipped one.
+ *
+ * The inference probe on real stores: the inferring image answers `'named-graphs'`; a `mem`
+ * dataset on it (which does not infer) answers `'none'`, and the sync then keeps the hierarchy in
+ * the default graph as well as writing the package graphs, with one warning. With
+ * LINKED_SECOND_FUSEKI_URL (and LINKED_SECOND_FUSEKI_EXPECTS, default `none`) the same runs
+ * against a second server: a stock `secoresearch/fuseki:6.2.0` answers `none`, the
+ * `ghcr.io/linked-fw/fuseki:6.2.0-1` image `default-graph`.
  */
-import {afterAll, beforeAll, expect, test} from '@jest/globals';
+import {afterAll, beforeAll, describe, expect, jest, test} from '@jest/globals';
 import {existsSync, readFileSync} from 'node:fs';
 import path from 'node:path';
 import {
+  createDataset,
   createTestDataset,
   DATASET_NAME,
+  deleteDataset,
   executeSparqlQuery,
   executeSparqlUpdate,
   FUSEKI_BASE_URL,
@@ -26,6 +35,7 @@ import {literalProperty} from '../shapes/SHACL';
 import {QueryBuilder} from '../queries/QueryBuilder';
 import {ontologyGraphHash, ontologySyncNodeIri, syncOntologies} from '../ontology/syncOntologies';
 import {OntologyGraph} from '../shapes/NamedGraph';
+import {probeHierarchyInference, type HierarchyInference} from '../ontology/hierarchyProbe';
 import {unsupportedGraphQuery} from '../queries/graphQuery';
 import type {GraphQuery, GraphResult} from '../queries/IntermediateRepresentation';
 import type {IDataset} from '../interfaces/IDataset';
@@ -252,8 +262,8 @@ describeFuseki('ontology sync on package graphs', () => {
     expect(second.skipped).toEqual(['ontology-sync-schema-fixture']);
     expect(store.updates).toBe(0);
 
-    // One graph query: one update.
-    expect(firstUpdates).toBe(1);
+    // One graph query: one update, then the removal of the claim its create marked the record with.
+    expect(firstUpdates).toBe(2);
     console.log(
       `[measure] first schema.org ontology sync: ${firstMs} ms, ${firstUpdates} update, ` +
         `${count.results.bindings[0].n.value} triples in its graph; ` +
@@ -261,3 +271,80 @@ describeFuseki('ontology sync on package graphs', () => {
     );
   }, 300_000);
 });
+
+/** A SELECT or ASK against `dataset` on `baseUrl`, as JSON. */
+async function queryOn(baseUrl: string, dataset: string, sparql: string): Promise<any> {
+  const response = await fetch(`${baseUrl}/${dataset}/sparql`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/sparql-query', Accept: 'application/sparql-results+json'},
+    body: sparql,
+  });
+  if (!response.ok) throw new Error(`query: ${response.status} ${await response.text()}`);
+  return response.json();
+}
+
+/**
+ * The sync on a store that does not infer from the registered graphs: one warning naming what
+ * degrades, the package graph written, the hierarchy kept in the default graph with its sync node,
+ * nothing of the probe left behind, and a second sync that writes and warns nothing.
+ */
+function degradedStoreTests(baseUrl: () => string, dataset: string, expects: () => HierarchyInference) {
+  let store: FusekiStore;
+  beforeAll(async () => {
+    await deleteDataset(dataset, baseUrl());
+    await createDataset(dataset, {dbType: baseUrl() === FUSEKI_BASE_URL ? 'mem' : 'tdb2', baseUrl: baseUrl()});
+    store = new FusekiStore(baseUrl(), dataset);
+  });
+  afterAll(async () => {
+    await deleteDataset(dataset, baseUrl());
+  });
+
+  test('the probe answers what the store infers from, and leaves nothing behind', async () => {
+    expect(await probeHierarchyInference(store)).toBe(expects());
+    const left = await queryOn(baseUrl(), dataset, 'SELECT * WHERE { { ?s ?p ?o } UNION { GRAPH ?g { ?s ?p ?o } } }');
+    expect(left.results.bindings).toEqual([]);
+  });
+
+  test('the sync keeps the hierarchy in the default graph and warns once', async () => {
+    liveData = dogIsAnimal;
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const first = await syncOntologies(store, {packages: ['ontology-sync-live-test']});
+      expect(first.written).toEqual(['ontology-sync-live-test']);
+      const second = await syncOntologies(store, {packages: ['ontology-sync-live-test']});
+      expect(second.skipped).toEqual(['ontology-sync-live-test']);
+      const warnings = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith('[syncOntologies]'));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(expects() === 'none' ? /does not infer/ : /only from the default graph/);
+    } finally {
+      warn.mockRestore();
+    }
+    const defaultAxiom = await queryOn(baseUrl(), dataset, `ASK { <${EX}Dog> <${SUB}> <${EX}Animal> }`);
+    expect(defaultAxiom.boolean).toBe(true);
+    const node = await queryOn(baseUrl(), dataset, `ASK { <${ontologySyncNodeIri('ontology-sync-live-test')}> ?p ?o }`);
+    expect(node.boolean).toBe(true);
+    // The package graph is written when the store does not infer at all ('none'); a store that
+    // infers from the default graph only gets the default-graph sync alone.
+    const graph = OntologyGraph.iriFor('ontology-sync-live-test');
+    const inGraph = await queryOn(baseUrl(), dataset, `ASK { GRAPH <${graph}> { <${EX}Dog> <${SUB}> <${EX}Animal> } }`);
+    expect(inGraph.boolean).toBe(expects() === 'none');
+    const probes = await queryOn(baseUrl(), dataset, 'ASK { { ?s ?p ?o FILTER(CONTAINS(STR(?s), "inferenceProbe")) } UNION { GRAPH ?g { ?s ?p ?o } FILTER(CONTAINS(STR(?g), "linked-inference-probe")) } }');
+    expect(probes.boolean).toBe(false);
+  });
+}
+
+describeFuseki('ontology sync on a store that does not infer (a mem dataset on the image)', () => {
+  degradedStoreTests(() => FUSEKI_BASE_URL, `${DATASET_NAME}-plain`, () => 'none');
+});
+
+const SECOND = process.env.LINKED_SECOND_FUSEKI_URL;
+(SECOND ? describe : describe.skip)(
+  `[fuseki] ontology sync on a second store${SECOND ? ` (${SECOND})` : ' (skipped: LINKED_SECOND_FUSEKI_URL unset)'}`,
+  () => {
+    degradedStoreTests(
+      () => SECOND!,
+      `${DATASET_NAME}-second`,
+      () => (process.env.LINKED_SECOND_FUSEKI_EXPECTS as HierarchyInference | undefined) ?? 'none',
+    );
+  },
+);

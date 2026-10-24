@@ -36,3 +36,17 @@ export class RFNewsArticle extends RFArticle {
 export class RFStoryShape extends Shape {
   static targetClass = ex('Story');
 }
+
+/** A package slugged `import`, the top segment of the managed imported graphs. */
+const importPackage = linkedPackage('@acme/import');
+
+@importPackage.linkedShape
+export class RFImportedRecord extends Shape {
+  static targetClass = ex('ImportedRecord');
+}
+
+/** Named in lower case: its `'own'` graph would be named exactly like an imported graph. */
+@importPackage.linkedShape({name: 'wikidata-people'})
+export class RFLowerNamed extends Shape {
+  static targetClass = ex('LowerNamed');
+}

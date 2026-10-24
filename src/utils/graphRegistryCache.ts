@@ -24,6 +24,7 @@ import type {GraphQuery} from '../queries/IntermediateRepresentation.js';
 import {GraphQueryError} from '../queries/graphQuery.js';
 import {graphs} from '../ontologies/graphs.js';
 import {coreOntology} from '../ontologies/linked-core.js';
+import {sharedState} from './sharedState.js';
 
 /** An entry older than this is re-read (30 seconds). */
 export const GRAPH_REGISTRY_MAX_AGE_MS = 30_000;
@@ -36,10 +37,17 @@ export type GraphRegistrySnapshot = ReadonlyMap<string, ReadonlySet<string>>;
 
 type Entry = {graphs: Map<string, Set<string>>; loadedAt: number};
 
-const entries = new Map<string, Entry>();
-const loads = new Map<string, Promise<Entry>>();
-/** Bumped by every invalidation, so a load that started before one is not stored after it. */
-const generations = new Map<string, number>();
+/**
+ * Kept on `globalThis` (see `sharedState`): a second copy of core in the process (Vite's SSR
+ * runner next to Node, two bundles) shares one cache, so an invalidation reaches every copy.
+ */
+const cacheState = sharedState('@_linked/core', 'graphRegistryCache', () => ({
+  entries: new Map<string, Entry>(),
+  loads: new Map<string, Promise<Entry>>(),
+  /** Bumped by every invalidation, so a load that started before one is not stored after it. */
+  generations: new Map<string, number>(),
+}));
+const {entries, loads, generations} = cacheState;
 
 const generationOf = (key: string) => generations.get(key) ?? 0;
 

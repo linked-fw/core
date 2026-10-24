@@ -1,0 +1,192 @@
+/*
+ * The inference probe and what the ontology sync does with each answer, against stub stores:
+ * `'named-graphs'` moves the hierarchy into package graphs, `'default-graph'` keeps the
+ * default-graph sync only, `'none'` writes package graphs and keeps the default-graph hierarchy;
+ * one warning per dataset, the answer cached per dataset, the probe cleaned up even when it fails.
+ */
+import {beforeEach, describe, expect, jest, test} from '@jest/globals';
+import {linkedPackage} from '../utils/Package';
+import {createNameSpace} from '../utils/NameSpace';
+import {SparqlDataset} from '../sparql/SparqlDataset';
+import type {SparqlQueryResults} from '../sparql/resultMapping';
+import {ontologySyncHash, ontologySyncNodeIri, syncOntologies} from '../ontology/syncOntologies';
+import {
+  INFERENCE_PROBE_PACKAGE,
+  probeHierarchyInference,
+  resetHierarchyInference,
+  type HierarchyInference,
+} from '../ontology/hierarchyProbe';
+import {OntologyGraph} from '../shapes/NamedGraph';
+import {OntologySync} from '../shapes/OntologySync';
+import type {GraphQuery, GraphResult} from '../queries/IntermediateRepresentation';
+import {inferenceProbeAnswer, isInferenceProbeGraph} from '../test-helpers/test-utils';
+
+const NS = 'http://example.org/probe-sync/';
+const SUB = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
+const line = (s: string, o: string) => `<${NS}${s}> <${SUB}> <${NS}${o}> .`;
+const PKG = 'probe-sync-a';
+linkedPackage(PKG).linkedOntology(
+  {},
+  createNameSpace(`http://example.org/ns/${PKG}/`),
+  PKG,
+  async () => [`@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n<${NS}A> rdfs:subClassOf <${NS}B> .`],
+  '../data/probe-sync-a.ttl',
+);
+
+const shapeOf = (query: any): string | undefined => {
+  const shape = query?.root?.shape ?? query?.shape;
+  return typeof shape === 'string' ? shape : shape?.id;
+};
+
+/** A store that infers as `inference` and records what the probe and the sync send. */
+class StubStore extends SparqlDataset {
+  graphQueries: GraphQuery[] = [];
+  probeQueries: GraphQuery[] = [];
+  updates: string[] = [];
+  asks = 0;
+  nodes: Array<{id: string; packageName: string; ontologyHash: string; ontologyTriples: string}> = [];
+  failAsk = false;
+  constructor(public inference: HierarchyInference) {
+    super();
+  }
+  override async askQuery(query: any): Promise<boolean> {
+    this.asks++;
+    if (this.failAsk) throw new Error('ask failed');
+    const answer = inferenceProbeAnswer(query, this.inference);
+    if (answer === undefined) throw new Error('unexpected ask');
+    return answer;
+  }
+  override async selectQuery(query: any): Promise<any> {
+    if (shapeOf(query) === OntologyGraph.shape.id) return [];
+    if (shapeOf(query) === OntologySync.shape.id) return this.nodes.map((n) => ({...n}));
+    throw new Error(`unexpected select of ${shapeOf(query)}`);
+  }
+  override async graphQuery(query: GraphQuery): Promise<GraphResult> {
+    (isInferenceProbeGraph(query.graph) ? this.probeQueries : this.graphQueries).push(query);
+    return {graph: query.graph, changed: true};
+  }
+  protected async executeSparqlSelect(): Promise<SparqlQueryResults> {
+    return {head: {vars: []}, results: {bindings: []}};
+  }
+  protected async executeSparqlUpdate(sparql: string): Promise<void> {
+    this.updates.push(sparql);
+  }
+}
+
+/** The default-graph node an earlier sync left for the package. */
+const oldNode = () => {
+  const text = line('A', 'B');
+  return {id: ontologySyncNodeIri(PKG), packageName: PKG, ontologyHash: ontologySyncHash(text), ontologyTriples: text};
+};
+const probeAxiomUpdates = (store: StubStore) => store.updates.filter((u) => u.includes('inferenceProbe/'));
+const syncUpdates = (store: StubStore) => store.updates.filter((u) => !u.includes('inferenceProbe/'));
+
+let warn: ReturnType<typeof jest.spyOn>;
+beforeEach(() => {
+  warn?.mockRestore();
+  warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+});
+const syncWarnings = () => warn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith('[syncOntologies]'));
+
+describe('probeHierarchyInference', () => {
+  test.each<[HierarchyInference, number]>([
+    ['named-graphs', 1],
+    ['default-graph', 2],
+    ['none', 2],
+  ])('a store that infers %s is answered so, after %i ask(s)', async (inference, asks) => {
+    const store = new StubStore(inference);
+    expect(await probeHierarchyInference(store)).toBe(inference);
+    expect(store.asks).toBe(asks);
+    // A temporary registered graph, created then dropped.
+    expect(store.probeQueries.map((q) => q.kind)).toEqual(['graph_create', 'graph_drop']);
+    const [create] = store.probeQueries;
+    expect(create.recordClass).toBe(OntologyGraph.targetClass.id);
+    expect(create.record).toEqual({package: INFERENCE_PROBE_PACKAGE});
+    expect(create.content?.text).toContain(`<${SUB}> <http://www.w3.org/ns/sparql-service-description#NamedGraph>`);
+    // The default-graph axiom is written only when the registered graph did not infer, and
+    // removed again.
+    expect(probeAxiomUpdates(store)).toHaveLength(inference === 'named-graphs' ? 0 : 2);
+  });
+
+  test('the answer is cached per dataset; reset drops it', async () => {
+    const store = new StubStore('named-graphs');
+    await probeHierarchyInference(store);
+    await probeHierarchyInference(store);
+    expect(store.probeQueries).toHaveLength(2);
+    await probeHierarchyInference(new StubStore('none'));
+    resetHierarchyInference(store);
+    await probeHierarchyInference(store);
+    expect(store.probeQueries).toHaveLength(4);
+  });
+
+  test('a probe that fails cleans up and is not cached', async () => {
+    const store = new StubStore('default-graph');
+    store.failAsk = true;
+    await expect(probeHierarchyInference(store)).rejects.toThrow('ask failed');
+    expect(store.probeQueries.map((q) => q.kind)).toEqual(['graph_create', 'graph_drop']);
+    store.failAsk = false;
+    expect(await probeHierarchyInference(store)).toBe('default-graph');
+    expect(probeAxiomUpdates(store)).toHaveLength(2); // added and removed
+  });
+});
+
+describe('syncOntologies by the probe answer', () => {
+  test("'named-graphs': the package graph is written and the default-graph hierarchy removed", async () => {
+    const store = new StubStore('named-graphs');
+    store.nodes = [oldNode()];
+    const result = await syncOntologies(store, {packages: [PKG]});
+    expect(result.written).toEqual([PKG]);
+    expect(store.graphQueries.map((q) => [q.kind, q.graph])).toEqual([['graph_create', OntologyGraph.iriFor(PKG)]]);
+    const removal = syncUpdates(store);
+    expect(removal.some((u) => u.includes('DELETE') && u.includes(`<${NS}A>`))).toBe(true);
+    expect(removal.at(-1)).toContain(`ontologySync/${PKG}`);
+    expect(syncWarnings()).toEqual([]);
+  });
+
+  test("'default-graph': the default-graph sync only, one warning, the probe run once", async () => {
+    const store = new StubStore('default-graph');
+    const first = await syncOntologies(store, {packages: [PKG]});
+    expect(first.written).toEqual([PKG]);
+    expect(store.graphQueries).toEqual([]);
+    const updates = syncUpdates(store);
+    expect(updates.some((u) => u.includes(`<${NS}A> rdfs:subClassOf <${NS}B>`))).toBe(true);
+    expect(updates.at(-1)).toContain(`ontologySync/${PKG}`);
+    store.nodes = [oldNode()];
+    await syncOntologies(store, {packages: [PKG]});
+    expect(store.probeQueries).toHaveLength(2);
+    expect(syncWarnings()).toHaveLength(1);
+    expect(syncWarnings()[0]).toMatch(/only from the default graph/);
+    expect(syncWarnings()[0]).toMatch(/Store requirements/);
+  });
+
+  test("'none': the package graph and the default-graph hierarchy both, one warning", async () => {
+    const store = new StubStore('none');
+    store.nodes = [];
+    const result = await syncOntologies(store, {packages: [PKG]});
+    expect(result).toEqual({written: [PKG], skipped: [], pruned: []});
+    expect(store.graphQueries.map((q) => q.kind)).toEqual(['graph_create']);
+    const updates = syncUpdates(store);
+    expect(updates.some((u) => u.includes(`<${NS}A> rdfs:subClassOf <${NS}B>`))).toBe(true);
+    expect(updates.at(-1)).toContain(`ontologySync/${PKG}`);
+    // A second sync with the node in place keeps it: nothing is removed from the default graph.
+    store.nodes = [oldNode()];
+    store.updates = [];
+    await syncOntologies(store, {packages: [PKG]});
+    expect(store.updates.some((u) => u.includes('DELETE'))).toBe(false);
+    expect(syncWarnings()).toHaveLength(1);
+    expect(syncWarnings()[0]).toMatch(/does not infer/);
+    expect(syncWarnings()[0]).toMatch(/subclasses' instances/);
+  });
+
+  test('a probe that fails for another reason keeps the hierarchy in the default graph too', async () => {
+    const store = new StubStore('named-graphs');
+    store.failAsk = true;
+    store.nodes = [oldNode()];
+    const result = await syncOntologies(store, {packages: [PKG]});
+    expect(result.written).toEqual([PKG]);
+    expect(store.graphQueries.map((q) => q.kind)).toEqual(['graph_create']);
+    expect(syncUpdates(store).some((u) => u.includes('DELETE'))).toBe(false);
+    expect(syncWarnings()).toHaveLength(1);
+    expect(syncWarnings()[0]).toMatch(/Could not measure/);
+  });
+});

@@ -189,14 +189,17 @@ function composeEnv(): NodeJS.ProcessEnv {
  * infer (`mem` stays plain), and they persist, so the run's teardown and the next run's setup
  * delete them (`reapTestDatasets`). Ignores 409 Conflict (dataset already exists).
  */
-export async function createDataset(name: string): Promise<void> {
-  const response = await fetch(`${FUSEKI_BASE_URL}/$/datasets`, {
+export async function createDataset(
+  name: string,
+  options: {dbType?: 'tdb2' | 'mem'; baseUrl?: string} = {},
+): Promise<void> {
+  const response = await fetch(`${options.baseUrl ?? FUSEKI_BASE_URL}/$/datasets`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       Authorization: adminAuth,
     },
-    body: `dbName=${encodeURIComponent(name)}&dbType=tdb2`,
+    body: `dbName=${encodeURIComponent(name)}&dbType=${options.dbType ?? 'tdb2'}`,
   });
   if (!response.ok && response.status !== 409) {
     throw new Error(
@@ -206,9 +209,9 @@ export async function createDataset(name: string): Promise<void> {
 }
 
 /** Delete a dataset (its TDB2 files too, on the image). Tolerates 404. */
-export async function deleteDataset(name: string): Promise<void> {
+export async function deleteDataset(name: string, baseUrl: string = FUSEKI_BASE_URL): Promise<void> {
   const response = await fetch(
-    `${FUSEKI_BASE_URL}/$/datasets/${encodeURIComponent(name)}`,
+    `${baseUrl}/$/datasets/${encodeURIComponent(name)}`,
     {method: 'DELETE', headers: {Authorization: adminAuth}},
   );
   if (!response.ok && response.status !== 404) {

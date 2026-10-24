@@ -10,7 +10,7 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import {type WhereClause, type WherePath, processWhereClause} from './SelectQuery.js';
-import {type DeleteMutationJSON, readKeepIncoming} from './MutationSerialization.js';
+import {type DeleteMutationJSON, type InboundMutationOptions, readKeepIncoming} from './MutationSerialization.js';
 import {serializeWherePath, deserializeWherePath} from './QueryBuilderSerialization.js';
 import type {DeleteLowerSpec} from './mutationLowerSpec.js';
 import {PendingQueryContext, asContextRef} from './QueryContext.js';
@@ -113,7 +113,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
   }
 
   /** Reconstruct a DeleteBuilder from its DSL-JSON (inverse of `toJSON`). */
-  static fromJSON(json: DeleteMutationJSON): DeleteBuilder {
+  static fromJSON(json: DeleteMutationJSON, options?: InboundMutationOptions): DeleteBuilder {
     assertWireVersion(json.v);
     const resolved = resolveShape(json.shape);
     if (json.mode === 'ids') {
@@ -121,7 +121,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
       const ids: DeleteId[] = json.ids.map((id) =>
         isContextRefJSON(id) ? new PendingQueryContext(id['@ctx']) : {id},
       );
-      return new DeleteBuilder({shape: resolved, ids, mode: 'ids', keepIncoming: readKeepIncoming(json)});
+      return new DeleteBuilder({shape: resolved, ids, mode: 'ids', keepIncoming: readKeepIncoming(json, options)});
     }
     if (readKeepIncoming(json)) {
       throw new Error('DeleteBuilder.fromJSON(): "keepIncoming" needs a delete by ids.');

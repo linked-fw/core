@@ -138,12 +138,31 @@ export type DeleteMutationJSON =
   | {v?: string; op: 'delete'; shape: string; mode: 'all'}
   | {v?: string; op: 'delete'; shape: string; mode: 'where'; where: WherePathJSON};
 
-/** The `keepIncoming` flag of a delete's DSL-JSON: absent or `false` → false; anything else but `true` is refused. */
-export function readKeepIncoming(json: DeleteMutationJSON): boolean {
+/** How a receiver decodes inbound mutation DSL-JSON (`fromJSON`, `lowerMutationJSON`). */
+export type InboundMutationOptions = {
+  /**
+   * Refuse a delete that carries `keepIncoming: true`. The flag is serialisable so a trusted
+   * service can send it, but it leaves links to a deleted node in place: a receiver that takes
+   * mutations from clients sets this and accepts the flag only from trusted service callers.
+   */
+  refuseKeepIncoming?: boolean;
+};
+
+/**
+ * The `keepIncoming` flag of a delete's DSL-JSON: absent or `false` → false; anything else but
+ * `true` is refused, and `true` too when the receiver refuses it (`refuseKeepIncoming`).
+ */
+export function readKeepIncoming(json: DeleteMutationJSON, options?: InboundMutationOptions): boolean {
   const flag = (json as {keepIncoming?: unknown}).keepIncoming;
   if (flag === undefined || flag === false) return false;
-  if (flag === true) return true;
-  throw new Error('delete DSL-JSON: "keepIncoming" must be a boolean.');
+  if (flag !== true) throw new Error('delete DSL-JSON: "keepIncoming" must be a boolean.');
+  if (options?.refuseKeepIncoming) {
+    throw new Error(
+      'delete DSL-JSON: "keepIncoming" is refused by this receiver; it is accepted only from ' +
+        'trusted service callers.',
+    );
+  }
+  return true;
 }
 
 export type MutationJSON =

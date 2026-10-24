@@ -29,6 +29,7 @@ import {getRegisteredOntologies} from '../utils/Package';
 import {OntologySync} from '../shapes/OntologySync';
 import {builtInShapeIris} from '../utils/ShapeCatalog';
 import {setOntologyHierarchy, superClassesOf} from '../ontology/classHierarchy';
+import {inferenceProbeAnswer, isInferenceProbeGraph} from '../test-helpers/test-utils';
 
 const NS = 'http://example.org/sync/';
 const SUB = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
@@ -113,9 +114,9 @@ describe('syncOntologies: the default-graph fallback', () => {
   test('a first sync writes one update per subject class, then the sync node, last', async () => {
     const result = await syncOntologies(ds, {packages: ['sync-a']});
     expect(result).toEqual({written: ['sync-a'], skipped: [], pruned: []});
-    // The graph path read the sync nodes and was refused at its first write; the fallback reads them again.
+    // The inference probe's first graph query was refused, before anything was read or written.
     expect(ds.graphQueries).toBe(1);
-    expect(ds.selects).toBe(2);
+    expect(ds.selects).toBe(1);
     expect(ds.updates).toHaveLength(3);
     expect(ds.updates[0]).toContain(`<${NS}A> rdfs:subClassOf <${NS}B> .`);
     expect(ds.updates[1]).toContain(`<${NS}B> rdfs:subClassOf <${NS}C> .`);
@@ -255,15 +256,24 @@ type GraphRow = {id: string; package: string; contentHash: string};
 class GraphRecording extends SparqlDataset {
   updates: string[] = [];
   graphQueries: GraphQuery[] = [];
+  /** The inference probe's own graph queries (kept apart from the sync's). */
+  probeQueries: GraphQuery[] = [];
   records: GraphRow[] = [];
   nodes: Row[] = [];
+  /** What the store answers the inference probe. */
+  inference: 'named-graphs' | 'default-graph' | 'none' = 'named-graphs';
+  override async askQuery(query: any): Promise<boolean> {
+    const answer = inferenceProbeAnswer(query, this.inference);
+    if (answer === undefined) throw new Error('unexpected ask');
+    return answer;
+  }
   override async selectQuery(query: any): Promise<any> {
     if (shapeOf(query) === OntologyGraph.shape.id) return this.records.map((r) => ({...r}));
     if (shapeOf(query) === OntologySync.shape.id) return this.nodes.map((n) => ({...n}));
     throw new Error(`unexpected select of ${shapeOf(query)}`);
   }
   override async graphQuery(query: GraphQuery): Promise<GraphResult> {
-    this.graphQueries.push(query);
+    (isInferenceProbeGraph(query.graph) ? this.probeQueries : this.graphQueries).push(query);
     return {graph: query.graph, contentHash: query.contentHash, changed: query.kind !== 'graph_patch'};
   }
   protected async executeSparqlSelect(): Promise<SparqlQueryResults> {

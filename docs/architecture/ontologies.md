@@ -176,8 +176,7 @@ ontology graph (see the next section):
 
 - the graph is `OntologyGraph.iriFor(packageName)` (`{package IRI}/graph/ontology`), recorded in
   the graph registry as an `OntologyGraph` (`package`, `sources`: the data files), which feeds
-  the store's hierarchy; the store needs to build its hierarchy from the registry
-  (`ghcr.io/linked-fw/fuseki:6.2.0-2` or later);
+  the store's hierarchy when the store builds its hierarchy from the registry (below);
 - the hash is `ontologyGraphHash(texts)`: SHA-256 of `linked-ontology-sync/2\n` + the package's
   raw data file texts in registration order, joined with `\n`, recorded as the graph's
   `core:contentHash`; bumping the prefix makes every dataset rewrite its graphs once;
@@ -185,8 +184,8 @@ ontology graph (see the next section):
   is created or replaced whole in one graph query, the body sent as N-Triples (each file parsed
   with its own blank-node prefix, so prefixes and blank-node labels of several files never
   clash); `force` replaces every package;
-- after a package's graph is written (or found unchanged), what the earlier default-graph sync
-  kept for it is removed: the lines its `OntologySync` node lists, except those another
+- after a package's graph is written (or found unchanged), and only when the store infers from
+  the registered graphs (below), what the earlier default-graph sync kept for it is removed: the lines its `OntologySync` node lists, except those another
   remaining node lists, then the node; a hand-written default-graph axiom no node lists stays,
   and the store keeps inferring through it;
 - `orphanScope: 'all'` (without `packages`) drops the ontology graph of every package no longer
@@ -199,6 +198,28 @@ node per package (`https://linked.cm/ont/core/ontologySync/<encodeURIComponent(p
 the built-in shape `OntologySync`, deprecated) and diffed into the default graph one subject
 class at a time (`ClassAxioms`); only lines a node lists are ever removed, and a triple another
 package lists is kept.
+
+**The inference probe** (`probeHierarchyInference(ds?)`, `@_linked/core/ontology/hierarchyProbe`)
+decides whether the hierarchy may leave the default graph. Before the sync writes, it creates a
+temporary graph registered as an `OntologyGraph` (record `package` `@_linked/inference-probe`,
+graph `{data root}/graph/import/linked-inference-probe-{random}`) holding
+`probe:Named rdfs:subClassOf sd:NamedGraph`, `probe:named a probe:Named` and
+`probe:default a probe:Default`, and asks through the `NamedGraph` shape, `.from()` that graph:
+
+| Answer | How it is found | The sync |
+|---|---|---|
+| `'named-graphs'` | `probe:named` is an `sd:NamedGraph` | package graphs; the default-graph hierarchy removed |
+| `'default-graph'` | not; after `probe:Default rdfs:subClassOf sd:NamedGraph` is written into the default graph, `probe:default` is | the default-graph sync only; one warning |
+| `'none'` | neither | package graphs and the default-graph sync; one warning that class-scoped reads miss subclass instances |
+
+The default-graph axiom is removed and the probe graph dropped whatever the answer, and a probe a
+crash left behind is an orphan record that `orphanScope: 'all'` prunes. The answer is cached per
+dataset object for the process (`resetHierarchyInference(ds?)` drops it). A probe that fails
+with `unsupported-query-kind` takes the default-graph sync, as a store without graph queries; any
+other failure is warned about and handled as `'none'`. Measured on the stores core is tested
+against: `ghcr.io/linked-fw/fuseki:6.2.0-2` answers `'named-graphs'`, `6.2.0-1`
+`'default-graph'`, a stock `secoresearch/fuseki:6.2.0` (and a `mem` dataset on the image)
+`'none'`.
 
 It runs at app boot and through the app's control route, before shape sync.
 
@@ -240,12 +261,21 @@ transaction):
 
 | Call | Graph query |
 |---|---|
-| `OntologyGraph.create({id, package, version}).withContent(c)` | `graph_create` (refused when registered: `graph-exists`) |
+| `OntologyGraph.create({id, package, version}).withContent(c)` | `graph_create` (refused when registered, or when the graph holds triples without a record: `graph-exists`) |
 | `NamedGraph.replaceContent(iri, c)` | `graph_replace` (refused when not registered: `graph-not-registered`) |
 | `NamedGraph.patchContent(iri, {insert, delete})` | `graph_patch` |
 | `OntologyGraph.update(iri).set({version})` | `graph_patch` with a record and no body (hash kept) |
 | `OntologyGraph.update(iri).set({version}).replaceContent(c)` | `graph_replace` with the record |
 | `OntologyGraph.delete(iri)` | `graph_drop` (graph and record) |
+
+Each condition is part of the update, not a separate read before it: a create writes only while
+the graph has no record and holds no triples, a replace or patch only while the record exists.
+Of two concurrent creates exactly one writes; the other reads that its update wrote nothing and is
+refused (`graph-exists`). A SPARQL store marks the record its create wrote with a one-time claim
+(`core:graphCreateClaim`), reads it back in one SELECT and removes it, so a create is the update
+plus two small requests. A replace or patch that loses a race with a drop writes nothing, so no
+half record is left. The result's `changed` is true whenever the body or a record field was
+written: a record-only update that sets `feedsHierarchy` changes what the store infers.
 
 Content is `{mediaType: 'text/turtle' | 'application/n-triples', text}`. Core fills the record's
 automatic fields: `sd:name`, `core:contentHash` (`sha256Hex` of the content text, or a hash the
@@ -364,7 +394,10 @@ LinkedStorage.setDatasetForShapes(store, [Tag, Category], {graph: dataGraph('tax
   (`{DATA_ROOT}/graph/import/…`). The refusal is `GraphQueryError('graph-name-read-only')` and names
   the shape and the graph: when the route is set, or, for a full IRI under the data root, when the
   routing is read. (Draft graphs, `{DATA_ROOT}/graph/drafts/…`, stay routable: an app routes its
-  draft shapes there.)
+  draft shapes there.) The managed kinds are the top segment of a `dataGraph()` slug; an `'own'`
+  route's top segment is its package slug, so a package slugged `import` or `shapes` routes to its
+  own graphs (`{DATA_ROOT}/graph/import/Article`). Only an `'own'` graph named exactly like an
+  imported graph, `graph/import/{lower-case slug}` (a shape named in lower case), is refused.
 
 `setShapeGraphs(dataset, {<shape IRI>: route})` records routes directly (a composite dataset
 registers them on the store it forwards to); `getShapeGraphs(dataset)` returns them resolved, and

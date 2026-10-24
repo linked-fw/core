@@ -48,6 +48,7 @@ import {assertWireVersion} from './wireVersion.js';
 import {
   decodeNodeDataToRaw,
   readKeepIncoming,
+  type InboundMutationOptions,
   valueShapeOf,
   type MutationJSON,
   type MutationNodeDataJSON,
@@ -203,6 +204,7 @@ function assertInboundDataValid(
 
 export function lowerMutationJSON(
   json: MutationJSON,
+  options?: InboundMutationOptions,
 ): IRCreateQuery | IRUpdateQuery | IRDeleteQuery {
   assertWireVersion(json.v);
   switch (json.op) {
@@ -251,7 +253,7 @@ export function lowerMutationJSON(
     }
     case 'delete': {
       const shape = requireShape(json.shape);
-      const keepIncoming = readKeepIncoming(json);
+      const keepIncoming = readKeepIncoming(json, options);
       if (json.mode === 'ids') {
         const ir = buildCanonicalDeleteMutationIR({
           shape,

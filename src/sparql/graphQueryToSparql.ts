@@ -224,13 +224,30 @@ const iri = (value: string): string => {
 const literal = (l: GraphRecordLiteral): string => `"${escapeSparqlString(l.value)}"^^${iri(l.datatype)}`;
 
 /**
+ * The predicate of the claim a `graph_create` writes on the record it creates, so the store can
+ * tell afterwards whether its own create wrote the record (see {@link graphCreateOutcomeQuery});
+ * removed again right after (internal, never part of a record).
+ */
+export const GRAPH_CREATE_CLAIM = 'https://linked.cm/ont/core/graphCreateClaim';
+
+/**
  * The one SPARQL update for `query`, or `undefined` when there is nothing to write (a record-only
  * update with no fields). `now` is the record's load time (ISO `xsd:dateTime`).
+ *
+ * Every operation carries its condition, so the update decides in the store's own transaction:
+ * - `graph_create` writes only while the graph has no record and holds no triples, and marks the
+ *   record it writes with `claim` (a value unique to this request; see
+ *   {@link graphCreateOutcomeQuery}). A record left without its `sd:name` is cleared first, under
+ *   the same condition.
+ * - `graph_replace` and `graph_patch` write only while the record exists (of `recordClass`, unless
+ *   that is `sd:NamedGraph`): one that loses a race with a drop writes nothing, so no record is
+ *   left half written.
  */
 export function graphQueryToSparql(
   query: GraphQuery,
   bodies: GraphQueryBodies,
   now: string,
+  claim?: string,
 ): string | undefined {
   const g = iri(query.graph);
   const registry = iri(graphs.registry);
@@ -238,11 +255,6 @@ export function graphQueryToSparql(
   const own = graphRecordFieldValues(query);
   const ops: string[] = [];
   const inRegistry = (triples: string) => `GRAPH ${registry} { ${triples} }`;
-  const deleteField = (predicate: string, n: number) =>
-    `DELETE WHERE { ${inRegistry(`${g} ${iri(predicate)} ?v${n}`)} }`;
-  const insertBody = (body: string | undefined) => {
-    if (body) ops.push(`INSERT DATA { GRAPH ${g} {\n${body}} }`);
-  };
   const recordFields = (fields: Map<string, GraphRecordLiteral[]>) =>
     [...fields].map(([p, values]) => `${iri(p)} ${values.map(literal).join(', ')}`);
 
@@ -252,6 +264,7 @@ export function graphQueryToSparql(
     automatic.set(coreOntology.contentHash.id, [{value: hash, datatype: xsd.string.id}]);
     automatic.set(dcterms.modified, [{value: now, datatype: xsd.dateTime.id}]);
   }
+  const named = `${g} ${iri(sd.name.id)} ${g}`;
 
   switch (query.kind) {
     case 'graph_create': {
@@ -261,38 +274,62 @@ export function graphQueryToSparql(
           {value: String(recordClass.feedsHierarchy), datatype: xsd.boolean.id},
         ]);
       }
-      ops.push(`DROP SILENT GRAPH ${g}`);
-      insertBody(bodies.content);
-      ops.push(`DELETE WHERE { ${inRegistry(`${g} ?p ?o`)} }`);
+      const free =
+        `FILTER NOT EXISTS { ${inRegistry(named)} } ` +
+        `FILTER NOT EXISTS { GRAPH ${g} { ?s_c ?p_c ?o_c } }`;
+      ops.push(
+        `DELETE { ${inRegistry(`${g} ?p_r ?o_r`)} } WHERE { ${inRegistry(`${g} ?p_r ?o_r`)} ${free} }`,
+      );
       const triples = [
         `a ${iri(query.recordClass)}`,
         `${iri(sd.name.id)} ${g}`,
         ...recordFields(automatic),
         ...recordFields(fields),
+        ...(claim ? [`${iri(GRAPH_CREATE_CLAIM)} "${escapeSparqlString(claim)}"`] : []),
       ];
-      ops.push(`INSERT DATA { ${inRegistry(`${g} ${triples.join(' ; ')} .`)} }`);
+      const body = bodies.content ? `GRAPH ${g} {\n${bodies.content}} ` : '';
+      ops.push(
+        `INSERT { ${body}${inRegistry(`${g} ${triples.join(' ; ')} .`)} } WHERE { ${free} }`,
+      );
       break;
     }
     case 'graph_replace':
     case 'graph_patch': {
+      const typed =
+        query.recordClass === sd.NamedGraph.id ? '' : ` ; a ${iri(query.recordClass)}`;
+      const recorded = inRegistry(`${named}${typed}`);
+      const clearGraph = () =>
+        ops.push(
+          `DELETE { GRAPH ${g} { ?s_c ?p_c ?o_c } } WHERE { ${recorded} GRAPH ${g} { ?s_c ?p_c ?o_c } }`,
+        );
+      const insertBody = (body: string | undefined) => {
+        if (body) ops.push(`INSERT { GRAPH ${g} {\n${body}} } WHERE { ${recorded} }`);
+      };
       if (query.kind === 'graph_replace') {
-        ops.push(`DROP SILENT GRAPH ${g}`);
+        clearGraph();
         insertBody(bodies.content);
       } else if (query.patch) {
-        if (bodies.delete) ops.push(`DELETE DATA { GRAPH ${g} {\n${bodies.delete}} }`);
+        if (bodies.delete) {
+          ops.push(`DELETE { GRAPH ${g} {\n${bodies.delete}} } WHERE { ${recorded} }`);
+        }
         for (const {triples, variables} of bodies.deletePatterns ?? []) {
           const blank = variables.map((v) => `isBlank(${v})`).join(' && ');
           ops.push(
-            `DELETE { GRAPH ${g} { ${triples} } } WHERE { GRAPH ${g} { ${triples} } FILTER(${blank}) }`,
+            `DELETE { GRAPH ${g} { ${triples} } } WHERE { ${recorded} GRAPH ${g} { ${triples} } FILTER(${blank}) }`,
           );
         }
         insertBody(bodies.insert);
       }
       const changed = new Map([...automatic, ...own]);
       let n = 0;
-      for (const predicate of changed.keys()) ops.push(deleteField(predicate, n++));
+      for (const predicate of changed.keys()) {
+        const field = inRegistry(`${g} ${iri(predicate)} ?v${n++}`);
+        ops.push(`DELETE { ${field} } WHERE { ${recorded} ${field} }`);
+      }
       if (changed.size) {
-        ops.push(`INSERT DATA { ${inRegistry(`${g} ${recordFields(changed).join(' ; ')} .`)} }`);
+        ops.push(
+          `INSERT { ${inRegistry(`${g} ${recordFields(changed).join(' ; ')} .`)} } WHERE { ${recorded} }`,
+        );
       }
       break;
     }
@@ -302,6 +339,27 @@ export function graphQueryToSparql(
       break;
   }
   return ops.length ? ops.join(' ;\n') : undefined;
+}
+
+/**
+ * After a `graph_create` update: whether it wrote the record (`?claimed`: the record carries this
+ * request's `claim`), and if not, whether the graph has a record (`?registered`) or holds triples
+ * (`?populated`), which is why the create wrote nothing.
+ */
+export function graphCreateOutcomeQuery(graph: string, claim: string): string {
+  const g = iri(graph);
+  const registry = iri(graphs.registry);
+  return (
+    'SELECT ?claimed ?registered ?populated WHERE { ' +
+    `BIND(EXISTS { GRAPH ${registry} { ${g} ${iri(GRAPH_CREATE_CLAIM)} "${escapeSparqlString(claim)}" } } AS ?claimed) ` +
+    `BIND(EXISTS { GRAPH ${registry} { ${g} ${iri(sd.name.id)} ${g} } } AS ?registered) ` +
+    `BIND(EXISTS { GRAPH ${g} { ?s ?p ?o } } AS ?populated) }`
+  );
+}
+
+/** Remove the claim a `graph_create` wrote on its record (see {@link GRAPH_CREATE_CLAIM}). */
+export function graphCreateClaimRemoval(graph: string, claim: string): string {
+  return `DELETE DATA { GRAPH ${iri(graphs.registry)} { ${iri(graph)} ${iri(GRAPH_CREATE_CLAIM)} "${escapeSparqlString(claim)}" } }`;
 }
 
 /**

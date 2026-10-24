@@ -25,6 +25,7 @@ import {NamedGraph, OntologyGraph} from '../shapes/NamedGraph';
 import {SparqlDataset} from '../sparql/SparqlDataset';
 import type {SparqlOptions} from '../sparql/sparqlUtils';
 import type {SparqlQueryResults} from '../sparql/resultMapping';
+import {graphCreateOutcomeAnswer} from '../test-helpers/test-utils';
 import {
   GRAPH_REGISTRY_MAX_AGE_MS,
   invalidateGraphRegistry,
@@ -360,6 +361,8 @@ class StubStore extends SparqlDataset {
 
   protected async executeSparqlSelect(sparql: string): Promise<SparqlQueryResults> {
     if (sparql.startsWith('ASK {')) return {head: {}, boolean: false};
+    const outcome = graphCreateOutcomeAnswer(sparql, {registered: false});
+    if (outcome) return outcome;
     if (sparql.startsWith('SELECT ?g ?c WHERE')) {
       this.registryLoads++;
       return {

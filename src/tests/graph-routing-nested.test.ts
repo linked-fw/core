@@ -18,6 +18,7 @@ import {collectOwnedLinks} from '../sparql/ownedLinkCheck';
 import {lower} from '../queries/lower';
 import {DeleteBuilder} from '../queries/DeleteBuilder';
 import {lowerMutationJSON} from '../queries/lowerMutationJSON';
+import {fromJSON} from '../queries/fromJSON';
 import {isGraphQueryError} from '../queries/graphQuery';
 import {mutationEffects, queryDependencies} from '../queries/queryDependencies';
 import {LinkedStorage} from '../utils/LinkedStorage';
@@ -35,6 +36,7 @@ import {
   NGPhoto,
 } from '../test-helpers/graph-routing-nested-fixtures';
 
+import {RFImportedRecord, RFLowerNamed} from '../test-helpers/graph-route-forms-fixtures';
 import '../ontologies/rdf';
 import '../ontologies/xsd';
 
@@ -356,6 +358,22 @@ describe('routes to graphs a store manages itself are refused', () => {
     setShapeGraphs(ds, {[NGArticle.shape.id]: dataGraph('importers')});
   });
 
+  test("'own' of a package slugged import is its own graph, unless named exactly like an imported graph", () => {
+    const s = new CaptureStore({dataRoot: ROOT});
+    setShapeGraphs(s, {[RFImportedRecord.shape.id]: 'own'});
+    expect(graphRoutingFor(s)!.graphForShape(RFImportedRecord.shape.id)).toBe(`${ROOT}/graph/import/RFImportedRecord`);
+    let err: unknown;
+    try {
+      setShapeGraphs(s, {[RFLowerNamed.shape.id]: 'own'});
+    } catch (e) {
+      err = e;
+    }
+    expect(isGraphQueryError(err, 'graph-name-read-only')).toBe(true);
+    expect(String(err)).toContain('{DATA_ROOT}/graph/import/wikidata-people');
+    // dataGraph() keeps refusing the managed kinds as its top segment.
+    expect(() => setShapeGraphs(s, {[RFImportedRecord.shape.id]: dataGraph('import/acme')})).toThrow(/imported graph/);
+  });
+
   test('a package ontology or shape graph, the registry and the portable names, when the route is set', () => {
     const ds = {} as unknown as IDataset;
     refused(() => setShapeGraphs(ds, {[NGArticle.shape.id]: 'https://linked.cm/pkg/schema/graph/shapes'}), 'https://linked.cm/pkg/schema/graph/shapes');
@@ -412,6 +430,19 @@ describe('a delete that keeps incoming links', () => {
     const plain = DeleteBuilder.from(NGPerson, {id: ID}).toJSON();
     expect(plain).not.toHaveProperty('keepIncoming');
     expect(lower(DeleteBuilder.fromJSON(plain))).not.toHaveProperty('keepIncoming');
+  });
+
+  test('a receiver that refuses keepIncoming refuses it on every inbound path; others accept it', () => {
+    const wire = JSON.parse(JSON.stringify(DeleteBuilder.from(NGPerson, {id: ID})._keepingIncoming().toJSON()));
+    const refuse = {refuseKeepIncoming: true};
+    expect(() => DeleteBuilder.fromJSON(wire, refuse)).toThrow(/trusted service callers/);
+    expect(() => fromJSON(wire, refuse)).toThrow(/trusted service callers/);
+    expect(() => fromJSON(wire, {...refuse, catalog: undefined})).toThrow(/trusted service callers/);
+    expect(() => lowerMutationJSON(wire, refuse)).toThrow(/trusted service callers/);
+    // A plain delete passes a refusing receiver; a receiver that does not refuse keeps the flag.
+    const plain = JSON.parse(JSON.stringify(DeleteBuilder.from(NGPerson, {id: ID}).toJSON()));
+    expect(lowerMutationJSON(plain, refuse)).toEqual(expect.objectContaining({kind: 'delete'}));
+    expect(lowerMutationJSON(wire, {refuseKeepIncoming: false})).toEqual(expect.objectContaining({keepIncoming: true}));
   });
 
   test('a malformed or misplaced flag is refused', () => {

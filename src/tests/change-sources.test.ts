@@ -205,6 +205,29 @@ describe('change sources', () => {
     expect(getLiveQueryStore()).toBe(store);
   });
 
+  test('a feed change and an app change with the same effects are two changes', async () => {
+    const effects = mutationEffects(Team.update({name: 'X'}).for(ids.T1));
+    store.publish({effects}, 'feed');
+    await flush();
+    expect(dataset.selects).toBe(2);
+    store.publish({effects}, 'app'); // another source, not the feed change's echo
+    await flush();
+    expect(dataset.selects).toBe(3);
+  });
+
+  test('a local change folds with one echo only; a second remote change refetches', async () => {
+    const effects = mutationEffects(Team.update({name: 'X'}).for(ids.T1));
+    store.publish({effects}, 'local');
+    await flush();
+    expect(dataset.selects).toBe(2);
+    store.publish({effects}, 'feed'); // its echo: folded
+    await flush();
+    expect(dataset.selects).toBe(2);
+    store.publish({effects}, 'feed'); // another writer's change with the same effects
+    await flush();
+    expect(dataset.selects).toBe(3);
+  });
+
   test('two different local writes within the echo window refetch twice', async () => {
     await Team.update({members: {add: [{id: ids.P3}]}}).for(ids.T1);
     await flush();
