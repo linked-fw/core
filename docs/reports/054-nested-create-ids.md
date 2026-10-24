@@ -83,7 +83,7 @@ and deriving `mintsAsIri` and `nestedNodeKind` from one helper (the blank-node t
 
 ### Follow-ups
 
-- Shape-ui's test double: backlog [063](../backlog/063-test-doubles-in-other-repos-need-graphquery.md).
+- Shape-ui's test double: done in https://github.com/linked-fw/shape-ui/pull/74 (backlog 063 closed).
 - The jest module-cache crash also stops react's `across-copies.test.tsx` locally (core linked
   from `packages-local`): backlog 060.
 
