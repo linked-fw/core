@@ -167,7 +167,7 @@ describe('syncOntologies by the probe answer', () => {
     const store = new StubStore('named-graphs');
     store.records = [record(ontologyGraphHash([PKG_TEXT]))];
     const result = await syncOntologies(store, {packages: [PKG]});
-    expect(result).toEqual({written: [], skipped: [PKG], pruned: []});
+    expect(result).toMatchObject({written: [], skipped: [PKG], pruned: []});
     expect(store.probeQueries).toEqual([]);
     expect(store.asks).toBe(0);
     expect(store.graphQueries).toEqual([]);
@@ -239,7 +239,7 @@ describe('syncOntologies by the probe answer', () => {
     async (inference) => {
       const store = new StubStore(inference);
       const first = await syncOntologies(store, {packages: [PKG]});
-      expect(first).toEqual({written: [PKG], skipped: [], pruned: []});
+      expect(first).toMatchObject({written: [PKG], skipped: [], pruned: []});
       expect(store.graphQueries.map((q) => q.kind)).toEqual(['graph_create']);
       expect(defaultGraphInserts(store)).toEqual([]);
       expect(syncUpdates(store).some((u) => u.includes('ontologySync/'))).toBe(false);

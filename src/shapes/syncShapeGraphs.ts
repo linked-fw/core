@@ -18,6 +18,12 @@
  * are removed once their package's graph holds them. A store without graph queries
  * (`unsupported-query-kind`) gets that default-graph sync instead (`syncShapes`).
  *
+ * That is the `'package'` mode, the default. The store's `shapeGraph` target
+ * (`utils/graphTargets.ts`) chooses the others: a shared graph IRI holds every package's shapes
+ * (and the app's generated ones) in one `ShapesGraph`, rebuilt whole on any change
+ * ({@link sharedShapeGraphHash}); `'default'` runs `syncShapes` into the default graph. Data
+ * another mode left is reported in one warning, never moved.
+ *
  * Runs at app boot and through the app's control route, after the ontology sync. Server only.
  *
  * @module @_linked/core/shapes/syncShapeGraphs
@@ -37,6 +43,7 @@ import {
   packagesWithShapes,
   singleOwnerShapesTurtle,
 } from './shapesToTurtle.js';
+import {graphTargetsOf, isSharedGraphTarget, type GraphTarget} from '../utils/graphTargets.js';
 
 /** What the shape graph hash covers before the Turtle; a new prefix re-syncs every dataset once. */
 export const SHAPE_GRAPH_HASH_PREFIX = 'linked-shape-graph/1\n';
@@ -88,13 +95,35 @@ export interface SyncShapeGraphsResult {
   /** The app graph: written, unchanged, or dropped (nothing to hold). Absent without `appShapes`. */
   appGraph?: 'written' | 'skipped' | 'dropped';
   /**
-   * Set when the store has no graph queries and the default-graph sync ran instead: how many
-   * of its writes ran.
+   * Set when the shapes went into the default graph (`syncShapes`): under `shapeGraph: 'default'`,
+   * or because the store has no graph queries. How many of its writes ran.
    */
   defaultGraph?: number;
+  /** Where the run wrote: the store's `shapeGraph` target (`'package'`, `'default'` or an IRI). */
+  target?: GraphTarget;
+  /** Set when a store without graph queries got the default-graph sync instead of `target`. */
+  fallback?: true;
 }
 
-type ShapesRecord = {package?: string; contentHash?: string};
+type ShapesRecord = {package?: string; contentHash?: string; packageHashes: string[]};
+
+/** What a shared shape graph's hash covers before its parts; a new prefix rebuilds it once. */
+export const SHARED_SHAPE_GRAPH_HASH_PREFIX = 'linked-shape-graph-shared/1\n';
+
+/**
+ * The content hash of a shared shape graph: SHA-256 (hex) of
+ * {@link SHARED_SHAPE_GRAPH_HASH_PREFIX} + one `"{package} {hash}"` line per package (sorted by
+ * name, each hash the package's {@link shapeGraphHash}), then, when the app's generated shapes are
+ * part of it, an empty line and their {@link shapeGraphHash}.
+ */
+export function sharedShapeGraphHash(parts: Array<{name: string; hash: string}>, appHash?: string): string {
+  return sha256Hex(
+    SHARED_SHAPE_GRAPH_HASH_PREFIX + packageHashLines(parts).join('\n') + (appHash ? `\n\n${appHash}` : ''),
+  );
+}
+
+const packageHashLines = (parts: Array<{name: string; hash: string}>): string[] =>
+  [...parts].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map((p) => `${p.name} ${p.hash}`);
 
 const turtle = (text: string): GraphContent => ({mediaType: 'text/turtle', text});
 
@@ -112,27 +141,196 @@ export async function syncShapeGraphs(
   options: SyncShapeGraphsOptions = {},
 ): Promise<SyncShapeGraphsResult> {
   assertNoActiveCatalog();
+  const target = graphTargetsOf(ds).shapeGraph;
+  if (target === 'default') return syncDefaultMode(ds, options);
   // A dataset class built against an older core has no graph queries.
   if (ds && typeof (ds as Partial<IDataset>).graphQuery !== 'function') {
-    return syncDefaultGraph(ds);
+    return {...(await syncDefaultGraph(ds, options)), target, fallback: true};
   }
   const run = {wroteGraph: false};
   try {
-    return await syncGraphs(run, ds, options);
+    return isSharedGraphTarget(target)
+      ? await syncSharedGraph(run, ds, options, target)
+      : {...(await syncGraphs(run, ds, options)), target: 'package'};
   } catch (error) {
     // A store either runs graph queries or refuses the first one, before anything was written.
     if (!run.wroteGraph && isGraphQueryError(error, 'unsupported-query-kind')) {
-      return syncDefaultGraph(ds);
+      return {...(await syncDefaultGraph(ds, options)), target, fallback: true};
     }
     throw error;
   }
 }
 
-/** The default-graph sync (`syncShapes`), for a store without graph queries. */
-async function syncDefaultGraph(ds?: IDataset): Promise<SyncShapeGraphsResult> {
-  const thunks = await syncShapes(ds);
+/** The default-graph sync (`syncShapes`): the `'default'` mode, and stores without graph queries. */
+async function syncDefaultGraph(ds: IDataset | undefined, options: SyncShapeGraphsOptions): Promise<SyncShapeGraphsResult> {
+  const thunks = await syncShapes(ds, options.force ? {force: true} : undefined);
   for (const run of thunks) await run();
   return {written: [], skipped: [], pruned: [], cleaned: 0, defaultGraph: thunks.length};
+}
+
+/** Every `ShapesGraph` record of `ds`, by graph, in one read. */
+async function readShapesRecords(ds?: IDataset): Promise<Map<string, ShapesRecord>> {
+  const rows =
+    ((await ShapesGraph.select((r) => [r.package, r.contentHash, r.packageHashes]).exec(ds)) as Array<{
+      id: string;
+      package?: unknown;
+      contentHash?: unknown;
+      packageHashes?: unknown;
+    }> | null) ?? [];
+  const records = new Map<string, ShapesRecord>();
+  for (const row of rows) {
+    if (!row?.id) continue;
+    const hashes = Array.isArray(row.packageHashes)
+      ? row.packageHashes
+      : row.packageHashes === undefined || row.packageHashes === null
+        ? []
+        : [row.packageHashes];
+    records.set(row.id, {
+      package: typeof row.package === 'string' ? row.package : undefined,
+      contentHash: typeof row.contentHash === 'string' ? row.contentHash : undefined,
+      packageHashes: hashes.filter((h): h is string => typeof h === 'string').sort(),
+    });
+  }
+  return records;
+}
+
+/**
+ * Log one warning naming the data of another `shapeGraph` mode the run found. The sync never
+ * moves it: changing the mode means clearing first (see "Ontology and shape graphs" in the README).
+ */
+function warnOtherModes(mode: GraphTarget, found: {packageGraphs?: string[]; sharedGraphs?: string[]; appGraph?: string; defaultGraphShapes?: number}): void {
+  const parts: string[] = [];
+  if (found.packageGraphs?.length) {
+    parts.push(`package shape graphs (the 'package' mode): ${found.packageGraphs.map((g) => `<${g}>`).join(', ')}`);
+  }
+  if (found.appGraph) parts.push(`the app's shape graph <${found.appGraph}> (the 'package' mode)`);
+  if (found.sharedGraphs?.length) {
+    parts.push(`shared shape graphs: ${found.sharedGraphs.map((g) => `<${g}>`).join(', ')}`);
+  }
+  if (found.defaultGraphShapes) {
+    parts.push(`${found.defaultGraphShapes} registered shape(s) in the default graph (the 'default' mode)`);
+  }
+  if (!parts.length) return;
+  const where = mode === 'package' ? "'package'" : mode === 'default' ? "'default'" : `<${mode}>`;
+  console.warn(
+    `[syncShapeGraphs] shapeGraph is ${where}, but the dataset also holds ${parts.join('; ')}. ` +
+      'The sync leaves it as it is and never copies it: clear it to switch modes (see "Ontology ' +
+      'and shape graphs" in @_linked/core\'s README).',
+  );
+}
+
+/** The package shape graphs among `records` (a package's own graph), sorted. */
+const packageGraphsOf = (records: Map<string, ShapesRecord>): string[] =>
+  [...records]
+    .filter(([graph, record]) => PACKAGE_SHAPES_GRAPH.test(graph) && !record.packageHashes.length)
+    .map(([graph]) => graph)
+    .sort();
+
+/** An app's own shape graph among `records` (neither a package's nor a shared one), if any. */
+const appGraphOf = (records: Map<string, ShapesRecord>): string | undefined =>
+  [...records].find(([graph, record]) => !PACKAGE_SHAPES_GRAPH.test(graph) && !record.packageHashes.length)?.[0];
+
+/** The shared shape graphs among `records` (those listing package hashes), sorted. */
+const sharedGraphsOf = (records: Map<string, ShapesRecord>, except?: string): string[] =>
+  [...records]
+    .filter(([graph, record]) => graph !== except && record.packageHashes.length > 0)
+    .map(([graph]) => graph)
+    .sort();
+
+/**
+ * The `'default'` mode: every shape in the default graph through `syncShapes` (each shape
+ * replaced on its own hash, keeping the links other shapes hold to it). Other modes' graphs are
+ * reported, never moved.
+ */
+async function syncDefaultMode(ds: IDataset | undefined, options: SyncShapeGraphsOptions): Promise<SyncShapeGraphsResult> {
+  try {
+    const records = await readShapesRecords(ds);
+    warnOtherModes('default', {
+      packageGraphs: packageGraphsOf(records),
+      sharedGraphs: sharedGraphsOf(records),
+      appGraph: appGraphOf(records),
+    });
+  } catch {
+    // A store without a graph registry holds no other mode's graphs.
+  }
+  return {...(await syncDefaultGraph(ds, options)), target: 'default'};
+}
+
+/**
+ * The shared mode (`shapeGraph` is an IRI): the shapes of every package of the run, and the app's
+ * generated shapes when `appShapes` is given, in the one `ShapesGraph` at `graph`, rebuilt whole in
+ * one graph query when the combined hash ({@link sharedShapeGraphHash}) differs from the record's.
+ * The record lists every package's hash (`packageHashes`) and file (`sources`). Other modes' data
+ * is reported, never moved (the default-graph cleanup of the package mode does not run).
+ */
+async function syncSharedGraph(
+  run: {wroteGraph: boolean},
+  ds: IDataset | undefined,
+  options: SyncShapeGraphsOptions,
+  graph: string,
+): Promise<SyncShapeGraphsResult> {
+  const records = await readShapesRecords(ds);
+  const registered = packagesWithShapes();
+  const only = options.packages ? new Set(options.packages) : undefined;
+  const texts: Array<{name: string; text: string}> = [];
+  for (const name of registered) {
+    if (only && !only.has(name)) continue;
+    const text = (await options.turtleFor?.(name)) ?? packageShapesTurtle(name);
+    if (text !== undefined) texts.push({name, text});
+  }
+  texts.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const appText = options.appShapes
+    ? singleOwnerShapesTurtle(registered.flatMap((name) => packageShapes(name)))
+    : undefined;
+
+  const stale = await readStoredHashes(registered.flatMap((name) => packageShapes(name).map((shape) => shape.id)), ds);
+  warnOtherModes(graph, {
+    packageGraphs: packageGraphsOf(records),
+    sharedGraphs: sharedGraphsOf(records, graph),
+    appGraph: appGraphOf(records),
+    defaultGraphShapes: stale.size,
+  });
+
+  const parts = texts.map(({name, text}) => ({name, hash: shapeGraphHash(text)}));
+  const hash = sharedShapeGraphHash(parts, appText === undefined ? undefined : shapeGraphHash(appText));
+  const record = records.get(graph);
+  const names = texts.map((t) => t.name);
+  const appStatus = (status: 'written' | 'skipped') =>
+    options.appShapes ? {appGraph: appText === undefined ? ('skipped' as const) : status} : {};
+  if (!options.force && record?.contentHash === hash) {
+    return {written: [], skipped: names, pruned: [], cleaned: 0, ...appStatus('skipped'), target: graph};
+  }
+  const content = turtle([...texts.map((t) => t.text), ...(appText === undefined ? [] : [appText])].join('\n'));
+  const fields = {
+    sources: names.map((name) => `${name}/${SHAPES_SOURCE}`),
+    packageHashes: packageHashLines(parts),
+  };
+  const replace = () => ShapesGraph.update(graph).set(fields).replaceContent(content, {contentHash: hash}).exec(ds);
+  const create = () =>
+    ShapesGraph.create({id: graph, ...fields} as unknown as {id: string; package: string})
+      .withContent(content, {contentHash: hash})
+      .exec(ds);
+  if (record) {
+    await replace();
+  } else {
+    try {
+      await create();
+    } catch (error) {
+      if (!isGraphQueryError(error, 'graph-exists')) throw error;
+      try {
+        await replace();
+      } catch (inner) {
+        if (!isGraphQueryError(inner, 'graph-not-registered')) throw inner;
+        await ShapesGraph.delete(graph).exec(ds);
+        await create();
+      }
+    }
+  }
+  run.wroteGraph = true;
+  const pruned = [...new Set((record?.packageHashes ?? []).map((line) => line.split(' ')[0]))].filter(
+    (name) => name && !names.includes(name),
+  );
+  return {written: names, skipped: [], pruned: pruned.sort(), cleaned: 0, ...appStatus('written'), target: graph};
 }
 
 async function syncGraphs(
@@ -141,20 +339,8 @@ async function syncGraphs(
   options: SyncShapeGraphsOptions,
 ): Promise<SyncShapeGraphsResult> {
   const result: SyncShapeGraphsResult = {written: [], skipped: [], pruned: [], cleaned: 0};
-  const rows =
-    ((await ShapesGraph.select((r) => [r.package, r.contentHash]).exec(ds)) as Array<{
-      id: string;
-      package?: unknown;
-      contentHash?: unknown;
-    }> | null) ?? [];
-  const records = new Map<string, ShapesRecord>();
-  for (const row of rows) {
-    if (!row?.id) continue;
-    records.set(row.id, {
-      package: typeof row.package === 'string' ? row.package : undefined,
-      contentHash: typeof row.contentHash === 'string' ? row.contentHash : undefined,
-    });
-  }
+  const records = await readShapesRecords(ds);
+  warnOtherModes('package', {sharedGraphs: sharedGraphsOf(records)});
 
   /** Create or replace `graph` with `text` unless its record's hash matches. */
   const write = async (
@@ -222,6 +408,7 @@ async function syncGraphs(
     const live = new Set(registered);
     for (const [graph, record] of [...records].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
       if (graph === options.appShapes?.graph || !record.package || live.has(record.package)) continue;
+      if (record.packageHashes.length) continue; // a shared graph (another mode's)
       // Only package graphs (`{baseUri}pkg/{slug}/graph/shapes`), never an app's own graph.
       if (!PACKAGE_SHAPES_GRAPH.test(graph)) continue;
       await ShapesGraph.delete(graph).exec(ds);

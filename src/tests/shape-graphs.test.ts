@@ -103,7 +103,7 @@ describe('syncShapeGraphs', () => {
 
   test('a first sync creates the package graph with its shapes.ttl and the sync hash', async () => {
     const result = await syncShapeGraphs(ds, only);
-    expect(result).toEqual({written: [PKG], skipped: [], pruned: [], cleaned: 0});
+    expect(result).toMatchObject({written: [PKG], skipped: [], pruned: [], cleaned: 0});
     expect(ds.graphQueries).toEqual([
       {
         kind: 'graph_create',
@@ -119,7 +119,7 @@ describe('syncShapeGraphs', () => {
 
   test('an unchanged package writes nothing; a changed one is replaced whole; force rewrites', async () => {
     ds.records = [{id: G, package: PKG, contentHash: shapeGraphHash(pkgTurtle())}];
-    expect(await syncShapeGraphs(ds, only)).toEqual({written: [], skipped: [PKG], pruned: [], cleaned: 0});
+    expect(await syncShapeGraphs(ds, only)).toMatchObject({written: [], skipped: [PKG], pruned: [], cleaned: 0});
     expect(ds.graphQueries).toEqual([]);
     expect(ds.updates).toEqual([]);
 

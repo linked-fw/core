@@ -233,6 +233,46 @@ against: `ghcr.io/linked-fw/fuseki:6.2.0-2` answers `'named-graphs'`, `6.2.0-1`
 
 It runs at app boot and through the app's control route, before shape sync.
 
+### Graph targets: where the syncs write
+
+Everything above is the `'package'` mode, the default. A store's two graph targets
+(`@_linked/core/utils/graphTargets`: `ontologyGraph` and `shapeGraph`, each `'package'`,
+`'default'` or an absolute graph IRI; `SparqlOptions`, `setGraphTargets`, a datasets config entry's
+`config`, or a host's `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH`) choose the others. Each value
+is checked when it is set; a store without `graphTargets()` runs `'package'`. The README's
+"Ontology and shape graphs" has the user-facing table; the mechanics:
+
+- **Shared graph (an IRI).** One `OntologyGraph` record at the IRI (`feedsHierarchy` true), its
+  body every package's data in one N-Triples text (each file with its own blank-node prefix),
+  its record's `packageHashes` one `"{package} {ontologyGraphHash}"` per package (`core:packageHash`)
+  and `sources` `{package}/{file}`. Hash: `sharedOntologyGraphHash` = SHA-256 of
+  `linked-ontology-shared/1\n` + the sorted package lines. A mismatch rebuilds the graph whole in
+  one graph query; the probe runs before it, as for package graphs. The shape sync's shared graph
+  is the same with `ShapesGraph`: every package's `shapes.ttl` text and the app's generated shapes
+  (when `appShapes` is given), hash `sharedShapeGraphHash` (`linked-shape-graph-shared/1\n`).
+- **`'default'`.** The ontology sync builds one update (`IDataset.replaceDefaultGraphTerms`,
+  compiled by `sparql/defaultGraphTerms.ts`): a `DELETE` of every package-owned term (subjects
+  under a registered ontology namespace, plus the IRI subjects of the current Turtle and the hash
+  node `https://linked.cm/pkg/core/ontology-sync/default-graph`) with its outgoing triples and the
+  blank nodes below them, then an `INSERT DATA` of every package's data and the new hash. The
+  delete follows up to `DEFAULT_GRAPH_TERMS_DEPTH` (8) blank-node steps, each a link to a blank
+  node and then any number of `rdf:rest` links, through blank nodes only, so it never walks
+  through an IRI into another term's structure. The hash, `defaultGraphOntologyHash`, covers the
+  namespaces and the package hashes (`linked-ontology-default/1\n`). The probe for this mode is
+  `probeDefaultGraphInference(ds?)`: `probe:Default rdfs:subClassOf core:OntologySync` and an
+  instance written into the default graph in one replace, asked for through the `OntologySync`
+  shape, then removed. The shape sync runs `syncShapes`, whose rewrite of a shape keeps the
+  links others hold to it.
+- **Readers.** `expandReadGraphs` maps `graphs.allOntologies` / `graphs.allShapes` through the
+  store's targets before the registry expansion: a shared IRI reads that graph, `'default'` the
+  default graph (alone, `{defaultGraph: true}`; with other graphs, `graphs.default` through
+  `mapGraphName`).
+- **Other modes' data** is reported in one warning per sync (registry records of package graphs,
+  shared records, the default-graph hash node, `OntologySync` nodes, default-graph shapes) and never
+  moved or pruned. `orphanScope: 'all'` in the package mode skips shared records.
+- **Results** carry `target` (the mode the run wrote in) and `fallback` (a store without graph
+  queries took the default-graph sync instead).
+
 ## Named graphs and the graph registry
 
 A dataset keeps named graphs on purpose (a package's whole ontology data, its shapes,

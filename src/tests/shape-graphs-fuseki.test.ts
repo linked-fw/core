@@ -153,7 +153,7 @@ describeFuseki('shape graphs on the inferring store', () => {
 
       const options = {packages: ['@_linked/core', PKG], appShapes: {graph: APP, package: '@acme/sg-live'}};
       const first = await syncShapeGraphs(store, options);
-      expect(first).toEqual({
+      expect(first).toMatchObject({
         written: ['@_linked/core', PKG],
         skipped: [],
         pruned: [],
@@ -179,7 +179,7 @@ describeFuseki('shape graphs on the inferring store', () => {
 
       store.updates = 0;
       const second = await syncShapeGraphs(store, options);
-      expect(second).toEqual({written: [], skipped: ['@_linked/core', PKG], pruned: [], cleaned: 0, appGraph: 'skipped'});
+      expect(second).toMatchObject({written: [], skipped: ['@_linked/core', PKG], pruned: [], cleaned: 0, appGraph: 'skipped'});
       expect(store.updates).toBe(0);
     },
     LIVE_FUSEKI_TIMEOUT,

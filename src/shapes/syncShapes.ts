@@ -266,10 +266,14 @@ function buildSyncThunk(nodeShape: NodeShapeData, iri: string, ds?: IDataset): (
   return () => writeShape(nodeShape, iri, ds);
 }
 
-/** Delete (cascade) then create one shape, storing the hash of the written data. */
+/**
+ * Delete (cascade) then create one shape, storing the hash of the written data. The delete keeps
+ * the links other nodes hold to the shape (`core:isExtending` of its sub-shapes, `sh:node`, a
+ * catalog's references): the shape is rewritten in place, not removed, so they stay valid.
+ */
 async function writeShape(nodeShape: NodeShapeData, iri: string, ds?: IDataset): Promise<void> {
   const {data, hash} = buildSyncData(nodeShape, iri);
-  await DeleteBuilder.from(NodeShape, {id: iri}).exec(ds);
+  await DeleteBuilder.from(NodeShape, {id: iri})._keepingIncoming().exec(ds);
   await (NodeShape.create({...data, shapeHash: hash} as never).withId(iri) as unknown as {
     exec: (target?: IDataset) => Promise<unknown>;
   }).exec(ds);

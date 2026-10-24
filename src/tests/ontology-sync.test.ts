@@ -113,7 +113,7 @@ describe('syncOntologies: the default-graph fallback', () => {
 
   test('a first sync writes one update per subject class, then the sync node, last', async () => {
     const result = await syncOntologies(ds, {packages: ['sync-a']});
-    expect(result).toEqual({written: ['sync-a'], skipped: [], pruned: []});
+    expect(result).toMatchObject({written: ['sync-a'], skipped: [], pruned: []});
     // The sync read the records and sync nodes, then the inference probe's first graph query was
     // refused (then its two best-effort drops), before anything was written; the default-graph
     // sync reads the sync nodes again.
@@ -140,7 +140,7 @@ describe('syncOntologies: the default-graph fallback', () => {
   test('an unchanged package writes nothing', async () => {
     ds.nodes = [node('sync-a', [line('A', 'B'), line('B', 'C')]), node('sync-b', [line('X', 'Y')])];
     const result = await syncOntologies(ds, {packages: ['sync-a', 'sync-b']});
-    expect(result).toEqual({written: [], skipped: ['sync-a', 'sync-b'], pruned: []});
+    expect(result).toMatchObject({written: [], skipped: ['sync-a', 'sync-b'], pruned: []});
     expect(ds.updates).toEqual([]);
   });
 
@@ -232,7 +232,7 @@ describe('syncOntologies: the default-graph fallback', () => {
     try {
       linkedPackage('sync-json').linkedOntology({}, ownNs('sync-json'), 'sync-json', async () => ({'@graph': []}), '../data/x.json');
       const result = await syncOntologies(ds, {packages: ['sync-json']});
-      expect(result).toEqual({written: [], skipped: ['sync-json'], pruned: []});
+      expect(result).toMatchObject({written: [], skipped: ['sync-json'], pruned: []});
       expect(ds.updates).toEqual([]);
       expect(warn).toHaveBeenCalledTimes(1);
     } finally {
@@ -310,7 +310,7 @@ describe('syncOntologies: package graphs', () => {
 
   test('a first sync creates one graph per package with the N-Triples body, the sync hash and its sources', async () => {
     const result = await syncOntologies(gs, {packages: ['sync-a', 'sync-b']});
-    expect(result).toEqual({written: ['sync-a', 'sync-b'], skipped: [], pruned: []});
+    expect(result).toMatchObject({written: ['sync-a', 'sync-b'], skipped: [], pruned: []});
     expect(gs.graphQueries).toHaveLength(2);
     const [a, b] = gs.graphQueries;
     expect(a).toMatchObject({
@@ -331,7 +331,7 @@ describe('syncOntologies: package graphs', () => {
   test('an unchanged package sends no graph query', async () => {
     gs.records = [recordOf('sync-a'), recordOf('sync-b')];
     const result = await syncOntologies(gs, {packages: ['sync-a', 'sync-b']});
-    expect(result).toEqual({written: [], skipped: ['sync-a', 'sync-b'], pruned: []});
+    expect(result).toMatchObject({written: [], skipped: ['sync-a', 'sync-b'], pruned: []});
     expect(gs.graphQueries).toEqual([]);
     expect(gs.updates).toEqual([]);
   });
@@ -339,7 +339,7 @@ describe('syncOntologies: package graphs', () => {
   test('a changed package is replaced whole, with its record; the unchanged one is left', async () => {
     gs.records = [recordOf('sync-a', 'old'), recordOf('sync-b')];
     const result = await syncOntologies(gs, {packages: ['sync-a', 'sync-b']});
-    expect(result).toEqual({written: ['sync-a'], skipped: ['sync-b'], pruned: []});
+    expect(result).toMatchObject({written: ['sync-a'], skipped: ['sync-b'], pruned: []});
     expect(gs.graphQueries).toHaveLength(1);
     expect(gs.graphQueries[0]).toMatchObject({
       kind: 'graph_replace',

@@ -12,6 +12,8 @@ import type {
   GraphResult,
 } from '../queries/IntermediateRepresentation.js';
 import type {ChangeEvent} from '../live/changes.js';
+import type {GraphTargetOptions, GraphTargets} from '../utils/graphTargets.js';
+import type {DefaultGraphTermsReplace} from '../queries/defaultGraphTerms.js';
 
 /**
  * Universal dataset interface. Every dataset in the Linked framework accepts
@@ -110,6 +112,27 @@ export interface IDataset {
    * graph with no record), `graph-exists` (create of a registered graph).
    */
   graphQuery(query: GraphQuery): Promise<GraphResult>;
+
+  /**
+   * Where this store keeps the registered packages' ontology data and shapes (`'package'`,
+   * `'default'` or a shared graph IRI, see `utils/graphTargets.ts`). Optional: a store without
+   * it runs `'package'` for both. The ontology and shape syncs write there, and
+   * `graphs.allOntologies` / `graphs.allShapes` read there.
+   */
+  graphTargets?(): GraphTargets;
+
+  /**
+   * Set the graph targets, checked (`parseGraphTargetOptions`; an invalid value throws). With
+   * `onlyUnset`, only the settings the store has not been given yet are filled: how a host applies
+   * `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH` without overriding the store's own options.
+   */
+  setGraphTargets?(options: GraphTargetOptions, how?: {onlyUnset?: boolean}): void;
+
+  /**
+   * Replace terms in the default graph in one update (see {@link DefaultGraphTermsReplace}): the
+   * ontology sync's `'default'` mode. Optional; that mode refuses a store without it.
+   */
+  replaceDefaultGraphTerms?(request: DefaultGraphTermsReplace): Promise<void>;
 
   /**
    * Optional change feed. A dataset that learns about changes made elsewhere

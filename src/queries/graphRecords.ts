@@ -50,6 +50,8 @@ const packageGraphFields: Record<string, GraphRecordField> = {
   ...namedGraphFields,
   package: {path: coreOntology.package.id, datatype: xsd.string.id},
   version: {path: coreOntology.version.id, datatype: xsd.string.id},
+  /** A shared graph's parts: `"{package} {hash}"` per package (see `utils/graphTargets.ts`). */
+  packageHashes: {path: coreOntology.packageHash.id, datatype: xsd.string.id, many: true},
 };
 // Only an ontology graph may opt out of feeding the hierarchy; every other kind never feeds it.
 const ontologyGraphFields: Record<string, GraphRecordField> = {

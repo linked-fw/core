@@ -48,6 +48,7 @@ import {QueryBuilder} from '../queries/QueryBuilder.js';
 import {ClassAxioms} from '../shapes/ClassAxioms.js';
 import {NamedGraph, OntologyGraph} from '../shapes/NamedGraph.js';
 import {sd} from '../ontologies/sd.js';
+import {OntologySync} from '../shapes/OntologySync.js';
 import {LINKED_DATA_ROOT} from '../shapes/SHACL.js';
 import {dataRootOf} from '../utils/graphRouting.js';
 import {LinkedStorage} from '../utils/LinkedStorage.js';
@@ -79,7 +80,13 @@ const probeState = sharedState('@_linked/core', 'hierarchyProbe', () => ({
   results: new WeakMap<object, Promise<HierarchyInference>>(),
   /** The datasets the sync has warned about (one warning per dataset). */
   warned: new WeakSet<object>(),
+  /** The default-graph probe's answers ({@link probeDefaultGraphInference}). */
+  defaultResults: new WeakMap<object, Promise<boolean>>(),
 }));
+
+/** The default-graph probe's cache; a copy of core older than the field shares the container. */
+const defaultResults = (): WeakMap<object, Promise<boolean>> =>
+  (probeState.defaultResults ??= new WeakMap<object, Promise<boolean>>());
 
 const cacheKey = (ds?: IDataset): object =>
   ds ?? (LinkedStorage.getDefaultDataset() as object | undefined) ?? GLOBAL_ROUTER;
@@ -117,6 +124,58 @@ export function probeHierarchyInference(ds?: IDataset): Promise<HierarchyInferen
 export function resetHierarchyInference(ds?: IDataset): void {
   probeState.results.delete(cacheKey(ds));
   probeState.warned?.delete(cacheKey(ds));
+  defaultResults().delete(cacheKey(ds));
+}
+
+/**
+ * Whether `ds` (default: the global router's default dataset) infers `rdf:type` from the default
+ * graph's hierarchy: the probe of the ontology sync's `'default'` mode, which writes the ontology
+ * there. In one default-graph replace (`IDataset.replaceDefaultGraphTerms`) it writes
+ * `probe:Default rdfs:subClassOf core:OntologySync` and `probe:default a probe:Default`, asks
+ * through the `OntologySync` shape (a default-graph shape, unlike the registry's) whether
+ * `probe:default` is found, then removes both terms (in `finally`, best effort; a leftover lies in
+ * core's ontology namespace, which the next `'default'` sync replaces). Cached per dataset like
+ * {@link probeHierarchyInference}; a rejected probe is not cached. Rejects when the store has no
+ * `replaceDefaultGraphTerms`.
+ */
+export function probeDefaultGraphInference(ds?: IDataset): Promise<boolean> {
+  const key = cacheKey(ds);
+  const cache = defaultResults();
+  let result = cache.get(key);
+  if (!result) {
+    result = runDefaultGraphProbe(ds);
+    cache.set(key, result);
+    result.catch(() => {
+      if (cache.get(key) === result) cache.delete(key);
+    });
+  }
+  return result;
+}
+
+async function runDefaultGraphProbe(ds?: IDataset): Promise<boolean> {
+  const target = ds ?? (LinkedStorage.getDefaultDataset() as IDataset | undefined);
+  if (typeof target?.replaceDefaultGraphTerms !== 'function') {
+    throw new Error('The store cannot replace default-graph terms (IDataset.replaceDefaultGraphTerms).');
+  }
+  const {inDefault} = probeTerms(randomToken());
+  await target.replaceDefaultGraphTerms({
+    namespaces: [],
+    subjects: [],
+    insert:
+      `<${inDefault.cls}> <${RDFS_SUBCLASSOF}> <${OntologySync.targetClass.id}> .\n` +
+      `<${inDefault.instance}> <${RDF_TYPE}> <${inDefault.cls}> .\n`,
+  });
+  try {
+    return (
+      (await (QueryBuilder.from(OntologySync).for(inDefault.instance) as unknown as {
+        exists: (target?: IDataset) => Promise<boolean>;
+      }).exists(target)) === true
+    );
+  } finally {
+    await target
+      .replaceDefaultGraphTerms({namespaces: [], subjects: [inDefault.cls, inDefault.instance], insert: ''})
+      .catch(() => undefined);
+  }
 }
 
 /**

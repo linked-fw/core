@@ -30,6 +30,13 @@
  * only from the default graph (`'default-graph'`) or not at all (`'none'`) gets one warning per
  * dataset that class-scoped reads miss subclass instances.
  *
+ * That is the `'package'` mode, the default. The store's `ontologyGraph` target
+ * (`utils/graphTargets.ts`) chooses the others: a shared graph IRI holds every package's data in
+ * one `OntologyGraph`, rebuilt whole when any package changes ({@link sharedOntologyGraphHash});
+ * `'default'` keeps the whole ontology in the default graph, replacing every package-owned term in
+ * one update when the combined hash changes ({@link defaultGraphOntologyHash}). Data another mode
+ * left is reported in one warning, never moved.
+ *
  * Runs at app boot and through the app's control route, before shape sync. Server only (the
  * readers load `n3`).
  *
@@ -46,11 +53,24 @@ import {ClassAxioms} from '../shapes/ClassAxioms.js';
 import {NamedGraph, OntologyGraph} from '../shapes/NamedGraph.js';
 import {isGraphQueryError} from '../queries/graphQuery.js';
 import {
+  probeDefaultGraphInference,
   probeHierarchyInference,
   warnOnceForDataset,
   type HierarchyInference,
 } from './hierarchyProbe.js';
-import {nTriplesFromTurtle, RDFS_SUBCLASSOF, type HierarchyTriple} from './hierarchy.js';
+import {
+  defaultGraphTermsFromTurtle,
+  nTriplesFromTurtle,
+  RDFS_SUBCLASSOF,
+  type HierarchyTriple,
+} from './hierarchy.js';
+import {graphTargetsOf, isSharedGraphTarget, type GraphTarget} from '../utils/graphTargets.js';
+import {LinkedStorage} from '../utils/LinkedStorage.js';
+import {getAllShapeClasses} from '../utils/ShapeClass.js';
+import {dataRootOf} from '../utils/graphRouting.js';
+import {LINKED_DATA_ROOT} from '../shapes/SHACL.js';
+import {DEFAULT_GRAPH_TERMS_DEPTH} from '../queries/defaultGraphTerms.js';
+import {coreOntology} from '../ontologies/linked-core.js';
 import {
   readPackageOntologies,
   registrationsByPackage,
@@ -81,8 +101,19 @@ export interface SyncOntologiesResult {
   written: string[];
   /** Packages left as they were: unchanged, or their data could not be read. */
   skipped: string[];
-  /** Packages no longer registered whose graph or hierarchy was removed (`orphanScope: 'all'`). */
+  /**
+   * Packages no longer registered whose graph or hierarchy was removed (`orphanScope: 'all'`); in
+   * a shared graph, the packages its record listed that the rebuild left out.
+   */
   pruned: string[];
+  /**
+   * Where the run wrote: the store's `ontologyGraph` target (`'package'`, `'default'` or the
+   * shared graph's IRI). A store without graph queries in `'package'` or shared mode got the
+   * default-graph hierarchy sync instead, reported as `'package'` or the IRI with `fallback` set.
+   */
+  target?: GraphTarget;
+  /** Set when a store without graph queries got the default-graph hierarchy sync instead. */
+  fallback?: true;
 }
 
 /** What the ontology graph hash covers before the package's texts; a new prefix re-syncs every dataset once. */
@@ -199,8 +230,25 @@ interface SyncRun {
 /** A plan-070 sync node as read. */
 type StoredNode = {hash?: string; lines: Set<string>};
 
+/**
+ * The node the `'default'` mode records its combined hash on, in the default graph: an
+ * `OntologySync` without a package name. Outside every package namespace, and replaced in the same
+ * update as the terms.
+ */
+export const DEFAULT_GRAPH_ONTOLOGY_NODE = 'https://linked.cm/pkg/core/ontology-sync/default-graph';
+
 /** Every `OntologySync` node in `ds`, by package name. */
 async function readSyncNodes(ds?: IDataset): Promise<Map<string, StoredNode>> {
+  return (await readSyncState(ds)).nodes;
+}
+
+/**
+ * The `OntologySync` nodes of `ds` in one read: the default-graph sync's (by package name) and the
+ * `'default'` mode's node (its hash, or `undefined` when there is none).
+ */
+async function readSyncState(
+  ds?: IDataset,
+): Promise<{nodes: Map<string, StoredNode>; defaultState?: {hash?: string}}> {
   const rows =
     ((await (QueryBuilder.from(OntologySync).select([
       'packageName',
@@ -212,16 +260,107 @@ async function readSyncNodes(ds?: IDataset): Promise<Map<string, StoredNode>> {
       ontologyHash?: unknown;
       ontologyTriples?: unknown;
     }> | null) ?? [];
-  const stored = new Map<string, StoredNode>();
+  const nodes = new Map<string, StoredNode>();
+  let defaultState: {hash?: string} | undefined;
   for (const row of rows) {
+    if (row?.id === DEFAULT_GRAPH_ONTOLOGY_NODE) {
+      defaultState = {hash: typeof row.ontologyHash === 'string' ? row.ontologyHash : undefined};
+      continue;
+    }
     if (!row || typeof row.packageName !== 'string') continue;
-    stored.set(row.packageName, {
+    nodes.set(row.packageName, {
       hash: typeof row.ontologyHash === 'string' ? row.ontologyHash : undefined,
       lines: new Set(splitLines(typeof row.ontologyTriples === 'string' ? row.ontologyTriples : '')),
     });
   }
-  return stored;
+  return {nodes, defaultState};
 }
+
+/** An `OntologyGraph` record as the sync reads it. */
+type OntologyRecord = {package?: string; contentHash?: string; packageHashes: string[]};
+
+/** Every `OntologyGraph` record of `ds`, by graph, in one read. */
+async function readOntologyRecords(ds?: IDataset): Promise<Map<string, OntologyRecord>> {
+  const rows =
+    ((await OntologyGraph.select((r) => [r.package, r.contentHash, r.packageHashes]).exec(ds)) as Array<{
+      id: string;
+      package?: unknown;
+      contentHash?: unknown;
+      packageHashes?: unknown;
+    }> | null) ?? [];
+  const records = new Map<string, OntologyRecord>();
+  for (const row of rows) {
+    if (!row?.id) continue;
+    const hashes = Array.isArray(row.packageHashes)
+      ? row.packageHashes
+      : row.packageHashes === undefined || row.packageHashes === null
+        ? []
+        : [row.packageHashes];
+    records.set(row.id, {
+      package: typeof row.package === 'string' ? row.package : undefined,
+      contentHash: typeof row.contentHash === 'string' ? row.contentHash : undefined,
+      packageHashes: hashes.filter((h): h is string => typeof h === 'string').sort(),
+    });
+  }
+  return records;
+}
+
+/** A package's own ontology graph IRI (`{package IRI}/graph/ontology`). */
+const PACKAGE_ONTOLOGY_GRAPH = /\/pkg\/[^/]+\/graph\/ontology$/;
+
+/** The shared ontology graphs among `records` (those listing package hashes), sorted. */
+const sharedRecords = (records: Map<string, OntologyRecord>, except?: string): string[] =>
+  [...records]
+    .filter(([graph, record]) => graph !== except && record.packageHashes.length > 0)
+    .map(([graph]) => graph)
+    .sort();
+
+/** The package ontology graphs among `records` (a package's own graph, with its record), sorted. */
+const packageRecords = (records: Map<string, OntologyRecord>): string[] =>
+  [...records]
+    .filter(([graph, record]) => PACKAGE_ONTOLOGY_GRAPH.test(graph) && !!record.package && !record.packageHashes.length)
+    .map(([graph]) => graph)
+    .sort();
+
+/** What a run found of another mode's data. */
+interface OtherModeFindings {
+  packageGraphs?: string[];
+  sharedGraphs?: string[];
+  defaultGraphOntology?: boolean;
+  defaultGraphHierarchy?: string[];
+}
+
+/**
+ * Log one warning naming the data of another `ontologyGraph` mode the run found. The sync never
+ * moves it: changing the mode means clearing first (see "Ontology and shape graphs" in the README).
+ */
+function warnOtherModes(mode: GraphTarget, ds: IDataset | undefined, found: OtherModeFindings): void {
+  const parts: string[] = [];
+  if (found.packageGraphs?.length) {
+    parts.push(`package ontology graphs (the 'package' mode): ${found.packageGraphs.map((g) => `<${g}>`).join(', ')}`);
+  }
+  if (found.sharedGraphs?.length) {
+    parts.push(`shared ontology graphs: ${found.sharedGraphs.map((g) => `<${g}>`).join(', ')}`);
+  }
+  if (found.defaultGraphOntology) {
+    parts.push(`the ontology in the default graph (the 'default' mode, <${DEFAULT_GRAPH_ONTOLOGY_NODE}>)`);
+  }
+  if (found.defaultGraphHierarchy?.length) {
+    parts.push(`a default-graph class hierarchy of ${found.defaultGraphHierarchy.join(', ')} (the earlier default-graph sync)`);
+  }
+  if (!parts.length) return;
+  const where = mode === 'package' ? "'package'" : mode === 'default' ? "'default'" : `<${mode}>`;
+  console.warn(
+    `[syncOntologies] ontologyGraph is ${where}, but the dataset${datasetLabel(ds)} also holds ` +
+      `${parts.join('; ')}. The sync leaves it as it is and never copies it: clear it to switch ` +
+      'modes (see "Ontology and shape graphs" in @_linked/core\'s README).',
+  );
+}
+
+const datasetLabel = (ds?: IDataset): string => {
+  const name = (ds as {dataset?: unknown} | undefined)?.dataset;
+  return typeof name === 'string' && name ? ` ${name}` : '';
+};
 
 /**
  * Remove what the default-graph sync kept for `name`: every line its node lists that no node in
@@ -282,10 +421,13 @@ export async function syncOntologies(
     unreadable,
     registered: new Set(registrationsByPackage().keys()),
   };
+  const target = graphTargetsOf(ds).ontologyGraph;
+  if (target === 'default') return syncDefaultMode(run);
   // A dataset class built against an older core has no graph queries.
   if (ds && typeof (ds as Partial<IDataset>).graphQuery !== 'function') {
-    return syncDefaultGraph(run);
+    return {...(await syncDefaultGraph(run)), target, fallback: true};
   }
+  if (isSharedGraphTarget(target)) return syncSharedGraph(run, target);
   return syncGraphs(run);
 }
 
@@ -333,21 +475,12 @@ async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
   const {ds, options, only} = run;
   const result: SyncOntologiesResult = {written: [], skipped: [], pruned: []};
 
-  const records =
-    ((await OntologyGraph.select((r) => [r.package, r.contentHash]).exec(ds)) as Array<{
-      id: string;
-      package?: unknown;
-      contentHash?: unknown;
-    }> | null) ?? [];
-  const recordByGraph = new Map<string, {package?: string; contentHash?: string}>();
-  for (const row of records) {
-    if (!row?.id) continue;
-    recordByGraph.set(row.id, {
-      package: typeof row.package === 'string' ? row.package : undefined,
-      contentHash: typeof row.contentHash === 'string' ? row.contentHash : undefined,
-    });
-  }
-  const nodes = await readSyncNodes(ds);
+  const recordByGraph = await readOntologyRecords(ds);
+  const {nodes, defaultState} = await readSyncState(ds);
+  warnOtherModes('package', ds, {
+    sharedGraphs: sharedRecords(recordByGraph),
+    defaultGraphOntology: defaultState !== undefined,
+  });
 
   const plan = [...run.parsed.keys()]
     .sort()
@@ -362,7 +495,7 @@ async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
 
   if (plan.some((p) => p.write) && (await probeBeforeWrite(ds)) === 'unsupported') {
     // Nothing was written yet: the store gets the default-graph sync instead.
-    return syncDefaultGraph(run);
+    return {...(await syncDefaultGraph(run)), target: 'package', fallback: true};
   }
 
   for (const name of run.unreadable) {
@@ -396,7 +529,8 @@ async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
   if (options?.orphanScope === 'all' && !only) {
     const pruned = new Set<string>();
     for (const [graph, record] of [...recordByGraph].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-      if (!record.package || run.registered.has(record.package)) continue;
+      // A package's own graph only: a shared graph (another mode's) is never pruned here.
+      if (!record.package || run.registered.has(record.package) || record.packageHashes.length) continue;
       await OntologyGraph.delete(graph).exec(ds);
       pruned.add(record.package);
     }
@@ -409,7 +543,7 @@ async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
   }
 
   result.skipped.sort();
-  return result;
+  return {...result, target: 'package'};
 }
 
 /**
@@ -427,8 +561,24 @@ async function createPackageGraph(
   hash: string,
   ds?: IDataset,
 ): Promise<void> {
+  await createOntologyGraph(graph, {package: name}, {sources}, content, hash, ds);
+}
+
+/**
+ * Create an ontology graph the sync owns (a package's, or the shared one) with `fixed` plus `fields`
+ * on its record; on `graph-exists`, replace it (`fields` set again), or drop and create it again
+ * when it holds triples without an `OntologyGraph` record. See {@link createPackageGraph}.
+ */
+async function createOntologyGraph(
+  graph: string,
+  fixed: Record<string, unknown>,
+  fields: Record<string, unknown>,
+  content: {mediaType: 'application/n-triples'; text: string},
+  hash: string,
+  ds?: IDataset,
+): Promise<void> {
   const create = () =>
-    OntologyGraph.create({id: graph, package: name, sources})
+    OntologyGraph.create({id: graph, ...fixed, ...fields} as {id: string; package: string})
       .withContent(content, {contentHash: hash})
       .exec(ds);
   try {
@@ -438,7 +588,7 @@ async function createPackageGraph(
     if (!isGraphQueryError(error, 'graph-exists')) throw error;
   }
   try {
-    await OntologyGraph.update(graph).set({sources}).replaceContent(content, {contentHash: hash}).exec(ds);
+    await OntologyGraph.update(graph).set(fields).replaceContent(content, {contentHash: hash}).exec(ds);
   } catch (error) {
     if (!isGraphQueryError(error, 'graph-not-registered')) throw error;
     await NamedGraph.delete(graph).exec(ds);
@@ -524,4 +674,236 @@ async function syncDefaultGraph(run: SyncRun): Promise<SyncOntologiesResult> {
 
   result.skipped.sort();
   return result;
+}
+
+/** What a shared ontology graph's hash covers before its parts; a new prefix rebuilds it once. */
+export const SHARED_ONTOLOGY_GRAPH_HASH_PREFIX = 'linked-ontology-shared/1\n';
+
+/**
+ * The content hash of a shared ontology graph: SHA-256 (hex) of
+ * {@link SHARED_ONTOLOGY_GRAPH_HASH_PREFIX} + one `"{package} {hash}"` line per package (sorted by
+ * name), each hash the package's {@link ontologyGraphHash}.
+ */
+export function sharedOntologyGraphHash(parts: Array<{name: string; hash: string}>): string {
+  return sha256Hex(SHARED_ONTOLOGY_GRAPH_HASH_PREFIX + packageHashLines(parts).join('\n'));
+}
+
+/** What the `'default'` mode's hash covers before its namespaces and parts. */
+export const DEFAULT_GRAPH_ONTOLOGY_HASH_PREFIX = 'linked-ontology-default/1\n';
+
+/**
+ * The combined hash of the `'default'` mode: SHA-256 (hex) of
+ * {@link DEFAULT_GRAPH_ONTOLOGY_HASH_PREFIX} + the swept namespaces (sorted, one per line), an
+ * empty line, and one `"{package} {hash}"` line per package (sorted by name).
+ */
+export function defaultGraphOntologyHash(
+  namespaces: string[],
+  parts: Array<{name: string; hash: string}>,
+): string {
+  return sha256Hex(
+    DEFAULT_GRAPH_ONTOLOGY_HASH_PREFIX +
+      [...namespaces].sort().join('\n') +
+      '\n\n' +
+      packageHashLines(parts).join('\n'),
+  );
+}
+
+const packageHashLines = (parts: Array<{name: string; hash: string}>): string[] =>
+  [...parts].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map((p) => `${p.name} ${p.hash}`);
+
+/** Every package of the run, sorted, and each one's {@link ontologyGraphHash}. */
+const packageParts = (run: SyncRun) =>
+  [...run.parsed.keys()].sort().map((name) => ({name, hash: ontologyGraphHash(run.parsed.get(name)!.texts)}));
+
+/** `names` limited to `options.packages` (what a result reports), sorted. */
+const reported = (run: SyncRun, names: string[]): string[] =>
+  names.filter((name) => !run.only || run.only.has(name)).sort();
+
+/**
+ * A run that must not rebuild a whole ontology (shared graph or default graph) because a package's
+ * data could not be read: a rebuild without it would drop its terms. Warns and skips everything.
+ */
+function skipUnreadable(run: SyncRun, where: string, target: GraphTarget): SyncOntologiesResult {
+  console.warn(
+    `[syncOntologies] ${where} is not rebuilt: the ontology data of ${run.unreadable.join(', ')} ` +
+      'could not be read, and a rebuild without it would drop its terms. Fix the package and sync again.',
+  );
+  return {
+    written: [],
+    skipped: reported(run, [...run.parsed.keys(), ...run.unreadable]),
+    pruned: [],
+    target,
+  };
+}
+
+/**
+ * The shared mode (`ontologyGraph` is an IRI): every package's ontology data in the one
+ * `OntologyGraph` at `graph` (feeding the hierarchy), rebuilt whole in one graph query when the
+ * combined hash ({@link sharedOntologyGraphHash}) differs from the record's. The record lists
+ * every package's hash (`packageHashes`) and its data files (`sources`, `{package}/{file}`). The
+ * probe runs before that write, as in the package mode. Other modes' data is reported, never moved.
+ */
+async function syncSharedGraph(run: SyncRun, graph: string): Promise<SyncOntologiesResult> {
+  const {ds, options} = run;
+  const records = await readOntologyRecords(ds);
+  const {nodes, defaultState} = await readSyncState(ds);
+  warnOtherModes(graph, ds, {
+    packageGraphs: packageRecords(records),
+    sharedGraphs: sharedRecords(records, graph),
+    defaultGraphOntology: defaultState !== undefined,
+    defaultGraphHierarchy: [...nodes.keys()].sort(),
+  });
+  const names = [...run.parsed.keys()].sort();
+  if (run.unreadable.length) return skipUnreadable(run, `The shared ontology graph <${graph}>`, graph);
+
+  const parts = packageParts(run);
+  const hash = sharedOntologyGraphHash(parts);
+  const record = records.get(graph);
+  if (!options?.force && record?.contentHash === hash) {
+    return {written: [], skipped: reported(run, names), pruned: [], target: graph};
+  }
+  if ((await probeBeforeWrite(ds)) === 'unsupported') {
+    return {...(await syncDefaultGraph(run)), target: graph, fallback: true};
+  }
+  const content = {
+    mediaType: 'application/n-triples' as const,
+    text: await nTriplesFromTurtle(
+      names.flatMap((name) => run.parsed.get(name)!.texts),
+      names.flatMap((name) => run.parsed.get(name)!.sources),
+    ),
+  };
+  const fields = {
+    sources: names.flatMap((name) => packageSources(name).map((file) => `${name}/${file}`)),
+    packageHashes: packageHashLines(parts),
+  };
+  if (record) {
+    await OntologyGraph.update(graph).set(fields).replaceContent(content, {contentHash: hash}).exec(ds);
+  } else {
+    await createOntologyGraph(graph, {}, fields, content, hash, ds);
+  }
+  const pruned = (record?.packageHashes ?? [])
+    .map((line) => line.split(' ')[0])
+    .filter((name) => name && !run.parsed.has(name) && !run.unreadable.includes(name));
+  return {written: reported(run, names), skipped: [], pruned: [...new Set(pruned)].sort(), target: graph};
+}
+
+/**
+ * The namespaces the `'default'` mode sweeps: each registered ontology with data of the run's
+ * packages (`ns('')`), sorted. Throws when one would sweep more than ontology terms: one that is
+ * empty, that the store's data root starts with (the app's own data), or that a registered
+ * shape's IRI starts with (the shapes share the default graph in that mode).
+ */
+function defaultModeNamespaces(run: SyncRun, target: IDataset): string[] {
+  const namespaces = new Set<string>();
+  for (const name of run.parsed.keys()) {
+    for (const registration of registrationsByPackage().get(name) ?? []) {
+      if (typeof registration.load !== 'function') continue;
+      namespaces.add(registration.ns('').id);
+    }
+  }
+  const root = `${dataRootOf(target) ?? LINKED_DATA_ROOT.replace(/\/+$/, '')}/`;
+  const shapeIris = [...getAllShapeClasses().keys()];
+  for (const ns of namespaces) {
+    const why = !ns
+      ? 'it is empty'
+      : root.startsWith(ns)
+        ? `the data root <${root}> lies inside it`
+        : shapeIris.some((iri) => iri.startsWith(ns))
+          ? `the shape <${shapeIris.find((iri) => iri.startsWith(ns))}> lies inside it`
+          : undefined;
+    if (why) {
+      throw new Error(
+        `[syncOntologies] ontologyGraph 'default' replaces every subject in a package's ontology ` +
+          `namespace, and the namespace <${ns}> would reach more than ontology terms (${why}). ` +
+          "Give the ontology a namespace of its own, or use 'package' or a shared graph IRI.",
+      );
+    }
+  }
+  return [...namespaces].sort();
+}
+
+/**
+ * The `'default'` mode: the whole ontology of every package in the default graph. When the
+ * combined hash ({@link defaultGraphOntologyHash}) differs from the one on
+ * {@link DEFAULT_GRAPH_ONTOLOGY_NODE}, one update (`IDataset.replaceDefaultGraphTerms`) deletes
+ * every package-owned term (each subject in a package's ontology namespace, and each subject of a
+ * package's current Turtle, with all its outgoing triples and the blank nodes under them) and
+ * inserts every package's data and the new hash. Subjects outside that set are never touched. An
+ * unchanged hash writes nothing and probes nothing. Other modes' data is reported, never moved.
+ */
+async function syncDefaultMode(run: SyncRun): Promise<SyncOntologiesResult> {
+  const {ds, options} = run;
+  const target = ds ?? (LinkedStorage.getDefaultDataset() as IDataset | undefined);
+  if (!target || typeof target.replaceDefaultGraphTerms !== 'function') {
+    throw new Error(
+      `[syncOntologies] ontologyGraph is 'default', but the store${target ? ` ${target.constructor?.name ?? ''}` : ''} ` +
+        'cannot replace default-graph terms (IDataset.replaceDefaultGraphTerms, which SparqlDataset ' +
+        "has). Use 'package' or a shared graph IRI for this store.",
+    );
+  }
+  const {defaultState} = await readSyncState(ds);
+  let records = new Map<string, OntologyRecord>();
+  try {
+    records = await readOntologyRecords(ds);
+  } catch {
+    // A store without a graph registry holds no other mode's graphs.
+  }
+  warnOtherModes('default', ds, {packageGraphs: packageRecords(records), sharedGraphs: sharedRecords(records)});
+  const names = [...run.parsed.keys()].sort();
+  if (run.unreadable.length) return skipUnreadable(run, 'The ontology in the default graph', 'default');
+
+  const namespaces = defaultModeNamespaces(run, target);
+  const hash = defaultGraphOntologyHash(namespaces, packageParts(run));
+  if (!options?.force && defaultState?.hash === hash) {
+    return {written: [], skipped: reported(run, names), pruned: [], target: 'default'};
+  }
+
+  const lines = new Set<string>();
+  const subjects = new Set<string>([DEFAULT_GRAPH_ONTOLOGY_NODE]);
+  for (const [i, name] of names.entries()) {
+    const data = run.parsed.get(name)!;
+    const terms = await defaultGraphTermsFromTurtle(data.texts, data.sources, `p${i}_`);
+    if (terms.unanchoredBlankNodes > 0) {
+      throw new Error(
+        `[syncOntologies] The ontology data of ${name} has ${terms.unanchoredBlankNodes} blank ` +
+          "node(s) that no IRI subject links to; ontologyGraph 'default' can only replace a blank " +
+          'node through the term it belongs to. Give it an IRI, or use another mode.',
+      );
+    }
+    if (terms.blankDepth > DEFAULT_GRAPH_TERMS_DEPTH) {
+      throw new Error(
+        `[syncOntologies] The ontology data of ${name} nests blank nodes ${terms.blankDepth} steps ` +
+          `deep; ontologyGraph 'default' replaces at most ${DEFAULT_GRAPH_TERMS_DEPTH}.`,
+      );
+    }
+    for (const line of terms.nTriples.split('\n')) if (line) lines.add(line);
+    for (const subject of terms.subjects) {
+      if (!namespaces.some((ns) => subject.startsWith(ns))) subjects.add(subject);
+    }
+  }
+  lines.add(`<${DEFAULT_GRAPH_ONTOLOGY_NODE}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${OntologySync.targetClass.id}> .`);
+  lines.add(`<${DEFAULT_GRAPH_ONTOLOGY_NODE}> <${coreOntology.ontologyHash.id}> "${hash}" .`);
+
+  try {
+    if (!(await probeDefaultGraphInference(ds))) {
+      warnOnceForDataset(
+        ds,
+        "[syncOntologies] ontologyGraph is 'default', but the store does not infer rdf:type from " +
+          'the default graph\'s rdfs:subClassOf: a class-scoped read misses the instances of ' +
+          `subclasses. ${STORE_REQUIREMENTS}`,
+      );
+    }
+  } catch (error) {
+    warnOnceForDataset(
+      ds,
+      `[syncOntologies] Could not measure whether the store infers from the default graph ` +
+        `(${(error as Error)?.message ?? error}). ${STORE_REQUIREMENTS}`,
+    );
+  }
+  await target.replaceDefaultGraphTerms({
+    namespaces,
+    subjects: [...subjects].sort(),
+    insert: [...lines].join('\n') + '\n',
+  });
+  return {written: reported(run, names), skipped: [], pruned: [], target: 'default'};
 }
