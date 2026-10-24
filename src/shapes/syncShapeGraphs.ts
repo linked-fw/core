@@ -18,7 +18,7 @@
  * are removed once their package's graph holds them. A store without graph queries
  * (`unsupported-query-kind`) gets that default-graph sync instead (`syncShapes`).
  *
- * That is the `'package'` mode, the default. The store's `shapeGraph` target
+ * That is the `'package'` mode, the default. The global `shapeGraph` target (`getGraphTargets`)
  * (`utils/graphTargets.ts`) chooses the others: a shared graph IRI holds every package's shapes
  * (and the app's generated ones) in one `ShapesGraph`, rebuilt whole on any change
  * ({@link sharedShapeGraphHash}); `'default'` runs `syncShapes` into the default graph. Data
@@ -43,7 +43,7 @@ import {
   packagesWithShapes,
   singleOwnerShapesTurtle,
 } from './shapesToTurtle.js';
-import {graphTargetsOf, isSharedGraphTarget, type GraphTarget} from '../utils/graphTargets.js';
+import {getGraphTargets, isSharedGraphTarget, type GraphTarget} from '../utils/graphTargets.js';
 
 /** What the shape graph hash covers before the Turtle; a new prefix re-syncs every dataset once. */
 export const SHAPE_GRAPH_HASH_PREFIX = 'linked-shape-graph/1\n';
@@ -99,7 +99,7 @@ export interface SyncShapeGraphsResult {
    * or because the store has no graph queries. How many of its writes ran.
    */
   defaultGraph?: number;
-  /** Where the run wrote: the store's `shapeGraph` target (`'package'`, `'default'` or an IRI). */
+  /** Where the run wrote: the global `shapeGraph` target (`'package'`, `'default'` or an IRI). */
   target?: GraphTarget;
   /** Set when a store without graph queries got the default-graph sync instead of `target`. */
   fallback?: true;
@@ -141,7 +141,7 @@ export async function syncShapeGraphs(
   options: SyncShapeGraphsOptions = {},
 ): Promise<SyncShapeGraphsResult> {
   assertNoActiveCatalog();
-  const target = graphTargetsOf(ds).shapeGraph;
+  const target = getGraphTargets().shapeGraph;
   if (target === 'default') return syncDefaultMode(ds, options);
   // A dataset class built against an older core has no graph queries.
   if (ds && typeof (ds as Partial<IDataset>).graphQuery !== 'function') {

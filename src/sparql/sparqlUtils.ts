@@ -28,15 +28,6 @@ export interface SparqlOptions {
    * false.
    */
   namedGraphUriParameter?: boolean;
-  /**
-   * Where the ontology sync writes the registered packages' ontology data, and where
-   * `graphs.allOntologies` reads: `'package'` (one graph per package, the default), `'default'`
-   * (the default graph) or the absolute IRI of one shared graph. Checked when the store is built.
-   * See `utils/graphTargets.ts`.
-   */
-  ontologyGraph?: string;
-  /** The same for the shape sync and `graphs.allShapes`. */
-  shapeGraph?: string;
 }
 
 /**

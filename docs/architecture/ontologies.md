@@ -235,11 +235,13 @@ It runs at app boot and through the app's control route, before shape sync.
 
 ### Graph targets: where the syncs write
 
-Everything above is the `'package'` mode, the default. A store's two graph targets
+Everything above is the `'package'` mode, the default. The process's two graph targets
 (`@_linked/core/utils/graphTargets`: `ontologyGraph` and `shapeGraph`, each `'package'`,
-`'default'` or an absolute graph IRI; `SparqlOptions`, `setGraphTargets`, a datasets config entry's
-`config`, or a host's `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH`) choose the others. Each value
-is checked when it is set; a store without `graphTargets()` runs `'package'`. The README's
+`'default'` or an absolute graph IRI) choose the others. They are one global setting, not a
+store's: the host calls `setGraphTargets` once at boot (`@_linked/server` from
+`LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH`), and the syncs and readers read `getGraphTargets()`.
+The state is `sharedState('@_linked/core', 'graphTargets')`, so every copy of core sees it. Each
+value is checked when it is set. The README's
 "Ontology and shape graphs" has the user-facing table; the mechanics:
 
 - **Shared graph (an IRI).** One `OntologyGraph` record at the IRI (`feedsHierarchy` true), its
@@ -264,7 +266,7 @@ is checked when it is set; a store without `graphTargets()` runs `'package'`. Th
   shape, then removed. The shape sync runs `syncShapes`, whose rewrite of a shape keeps the
   links others hold to it.
 - **Readers.** `expandReadGraphs` maps `graphs.allOntologies` / `graphs.allShapes` through the
-  store's targets before the registry expansion: a shared IRI reads that graph, `'default'` the
+  global targets before the registry expansion: a shared IRI reads that graph, `'default'` the
   default graph (alone, `{defaultGraph: true}`; with other graphs, `graphs.default` through
   `mapGraphName`).
 - **Other modes' data** is reported in one warning per sync (registry records of package graphs,

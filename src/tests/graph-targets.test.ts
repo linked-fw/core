@@ -1,18 +1,21 @@
 /*
  * Graph targets (`ontologyGraph`, `shapeGraph`): the checked values (keywords, absolute IRIs, the
- * env variables, the store option, `setGraphTargets`, `loadStores`), the readers per mode
+ * env variables), the one global setting (`setGraphTargets` / `getGraphTargets`, no store or
+ * `loadStores` path), the readers per mode
  * (`graphs.allOntologies` / `graphs.allShapes`), the default-graph sweep's SPARQL (golden), and the
  * blank-node analysis of the `'default'` mode.
  */
-import {describe, expect, jest, test} from '@jest/globals';
+import {afterEach, describe, expect, jest, test} from '@jest/globals';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {
+  getGraphTargets,
   graphTargetOptionsFromEnv,
-  graphTargetsOf,
   parseGraphTarget,
   parseGraphTargetOptions,
+  setGraphTargets,
 } from '../utils/graphTargets';
+import {sharedStateKey} from '../utils/sharedState';
 import {SparqlDataset} from '../sparql/SparqlDataset';
 import type {SparqlQueryResults} from '../sparql/resultMapping';
 import {expandReadGraphs} from '../utils/graphRegistryCache';
@@ -21,6 +24,9 @@ import {coreOntology} from '../ontologies/linked-core';
 import {defaultGraphTermsToSparql} from '../sparql/defaultGraphTerms';
 import {defaultGraphTermsFromTurtle} from '../ontology/hierarchy';
 import {loadStores} from '../utils/loadStores';
+import {QueryBuilder} from '../queries/QueryBuilder';
+import {NodeShape} from '../shapes/SHACL';
+import '../shapes/index';
 
 const SHARED = 'https://data.example.org/graph/ontology';
 
@@ -89,87 +95,63 @@ describe('graph target values', () => {
   });
 });
 
-describe('the store option', () => {
-  test("a store without the options runs 'package' for both", () => {
-    expect(new Plain().graphTargets()).toEqual({ontologyGraph: 'package', shapeGraph: 'package'});
-    expect(graphTargetsOf(new Plain())).toEqual({ontologyGraph: 'package', shapeGraph: 'package'});
-    // A dataset without graphTargets (an older store, a router) is 'package' too.
-    expect(graphTargetsOf({} as never)).toEqual({ontologyGraph: 'package', shapeGraph: 'package'});
+describe('the global setting', () => {
+  afterEach(() => setGraphTargets({}));
+
+  test("nothing set is 'package' for both", () => {
+    expect(getGraphTargets()).toEqual({ontologyGraph: 'package', shapeGraph: 'package'});
   });
 
-  test('the options are checked when the store is built', () => {
-    expect(new Plain({ontologyGraph: SHARED, shapeGraph: 'default'}).graphTargets()).toEqual({
-      ontologyGraph: SHARED,
-      shapeGraph: 'default',
-    });
-    expect(() => new Plain({ontologyGraph: 'named'})).toThrow(/^Invalid ontologyGraph "named"/);
+  test('each call is checked and replaces both settings; {} restores the default', () => {
+    setGraphTargets({ontologyGraph: SHARED, shapeGraph: 'default'});
+    expect(getGraphTargets()).toEqual({ontologyGraph: SHARED, shapeGraph: 'default'});
+    setGraphTargets({shapeGraph: 'default'});
+    expect(getGraphTargets()).toEqual({ontologyGraph: 'package', shapeGraph: 'default'});
+    expect(() => setGraphTargets({ontologyGraph: 'x'})).toThrow(/^Invalid ontologyGraph "x"/);
+    expect(() => setGraphTargets({ontologyGraph: SHARED, shapeGraph: SHARED})).toThrow(/both name/);
+    // A refused call leaves the setting as it was.
+    expect(getGraphTargets()).toEqual({ontologyGraph: 'package', shapeGraph: 'default'});
+    setGraphTargets({});
+    expect(getGraphTargets()).toEqual({ontologyGraph: 'package', shapeGraph: 'package'});
   });
 
-  test("setGraphTargets checks, and with onlyUnset keeps the store's own settings", () => {
-    const store = new Plain({shapeGraph: 'default'});
-    store.setGraphTargets({ontologyGraph: SHARED, shapeGraph: 'package'}, {onlyUnset: true});
-    expect(store.graphTargets()).toEqual({ontologyGraph: SHARED, shapeGraph: 'default'});
-    store.setGraphTargets({shapeGraph: 'package'});
-    expect(store.graphTargets()).toEqual({ontologyGraph: SHARED, shapeGraph: 'package'});
-    expect(() => store.setGraphTargets({shapeGraph: SHARED})).toThrow(/both name/);
-    expect(() => store.setGraphTargets({ontologyGraph: 'x'})).toThrow(/^Invalid ontologyGraph "x"/);
-    expect(store.graphTargets()).toEqual({ontologyGraph: SHARED, shapeGraph: 'package'});
+  test('the state is on globalThis, so a second copy of core sees it', () => {
+    setGraphTargets({ontologyGraph: 'default'});
+    const state = (globalThis as Record<symbol, unknown>)[sharedStateKey('@_linked/core', 'graphTargets')];
+    expect(state).toMatchObject({targets: {ontologyGraph: 'default', shapeGraph: 'package'}});
   });
-});
 
-describe('loadStores', () => {
-  const HOOK = Symbol.for('@_linked/core:importModule');
-  class Other {
-    constructor(readonly config: unknown) {}
-  }
-  /** Like most stores, takes its own config and passes no SparqlOptions on. */
-  class Configured extends Plain {
-    constructor(readonly config: unknown) {
-      super();
+  test('a store takes no targets: its options and the store methods are gone', () => {
+    const store = new Plain({ontologyGraph: 'default'} as never) as unknown as Record<string, unknown>;
+    expect(store.graphTargets).toBeUndefined();
+    expect(store.setGraphTargets).toBeUndefined();
+  });
+
+  test('loadStores passes a config verbatim, sets no target, and warns about one', async () => {
+    const HOOK = Symbol.for('@_linked/core:importModule');
+    class Configured extends Plain {
+      constructor(readonly config: unknown) {
+        super();
+      }
     }
-  }
-  const modules: Record<string, unknown> = {
-    'fake/Plain': {Plain},
-    'fake/Configured': {Configured},
-    'fake/Other': {Other},
-  };
-  (globalThis as Record<symbol, unknown>)[HOOK] = async (specifier: string) => modules[specifier];
-
-  test("an entry's own targets, then the host's for what is unset", async () => {
-    const stores = await loadStores<Plain>(
-      {
-        datasets: {
-          a: {store: 'fake/Plain', config: {shapeGraph: 'default'}},
-          b: {store: 'fake/Plain', config: {}},
-        },
-      },
-      {graphTargets: {ontologyGraph: SHARED, shapeGraph: 'package'}},
-    );
-    expect(stores.a.graphTargets()).toEqual({ontologyGraph: SHARED, shapeGraph: 'default'});
-    expect(stores.b.graphTargets()).toEqual({ontologyGraph: SHARED, shapeGraph: 'package'});
-  });
-
-  test('an invalid value fails the load, naming where it came from', async () => {
-    await expect(
-      loadStores({datasets: {a: {store: 'fake/Configured', config: {ontologyGraph: 'pkg'}}}}),
-    ).rejects.toThrow(/^Invalid ontologyGraph "pkg" \(from datasets\.a\.config\.ontologyGraph\)/);
-    await expect(
-      loadStores({datasets: {a: {store: 'fake/Plain', config: {}}}}, {graphTargets: {shapeGraph: 'x'}}),
-    ).rejects.toThrow(/^Invalid shapeGraph "x"/);
-  });
-
-  test('a store that takes no targets refuses its own, and ignores the host\'s with a warning', async () => {
-    await expect(
-      loadStores({datasets: {o: {store: 'fake/Other', config: {ontologyGraph: 'default'}}}}),
-    ).rejects.toThrow(/alias "o" sets a graph target, but its store \(Other\) takes none/);
+    const previous = (globalThis as Record<symbol, unknown>)[HOOK];
+    (globalThis as Record<symbol, unknown>)[HOOK] = async () => ({Configured});
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      await loadStores({datasets: {o: {store: 'fake/Other', config: {}}}}, {graphTargets: {ontologyGraph: 'default'}});
+      const stores = await loadStores<Configured>({
+        datasets: {
+          a: {store: 'fake/Configured', config: {ontologyGraph: 'default'}},
+          b: {store: 'fake/Configured', config: {}},
+        },
+      });
+      expect(stores.a.config).toEqual({ontologyGraph: 'default'});
+      expect(getGraphTargets()).toEqual({ontologyGraph: 'package', shapeGraph: 'package'});
       expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
-        expect.stringContaining(`alias "o" (Other) takes no graph targets, so it runs 'package'`),
+        expect.stringContaining('alias "a" sets ontologyGraph in its config, which no store reads'),
       ]);
     } finally {
       warn.mockRestore();
+      (globalThis as Record<symbol, unknown>)[HOOK] = previous;
     }
   });
 });
@@ -183,8 +165,11 @@ describe('the readers follow the mode', () => {
       [PKG_SHAPES, new Set([coreOntology.ShapesGraph.id])],
     ]);
   const mapGraphName = (iri: string) => (iri === graphs.default ? 'urn:x-arq:DefaultGraph' : null);
-  const expand = (names: string[], ontologyGraph: string, shapeGraph = 'package') =>
-    expandReadGraphs(names, {registry, mapGraphName, targets: {ontologyGraph, shapeGraph}});
+  const expand = (names: string[], ontologyGraph: string, shapeGraph = 'package') => {
+    setGraphTargets({ontologyGraph, shapeGraph});
+    return expandReadGraphs(names, {registry, mapGraphName});
+  };
+  afterEach(() => setGraphTargets({}));
 
   test("'package': the registry's graphs of that kind", async () => {
     expect(await expand([graphs.allOntologies], 'package')).toEqual({defaultGraph: false, graphs: [PKG_ONT]});
@@ -206,6 +191,31 @@ describe('the readers follow the mode', () => {
       defaultGraph: false,
       graphs: [graphs.default, 'https://x/g'],
     });
+  });
+});
+
+describe("a store's reads follow the global setting", () => {
+  class Recording extends SparqlDataset {
+    selects: string[] = [];
+    protected async executeSparqlSelect(sparql: string): Promise<SparqlQueryResults> {
+      this.selects.push(sparql);
+      return {head: {vars: []}, results: {bindings: []}};
+    }
+    protected async executeSparqlUpdate(): Promise<void> {}
+  }
+  type Exec = {exec: (ds: unknown) => Promise<unknown>};
+  const readAllShapes = (store: Recording) =>
+    (QueryBuilder.from(NodeShape).select([]).from(graphs.allShapes) as unknown as Exec).exec(store);
+  afterEach(() => setGraphTargets({}));
+
+  test('a shared IRI is read as that graph; the default graph as without .from()', async () => {
+    const store = new Recording();
+    setGraphTargets({shapeGraph: 'urn:example:shapes'});
+    await readAllShapes(store);
+    expect(store.selects.at(-1)).toContain('<urn:example:shapes>');
+    setGraphTargets({shapeGraph: 'default'});
+    await readAllShapes(store);
+    expect(store.selects.at(-1)).not.toMatch(/GRAPH|FROM NAMED/);
   });
 });
 

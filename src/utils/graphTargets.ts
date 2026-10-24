@@ -5,8 +5,8 @@
  */
 
 /**
- * Where a store keeps the ontology data and the shapes of the registered packages: its two graph
- * targets, `ontologyGraph` and `shapeGraph`. Each is one string:
+ * Where the ontology data and the shapes of the registered packages live: the two graph targets,
+ * `ontologyGraph` and `shapeGraph`. Each is one string:
  *
  * - `'package'` (the default): one named graph per package (`{package IRI}/graph/ontology`,
  *   `{package IRI}/graph/shapes`), each replaced whole when its package changes.
@@ -15,20 +15,22 @@
  * - an absolute IRI: one shared named graph holding every package's data, rebuilt whole when any
  *   package changes.
  *
- * A store takes them as options (`SparqlOptions.ontologyGraph` / `.shapeGraph`, or
- * {@link IDataset.setGraphTargets}); a host fills them from the environment
- * (`LINKED_ONTOLOGY_GRAPH`, `LINKED_SHAPE_GRAPH`: {@link graphTargetOptionsFromEnv} reads the env
- * map it is given; core never reads `process.env` for them). The syncs write where the targets say
- * and the readers (`graphs.allOntologies`, `graphs.allShapes`) read there. See "Ontology and shape
- * graphs" in core's README.
+ * They are one global setting of the process, not of a store: the host sets them once at boot
+ * ({@link setGraphTargets}), before its stores load and before the syncs run. `@_linked/server`
+ * sets them from `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH` ({@link graphTargetOptionsFromEnv}
+ * reads the env map it is given; core never reads `process.env` for them). Unset, both are
+ * `'package'`. The syncs write where they say, and every store's readers (`graphs.allOntologies`,
+ * `graphs.allShapes`) read there. A frontend whose queries go through the backend sets nothing: it
+ * sends those portable names, and the backend's store expands them (a store used directly in a
+ * browser follows the browser's own setting). See "Ontology and shape graphs" in core's README.
  *
- * Browser-safe: no I/O.
+ * The state lives on `globalThis` (`sharedState`), so every copy of core in a process sees one
+ * setting. Browser-safe: no I/O.
  *
  * @module @_linked/core/utils/graphTargets
  */
-import type {IDataset} from '../interfaces/IDataset.js';
 import {PORTABLE_GRAPH_NAMES} from '../ontologies/graphs.js';
-import {LinkedStorage} from './LinkedStorage.js';
+import {sharedState} from './sharedState.js';
 
 /** `'package'`, `'default'`, or an absolute graph IRI (see the module doc). */
 export type GraphTarget = 'package' | 'default' | (string & {});
@@ -39,7 +41,7 @@ export interface GraphTargetOptions {
   shapeGraph?: string;
 }
 
-/** The two settings as a store runs with them. */
+/** The two settings as the process runs with them. */
 export interface GraphTargets {
   ontologyGraph: GraphTarget;
   shapeGraph: GraphTarget;
@@ -151,15 +153,25 @@ export function graphTargetOptionsFromEnv(
   );
 }
 
+const targetState = sharedState('@_linked/core', 'graphTargets', () => ({
+  targets: {...DEFAULT_GRAPH_TARGETS} as GraphTargets,
+}));
+
 /**
- * The graph targets of `ds` (default: the global router's default dataset): what the store
- * reports (`IDataset.graphTargets`), else both `'package'`.
+ * Set the process's graph targets, checked ({@link parseGraphTargetOptions}: an invalid value, or
+ * one shared graph for both, throws and leaves the setting as it was). Each call replaces both: a
+ * setting left out (or `''`) is `'package'`. The host calls it once at boot, before its stores load
+ * and before the ontology and shape syncs; `setGraphTargets({})` restores the default.
  */
-export function graphTargetsOf(ds?: IDataset): GraphTargets {
-  const target = ds ?? (LinkedStorage.getDefaultDataset() as IDataset | undefined);
-  const targets = typeof target?.graphTargets === 'function' ? target.graphTargets() : undefined;
-  return {
-    ontologyGraph: targets?.ontologyGraph ?? 'package',
-    shapeGraph: targets?.shapeGraph ?? 'package',
-  };
+export function setGraphTargets(options: GraphTargetOptions = {}): void {
+  targetState.targets = {...DEFAULT_GRAPH_TARGETS, ...parseGraphTargetOptions(options)};
+}
+
+/**
+ * The process's graph targets (see {@link setGraphTargets}); both `'package'` when nothing was set.
+ * The syncs and every store's readers use these.
+ */
+export function getGraphTargets(): GraphTargets {
+  // A container an older copy created may lack the field.
+  return {...DEFAULT_GRAPH_TARGETS, ...targetState.targets};
 }

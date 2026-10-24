@@ -13,6 +13,7 @@ import {FusekiStore} from '../test-helpers/FusekiStore';
 import {linkedPackage} from '../utils/Package';
 import {createNameSpace} from '../utils/NameSpace';
 import {syncOntologies} from '../ontology/syncOntologies';
+import {setGraphTargets} from '../utils/graphTargets';
 
 const fixture = readFileSync(path.resolve(process.cwd(), 'src/tests/fixtures/ontology-data/schema-hierarchy.ttl'), 'utf8');
 let data = fixture;
@@ -47,11 +48,13 @@ describeFuseki("graph targets: measure 'default' on a populated default graph", 
     await executeSparqlUpdate(`INSERT DATA { ${lines.join('\n')} }`);
   }, 120_000);
   afterAll(async () => {
+    setGraphTargets({});
     await executeSparqlUpdate('DROP ALL');
   });
 
   test('first, changed and unchanged sync', async () => {
-    const store = new CountingStore(FUSEKI_BASE_URL, DATASET_NAME, {ontologyGraph: 'default'});
+    setGraphTargets({ontologyGraph: 'default'});
+    const store = new CountingStore(FUSEKI_BASE_URL, DATASET_NAME);
     const instances = await count('?s ?p ?o FILTER(STRSTARTS(STR(?s), "https://data.example.org/measure/"))');
     expect(instances).toBe(20_000);
     let t = Date.now();
