@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.40.0
+
+### Minor Changes
+
+- [#386](https://github.com/linked-fw/core/pull/386) [`44ca0c4`](https://github.com/linked-fw/core/commit/44ca0c42f0c3fc86270e8b044b387b4f79633afa) Thanks [@flyon](https://github.com/flyon)! - Routed writes are correct when shapes live in different graphs. Apps without graph routes compile byte-identical SPARQL; the changes below apply only under routing.
+  
+  - **A delete by id removes incoming links in every graph that may hold one.** `Person.delete({id})` with persons in a people graph and articles in an articles graph now also removes the article's `author` link. The graphs are the read sets of every shape that declares a property whose value shape is the deleted shape, a super-shape (the base `Shape` included) or a sub-shape of it, plus the subject's own graph set. The update gets a `GRAPH ?g_in { ?s ?p2 <id> }` template and a `VALUES ?g_in { … }` branch in its WHERE. A delete that keeps incoming links, and the bulk deletes (which never remove incoming links), are unchanged.
+  - **Where clauses and computed fields read a linked node in its own graphs.** `Article.update(…).where((a) => a.author.name.equals('x'))`, `Article.deleteWhere(…)` with the same filter (`EXISTS` patterns included), and computed updates such as `p.bestFriend.name.ucase()` read the linked node in its value shape's read set. That read is a `GRAPH <g>`, or a `VALUES ?g { … }` with `GRAPH ?g`, block nested in the mutation's own graph. The templates stay in the subject's graph. A node reached through `contains`, and a link that stays inside the subject's one graph, compile as before. An inverse path (`^<author>`) into another graph is read the stored way round (`?article <author> ?person`) in the linked node's graph. Any other complex path (a sequence, an alternative, a repetition) into a node in another graph is refused with `GraphQueryError('unsupported-query-kind')`. It is still one update per mutation.
+  - **An update-where that links an existing node into a `contains` property is checked against the owners' graph.** When the shape's read set is one graph (or `.into()` names one), a node that lives in another graph is refused, as for a change by id. When the read set holds several graphs, the update-where is refused with `GraphQueryError('unsupported-query-kind')` before anything is sent. Name the graph with `.into()`, or link per owner with `.for(id)`.
+  - **A routed store needs `SparqlOptions.mapGraphName`** for a delete by id whose links may be held in the default graph as well as named graphs. That is the case under any routes, because core's own shapes link to the base `Shape`. A store without it gets `GraphQueryError('unsupported-query-kind')`. Routed reads that mix the default graph with named graphs already need it, and `@_linked/fuseki`'s `FusekiStore` sets it.
+  - **`MutationEffects.graph`** is unknown for a routed delete by id whose links may be held in another graph than the subject's, so the live queries reading those links are re-run.
+
 ## 2.39.4
 
 ### Patch Changes
