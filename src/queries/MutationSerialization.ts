@@ -123,9 +123,28 @@ export type UpsertMutationJSON = {
 };
 
 export type DeleteMutationJSON =
-  | {v?: string; op: 'delete'; shape: string; mode: 'ids'; ids: (string | ContextRefJSON)[]}
+  | {
+      v?: string;
+      op: 'delete';
+      shape: string;
+      mode: 'ids';
+      ids: (string | ContextRefJSON)[];
+      /**
+       * Delete only each id's own description (its triples, blank values and owned subtree) and
+       * keep the links other nodes hold to it. Absent = a plain delete. Only on `mode: 'ids'`.
+       */
+      keepIncoming?: boolean;
+    }
   | {v?: string; op: 'delete'; shape: string; mode: 'all'}
   | {v?: string; op: 'delete'; shape: string; mode: 'where'; where: WherePathJSON};
+
+/** The `keepIncoming` flag of a delete's DSL-JSON: absent or `false` → false; anything else but `true` is refused. */
+export function readKeepIncoming(json: DeleteMutationJSON): boolean {
+  const flag = (json as {keepIncoming?: unknown}).keepIncoming;
+  if (flag === undefined || flag === false) return false;
+  if (flag === true) return true;
+  throw new Error('delete DSL-JSON: "keepIncoming" must be a boolean.');
+}
 
 export type MutationJSON =
   | CreateMutationJSON

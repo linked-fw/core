@@ -396,6 +396,18 @@ the unknown-op guard instead and throws.
 { "v":"1.0", "op":"delete", "shape":"…", "mode":"where", "where": { "hobby": "Chess" } }
 ```
 
+A delete by ids may carry `"keepIncoming": true`. It deletes only each id's own description (its
+triples, its blank values and its owned subtree) and keeps the links other nodes hold to it
+(`?s ?p <id>`). Absent or `false` is a plain delete; any other value, or the flag on `"all"` or
+`"where"`, is refused. It removes strictly less than a plain delete, so a receiver applies the same
+access rules as for any delete. Core's shape-graph sync uses it to clean shapes out of the default
+graph, also over a remote dataset.
+
+```jsonc
+{ "v":"1.0", "op":"delete", "shape":"…", "mode":"ids", "ids": [ "https://ex.org/shape" ],
+  "keepIncoming": true }
+```
+
 ## Reserved words
 
 The **value-tags** are all `@`-sigiled — `@path`, `@id`, `@ctx`, `@date`, `@list`, `@add`,
@@ -405,7 +417,7 @@ point of the sigil: a property literally named `path`, `id`, `date`, `list`, `ad
 
 The remaining reserved keys are the **structural / grammar** words, not value-tags: `and`, `or`,
 `not`, `as`, `value`, `where`, `fields`, `cast`, `one`, `call`, `args`, `some`, `every`, `none`,
-`minus`, `sortBy`, `subject`, `subjects`, `op`, `shape`, `data`, `mode`, `targetId`, `ids`, `v`,
+`minus`, `sortBy`, `subject`, `subjects`, `op`, `shape`, `data`, `mode`, `targetId`, `ids`, `keepIncoming`, `v`,
 and the operator symbols.
 
 **Key** position (a condition key) has no wrapper, so the three boolean **combinators `and` / `or`

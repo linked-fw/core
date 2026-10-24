@@ -47,6 +47,7 @@ import {isContextRefJSON, resolveContextId} from './ContextRef.js';
 import {assertWireVersion} from './wireVersion.js';
 import {
   decodeNodeDataToRaw,
+  readKeepIncoming,
   valueShapeOf,
   type MutationJSON,
   type MutationNodeDataJSON,
@@ -250,8 +251,9 @@ export function lowerMutationJSON(
     }
     case 'delete': {
       const shape = requireShape(json.shape);
+      const keepIncoming = readKeepIncoming(json);
       if (json.mode === 'ids') {
-        return buildCanonicalDeleteMutationIR({
+        const ir = buildCanonicalDeleteMutationIR({
           shape,
           // A `{@ctx}` id resolves against the live map; a delete must hit a
           // concrete node, so an unresolved context throws.
@@ -259,7 +261,10 @@ export function lowerMutationJSON(
             isContextRefJSON(id) ? {id: resolveContextId(id['@ctx'], true)!} : {id},
           ),
         });
+        if (keepIncoming) ir.keepIncoming = true;
+        return ir;
       }
+      if (keepIncoming) throw new Error('delete DSL-JSON: "keepIncoming" needs mode "ids".');
       if (json.mode === 'all') {
         return buildCanonicalDeleteAllMutationIR({shape});
       }

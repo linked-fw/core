@@ -27,6 +27,15 @@ import {syncShape} from '../shapes/syncShapes';
 import {NodeShape} from '../shapes/SHACL';
 import {QueryBuilder} from '../queries/QueryBuilder';
 import {graphs} from '../ontologies/graphs';
+import {fromJSON, type QueryJSON} from '../queries/fromJSON';
+import type {IDataset} from '../interfaces/IDataset';
+import type {SelectQuery} from '../queries/SelectQuery';
+import type {CountQuery} from '../queries/CountQuery';
+import type {AskQuery} from '../queries/AskQuery';
+import type {UpdateQuery} from '../queries/UpdateQuery';
+import type {CreateQuery} from '../queries/CreateQuery';
+import type {DeleteQuery} from '../queries/DeleteQuery';
+import type {GraphQuery} from '../queries/IntermediateRepresentation';
 import '../shapes/index';
 
 const PKG = 'shape-graphs-live';
@@ -73,6 +82,43 @@ class CountingStore extends FusekiStore {
   protected override async executeSparqlUpdate(sparql: string): Promise<void> {
     this.updates++;
     return super.executeSparqlUpdate(sparql);
+  }
+}
+
+/** Forwards every query as DSL-JSON (`toJSON` → wire → `fromJSON`) to `inner`, as a remote dataset does. */
+class ForwardingStore implements IDataset {
+  sent: Array<Record<string, unknown>> = [];
+  constructor(private readonly inner: FusekiStore) {}
+
+  private wire<T>(json: T): T {
+    const decoded = JSON.parse(JSON.stringify(json)) as T;
+    this.sent.push(decoded as Record<string, unknown>);
+    return decoded;
+  }
+  private decode(query: {toJSON(): unknown}): never {
+    return fromJSON(this.wire(query.toJSON()) as QueryJSON) as never;
+  }
+
+  dataRoot(): string | undefined {
+    return this.inner.dataRoot?.();
+  }
+  selectQuery(query: SelectQuery | CountQuery) {
+    return this.inner.selectQuery(this.decode(query));
+  }
+  askQuery(query: AskQuery) {
+    return this.inner.askQuery(this.decode(query));
+  }
+  updateQuery(query: UpdateQuery) {
+    return this.inner.updateQuery(this.decode(query));
+  }
+  createQuery(query: CreateQuery) {
+    return this.inner.createQuery(this.decode(query));
+  }
+  deleteQuery(query: DeleteQuery) {
+    return this.inner.deleteQuery(this.decode(query));
+  }
+  graphQuery(query: GraphQuery) {
+    return this.inner.graphQuery(this.wire(query));
   }
 }
 
@@ -164,6 +210,34 @@ describeFuseki('shape graphs on the inferring store', () => {
       expect(await count(`<${STAY}> <${CORE}isExtending> <${SgPerson.shape.id}>`)).toBe(1);
       expect(await count(`<${STAY}/friend> <${SH}node> <${SgPerson.shape.id}>`)).toBe(1);
       expect(await count(`<${STAY}> <${SH}property> <${STAY}/friend>`)).toBe(1);
+    },
+    LIVE_FUSEKI_TIMEOUT,
+  );
+
+  test(
+    'the cleanup runs over a dataset that forwards DSL-JSON (a remote dataset)',
+    async () => {
+      // A RemoteDataset-style forwarder: every query crosses the wire as JSON and the receiver
+      // decodes it with core's fromJSON before running it on the real store.
+      const remote = new ForwardingStore(store);
+      await syncShape(SgPerson, store, {force: true})();
+      const STAY = `${X}StayingRemoteShape`;
+      await executeSparqlUpdate(
+        `INSERT DATA { <${STAY}> a <${SH}NodeShape> ; <${CORE}isExtending> <${SgPerson.shape.id}> . }`,
+      );
+      expect(await count(`<${SgPerson.shape.id}> <${CORE}shapeHash> ?h`)).toBe(1);
+
+      const result = await syncShapeGraphs(remote, {packages: ['@_linked/core', PKG], force: true});
+      expect(result.cleaned).toBe(1);
+      const deletes = remote.sent.filter((json) => json.op === 'delete');
+      expect(deletes).toEqual([
+        expect.objectContaining({mode: 'ids', ids: [SgPerson.shape.id], keepIncoming: true}),
+      ]);
+      // The stale shape and its property shapes are gone; the staying shape's link is kept.
+      expect(await count(`<${SgPerson.shape.id}> ?p ?o`)).toBe(0);
+      expect(await count(`<${SgPerson.shape.id}/name> ?p ?o`)).toBe(0);
+      expect(await count(`<${STAY}> <${CORE}isExtending> <${SgPerson.shape.id}>`)).toBe(1);
+      expect(await count(`GRAPH <${G}> { <${SgEmployee.shape.id}> <${CORE}isExtending> <${SgPerson.shape.id}> }`)).toBe(1);
     },
     LIVE_FUSEKI_TIMEOUT,
   );
