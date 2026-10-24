@@ -15,6 +15,15 @@ Deferred out of the linked-query test-coverage effort (plan 001) because adding
 a DSL surface is feature work, not test coverage. Pick up as its own workflow
 cycle; the coverage tests for these land with the implementation.
 
+**Also the home for the general aggregate review** raised by the GraphQL-style
+selection proposal ([idea 025](../ideas/025-graphql-style-nested-selection.md)).
+That proposal folds `$count` into its v1 object form because `.size()` already
+works, but explicitly leaves the rest of the aggregate story to this node: when
+`sum`/`avg`/`min`/`max` (and any `groupBy`, [idea 016](../ideas/016-aggregations.md))
+land, decide how they surface in the `Shape.select({...})` object form too — a
+`$sum`/`$avg`/… option per aggregate, or a single `$agg` option naming the
+function. Keep the object-form surface consistent with the chainable one.
+
 ## Sketch (≈5 edits)
 
 1. Add `.sum()/.avg()/.min()/.max()` to `QueryShapeSet` / numeric

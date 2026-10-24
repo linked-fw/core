@@ -1,5 +1,5 @@
 ---
-summary: Compare the Linked query DSL with GraphQL (working-draft spec + graphql-js 17, released June 2026) feature by feature, and propose a GraphQL-style declarative selection syntax as a NEW OVERLOAD of `Shape.select(...)` — a nested object-literal query tree where fields are bare keys, verbs are `$`-prefixed options, and filters reuse the existing DSL-JSON condition grammar — plus an optional in-house (no-dependency) GraphQL-text parser and a longer-term GraphQL endpoint generated from SHACL shapes. Everything lowers to the existing DSL-JSON wire format.
+summary: Compare the Linked query DSL with GraphQL (working-draft spec + graphql-js 17, released June 2026) feature by feature, and propose a GraphQL-style declarative selection syntax as a NEW OVERLOAD of `Shape.select(...)` — a nested object-literal tree where fields are keys, verbs are `$`-prefixed options, filters reuse the DSL-JSON condition grammar, and casting uses `$on` to mirror GraphQL inline fragments. v1 folds in every capability the DSL already has ($where/$orderBy/$limit/$offset/$one/$on/$as/$path/$minus/$count); genuinely new capabilities (query variables, @include/@skip) are deferred to backlog 007, and the broader aggregate story to backlog 006. No dependency on the graphql package. Everything lowers to the existing DSL-JSON wire format.
 packages: [core]
 ---
 
@@ -93,13 +93,17 @@ Worth stating explicitly, because the proposal must not regress these:
 ### 1.3 Genuine gaps GraphQL exposes
 
 1. **A declarative selection tree.** The chainable DSL scales badly with
-   nesting depth (see 2.1). *This is the core of the proposal.*
+   nesting depth (see 2.1). *This is the core of the proposal, and the v1 scope.*
 2. **Per-query variables.** `($minAge: Int)` — serialize once, execute many
    times with different bindings. Context (`$ctx`) only covers ambient values.
+   *New capability → deferred to [backlog 007](../backlog/007-query-variables-and-conditional-fields.md), not in v1.*
 3. **Conditional inclusion** (`@include(if:)` / `@skip(if:)`) inside one
-   serialized query.
+   serialized query. *New capability → deferred to
+   [backlog 007](../backlog/007-query-variables-and-conditional-fields.md), not in v1.*
 4. **Standard introspection** — "what can I select on `Person`?" as a query.
+   *In scope: a thin formatter over the existing shape registry.*
 5. **Operation naming** — useful for logging/caching/persisted queries.
+   *Rides along with variables (backlog 007).*
 6. Subscriptions and incremental delivery (acknowledged; not in this proposal).
 
 ## Part 2 — The pain, concretely
@@ -215,7 +219,7 @@ const result = await Person.select({
     name: true,
     hobby: true,
     bestFriend: { name: true, birthDate: true },
-    pets: { $as: Dog, name: true, guardDogLevel: true },
+    pets: { name: true, $on: { Dog: { guardDogLevel: true } } },
   },
 });
 ```
@@ -252,21 +256,35 @@ For a key `K` that is a decorated property of the shape:
 | `{...}` (nested selection) | sub-select on the relation | `{ "K": { "fields": [...] , ...options } }` |
 | `'*'` | `selectAll()` at that level | expansion of all decorated fields |
 
-`$`-options allowed in any nested selection object:
+#### v1 scope — what's in, what's deferred
 
-| Option | Chainable equivalent | DSL-JSON |
-|---|---|---|
-| `$where: Condition` | `.where(fn)` | `where` (path-keyed condition grammar, reused as-is) |
-| `$orderBy: 'name' \| {path, dir}` | `.orderBy(...)` | `sortBy` |
-| `$limit` / `$offset` | `.limit()` / `.offset()` | `limit` / `offset` |
-| `$one: true` | `.one()` | `one` |
-| `$as: Dog` | `.as(Dog)` | `cast` |
-| `$key: 'buddies'` | custom result object key | `as` (alias) |
-| `$minus` | `.minus(...)` | `minus` |
-| `$count: true` | `.size()` | aggregate projection |
+Every `$`-option below that is marked **v1** is a *second spelling of a
+capability the chainable DSL already has*, so folding it in adds no new runtime,
+IR, or validation — pure ergonomics. Two options are **new capabilities**
+(variables, conditional inclusion); those are **deferred out of the GraphQL
+surface** and tracked for the core DSL in **[backlog 007](../backlog/007-query-variables-and-conditional-fields.md)**.
+
+| Option | Status | Chainable equivalent | DSL-JSON | Verified in DSL |
+|---|---|---|---|---|
+| `$where: Condition` | **v1** | `.where(fn)` | `where` (path-keyed grammar, reused as-is) | yes |
+| `$orderBy: 'name' \| {path, dir}` | **v1** | `.orderBy(...)` | `sortBy` | yes |
+| `$limit` / `$offset` | **v1** | `.limit()` / `.offset()` | `limit` / `offset` | yes |
+| `$one: true` | **v1** | `.one()` | `one` | yes |
+| `$on: {Sub: {...}}` / `$as: Dog` | **v1** | `.as(Dog)` | `cast` | yes |
+| `$path: 'knows'` (alias a relation under a custom key) | **v1** | custom result-object key — `({chessFriends: p.knows.select(...)})` | `as` (alias) | yes — `src/tests/type-probe-deep-nesting.ts:79,96` |
+| `$minus` | **v1** | `.minus(...)` | `minus` | yes |
+| `$count: true` | **v1** | `.size()` | aggregate projection | yes — `README.md:451` |
+| `$var` (parameterize) | **deferred → backlog 007** | — (no equivalent) | `vars` / `{$var}` (new) | no — new capability |
+| `$if` (conditional include) | **deferred → backlog 007** | — (no equivalent) | `if` (new) | no — new capability |
 
 Top level additionally accepts `$for: {id}` / `$forAll: [...]` (subject
-targeting) and `$vars` (below).
+targeting).
+
+`$count` is the one aggregate reachable today (`.size()`); the broader aggregate
+story — `sum`/`avg`/`min`/`max`/`groupBy` and how they surface in this object
+form — is deferred to **[backlog 006](../backlog/006-dsl-aggregates-sum-avg-min-max.md)**
+and [idea 016](./016-aggregations.md). `$count` ships now because it already
+works; the rest follow the aggregate review.
 
 **`$where` reuses the DSL-JSON condition grammar verbatim** — path-keyed
 conditions, `and`/`or`/`not` combinators, quantifiers, and the S-expression
@@ -295,7 +313,7 @@ unambiguous, and they're why overloading `select` is safe:
 
 **Rule 1 — the `$` sigil splits fields from verbs.** In a selection object, any
 key starting with `$` is an *option/verb* (`$where`, `$limit`, `$orderBy`,
-`$as`, `$if`, `$count`, …); every other key is a *field name* that must be a
+`$on`, `$path`, `$count`, …); every other key is a *field name* that must be a
 decorated property of the shape. A SHACL property can never start with `$`, so
 there is zero collision between the two namespaces.
 
@@ -399,46 +417,55 @@ const r = await Person.select({
 `$fragments: [personCard]` array form is the serializable alternative for
 DSL-JSON transport.)
 
-#### Variables (GraphQL §2.10) — new, also lands in DSL-JSON
+#### Casting / polymorphism (GraphQL inline fragments, `... on Type`) — `$on`
 
-The one genuinely new wire-format feature this proposal needs. `$var` markers
-parallel to the existing `{$ctx}` markers, plus a `vars` envelope key:
+GraphQL narrows a polymorphic edge with an inline fragment and selects
+subtype-only fields inside it:
+
+```graphql
+pets {
+  name
+  ... on Dog { guardDogLevel }
+  ... on Cat { livesRemaining }
+}
+```
+
+The `$on` form mirrors that exactly — shared fields at the top, subtype blocks
+scoped under the cast — which is why it reads naturally to a GraphQL user and
+handles the real case `.as(Dog)` can't: *different* fields per subtype on one
+edge.
 
 ```typescript
-const friendsOf = Person.select({
-  $where: { name: { $var: 'name' } },
-  knows: { name: true, $limit: { $var: 'max' } },
-});
-
-const a = await friendsOf.bind({ name: 'Alice', max: 10 });
-const b = await friendsOf.bind({ name: 'Bob',   max: 3 });
+pets: {
+  name: true,                                    // shared field
+  $on: {
+    Dog: { guardDogLevel: true },                // ... on Dog
+    Cat: { livesRemaining: true },               // ... on Cat
+  },
+}
 ```
 
-```jsonc
-// DSL-JSON: declared once, bound at execution
-{ "v": "1.1", "shape": ".../Person",
-  "vars": { "name": { "type": "string" }, "max": { "type": "integer", "default": 10 } },
-  "where": { "name": { "$var": "name" } },
-  "fields": [ { "knows": { "limit": { "$var": "max" }, "fields": ["name"] } } ] }
-```
+`$on` lowers to one DSL-JSON `cast` block per subtype. `$as: Dog` stays as a
+shorthand for the single-subtype case (`{ $as: Dog, guardDogLevel: true }` ≡
+`{ $on: { Dog: { guardDogLevel: true } } }`) and keeps parity with the chainable
+`.as(Dog)`. **Recommendation: `$on` is canonical; `$as` is the shorthand.**
 
-This is what makes persisted/cached/parameterized queries possible — serialize
-the tree once, POST `{query, vars}` many times. Resolution happens at the same
-stage `$ctx` resolves today.
+#### Deferred (NOT in the v1 GraphQL surface): variables and conditional inclusion
 
-#### Conditional inclusion (`@include` / `@skip`) — `$if`
+Variables (`$var` + `.bind()`, GraphQL §2.10) and conditional inclusion (`$if`,
+GraphQL `@include`/`@skip`) are the two items from §1.3 that are **new
+capabilities, not re-spellings** of the existing DSL — so they do not ride into
+the GraphQL surface for free. They only pay off once a query is *serialized and
+stored* (persisted/parameterized queries, a CMS query-editor), and in live TS a
+variable is just a JS value and a conditional field is a spread
+(`{ name: true, ...(withDetails && { birthDate: true }) }`).
 
-```typescript
-const r = await Person.select({
-  name: true,
-  birthDate: { $if: { $var: 'withDetails' } },   // @include(if: $withDetails)
-  knows: { $if: { $var: 'withFriends' }, name: true },
-});
-```
-
-Lowers to a DSL-JSON field option `"if"`. For ad-hoc TS queries this is mere
-convenience (spread a conditional), but for *serialized* queries (CMS-defined,
-persisted) it is the only way to make one stored query serve several views.
+The core DSL will likely want real parameterization regardless, so this is
+tracked as a core-DSL feature in
+**[backlog 007](../backlog/007-query-variables-and-conditional-fields.md)**.
+When it lands there, exposing it in this object form (and in DSL-JSON as a
+`vars` envelope + `{$var}` markers parallel to today's `{$ctx}`) is a small,
+additive follow-up — but it is explicitly out of scope here.
 
 #### Introspection (GraphQL §4)
 
@@ -484,8 +511,9 @@ static query<S extends Shape, const Q extends Selection<S>>(
 ```
 
 `const Q` (TS 5 const type parameters) preserves the literal tree; `$`-keys are
-excluded from `SelectedKeys`. `$as` narrows `RelatedShape`; `$one`/`$for`
-unwrap the array; `$count: true` maps the key to `number`. The existing
+excluded from `SelectedKeys`. `$on`/`$as` narrow `RelatedShape`; `$one`/`$for`
+unwrap the array; `$count: true` maps the key to `number`; `$path` keys the
+result by the alias, not the property. The existing
 `QueryResponseToResultType` machinery already solves the hard cardinality/
 datatype cases — this reuses it with a different input encoding.
 
@@ -494,10 +522,13 @@ datatype cases — this reuses it with a different input encoding.
 `select(selection)` does **not** grow a second pipeline. It compiles the
 selection object directly to DSL-JSON (it is nearly isomorphic already) and
 hands it to `fromJSON(...)` → existing builder → existing IR/lowering. New code
-is: the selection→DSL-JSON normalizer, the `Selection`/`QueryResult` types, and
-(for variables/`$if`/introspection) small DSL-JSON v1.1 additions with their
-IRDesugar handling. Everything downstream — IR, SPARQL, result mapping,
-`LinkedStorage` routing — is untouched.
+is just: the selection→DSL-JSON normalizer and the `Selection`/`QueryResult`
+types — plus a small `introspect` formatter. Because every v1 `$`-option
+(`$where`…`$count`, `$path`, `$on`) maps to a capability the builder/IR already
+have, **nothing downstream changes** — IR, SPARQL, result mapping, and
+`LinkedStorage` routing are untouched. (Variables and `$if`, when they arrive
+via backlog 007, are the only items that would add new DSL-JSON + IRDesugar
+handling — another reason they stay out of v1.)
 
 ### Tier 2 (optional, no dependency): GraphQL text via an in-house parser
 
@@ -524,7 +555,8 @@ const result = await gql`{
 
 - Root field name resolves to a registered shape (label or IRI); arguments map
   to the same `$`-options; `... on Dog` → `cast`; named fragments → `FieldSet`;
-  GraphQL variables → the Tier-1 `vars` envelope; `@include`/`@skip` → `$if`.
+  GraphQL variables → `vars` envelope and `@include`/`@skip` → `$if` *once
+  backlog 007 lands* (a parser can accept the syntax and error until then).
 - A small in-house recursive-descent parser for the query subset we support
   (selection sets, arguments, aliases, inline fragments, named fragments,
   variables, `@include`/`@skip`) emits **DSL-JSON**, so execution is Tier 1's
@@ -613,6 +645,7 @@ Person.select({
   A later `Shape.mutate({...})` object form could mirror Tier 1 if wanted.
 - IR / SPARQL pipeline: untouched. Everything lowers through DSL-JSON.
 - No subscriptions / `@defer` / `@stream` in this proposal.
+- No variables / conditional inclusion in v1 — deferred to backlog 007.
 
 ## Resolved decisions
 
@@ -625,6 +658,18 @@ Person.select({
    object-literal form (Tier 1) is the primary surface and needs no parser — it
    compiles straight to DSL-JSON. Tier 2, *if* pursued, is a small in-house
    subset parser (accepting spec-drift risk), never an external dep.
+3. **Cover every existing DSL capability; defer only genuinely new ones.**
+   (Confirmed.) `$count` (`.size()`) and `$path` (relation aliasing under a
+   custom key) are verified existing DSL features, so they are folded into v1.
+   Only `$var` and `$if` — which are *new* capabilities — are deferred, to
+   [backlog 007](../backlog/007-query-variables-and-conditional-fields.md). The
+   general aggregate story (`sum`/`avg`/`min`/`max`/`groupBy`) is reviewed in
+   [backlog 006](../backlog/006-dsl-aggregates-sum-avg-min-max.md) /
+   [idea 016](./016-aggregations.md); `$count` ships now because it already works.
+4. **Casting uses `$on`, closest to GraphQL's `... on`.** (Recommendation.)
+   `$on: { Sub: {...} }` mirrors inline fragments and supports multiple subtypes
+   on one edge; `$as: Sub` remains the single-subtype shorthand and matches the
+   chainable `.as()`.
 
 ## Open questions
 
@@ -633,8 +678,10 @@ Person.select({
    says yes.)
 2. **`true` vs `1` vs nested-only**: allow `name: {}` as synonym for
    `name: true`? Recommend no — keep one spelling.
-3. **Wire version bump**: variables, `$if`, `$path` aliasing, and `introspect`
-   are DSL-JSON additions → `"v": "1.1"`, additive only.
+3. **Wire version bump**: `$path` aliasing and `introspect` are the only v1
+   DSL-JSON additions (both additive); every other v1 `$`-option already has a
+   wire encoding. Does `introspect` justify a `"v": "1.1"`, or ship it as a
+   separate op? (`$var`/`$if` would be their own later bump via backlog 007.)
 4. **Expression tier typing in `$where`**: ship untyped S-expressions first
    (validated at runtime against the shape), add typed builders later?
 5. **Tier 2 in-house parser**: worth building at all, or is the typed
