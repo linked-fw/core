@@ -31,6 +31,7 @@ import {
   executeSparqlUpdate,
   clearAllData,
   DATASET_NAME,
+  FUSEKI_BASE_URL,
 } from '../test-helpers/fuseki-test-store';
 import {describeFuseki, fusekiLive} from '../test-helpers/fuseki-live';
 import {setQueryContext, getQueryContext} from '../queries/QueryContext';
@@ -145,7 +146,7 @@ const BASE_DATA = `
 `.trim();
 
 const store = new FusekiStore(
-  process.env.FUSEKI_BASE_URL || 'http://localhost:3939',
+  FUSEKI_BASE_URL,
   DATASET_NAME,
 );
 
@@ -1005,7 +1006,7 @@ describeFuseki('coverage — .exists() against Fuseki', () => {
 
   test('a real store failure rejects rather than resolving false', async () => {
     const broken = new FusekiStore(
-      process.env.FUSEKI_BASE_URL || 'http://localhost:3939',
+      FUSEKI_BASE_URL,
       'no-such-dataset-here',
     );
     await expect(Person.exists({id: `${ENT}p1`}, broken)).rejects.toThrow();

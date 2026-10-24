@@ -12,7 +12,7 @@
  * themselves never check availability.
  */
 import {describe} from '@jest/globals';
-import {FUSEKI_BASE_URL, FUSEKI_LIVE_ENV} from './fuseki-test-store';
+import {FUSEKI_BASE_URL, FUSEKI_LIVE_ENV, fusekiConfigMissing} from './fuseki-test-store';
 
 /**
  * Every live block's name starts with this; `npm run test:fuseki` selects on it and the
@@ -27,6 +27,8 @@ export function describeFuseki(name: string, fn: () => void): void {
   if (fusekiLive) {
     describe(`${FUSEKI_TEST_PREFIX} ${name}`, fn);
   } else {
-    describe.skip(`${FUSEKI_TEST_PREFIX} ${name} (skipped: Fuseki unavailable at ${FUSEKI_BASE_URL})`, fn);
+    const missing = fusekiConfigMissing();
+    const why = missing.length ? `${missing.join(', ')} not set` : `Fuseki unavailable at ${FUSEKI_BASE_URL}`;
+    describe.skip(`${FUSEKI_TEST_PREFIX} ${name} (skipped: ${why})`, fn);
   }
 }

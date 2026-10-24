@@ -65,6 +65,7 @@
     "typecheck": "tsc -p tsconfig-tests.json",
     "check:dts": "tsc -p tsconfig-dts-check.json",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs && npm run typecheck",
+    "test:ci": "[ \"$GITHUB_ACTIONS\" = true ] || { echo 'test:ci runs only on GitHub Actions. Locally: export FUSEKI_BASE_URL and FUSEKI_ADMIN_PASSWORD for a Fuseki of your own, then npm test.' >&2; exit 1; } && FUSEKI_BASE_URL=http://localhost:3939 FUSEKI_ADMIN_PASSWORD=admin npm test",
     "test:fuseki": "REQUIRE_FUSEKI=1 NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --testNamePattern='\\[fuseki\\]'"
   },
   "devDependencies": {

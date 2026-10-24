@@ -45,6 +45,7 @@ import {
   executeSparqlUpdate,
   clearAllData,
   DATASET_NAME,
+  FUSEKI_BASE_URL,
 } from '../test-helpers/fuseki-test-store';
 import {describeFuseki, fusekiLive} from '../test-helpers/fuseki-live';
 import {FusekiStore} from '../test-helpers/FusekiStore';
@@ -2052,7 +2053,7 @@ describeFuseki('Fuseki COUNT — root-level', () => {
       subject: {'@ctx': 'not-set-in-this-process'},
     } as never);
     const store = new FusekiStore(
-      process.env.FUSEKI_BASE_URL || 'http://localhost:3939',
+      FUSEKI_BASE_URL,
       DATASET_NAME,
     );
     await expect(store.selectQuery(rehydrated)).rejects.toThrow(/context/i);
@@ -2060,7 +2061,7 @@ describeFuseki('Fuseki COUNT — root-level', () => {
 
   test('a count answers end to end, over the select channel', async () => {
     const store = new FusekiStore(
-      process.env.FUSEKI_BASE_URL || 'http://localhost:3939',
+      FUSEKI_BASE_URL,
       DATASET_NAME,
     );
     // `selectQuery`, not a method of its own: a count is a select with an aggregate
@@ -2081,7 +2082,6 @@ describeFuseki('Fuseki COUNT — root-level', () => {
 // SparqlDataset base class — via FusekiStore
 // =========================================================================
 
-const FUSEKI_BASE_URL = process.env.FUSEKI_BASE_URL || 'http://localhost:3939';
 const FUSEKI_DATASET = DATASET_NAME;
 
 describeFuseki('SparqlDataset (via FusekiStore)', () => {
