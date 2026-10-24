@@ -26,8 +26,15 @@ import {
   unsupportedGraphQuery,
 } from '../queries/graphQuery.js';
 import {sd} from '../ontologies/sd.js';
-import {getGraphRecordClass, graphContentHash, hasPatchBody} from '../queries/graphRecords.js';
 import {
+  getGraphRecordClass,
+  graphContentHash,
+  graphRecordFieldValues,
+  hasPatchBody,
+} from '../queries/graphRecords.js';
+import {
+  graphCreateClaimRemoval,
+  graphCreateOutcomeQuery,
   graphQueryBodies,
   graphQueryToSparql,
   graphRegisteredAsk,
@@ -67,6 +74,7 @@ import {withShapeCatalog} from '../utils/ShapeClass.js';
 import {lower} from '../queries/lower.js';
 import {attachCatalog, catalogOf} from '../utils/ShapeClass.js';
 import {graphs} from '../ontologies/graphs.js';
+import {sharedState} from '../utils/sharedState.js';
 import {
   expandReadGraphs,
   invalidateGraphRegistry,
@@ -110,14 +118,24 @@ import {
  * }
  * ```
  */
-let nextRegistryKey = 0;
+/**
+ * The counter behind each store's default registry key, on `globalThis` like the registry cache
+ * itself: two copies of core in one process must not both mint `sparql-dataset:0`.
+ */
+const registryKeys = sharedState('@_linked/core', 'SparqlDataset.registryKey', () => ({next: 0}));
+
+/** A value unique to one `graph_create` request (see `GRAPH_CREATE_CLAIM`). */
+function newCreateClaim(): string {
+  const random = globalThis.crypto?.randomUUID?.();
+  return random ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
 
 /** An empty SELECT answer, for a read whose graph set expanded to no graph. */
 const NO_ROWS = {head: {vars: []}, results: {bindings: []}};
 
 export abstract class SparqlDataset implements IDataset {
   protected options?: SparqlOptions;
-  private readonly instanceRegistryKey = `sparql-dataset:${nextRegistryKey++}`;
+  private readonly instanceRegistryKey = `sparql-dataset:${registryKeys.next++}`;
 
   constructor(options?: SparqlOptions) {
     this.options = options;
@@ -536,10 +554,16 @@ export abstract class SparqlDataset implements IDataset {
    * transaction): `graph_create`, `graph_replace`, `graph_patch`, `graph_drop`.
    *
    * Refusals (`GraphQueryError`): a portable graph name or the registry itself
-   * (`graph-name-read-only`); create of a registered graph (`graph-exists`); replace or patch of
-   * a graph with no record (`graph-not-registered`); any other kind (`unsupported-query-kind`).
-   * Whether the graph is registered is read first, with one `ASK` on the registry; the write
-   * itself is the single update.
+   * (`graph-name-read-only`); create of a registered graph, or of a graph that holds triples
+   * without a record (`graph-exists`); replace or patch of a graph with no record
+   * (`graph-not-registered`); any other kind (`unsupported-query-kind`).
+   *
+   * The conditions are part of the update (see `graphQueryToSparql`), so they hold in the
+   * store's own transaction: of two concurrent creates exactly one writes, and a replace or patch
+   * that loses a race with a drop writes nothing. A replace or patch asks first whether the
+   * record exists, for its refusal. A create sends its update first and then reads, in one
+   * SELECT, whether its own update wrote the record (the claim it marked the record with), which
+   * it then removes: three requests for a create, the update alone being the write.
    *
    * Bodies are parsed and re-serialised as N-Triples (see `graphQueryToSparql.ts`). A body is
    * sent inside the update rather than by the Graph Store Protocol: a GSP `PUT` and the record's
@@ -566,24 +590,15 @@ export abstract class SparqlDataset implements IDataset {
       );
     }
     getGraphRecordClass(query.recordClass);
-    if (query.kind !== 'graph_drop') {
+    if (query.kind === 'graph_replace' || query.kind === 'graph_patch') {
       // Replace and patch through a record class (OntologyGraph.update(…)) need a record of that
-      // class; through NamedGraph any record will do.
-      const classCheck =
-        query.kind !== 'graph_create' && query.recordClass !== sd.NamedGraph.id
-          ? query.recordClass
-          : undefined;
+      // class; through NamedGraph any record will do. Asked first for the typed refusal; the
+      // update carries the same condition, so one that loses a race with a drop writes nothing.
+      const classCheck = query.recordClass !== sd.NamedGraph.id ? query.recordClass : undefined;
       const registered = mapSparqlAskResult(
         await this.executeSparqlSelect(graphRegisteredAsk(query.graph, classCheck)),
       );
-      if (query.kind === 'graph_create' && registered) {
-        throw new GraphQueryError(
-          'graph-exists',
-          `<${query.graph}> is already registered; change it with update(), replaceContent() or patchContent().`,
-          query.graph,
-        );
-      }
-      if (query.kind !== 'graph_create' && !registered) {
+      if (!registered) {
         throw new GraphQueryError(
           'graph-not-registered',
           classCheck
@@ -594,14 +609,54 @@ export abstract class SparqlDataset implements IDataset {
       }
     }
     const modified = new Date().toISOString();
-    const sparql = graphQueryToSparql(query, await graphQueryBodies(query), modified);
+    const claim = query.kind === 'graph_create' ? newCreateClaim() : undefined;
+    const sparql = graphQueryToSparql(query, await graphQueryBodies(query), modified, claim);
     if (sparql) await this.executeSparqlUpdate(sparql);
+    if (claim) await this.confirmGraphCreate(query.graph, claim);
     noteGraphQuery(this.graphRegistryKey(), query);
     const contentHash = graphContentHash(query);
-    const changed = query.kind !== 'graph_patch' || hasPatchBody(query);
+    // A record-only update (`update(graph).set({…})`) changes the record, which may change what
+    // the store infers (`feedsHierarchy`): it is a change too. Only an update with no body and no
+    // field writes nothing.
+    const changed =
+      query.kind !== 'graph_patch' || hasPatchBody(query) || graphRecordFieldValues(query).size > 0;
     return contentHash === undefined
       ? {graph: query.graph, changed}
       : {graph: query.graph, contentHash, modified, changed};
+  }
+
+  /**
+   * After a `graph_create` update: refuse with `graph-exists` when the update wrote nothing (the
+   * graph had a record, or held triples without one, when the update ran), else remove the claim
+   * the update marked its record with.
+   */
+  private async confirmGraphCreate(graph: string, claim: string): Promise<void> {
+    const json = await this.executeSparqlSelect(graphCreateOutcomeQuery(graph, claim));
+    const row = isSparqlSelectResults(json) ? json.results.bindings[0] : undefined;
+    // `true`, or `1` from a store that writes an xsd:boolean BIND in its numeric form.
+    const flag = (name: string) => row?.[name]?.value === 'true' || row?.[name]?.value === '1';
+    if (!row) {
+      throw new Error('Expected a SPARQL SELECT result set when confirming a graph create.');
+    }
+    if (flag('claimed')) {
+      // Best effort: the create has written. A claim left on the record is ignored by readers and
+      // removed with the record.
+      await this.executeSparqlUpdate(graphCreateClaimRemoval(graph, claim)).catch(() => undefined);
+      return;
+    }
+    if (!flag('registered') && flag('populated')) {
+      throw new GraphQueryError(
+        'graph-exists',
+        `<${graph}> holds triples but has no record in the graph registry; create() would ` +
+          'replace them. Drop the graph first (NamedGraph.delete(graph)) if they may go.',
+        graph,
+      );
+    }
+    throw new GraphQueryError(
+      'graph-exists',
+      `<${graph}> is already registered; change it with update(), replaceContent() or patchContent().`,
+      graph,
+    );
   }
 
   /**

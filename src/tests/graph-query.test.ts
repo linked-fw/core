@@ -16,7 +16,7 @@ import {fromJSON} from '../queries/fromJSON';
 import {LinkedStorage} from '../utils/LinkedStorage';
 import {graphs} from '../ontologies/graphs';
 import type {IDataset} from '../interfaces/IDataset';
-import {unusedDatasetMethods} from '../test-helpers/test-utils';
+import {graphCreateOutcomeAnswer, unusedDatasetMethods} from '../test-helpers/test-utils';
 import {DraftGraph, NamedGraph, OntologyGraph, ShapesGraph} from '../shapes/NamedGraph';
 import {lower} from '../queries/lower';
 import {CountBuilder} from '../queries/CountBuilder';
@@ -292,15 +292,23 @@ describe('SparqlDataset.graphQuery', () => {
     text: '@prefix ex: <http://example.org/> .\nex:A a ex:Class ; ex:label "A"@en .',
   };
 
-  /** A SPARQL dataset that records what it sends and answers the registry ASK as told. */
+  /**
+   * A SPARQL dataset that records what it sends and answers the registry ASK as told; a create's
+   * outcome read finds its claim unless the graph is registered (or `populated`).
+   */
   class RecordingSparql extends SparqlDataset {
     updates: string[] = [];
     asks: string[] = [];
-    constructor(private registered: boolean) {
+    constructor(
+      private registered: boolean,
+      private populated = false,
+    ) {
       super();
     }
     protected async executeSparqlSelect(sparql: string): Promise<any> {
       this.asks.push(sparql);
+      const outcome = graphCreateOutcomeAnswer(sparql, {registered: this.registered, populated: this.populated});
+      if (outcome) return outcome;
       return {head: {}, boolean: this.registered};
     }
     protected async executeSparqlUpdate(sparql: string): Promise<void> {
@@ -308,19 +316,31 @@ describe('SparqlDataset.graphQuery', () => {
     }
   }
 
-  test('graph_create: one update with the body and the whole record', async () => {
+  test('graph_create: one conditional update with the body and the whole record, then its outcome', async () => {
     const ds = new RecordingSparql(false);
     const result = await OntologyGraph.create({id: G, package: '@_linked/example', version: '1.0.0'})
       .withContent(ttl)
       .exec(ds);
-    expect(ds.asks).toEqual([
-      `ASK { GRAPH <${REG}> { <${G}> <http://www.w3.org/ns/sparql-service-description#name> <${G}> } }`,
-    ]);
-    expect(ds.updates).toHaveLength(1);
-    const update = ds.updates[0];
-    expect(update).toMatch(new RegExp(`^DROP SILENT GRAPH <${G}> ;\\nINSERT DATA \\{ GRAPH <${G}> \\{\\n`));
+    const NAME = 'http://www.w3.org/ns/sparql-service-description#name';
+    const CLAIM = 'https://linked.cm/ont/core/graphCreateClaim';
+    expect(ds.updates).toHaveLength(2);
+    const [update, cleanup] = ds.updates;
+    const ops = update.split(' ;\n');
+    const free =
+      `FILTER NOT EXISTS { GRAPH <${REG}> { <${G}> <${NAME}> <${G}> } } ` +
+      `FILTER NOT EXISTS { GRAPH <${G}> { ?s_c ?p_c ?o_c } }`;
+    expect(ops[0]).toBe(
+      `DELETE { GRAPH <${REG}> { <${G}> ?p_r ?o_r } } WHERE { GRAPH <${REG}> { <${G}> ?p_r ?o_r } ${free} }`,
+    );
+    expect(ops[1].startsWith(`INSERT { GRAPH <${G}> {\n`)).toBe(true);
+    expect(ops[1].endsWith(` } WHERE { ${free} }`)).toBe(true);
+    expect(ops).toHaveLength(2);
+    expect(update).not.toContain('DROP');
     expect(update).toContain('<http://example.org/A> <http://example.org/label> "A"@en .');
-    expect(update).toContain(`DELETE WHERE { GRAPH <${REG}> { <${G}> ?p ?o } }`);
+    const claim = /<https:\/\/linked\.cm\/ont\/core\/graphCreateClaim> "([^"]+)"/.exec(update)![1];
+    expect(ds.asks).toEqual([expect.stringContaining(`"${claim}"`)]);
+    expect(ds.asks[0].startsWith('SELECT ?claimed ?registered ?populated')).toBe(true);
+    expect(cleanup).toBe(`DELETE DATA { GRAPH <${REG}> { <${G}> <${CLAIM}> "${claim}" } }`);
     expect(update).toContain(`a <${ONTOLOGY_GRAPH}>`);
     expect(update).toContain(`<http://www.w3.org/ns/sparql-service-description#name> <${G}>`);
     expect(update).toContain('<https://linked.cm/ont/core/feedsHierarchy> "true"^^<http://www.w3.org/2001/XMLSchema#boolean>');
@@ -330,11 +350,20 @@ describe('SparqlDataset.graphQuery', () => {
     expect(result).toMatchObject({graph: G, contentHash: sha256Hex(ttl.text), changed: true});
   });
 
-  test('graph_create of a registered graph is refused with graph-exists, nothing written', async () => {
+  test('graph_create of a registered graph is refused with graph-exists; its update wrote nothing', async () => {
     const ds = new RecordingSparql(true);
     const err = await OntologyGraph.create({id: G, package: 'p'}).exec(ds).catch((e) => e);
     expect(isGraphQueryError(err, 'graph-exists')).toBe(true);
-    expect(ds.updates).toEqual([]);
+    expect((err as Error).message).toMatch(/already registered/);
+    expect(ds.updates).toHaveLength(1); // the conditional update only: no claim to remove
+  });
+
+  test('graph_create of a graph that holds triples without a record is refused with graph-exists', async () => {
+    const ds = new RecordingSparql(false, true);
+    const err = await NamedGraph.create({id: G}).withContent(nt).exec(ds).catch((e) => e);
+    expect(isGraphQueryError(err, 'graph-exists')).toBe(true);
+    expect((err as Error).message).toMatch(/holds triples but has no record/);
+    expect(ds.updates).toHaveLength(1);
   });
 
   test('graph_replace and graph_patch of an unregistered graph are refused', async () => {
@@ -353,13 +382,20 @@ describe('SparqlDataset.graphQuery', () => {
     const ds = new RecordingSparql(true);
     await OntologyGraph.update(G).set({version: '2.0.0'}).replaceContent(nt, {contentHash: 'filehash'}).exec(ds);
     const ops = ds.updates[0].split(' ;\n');
-    expect(ops[0]).toBe(`DROP SILENT GRAPH <${G}>`);
-    expect(ops[1]).toBe(`INSERT DATA { GRAPH <${G}> {\n<urn:a> <urn:b> "x\\ny" .\n} }`);
+    // Every operation runs only while the record exists: a replace that loses a race with a drop
+    // writes nothing, so no half record is left.
+    const rec = `GRAPH <${REG}> { <${G}> <http://www.w3.org/ns/sparql-service-description#name> <${G}> ; a <${ONTOLOGY_GRAPH}> }`;
+    expect(ops[0]).toBe(
+      `DELETE { GRAPH <${G}> { ?s_c ?p_c ?o_c } } WHERE { ${rec} GRAPH <${G}> { ?s_c ?p_c ?o_c } }`,
+    );
+    expect(ops[1]).toBe(`INSERT { GRAPH <${G}> {\n<urn:a> <urn:b> "x\\ny" .\n} } WHERE { FILTER EXISTS { ${rec} } }`);
+    const field = (p: string, n: number) => `GRAPH <${REG}> { <${G}> <${p}> ?v${n} }`;
     expect(ops.slice(2, 5)).toEqual([
-      `DELETE WHERE { GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/contentHash> ?v0 } }`,
-      `DELETE WHERE { GRAPH <${REG}> { <${G}> <http://purl.org/dc/terms/modified> ?v1 } }`,
-      `DELETE WHERE { GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/version> ?v2 } }`,
+      `DELETE { ${field('https://linked.cm/ont/core/contentHash', 0)} } WHERE { ${rec} ${field('https://linked.cm/ont/core/contentHash', 0)} }`,
+      `DELETE { ${field('http://purl.org/dc/terms/modified', 1)} } WHERE { ${rec} ${field('http://purl.org/dc/terms/modified', 1)} }`,
+      `DELETE { ${field('https://linked.cm/ont/core/version', 2)} } WHERE { ${rec} ${field('https://linked.cm/ont/core/version', 2)} }`,
     ]);
+    expect(ops[5].endsWith(`WHERE { FILTER EXISTS { ${rec} } }`)).toBe(true);
     expect(ops[5]).toContain('"filehash"');
     expect(ops[5]).toContain('<https://linked.cm/ont/core/version> "2.0.0"');
     expect(ops).toHaveLength(6);
@@ -370,19 +406,30 @@ describe('SparqlDataset.graphQuery', () => {
     const del: GraphContent = {mediaType: 'application/n-triples', text: '<urn:a> <urn:b> <urn:old> .'};
     const result = await NamedGraph.patchContent(G, {insert: nt, delete: del}).exec(ds);
     const ops = ds.updates[0].split(' ;\n');
-    expect(ops[0]).toBe(`DELETE DATA { GRAPH <${G}> {\n<urn:a> <urn:b> <urn:old> .\n} }`);
-    expect(ops[1]).toContain(`INSERT DATA { GRAPH <${G}> {`);
+    const rec = `GRAPH <${REG}> { <${G}> <http://www.w3.org/ns/sparql-service-description#name> <${G}> }`;
+    expect(ops[0]).toBe(`DELETE { GRAPH <${G}> {\n<urn:a> <urn:b> <urn:old> .\n} } WHERE { ${rec} }`);
+    expect(ops[1]).toContain(`INSERT { GRAPH <${G}> {`);
+    expect(ops[1].endsWith(`WHERE { FILTER EXISTS { ${rec} } }`)).toBe(true);
     expect(result.contentHash).toBe(sha256Hex(`${del.text}\n${nt.text}`));
     expect(ops.join('\n')).not.toContain('version');
   });
 
-  test('graph_patch record only: own fields, hash and modified kept', async () => {
+  test('graph_patch record only: own fields, hash and modified kept; a change of the record', async () => {
     const ds = new RecordingSparql(true);
     const result = await OntologyGraph.update(G).set({version: '3'}).exec(ds);
+    const rec = `GRAPH <${REG}> { <${G}> <http://www.w3.org/ns/sparql-service-description#name> <${G}> ; a <${ONTOLOGY_GRAPH}> }`;
+    const field = `GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/version> ?v0 }`;
     expect(ds.updates).toEqual([
-      `DELETE WHERE { GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/version> ?v0 } } ;\n` +
-        `INSERT DATA { GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/version> "3"^^<http://www.w3.org/2001/XMLSchema#string> . } }`,
+      `DELETE { ${field} } WHERE { ${rec} ${field} } ;\n` +
+        `INSERT { GRAPH <${REG}> { <${G}> <https://linked.cm/ont/core/version> "3"^^<http://www.w3.org/2001/XMLSchema#string> . } } WHERE { FILTER EXISTS { ${rec} } }`,
     ]);
+    expect(result).toEqual({graph: G, changed: true});
+  });
+
+  test('an update with neither a body nor a field writes nothing and is no change', async () => {
+    const ds = new RecordingSparql(true);
+    const result = await ds.graphQuery({kind: 'graph_patch', graph: G, recordClass: ONTOLOGY_GRAPH});
+    expect(ds.updates).toEqual([]);
     expect(result).toEqual({graph: G, changed: false});
   });
 
@@ -430,18 +477,19 @@ describe('SparqlDataset.graphQuery', () => {
     const ops = ds.updates[0].split(' ;\n');
     const SH = 'http://www.w3.org/ns/shacl#';
     const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
-    expect(ops[0]).toBe(`DELETE DATA { GRAPH <${G}> {\n<urn:ps> <urn:label> "kids" .\n} }`);
+    const rec = `GRAPH <${REG}> { <${G}> <http://www.w3.org/ns/sparql-service-description#name> <${G}> }`;
+    expect(ops[0]).toBe(`DELETE { GRAPH <${G}> {\n<urn:ps> <urn:label> "kids" .\n} } WHERE { ${rec} }`);
     const inv = `<urn:ps> <${SH}path> ?b0 . ?b0 <${SH}inversePath> <urn:parent> .`;
     expect(ops[1]).toBe(
-      `DELETE { GRAPH <${G}> { ${inv} } } WHERE { GRAPH <${G}> { ${inv} } FILTER(isBlank(?b0)) }`,
+      `DELETE { GRAPH <${G}> { ${inv} } } WHERE { ${rec} GRAPH <${G}> { ${inv} } FILTER(isBlank(?b0)) }`,
     );
     const seq =
       `<urn:seq> <${SH}path> ?b0 . ?b0 <${RDF}first> <urn:a> . ?b0 <${RDF}rest> ?b1 . ` +
       `?b1 <${RDF}first> ?b2 . ?b1 <${RDF}rest> <${RDF}nil> . ?b2 <${SH}inversePath> <urn:b> .`;
     expect(ops[2]).toBe(
-      `DELETE { GRAPH <${G}> { ${seq} } } WHERE { GRAPH <${G}> { ${seq} } FILTER(isBlank(?b0) && isBlank(?b1) && isBlank(?b2)) }`,
+      `DELETE { GRAPH <${G}> { ${seq} } } WHERE { ${rec} GRAPH <${G}> { ${seq} } FILTER(isBlank(?b0) && isBlank(?b1) && isBlank(?b2)) }`,
     );
-    expect(ops[3].startsWith(`INSERT DATA { GRAPH <${G}> {\n`)).toBe(true);
+    expect(ops[3].startsWith(`INSERT { GRAPH <${G}> {\n`)).toBe(true);
     expect(ops[3]).toContain(`<${SH}inversePath> <urn:mother>`);
     expect(ops).toHaveLength(4 + 3); // + the record's hash and modified time
   });
@@ -476,7 +524,7 @@ describe('store-reserved names, feedsHierarchy, record classes', () => {
     }
     protected async executeSparqlSelect(sparql: string): Promise<any> {
       this.asks.push(sparql);
-      return {head: {}, boolean: this.registered};
+      return graphCreateOutcomeAnswer(sparql, {registered: this.registered}) ?? {head: {}, boolean: this.registered};
     }
     protected async executeSparqlUpdate(sparql: string): Promise<void> {
       this.updates.push(sparql);
@@ -521,8 +569,8 @@ describe('store-reserved names, feedsHierarchy, record classes', () => {
     ]) {
       expect(String(await call().catch((e) => e))).toMatch(/no field "feedsHierarchy"/);
     }
-    await ShapesGraph.create({id: G, package: 'p'}).exec(ds);
-    expect(ds.updates[1]).toContain('feedsHierarchy> "false"');
+    await ShapesGraph.create({id: G, package: 'p'}).exec(ds); // after the first create's write and claim removal
+    expect(ds.updates[2]).toContain('feedsHierarchy> "false"');
   });
 
   test('replace and patch through a subclass ask for a record of that class; NamedGraph does not', async () => {

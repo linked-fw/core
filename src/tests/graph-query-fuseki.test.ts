@@ -97,7 +97,8 @@ describeFuseki('graph queries on the inferring store', () => {
     })
       .withContent(body)
       .exec(store);
-    expect(store.updates).toBe(1);
+    // The write is one update; the second removes the claim it marked the record with.
+    expect(store.updates).toBe(2);
     expect(result).toMatchObject({graph: G, contentHash: sha256Hex(body.text), changed: true});
     expect(await tripleCount(G)).toBe(2);
     const fields = await record(G);
@@ -112,6 +113,7 @@ describeFuseki('graph queries on the inferring store', () => {
     // as `…17.56Z`.
     expect(fields['dcterms:modified'].map((d) => new Date(d).toISOString())).toEqual([result.modified]);
     expect(fields['dcterms:source']).toEqual(['data/live.ttl']);
+    expect(fields['core:graphCreateClaim']).toBeUndefined();
     // The body went to the graph, not to the default graph.
     const stray = await executeSparqlQuery('ASK { <http://example.org/A> ?p ?o }');
     expect(stray.boolean).toBe(false);
@@ -150,7 +152,7 @@ describeFuseki('graph queries on the inferring store', () => {
     const before = await record(G);
     store.updates = 0;
     const result = await OntologyGraph.update(G).set({version: '1.1.0'}).exec(store);
-    expect(result.changed).toBe(false);
+    expect(result.changed).toBe(true); // the record changed
     expect(store.updates).toBe(1);
     const after = await record(G);
     expect(after['core:version']).toEqual(['1.1.0']);
@@ -220,6 +222,61 @@ describeFuseki('graph queries on the inferring store', () => {
     expect(await tripleCount(G)).toBe(0);
     expect(await record(G)).toEqual({});
     expect(await NamedGraph.select().exec(store)).toEqual([]);
+  });
+
+  test('of two concurrent creates of one graph exactly one writes; the other gets graph-exists', async () => {
+    const RACE = OntologyGraph.iriFor('@_linked/graph-query-live-race');
+    for (let round = 0; round < 5; round++) {
+      const stores = [0, 1, 2, 3].map(() => new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME));
+      const outcomes = await Promise.allSettled(
+        stores.map((s, i) =>
+          OntologyGraph.create({id: RACE, package: `@_linked/racer-${i}`})
+            .withContent(nt([`<http://example.org/R${i}> <http://www.w3.org/2000/01/rdf-schema#label> "${i}" .`]))
+            .exec(s),
+        ),
+      );
+      const won = outcomes.flatMap((o, i) => (o.status === 'fulfilled' ? [i] : []));
+      expect(won).toHaveLength(1);
+      for (const o of outcomes) {
+        if (o.status === 'rejected') expect(isGraphQueryError(o.reason, 'graph-exists')).toBe(true);
+      }
+      // The record and the body are the winner's alone, and no claim is left.
+      const fields = await record(RACE);
+      expect(fields['core:package']).toEqual([`@_linked/racer-${won[0]}`]);
+      expect(fields['core:graphCreateClaim']).toBeUndefined();
+      expect(await tripleCount(RACE)).toBe(1);
+      await OntologyGraph.delete(RACE).exec(store);
+    }
+  });
+
+  test('a replace racing a drop leaves the graph either replaced or gone, never a half record', async () => {
+    const RACE = OntologyGraph.iriFor('@_linked/graph-query-live-replace-race');
+    for (let round = 0; round < 8; round++) {
+      await OntologyGraph.create({id: RACE, package: '@_linked/race'}).withContent(body).exec(store);
+      const replacer = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME);
+      const dropper = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME);
+      const replaced = OntologyGraph.update(RACE)
+        .set({version: `${round}`})
+        .replaceContent(nt(['<http://example.org/Z> <http://www.w3.org/2000/01/rdf-schema#label> "z" .']))
+        .exec(replacer);
+      const dropped = OntologyGraph.delete(RACE).exec(dropper);
+      const [r] = await Promise.allSettled([replaced, dropped]);
+      if (r.status === 'rejected') expect(isGraphQueryError(r.reason, 'graph-not-registered')).toBe(true);
+      // The drop came last or first: either way nothing of the graph or its record is left.
+      expect(await record(RACE)).toEqual({});
+      expect(await tripleCount(RACE)).toBe(0);
+    }
+  });
+
+  test('create of a graph that holds triples without a record is refused and keeps them', async () => {
+    const LOOSE = 'https://acme.example/data/graph/loose';
+    await executeSparqlUpdate(`INSERT DATA { GRAPH <${LOOSE}> { <urn:x> <urn:y> "kept" . } }`);
+    const err = await NamedGraph.create({id: LOOSE}).withContent(body).exec(store).catch((e) => e);
+    expect(isGraphQueryError(err, 'graph-exists')).toBe(true);
+    expect(String(err)).toMatch(/holds triples but has no record/);
+    expect(await tripleCount(LOOSE)).toBe(1);
+    expect(await record(LOOSE)).toEqual({});
+    await executeSparqlUpdate(`DROP GRAPH <${LOOSE}>`);
   });
 
   test('measure: a ~16k-triple body as one update, and as a GSP PUT plus a record update', async () => {

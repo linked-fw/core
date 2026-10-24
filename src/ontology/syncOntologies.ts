@@ -20,6 +20,14 @@
  * each package's `rdfs:subClassOf` triples diffed into the default graph against an
  * `OntologySync` node (hash `linked-ontology-sync/1\n` + the lines).
  *
+ * Before anything is written, the store is probed once per dataset (`hierarchyProbe.ts`) for the
+ * hierarchy it infers from, and the move out of the default graph happens only when it is the
+ * registered graphs':
+ * - `'named-graphs'`: package graphs, and the default-graph hierarchy is removed (above).
+ * - `'default-graph'` and `'none'`: package graphs and the default-graph sync both (the hierarchy
+ *   stays in the default graph too, so the ontology data is in package graphs on every store);
+ *   one warning, for `'none'` that class-scoped reads miss subclass instances.
+ *
  * Runs at app boot and through the app's control route, before shape sync. Server only (the
  * readers load `n3`).
  *
@@ -33,8 +41,13 @@ import {assertNoActiveCatalog} from '../utils/ShapeClass.js';
 import {sha256Hex} from '../utils/sha256.js';
 import {OntologySync} from '../shapes/OntologySync.js';
 import {ClassAxioms} from '../shapes/ClassAxioms.js';
-import {OntologyGraph} from '../shapes/NamedGraph.js';
+import {NamedGraph, OntologyGraph} from '../shapes/NamedGraph.js';
 import {isGraphQueryError} from '../queries/graphQuery.js';
+import {
+  probeHierarchyInference,
+  warnOnceForDataset,
+  type HierarchyInference,
+} from './hierarchyProbe.js';
 import {nTriplesFromTurtle, RDFS_SUBCLASSOF, type HierarchyTriple} from './hierarchy.js';
 import {
   readPackageOntologies,
@@ -179,8 +192,6 @@ interface SyncRun {
   parsed: Map<string, PackageOntologyData>;
   unreadable: string[];
   registered: Set<string>;
-  /** Set once a graph query has written: from then on `unsupported-query-kind` is an error. */
-  wroteGraph: boolean;
 }
 
 /** A plan-070 sync node as read. */
@@ -268,25 +279,66 @@ export async function syncOntologies(
     parsed,
     unreadable,
     registered: new Set(registrationsByPackage().keys()),
-    wroteGraph: false,
   };
   // A dataset class built against an older core has no graph queries.
   if (ds && typeof (ds as Partial<IDataset>).graphQuery !== 'function') {
     return syncDefaultGraph(run);
   }
+  let inference: HierarchyInference;
   try {
-    return await syncGraphs(run);
+    inference = await probeHierarchyInference(ds);
   } catch (error) {
-    // A store either runs graph queries or refuses the first one, before anything was written.
-    if (!run.wroteGraph && isGraphQueryError(error, 'unsupported-query-kind')) {
-      return syncDefaultGraph(run);
-    }
-    throw error;
+    // A store either runs graph queries or refuses the first one (the probe's), before anything
+    // was written.
+    if (isGraphQueryError(error, 'unsupported-query-kind')) return syncDefaultGraph(run);
+    warnOnceForDataset(
+      ds,
+      `[syncOntologies] Could not measure which class hierarchy the store infers from ` +
+        `(${(error as Error)?.message ?? error}); the hierarchy stays in the default graph as ` +
+        'well as in the package graphs.',
+    );
+    inference = 'none';
   }
+  if (inference === 'default-graph') {
+    warnOnceForDataset(
+      ds,
+      '[syncOntologies] The store infers classes only from the default graph, not from the ' +
+        "graphs the registry marks feedsHierarchy: the ontology data is written into package " +
+        'graphs and the class hierarchy kept in the default graph as well. See "Store ' +
+        `requirements" in @_linked/core's README.`,
+    );
+  } else if (inference === 'none') {
+    warnOnceForDataset(
+      ds,
+      '[syncOntologies] The store does not infer rdf:type through rdfs:subClassOf: a read of a ' +
+        "class will not return its subclasses' instances. The ontology data is written into " +
+        'package graphs and the class hierarchy kept in the default graph as well. See "Store ' +
+        `requirements" in @_linked/core's README.`,
+    );
+  }
+  const keepDefaultGraph = inference !== 'named-graphs';
+  const graphsResult = await syncGraphs(run, keepDefaultGraph);
+  if (!keepDefaultGraph) return graphsResult;
+  return mergeResults(graphsResult, await syncDefaultGraph(run));
 }
 
-/** The sync on package graphs. */
-async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
+/** The results of the two syncs of one run: a package written by either is written. */
+function mergeResults(a: SyncOntologiesResult, b: SyncOntologiesResult): SyncOntologiesResult {
+  const written = new Set([...a.written, ...b.written]);
+  const skipped = new Set([...a.skipped, ...b.skipped].filter((name) => !written.has(name)));
+  return {
+    written: [...written].sort(),
+    skipped: [...skipped].sort(),
+    pruned: [...new Set([...a.pruned, ...b.pruned])].sort(),
+  };
+}
+
+
+/**
+ * The sync on package graphs. With `keepDefaultGraph` (a store that does not infer from the
+ * registered graphs) what the default-graph sync kept stays; the caller runs that sync as well.
+ */
+async function syncGraphs(run: SyncRun, keepDefaultGraph = false): Promise<SyncOntologiesResult> {
   const {ds, options, only} = run;
   const result: SyncOntologiesResult = {written: [], skipped: [], pruned: []};
 
@@ -330,16 +382,14 @@ async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
           .replaceContent(content, {contentHash: hash})
           .exec(ds);
       } else {
-        await OntologyGraph.create({id: graph, package: name, sources})
-          .withContent(content, {contentHash: hash})
-          .exec(ds);
+        await createPackageGraph(graph, name, sources, content, hash, ds);
       }
-      run.wroteGraph = true;
       result.written.push(name);
     }
     // Written or unchanged, the package's graph holds its data: what the default-graph sync kept
-    // for it goes (also finishing a removal an earlier run did not complete).
-    await removeSyncNode(name, nodes, ds);
+    // for it goes (also finishing a removal an earlier run did not complete), once the store is
+    // known to infer from the package graphs.
+    if (!keepDefaultGraph) await removeSyncNode(name, nodes, ds);
   }
 
   if (options?.orphanScope === 'all' && !only) {
@@ -347,10 +397,10 @@ async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
     for (const [graph, record] of [...recordByGraph].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
       if (!record.package || run.registered.has(record.package)) continue;
       await OntologyGraph.delete(graph).exec(ds);
-      run.wroteGraph = true;
       pruned.add(record.package);
     }
-    for (const name of [...nodes.keys()].sort()) {
+    // The default-graph sync that follows prunes its own orphans.
+    for (const name of keepDefaultGraph ? [] : [...nodes.keys()].sort()) {
       if (run.registered.has(name)) continue;
       await removeSyncNode(name, nodes, ds);
       pruned.add(name);
@@ -360,6 +410,40 @@ async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
 
   result.skipped.sort();
   return result;
+}
+
+/**
+ * Create a package's ontology graph that had no `OntologyGraph` record when the sync read the
+ * registry. When the create is refused (`graph-exists`): another process created it meanwhile
+ * (two apps booting at once), so it is replaced instead; or the graph holds triples without an
+ * `OntologyGraph` record (an older tool's load, a record of another class), and since the
+ * package's ontology graph is the sync's own, it is dropped and created again.
+ */
+async function createPackageGraph(
+  graph: string,
+  name: string,
+  sources: string[],
+  content: {mediaType: 'application/n-triples'; text: string},
+  hash: string,
+  ds?: IDataset,
+): Promise<void> {
+  const create = () =>
+    OntologyGraph.create({id: graph, package: name, sources})
+      .withContent(content, {contentHash: hash})
+      .exec(ds);
+  try {
+    await create();
+    return;
+  } catch (error) {
+    if (!isGraphQueryError(error, 'graph-exists')) throw error;
+  }
+  try {
+    await OntologyGraph.update(graph).set({sources}).replaceContent(content, {contentHash: hash}).exec(ds);
+  } catch (error) {
+    if (!isGraphQueryError(error, 'graph-not-registered')) throw error;
+    await NamedGraph.delete(graph).exec(ds);
+    await create();
+  }
 }
 
 /**

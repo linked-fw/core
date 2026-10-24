@@ -23,12 +23,13 @@ import {
   syncOntologies,
 } from '../ontology/syncOntologies';
 import {OntologyGraph} from '../shapes/NamedGraph';
-import {unsupportedGraphQuery} from '../queries/graphQuery';
+import {GraphQueryError, unsupportedGraphQuery} from '../queries/graphQuery';
 import type {GraphQuery, GraphResult} from '../queries/IntermediateRepresentation';
 import {getRegisteredOntologies} from '../utils/Package';
 import {OntologySync} from '../shapes/OntologySync';
 import {builtInShapeIris} from '../utils/ShapeCatalog';
 import {setOntologyHierarchy, superClassesOf} from '../ontology/classHierarchy';
+import {inferenceProbeAnswer, isInferenceProbeGraph} from '../test-helpers/test-utils';
 
 const NS = 'http://example.org/sync/';
 const SUB = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
@@ -113,9 +114,10 @@ describe('syncOntologies: the default-graph fallback', () => {
   test('a first sync writes one update per subject class, then the sync node, last', async () => {
     const result = await syncOntologies(ds, {packages: ['sync-a']});
     expect(result).toEqual({written: ['sync-a'], skipped: [], pruned: []});
-    // The graph path read the sync nodes and was refused at its first write; the fallback reads them again.
-    expect(ds.graphQueries).toBe(1);
-    expect(ds.selects).toBe(2);
+    // The inference probe's first graph query was refused (then its two best-effort drops),
+    // before anything was read or written.
+    expect(ds.graphQueries).toBe(3);
+    expect(ds.selects).toBe(1);
     expect(ds.updates).toHaveLength(3);
     expect(ds.updates[0]).toContain(`<${NS}A> rdfs:subClassOf <${NS}B> .`);
     expect(ds.updates[1]).toContain(`<${NS}B> rdfs:subClassOf <${NS}C> .`);
@@ -255,15 +257,24 @@ type GraphRow = {id: string; package: string; contentHash: string};
 class GraphRecording extends SparqlDataset {
   updates: string[] = [];
   graphQueries: GraphQuery[] = [];
+  /** The inference probe's own graph queries (kept apart from the sync's). */
+  probeQueries: GraphQuery[] = [];
   records: GraphRow[] = [];
   nodes: Row[] = [];
+  /** What the store answers the inference probe. */
+  inference: 'named-graphs' | 'default-graph' | 'none' = 'named-graphs';
+  override async askQuery(query: any): Promise<boolean> {
+    const answer = inferenceProbeAnswer(query, this.inference);
+    if (answer === undefined) throw new Error('unexpected ask');
+    return answer;
+  }
   override async selectQuery(query: any): Promise<any> {
     if (shapeOf(query) === OntologyGraph.shape.id) return this.records.map((r) => ({...r}));
     if (shapeOf(query) === OntologySync.shape.id) return this.nodes.map((n) => ({...n}));
     throw new Error(`unexpected select of ${shapeOf(query)}`);
   }
   override async graphQuery(query: GraphQuery): Promise<GraphResult> {
-    this.graphQueries.push(query);
+    (isInferenceProbeGraph(query.graph) ? this.probeQueries : this.graphQueries).push(query);
     return {graph: query.graph, contentHash: query.contentHash, changed: query.kind !== 'graph_patch'};
   }
   protected async executeSparqlSelect(): Promise<SparqlQueryResults> {
@@ -424,6 +435,34 @@ describe('syncOntologies: package graphs', () => {
     expect(result.pruned).toEqual(['sync-gone']);
     expect(gs.updates.some((u) => /DELETE \{[^}]*<http:\/\/example\.org\/sync\/G> rdfs:subClassOf/.test(u))).toBe(true);
     expect(gs.updates.at(-1)).toContain('ontologySync/sync-gone');
+  });
+
+  test('a create refused because another process created the graph meanwhile replaces it', async () => {
+    const record = gs.graphQuery.bind(gs);
+    gs.graphQuery = async (q) => {
+      if (q.kind === 'graph_create' && !isInferenceProbeGraph(q.graph)) {
+        gs.graphQueries.push(q);
+        throw new GraphQueryError('graph-exists', 'taken', q.graph);
+      }
+      return record(q);
+    };
+    const result = await syncOntologies(gs, {packages: ['sync-a']});
+    expect(result.written).toEqual(['sync-a']);
+    expect(gs.graphQueries.map((q) => q.kind)).toEqual(['graph_create', 'graph_replace']);
+  });
+
+  test('a create refused because the graph holds triples without a record drops and creates it', async () => {
+    let creates = 0;
+    const record = gs.graphQuery.bind(gs);
+    gs.graphQuery = async (q) => {
+      if (isInferenceProbeGraph(q.graph)) return record(q);
+      gs.graphQueries.push(q);
+      if (q.kind === 'graph_create' && creates++ === 0) throw new GraphQueryError('graph-exists', 'triples', q.graph);
+      if (q.kind === 'graph_replace') throw new GraphQueryError('graph-not-registered', 'no record', q.graph);
+      return {graph: q.graph, changed: true};
+    };
+    await syncOntologies(gs, {packages: ['sync-a']});
+    expect(gs.graphQueries.map((q) => q.kind)).toEqual(['graph_create', 'graph_replace', 'graph_drop', 'graph_create']);
   });
 
   test('a graph write failure other than unsupported-query-kind is thrown, never a fallback', async () => {

@@ -27,8 +27,9 @@ export type ChangeEvent =
 
 /**
  * Where a change event came from. Only used to fold a remote echo (`feed`,
- * `app`) onto the local original of the same change, or the reverse; two local
- * events are never folded, and `manual` (`invalidate()`) is never folded.
+ * `app`) onto the local original of the same change, or the reverse, one echo
+ * per change; two local events, or a `feed` and an `app` event, are never
+ * folded, and `manual` (`invalidate()`) is never folded.
  */
 export type ChangeOrigin = 'local' | 'feed' | 'app' | 'manual';
 

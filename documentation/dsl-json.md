@@ -403,6 +403,11 @@ triples, its blank values and its owned subtree) and keeps the links other nodes
 access rules as for any delete. Core's shape-graph sync uses it to clean shapes out of the default
 graph, also over a remote dataset.
 
+Because it leaves links to a deleted node in place, a receiver accepts the flag only from trusted
+service callers. A receiver that decodes mutations from clients passes `{refuseKeepIncoming: true}`
+to `fromJSON`, `DeleteBuilder.fromJSON` or `lowerMutationJSON`, and a delete that carries the flag
+is then refused; without the option the flag is accepted.
+
 ```jsonc
 { "v":"1.0", "op":"delete", "shape":"…", "mode":"ids", "ids": [ "https://ex.org/shape" ],
   "keepIncoming": true }

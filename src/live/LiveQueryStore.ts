@@ -181,7 +181,8 @@ export class LiveQueryStore {
 
   private readonly _disposers: Array<() => void> = [];
   private readonly _feeds = new Map<IDataset, () => void>();
-  private readonly _recentChanges = new Map<string, {at: number; origin: ChangeOrigin; graph?: string}>();
+  /** Changes still waiting for their echo, by effects hash, oldest first (see `_publish`). */
+  private readonly _recentChanges = new Map<string, Array<{at: number; origin: ChangeOrigin; graph?: string}>>();
   private _pendingRefetch = new Set<Instance>();
   private _flushScheduled = false;
   /** How many templates each catalog has; a change is decoded once per catalog listed here. */
@@ -416,9 +417,12 @@ export class LiveQueryStore {
    * code via `publishChange()` (`app`) and `invalidate()` (`manual`).
    *
    * A local change and its remote confirmation carry identical effects; when
-   * they arrive within `options.echoMs` of each other they refetch once. Two
-   * events of the same origin are never folded — two writes to the same node
-   * in quick succession are two changes — and manual invalidations never are.
+   * they arrive within `options.echoMs` of each other they refetch once. Only a
+   * local change and a remote one (`feed` or `app`) fold, each change with one
+   * echo: two events of the same origin are never folded — two writes to the
+   * same node in quick succession are two changes — nor a `feed` and an `app`
+   * event, nor a second remote event onto a local change that already had its
+   * echo; manual invalidations never are.
    */
   publish(event: ChangeEvent, origin: ChangeOrigin = 'app'): void {
     this._publish(event, origin);
@@ -440,20 +444,29 @@ export class LiveQueryStore {
     if (origin !== 'manual') {
       const hash = effectsHash(effects);
       const now = Date.now();
-      const prev = this._recentChanges.get(hash);
-      if (
-        prev &&
-        prev.origin !== 'manual' &&
-        prev.origin !== origin &&
-        now - prev.at < this.options.echoMs &&
-        graphsFold(prev.graph, effects.graph)
-      ) {
+      const live = (this._recentChanges.get(hash) ?? []).filter((r) => now - r.at < this.options.echoMs);
+      // An echo pairs a local change with its remote confirmation (`feed` or `app`), either way
+      // round, and each change folds with one echo only: the entry it folds with is used up, so
+      // a second remote change with the same effects refetches. Two remote changes (`feed` and
+      // `app`) are two changes, never one's echo.
+      const echoOf = live.findIndex(
+        (r) => (r.origin === 'local') !== (origin === 'local') && graphsFold(r.graph, effects.graph),
+      );
+      if (echoOf >= 0) {
+        live.splice(echoOf, 1);
+        if (live.length) this._recentChanges.set(hash, live);
+        else this._recentChanges.delete(hash);
         return; // the echo of a change already applied
       }
-      this._recentChanges.set(hash, {at: now, origin, ...(effects.graph !== undefined ? {graph: effects.graph} : {})});
+      live.push({at: now, origin, ...(effects.graph !== undefined ? {graph: effects.graph} : {})});
+      this._recentChanges.set(hash, live);
       if (this._recentChanges.size > 256) {
         // Bounded: anything older than the echo window can no longer fold with a newcomer.
-        for (const [h, r] of this._recentChanges) if (now - r.at >= this.options.echoMs) this._recentChanges.delete(h);
+        for (const [h, list] of this._recentChanges) {
+          const kept = list.filter((r) => now - r.at < this.options.echoMs);
+          if (kept.length) this._recentChanges.set(h, kept);
+          else this._recentChanges.delete(h);
+        }
       }
     }
     if (decoded.length === 1 && decoded[0][0] === undefined && this._catalogTemplates.size === 0) {

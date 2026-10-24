@@ -606,6 +606,10 @@ export interface GraphResult {
   contentHash?: string;
   /** The record's load time after the query, ISO `xsd:dateTime`. */
   modified?: string;
-  /** Whether the graph's body was written or dropped; false for a record-only update. */
+  /**
+   * Whether the query wrote anything: the graph's body, or its record's fields (a record-only
+   * update that sets a field, such as `feedsHierarchy`, is a change); false only for an update
+   * with neither a body nor a field.
+   */
   changed: boolean;
 }

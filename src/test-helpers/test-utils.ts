@@ -1,6 +1,7 @@
 import {tmpEntityBase} from './query-fixtures';
 import {captureQuery} from './query-capture-store';
 import type {GraphQuery} from '../queries/IntermediateRepresentation';
+import type {SparqlJsonResults} from '../sparql/resultMapping';
 import {unsupportedGraphQuery} from '../queries/graphQuery';
 
 /**
@@ -55,3 +56,44 @@ export const unusedDatasetMethods = {
     throw unsupportedGraphQuery(query);
   },
 };
+
+/**
+ * A stub SPARQL transport's answer to the read a `graph_create` sends after its update (see
+ * `graphCreateOutcomeQuery`), or `undefined` for any other query: the create wrote its record
+ * unless the graph was registered or held triples.
+ */
+export function graphCreateOutcomeAnswer(
+  sparql: string,
+  state: {registered: boolean; populated?: boolean},
+): SparqlJsonResults | undefined {
+  if (!sparql.startsWith('SELECT ?claimed ?registered ?populated')) return undefined;
+  const b = (value: boolean) => ({type: 'literal' as const, value: String(value)});
+  const populated = state.populated ?? false;
+  return {
+    head: {vars: ['claimed', 'registered', 'populated']},
+    results: {
+      bindings: [
+        {claimed: b(!state.registered && !populated), registered: b(state.registered), populated: b(populated)},
+      ],
+    },
+  };
+}
+
+/**
+ * A stub store's answer to the ontology sync's inference probe (`hierarchyProbe.ts`): for an ask
+ * about one of the probe's instances, whether a store that infers as `inference` finds it;
+ * `undefined` for any other query.
+ */
+export function inferenceProbeAnswer(
+  query: {toJSON?: () => unknown},
+  inference: 'named-graphs' | 'default-graph' | 'none',
+): boolean | undefined {
+  const json = JSON.stringify(query?.toJSON?.() ?? null);
+  if (/inferenceProbe\/[a-z0-9]+\/named"/.test(json)) return inference === 'named-graphs';
+  if (/inferenceProbe\/[a-z0-9]+\/default"/.test(json)) return inference !== 'none';
+  return undefined;
+}
+
+/** Whether a graph query is the inference probe's (its temporary graph). */
+export const isInferenceProbeGraph = (graph: string): boolean =>
+  graph.includes('/graph/import/linked-inference-probe-');

@@ -23,22 +23,49 @@ npm install @_linked/core
 
 ### Store requirements
 
-Core requires a SPARQL store with **RDFS class inference** over the stored `rdfs:subClassOf`
-triples, built from the graphs the graph registry marks plus the default graph, and each
-package's ontology data synced into each dataset:
+Core works with any SPARQL 1.1 store. It checks what a store does by asking it, never by its
+product or version.
 
-- **Inference:** a node stored as `ex:Project` must also answer as every superclass
-  (`schema:CreativeWork`, `schema:Thing`). Class-scoped selects, counts, asks and `EXISTS`, bulk
-  mutations (`deleteAll`, `deleteWhere`, `update().forAll()` / `.where()`), the owned-link class
-  check, the owned walk's cycle hops and the single-owner SHACL constraint all rely on it. With
-  Fuseki, run the inferring image `ghcr.io/linked-fw/fuseki:6.2.0-2` or later (its `tdb2`
-  datasets infer, with the hierarchy of the registry's ontology graphs; see `@_linked/fuseki`).
-  Without inference these silently miss or refuse subclass instances.
-- **The hierarchy:** `syncOntologies` (`@_linked/core/ontology/syncOntologies`) writes every
-  registered package's ontology data into its own named graph, recorded in the graph registry;
-  `@_linked/server` runs it at boot. See [ontologies](./docs/architecture/ontologies.md).
+- **Always:** SPARQL 1.1 Query and Update. Core sends standard queries and updates only.
+- **The graph API** (`NamedGraph`, `OntologyGraph`, `.from()`, `.into()`, graph routing): named
+  graphs. A graph query is one update whose conditions are part of the update (a create writes
+  only while its graph has no record and holds no triples; a replace or patch only while the
+  record exists), so concurrent writers are decided in the store's own transaction. A store
+  without graph queries refuses them (`unsupported-query-kind`), and the ontology sync falls back
+  to the default graph.
+- **Polymorphic reads:** RDFS class inference. A node stored as `ex:Project` must also answer as
+  every superclass (`schema:CreativeWork`, `schema:Thing`), with the hierarchy built from the
+  stored `rdfs:subClassOf` triples of the **default graph** and of **every graph the registry marks
+  `core:feedsHierarchy true`** (the package ontology graphs `syncOntologies` writes). Class-scoped
+  selects, counts, asks and `EXISTS`, bulk mutations (`deleteAll`, `deleteWhere`,
+  `update().forAll()` / `.where()`), the owned-link class check, the owned walk's cycle hops and
+  the single-owner SHACL constraint rely on it. Only classes are inferred: `rdfs:subPropertyOf`,
+  `rdfs:domain` and `rdfs:range` are not needed.
+- **A store that infers over all graphs** works too. The caveat: drafts and other graphs the
+  registry marks `feedsHierarchy false` then feed the hierarchy as well, so a draft ontology's
+  classes infer before it is published.
 
-Only classes are inferred: `rdfs:subPropertyOf`, `rdfs:domain` and `rdfs:range` are not.
+How the ontology sync adapts (`syncOntologies`, `@_linked/core/ontology/syncOntologies`; run by
+`@_linked/server` at boot): before it writes, it probes the store once per dataset. It writes a
+probe `rdfs:subClassOf` into a temporary registered graph and a typed instance into a second graph
+that does not feed the hierarchy, asks through the normal query path whether the instance is found
+by its superclass, then removes the probe. The ontology data is written into package graphs on
+every store with named graphs, so readers of `graphs.allOntologies` see the same everywhere. See
+[ontologies](./docs/architecture/ontologies.md).
+
+| The store infers from | The sync does |
+|---|---|
+| the registered graphs | writes each package's ontology data into its own graph, and removes the hierarchy an earlier sync kept in the default graph |
+| the default graph only | writes the package graphs and keeps the hierarchy in the default graph too; warns once |
+| nothing | writes the package graphs and keeps the hierarchy in the default graph too; warns once that class-scoped reads miss subclass instances |
+
+**Without inference** core still reads and writes, but everything that matches by class sees
+only nodes stored with exactly that class. Selects, counts and asks of a superclass miss the
+instances of its subclasses; bulk mutations skip them; the owned-link check refuses a link to a
+subclass instance; the single-owner constraint does not see it.
+
+`@_linked/fuseki`'s image (`ghcr.io/linked-fw/fuseki`, its `tdb2` datasets) is one store that meets
+these requirements. Core does not depend on it: any store with the behaviour above works.
 
 ## Repository setup (contributors)
 

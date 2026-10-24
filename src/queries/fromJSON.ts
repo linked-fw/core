@@ -20,7 +20,7 @@ import {AskBuilder} from './AskBuilder.js';
 import {CountBuilder} from './CountBuilder.js';
 import type {AskQueryJSON} from './AskQuery.js';
 import type {CountQueryJSON} from './CountQuery.js';
-import type {MutationJSON} from './MutationSerialization.js';
+import type {InboundMutationOptions, MutationJSON} from './MutationSerialization.js';
 import {assertWireVersion} from './wireVersion.js';
 import {isGraphQueryKind} from './graphQuery.js';
 import {getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
@@ -35,7 +35,7 @@ export type FromJSONOptions = {
    * supplies its own.
    */
   catalog?: ShapeCatalog;
-};
+} & InboundMutationOptions;
 
 /** Any query in its wire (DSL-JSON) form. */
 export type QueryJSON =
@@ -55,7 +55,8 @@ export function fromJSON(
   | UpdateBuilder
   | DeleteBuilder {
   if (options && 'catalog' in options && options.catalog !== getActiveShapeCatalog()) {
-    return withShapeCatalog(options.catalog, () => fromJSON(json));
+    const {catalog, ...rest} = options;
+    return withShapeCatalog(catalog, () => fromJSON(json, rest));
   }
   assertWireVersion((json as {v?: unknown})?.v);
   const kind = (json as unknown as {kind?: unknown})?.kind;
@@ -80,7 +81,7 @@ export function fromJSON(
         // Both reconstruct an UpdateBuilder; the op selects upsert mode inside.
         return UpdateBuilder.fromJSON(json);
       case 'delete':
-        return DeleteBuilder.fromJSON(json);
+        return DeleteBuilder.fromJSON(json, options);
       default:
         // An `op` is present but not one we know — a malformed/corrupted or
         // future-versioned mutation envelope. Fail loud rather than silently

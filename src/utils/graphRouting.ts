@@ -31,7 +31,10 @@
  * package's ontology or shape graph (`…/pkg/{slug}/graph/…`), the app's shape graph
  * (`{DATA_ROOT}/graph/shapes`) or an imported graph (`{DATA_ROOT}/graph/import/…`). Such a route
  * is refused with `GraphQueryError('graph-name-read-only')`, naming the shape and the graph: when
- * it is set, or, for a full IRI under the data root, when the routing is read.
+ * it is set, or, for a full IRI under the data root, when the routing is read. The managed kinds
+ * are the top segment of a `dataGraph()` slug; an `'own'` route's top segment is its package slug,
+ * so a package slugged `import` or `shapes` has its own graphs (refused only where one would be
+ * named exactly like an imported graph, `graph/import/{lower-case slug}`).
  *
  * - **A shape's graph** (where its instances are written): its own route, else its nearest routed
  *   super-shape's, else the default graph.
@@ -120,6 +123,25 @@ function checkGraphIri(shape: string, graph: string): void {
   }
 }
 
+/**
+ * The name of an imported graph, `graph/import/{slug}`: one lower-case slug segment, the form the
+ * graphs an import writes are named in.
+ */
+const IMPORT_GRAPH_PATH = /^graph\/import\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Refuse the `'own'` path of a shape that names a managed graph. An `'own'` path is
+ * `graph/{package slug}/{shape name}`, so its top segment is a package slug, not a managed kind: a
+ * package slugged `import` or `shapes` routes to its own graphs. Only a path that is also the name
+ * of an imported graph (`graph/import/{slug}`: package `import`, a shape named in lower case) is
+ * refused; shape names are case-kept class names (`Article`), which no import slug is.
+ */
+function checkOwnPath(shape: string, path: string, graph: string): void {
+  if (IMPORT_GRAPH_PATH.test(path)) {
+    refuseManaged(shape, graph, 'an imported graph');
+  }
+}
+
 /** Refuse a path under the data root that names a managed graph ({@link MANAGED_UNDER_ROOT}). */
 function checkUnderRoot(shape: string, path: string, graph: string): void {
   if (MANAGED_UNDER_ROOT.test(path)) {
@@ -155,7 +177,7 @@ function storedRoute(shape: string, route: GraphRoute): StoredRoute | undefined 
   checkShape(shape);
   if (route === OWN_GRAPH) {
     const path = ownGraphPath(shape);
-    checkUnderRoot(shape, path, `{DATA_ROOT}/${path}`);
+    checkOwnPath(shape, path, `{DATA_ROOT}/${path}`);
     return {underRoot: path, form: `'own'`};
   }
   if (isDataGraphRoute(route)) {

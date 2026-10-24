@@ -29,6 +29,7 @@ const MODULES = {
   expression: 'expressions/ExpressionNode.js',
   unresolved: 'utils/unresolvedShape.js',
   error: 'utils/linkedError.js',
+  registryCache: 'utils/graphRegistryCache.js',
 } as const;
 
 type Copy = {-readonly [K in keyof typeof MODULES]: any};
@@ -108,6 +109,24 @@ describe('state set through one copy is read by the other', () => {
     a.qc.setQueryContext('two-copies-late', null);
     expect(heard).toEqual(['two-copies-user']);
     expect(b.qc.getQueryContext('two-copies-user')).toBeInstanceOf(b.qc.PendingQueryContext);
+  });
+
+  it('graph registry cache: an entry loaded through one copy is read, and dropped, through the other', async () => {
+    const key = 'two-copies-registry';
+    const row = {graph: 'https://ex.org/g', recordClass: 'https://linked.cm/ont/core/OntologyGraph'};
+    let loads = 0;
+    const load = async () => {
+      loads++;
+      return [row];
+    };
+    await a.registryCache.readGraphRegistry(key, load);
+    const seen = await b.registryCache.readGraphRegistry(key, load);
+    expect(loads).toBe(1);
+    expect([...seen.keys()]).toEqual([row.graph]);
+    b.registryCache.invalidateGraphRegistry(key);
+    await a.registryCache.readGraphRegistry(key, load);
+    expect(loads).toBe(2);
+    a.registryCache.invalidateGraphRegistry(key);
   });
 
   it('LinkedFileStorage: default store, accessURL, stores and purposes', () => {
