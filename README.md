@@ -381,6 +381,39 @@ export class Person extends Shape {
 }
 ```
 
+### Using ontology terms
+
+A vocabulary package (`@_linked/schema`, `rdfs`, `owl`, `xsd`, `dcmi`, `dcat`, `org`, `sioc`, or
+an app's own ontology package) exports one named term per class and property, generated from its
+Turtle by `linked generate-ontology`. Use them like this:
+
+- **Import the module as a namespace.** `schema.Person` reads like the Turtle's `schema:Person`,
+  and a bundler keeps only the terms a module uses:
+
+  ```typescript
+  // With the imports of the §Shapes example; needs `@_linked/schema` and `@_linked/xsd` installed.
+  import * as schema from '@_linked/schema/ontologies/schema';
+  import * as xsd from '@_linked/xsd/ontologies/xsd';
+
+  @linkedShape
+  export class Event extends Shape {
+    static targetClass = schema.Event;
+
+    @literalProperty({path: schema.startDate, datatype: xsd.dateTime, maxCount: 1})
+    declare startDate: Date;
+  }
+  ```
+
+  There is no aggregated object (`import {schema} from …`). A local name that is not an
+  identifier follows one rule: `schema:3DModel` is `schema._3DModel`, `schema:yield` is
+  `schema.yield_`, `dcterms:ISO639-2` is `dcterms.ISO639_2`. The namespace function and the data
+  helpers (`ns`, `dataFiles`, `loadData`, `_ontologyResource`) are in the sibling
+  `ontologies/<prefix>.data` module.
+- **Prefer the accessor over `{id}`.** `schema.name` is checked by the compiler and found by
+  "go to definition"; `{id: 'http://schema.org/name'}` is a string nothing checks.
+- **Use `{id}` (or `createNameSpace`) only for a namespace without a module**, such as a
+  vocabulary no package mirrors, as in the §Shapes example.
+
 ### Owned properties (`contains` / `dependent`)
 
 By default an object property is a plain *reference*: the two nodes exist independently, and
