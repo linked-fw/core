@@ -252,13 +252,16 @@ WHERE {
   });
 
   test('a computed field through an inverse path reads the stored triple in the linked node\'s graph', async () => {
-    for (const run of [computedThroughInverse, computedWhereThroughInverse]) {
-      const sparql = await sparqlOf((s) => run(s));
+    const cases: [(s: CaptureStore) => Promise<unknown>, string][] = [
+      [(s) => computedThroughInverse(s), `<${D}writer/w>`],
+      [computedWhereThroughInverse, '?a0'],
+    ];
+    for (const [run, subject] of cases) {
+      const sparql = await sparqlOf(run);
       expect(sparql).toContain(`WITH <${G_PEOPLE}>`);
       expect(sparql).not.toContain('^<');
-      expect(sparql).toMatch(
-        new RegExp(`GRAPH <${G_ARTICLES}> \\{\\n\\s+\\?__trav_0__ <${NG}author> (<${D}writer/w>|\\?a0) \\.`),
-      );
+      expect(sparql).toContain(`GRAPH <${G_ARTICLES}> {\n`);
+      expect(sparql).toMatch(new RegExp(`\\?__trav_0__ <${NG}author> ${subject.replace(/[?.]/g, '\\$&')} \\.`));
     }
   });
 

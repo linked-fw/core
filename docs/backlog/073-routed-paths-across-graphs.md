@@ -3,14 +3,14 @@ summary: >
   Under graph routing a link followed through a complex `sh:path` is read in one graph. Routed
   reads read `?a ^<p> ?b` in `?a`'s graph, while the stored `?b <p> ?a` is in `?b`'s; a sequence's
   middle nodes have no graph of their own anywhere. Writes now handle `^<p>` and refuse other paths
-  into another graph (report 055). Also left open: referrers without a value shape and an
+  into another graph (report 056). Also left open: referrers without a value shape and an
   update-where's shared nested owned node.
 packages: [core]
 ---
 
 # 073 — Routed paths across graphs
 
-Source: core report 055 (writes across graphs), its review.
+Source: core report 056 (writes across graphs), its review.
 
 ## Problem
 
@@ -19,7 +19,7 @@ Source: core report 055 (writes across graphs), its review.
   - An inverse path `?a0 ^<author> ?a1` (a person's articles) is grouped with `?a0` and read in the
     person's graphs. The stored triple `?a1 <author> ?a0` is in the article's graph, so the
     traversal matches nothing.
-  - Writes now rewrite such a triple the stored way round (report 055); reads do not yet.
+  - Writes now rewrite such a triple the stored way round (report 056); reads do not yet.
 - **Sequences and other complex paths.** In `^<author>/<reviewer>`, the middle node (the article)
   has no variable and so no graph. Reads read the whole path in the subject's graphs.
   - Writes refuse such a path into a node in another graph (`GraphQueryError('unsupported-query-kind')`).
@@ -30,7 +30,7 @@ Source: core report 055 (writes across graphs), its review.
   property without a value shape can link to anything, and its links in other graphs stay.
 - **An update-where with a nested owned create** mints one IRI for every matched owner (as without
   routing). When the owners may live in several graphs, that one node is written into each of them.
-  The same update linking an existing node is refused (report 055).
+  The same update linking an existing node is refused (report 056).
 
 ## First questions
 

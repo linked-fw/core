@@ -9,7 +9,7 @@ summary: >
 packages: [core]
 ---
 
-# 055 — Writes across graphs
+# 056 — Writes across graphs
 
 ## PR
 
@@ -95,14 +95,15 @@ held in another graph (`queryDependencies.ts`).
 - `writes-across-graphs-paths.test.ts`:
   - golden SPARQL for an inverse path with EXISTS, the default graph under `WITH`, a traversal from
     a linked node, `contains` below a linked node, the `GRAPH ?g_w` form, and both refusals;
-  - `[fuseki]` cases.
+  - golden SPARQL for a computed field through an inverse path, by id and in an update-where;
+  - `[fuseki]` cases for each of these.
 - `writes-across-graphs-owned.test.ts`: the update-where owned-link rule.
 - `writes-across-graphs-fuseki.test.ts`: the four cases asked for, plus a default-graph subject, a
   cover found in its owner's graph, and an employee found at write time.
 
 ### Verification
 
-Worktree `../wt/c067` (`main--c067`), own Fuseki `ghcr.io/linked-fw/fuseki:6.2.0-2` on :3311
+Worktree `../wt/c067` (`main--c067`, rebased on `origin/main` at `7faa99f`), own Fuseki `ghcr.io/linked-fw/fuseki:6.2.0-2` on :3311
 (compose project `fuseki-c067`). Every jest run used a wrapper that exports
 `FUSEKI_TEST_PORT=3311 FUSEKI_BASE_URL=http://localhost:3311
 LINKED_CORE_TEST_COMPOSE_PROJECT=fuseki-c067 REQUIRE_FUSEKI=1`, except the incidents below.
@@ -118,12 +119,14 @@ LINKED_CORE_TEST_COMPOSE_PROJECT=fuseki-c067 REQUIRE_FUSEKI=1`, except the incid
     passes is keep-incoming.
   - Owned-link suite without the `SparqlDataset` change: `3 failed, 2 passed`.
   - Paths suite on the first commit, before the inverse fix: `3 failed, 7 passed`.
-- **Full gate:**
+  - Paths suite without the computed-field inverse fix: `2 failed, 10 passed` (its two new cases).
+- **Full gate**, after the rebase:
   - `npx linked build`: `✔ Build successful`.
-  - jest without `two-copies-built`: `Test Suites: 4 skipped, 138 passed, 138 of 142 total`,
-    `Tests: 120 skipped, 2745 passed, 2865 total`, `[fuseki] live tests: 372 total — 372 passed, 0
-    failed, 0 skipped`.
-  - `[fuseki]` only: `372 total — 372 passed`.
+  - jest without `two-copies-built`: `Test Suites: 4 skipped, 139 passed, 139 of 143 total`,
+    `Tests: 122 skipped, 2771 passed, 2893 total`, `[fuseki] live tests: 380 total — 378 passed, 0
+    failed, 2 skipped`.
+  - The 2 skipped are `ontology sync on a second store`, which needs `LINKED_SECOND_FUSEKI_URL`
+    (from `origin/main`).
   - `npm run typecheck`: clean. `npm run check:dts`: clean.
   - `two-copies-built.test.ts` alone: `Module cache already has entry
     …/lib/esm/shapes/SHACL.js.` (backlog 060, known).
@@ -196,7 +199,16 @@ open (1 and 2) and no high ones."
       (backlog 073);
     - the base-`Shape` consequence (Deviations).
 
-<!-- re-review -->
+**Re-reviews (same reviewer).**
+- **First re-review**, quoted: "Verdict: one medium finding is open (computed-field inverse first
+  hop); there are no high findings."
+  - The finding: the rewrite matched on the subject alias, while a computed field's first hop
+    starts from `<id>` or `?a0`. It removed the old value and inserted nothing.
+  - Fixed: the rewrite now matches the traversal's target alias. Golden and `[fuseki]` cases fail
+    without the fix.
+- **Second re-review**, quoted: "Verdict: no medium or high findings are open."
+  - Lows fixed: this section, the gate numbers, and the golden check, which now names the subject
+    of each run.
 
 ### Follow-ups
 
