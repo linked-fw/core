@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.42.1
+
+### Patch Changes
+
+- [#395](https://github.com/linked-fw/core/pull/395) [`f2a7e26`](https://github.com/linked-fw/core/commit/f2a7e261f4f4ada1cfc3ea8be06e5711a8e79a1e) Thanks [@flyon](https://github.com/flyon)! - README: new "Using ontology terms" section (under Shapes). Import a vocabulary module as a
+  namespace (`import * as schema from '@_linked/schema/ontologies/schema'`), prefer its accessors
+  over `{id}`, and use `{id}` only for a namespace without a module. No code changed.
+
 ## 2.42.0
 
 ### Minor Changes
