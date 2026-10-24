@@ -455,17 +455,37 @@ WHERE {
 
 A subject found in none of them is left alone; an upsert of one creates it in the shape's graph
 (`BIND(COALESCE(…))`); a bulk update or delete runs in every graph of the set where it matches; a
-delete of several ids is one operation per id in one request. Old values, incoming references and
-owned walks are read and removed in that graph only. Under routing an owned node lives in its
-owner's graph: the owned-link check reads the linked node's types in every graph and refuses one
-that lives elsewhere. `.into(graph)` on a create, update or delete builder overrides the graph, only
+delete of several ids is one operation per id in one request. Old values and owned walks are read
+and removed in that graph only. Two reads leave it, inside the same update:
+
+- **Incoming references.** A delete by id removes the links to its subject in every graph that may
+  hold one: the read sets of the shapes that declare a property whose value shape is the deleted
+  shape, a super-shape (the base `Shape` included) or a sub-shape of it, plus the subject's own
+  graph set. The template gets `GRAPH ?g_in { ?s ?p2 <id> }` and the WHERE a UNION branch
+  `VALUES ?g_in { … } GRAPH ?g_in { ?s ?p2 <id> }` (the default graph under the store's name for
+  it, so such a store needs `mapGraphName`). A delete that keeps incoming links
+  (`_keepingIncoming()`) and the bulk deletes, which never remove incoming links, are unchanged.
+- **Linked nodes.** A where clause (`update().where()`, `deleteWhere`, `EXISTS` included) or a
+  computed field (`p.bestFriend.name.ucase()`) that follows a link reads the linked node in its
+  value shape's read set, in a block nested in the mutation's graph: `GRAPH <g> { … }` for one
+  graph, `VALUES ?g { … } GRAPH ?g { … }` for several (the routed reads' forms with the default
+  graph in the mix; an update has no `FROM NAMED`). A node reached through `contains` stays with
+  its owner, and a link inside the subject's own one graph compiles as before. The templates stay
+  in the subject's graph.
+
+Under routing an owned node lives in its owner's graph: the owned-link check reads the linked
+node's types in every graph and refuses one that lives elsewhere. For an update-where that links
+an existing node into a `contains` property the owners' graph is the mutation's one graph; when
+the shape's read set holds several, the owners may live in any of them and the update-where is
+refused (`GraphQueryError('unsupported-query-kind')`, before anything is sent; name the graph with
+`.into()` or link per owner with `.for(id)`). `.into(graph)` on a create, update or delete builder overrides the graph, only
 to a graph in the shape's read set (else `GraphQueryError('graph-not-routed')`; a portable name, the
 registry or a store-reserved name is `graph-name-read-only`). `.into()` is never carried in
 DSL-JSON: a process that receives a mutation derives its graph from its own routing, and `toJSON`
 of a builder with `.into()` throws rather than drop it.
 
 **Live queries.** `QueryDependencies.graphs` (the `.from()` names, or the routed read sets) and
-`MutationEffects.graph` (the `.into()` graph, the routed graph of a create, or the one graph of a change to existing subjects; unknown when the read set holds several, or when a nested node is written into another graph) are set when the dataset `LinkedStorage`
+`MutationEffects.graph` (the `.into()` graph, the routed graph of a create, or the one graph of a change to existing subjects; unknown when the read set holds several, when a nested node is written into another graph, or for a delete by id whose links may be held in another graph) are set when the dataset `LinkedStorage`
 routes the shape to has routes; the matcher skips a template that does not read the written graph.
 A change and its remote echo fold when their graphs agree or one of them has none.
 

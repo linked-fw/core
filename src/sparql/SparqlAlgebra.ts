@@ -272,6 +272,11 @@ export type SparqlDeleteInsertPlan = {
   graphIn?: {variable: string; graphs: string[]; subject?: string; fallback?: string};
   /** INSERT template blocks in other graphs (see {@link SparqlGraphTriples}). */
   insertElsewhere?: SparqlGraphTriples[];
+  /**
+   * DELETE template blocks in the graph a WHERE variable binds, outside the plan's own graph: the
+   * links to a deleted subject held in other graphs (`GRAPH ?g { ?s ?p <id> }`).
+   */
+  deleteInGraphs?: {variable: string; triples: SparqlTriple[]}[];
 };
 
 export type SparqlDeleteWherePlan = {

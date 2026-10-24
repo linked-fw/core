@@ -136,6 +136,53 @@ type SubjectForm =
   | {kind: 'fixed'; iri: string}
   | {kind: 'variable'; values?: string[]};
 
+/**
+ * The graph a mutation on existing subjects runs in: the default graph, one known graph (`WITH
+ * <g>`), or a graph found at write time (`GRAPH ?g_w { … }` around the WHERE).
+ */
+export type MutationSubjectGraph =
+  | {kind: 'plain'}
+  | {kind: 'fixed'; iri: string}
+  | {kind: 'variable'; variable: string};
+
+/**
+ * The graphs the WHERE of a mutation reads. The WHERE runs in the subject's graph
+ * (`subjectGraph`), which holds the subject's own triples, its old values, and its owned and blank
+ * nodes; the variables in `linked`, nodes reached through a link to another shape, are read in
+ * their shape's read set.
+ */
+export type MutationGraphScope = {
+  subjectGraph: MutationSubjectGraph;
+  linked: ReadonlyMap<string, readonly string[]>;
+};
+
+/**
+ * Scope the WHERE of a mutation that reads a linked node in other graphs (see
+ * {@link MutationGraphScope}). The subject's patterns are left as they are (the plan runs them in
+ * its graph); a linked node's patterns get a block nested in it: plain triples when its set is the
+ * subject's one graph, `GRAPH <g>` for one other graph (the default graph under the store's name
+ * for it), `VALUES ?g { … }` with `GRAPH ?g` for several (an update has no `FROM NAMED`). `GRAPH`
+ * and `VALUES` nodes already in the algebra are kept.
+ */
+export function scopeMutationWhere(
+  algebra: SparqlAlgebraNode,
+  scope: MutationGraphScope,
+  options?: SparqlOptions,
+): SparqlAlgebraNode {
+  for (const set of scope.linked.values()) {
+    if (set.length === 0) throw new Error('A mutation reads a linked node in an empty set of graphs.');
+    for (const name of set) {
+      if (STORE_RESOLVED_NAMES.has(name)) {
+        throw new Error(`<${name}> is a portable graph name; a mutation reads concrete graphs.`);
+      }
+    }
+  }
+  return new SubjectGraphScoper(algebra, scope, options).scopedWhere();
+}
+
+const isMutationScope = (scope: ReadGraphScope | MutationGraphScope): scope is MutationGraphScope =>
+  !Array.isArray(scope) && 'subjectGraph' in scope;
+
 class SubjectGraphScoper {
   /** Variables used anywhere in the algebra, so a graph variable never collides with one. */
   private readonly used = new Set<string>();
@@ -152,10 +199,12 @@ class SubjectGraphScoper {
   private fromNamed?: string[];
   private unchanged = false;
   private wholeGraph?: string;
+  /** The form of a subject without one of its own (in a mutation: plain, in the plan's graph). */
+  private defaultForm: SubjectForm = {kind: 'variable'};
 
   constructor(
     private readonly algebra: SparqlAlgebraNode,
-    scope: ReadGraphScope,
+    scope: ReadGraphScope | MutationGraphScope,
     options?: SparqlOptions,
   ) {
     this.isolateLinkedTypeChecks = options?.isolateLinkedTypeChecks === true;
@@ -168,7 +217,48 @@ class SubjectGraphScoper {
       if (!this.subjects.has(key)) this.subjects.set(key, triple.subject);
       if (isTypeCheck(triple)) this.typed.add(key);
     }, this.used);
-    this.planForms(scope, options);
+    if (isMutationScope(scope)) this.planMutationForms(scope, options);
+    else this.planForms(scope, options);
+  }
+
+  /** A mutation's forms (see {@link scopeMutationWhere}). */
+  private planMutationForms(scope: MutationGraphScope, options?: SparqlOptions): void {
+    // A subject that is not linked stays in the plan's graph.
+    this.defaultForm = {kind: 'plain'};
+    const subject = scope.subjectGraph;
+    const storeName = (graph: string): string => {
+      if (graph !== graphs.default) return graph;
+      const name = options?.mapGraphName ? options.mapGraphName(graphs.default) : null;
+      if (!name) {
+        throw new GraphQueryError(
+          'unsupported-query-kind',
+          'This write reads a linked node that may be in the default graph while the write runs ' +
+            'in a named graph, which a SPARQL store addresses through its own name for the ' +
+            'default graph; this store has none (SparqlOptions.mapGraphName).',
+          graphs.default,
+        );
+      }
+      return name;
+    };
+    for (const [variable, set] of scope.linked) {
+      const key = `?${variable}`;
+      const one = set.length === 1 ? set[0] : undefined;
+      if (
+        one !== undefined &&
+        ((subject.kind === 'plain' && one === graphs.default) || (subject.kind === 'fixed' && one === subject.iri))
+      ) {
+        this.forms.set(key, {kind: 'plain'});
+      } else if (one !== undefined) {
+        this.forms.set(key, {kind: 'fixed', iri: storeName(one)});
+      } else {
+        this.forms.set(key, {kind: 'variable', values: set.map(storeName)});
+      }
+    }
+  }
+
+  /** The scoped algebra of a mutation's WHERE. */
+  scopedWhere(): SparqlAlgebraNode {
+    return this.scope(this.algebra);
   }
 
   /** Decide each subject's form, the dataset clause, or that the algebra stays as it is. */
@@ -336,7 +426,7 @@ class SubjectGraphScoper {
     }
     const blocks: SparqlAlgebraNode[] = [];
     for (const [key, {subject, triples}] of groups) {
-      const form = this.forms.get(key) ?? {kind: 'variable'};
+      const form = this.forms.get(key) ?? this.defaultForm;
       if (form.kind === 'plain') {
         blocks.push({type: 'bgp', triples});
         continue;

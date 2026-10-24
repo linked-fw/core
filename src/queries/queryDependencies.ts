@@ -52,7 +52,7 @@ import {
   type NodeShapeData,
 } from '../shapes/nodeShapeData.js';
 import {LinkedStorage} from '../utils/LinkedStorage.js';
-import {graphRoutingFor, type ShapeGraphRouting} from '../utils/graphRouting.js';
+import {graphRoutingFor, referringGraphsForShape, type ShapeGraphRouting} from '../utils/graphRouting.js';
 import {
   getAllNodeShapes,
   getNodeShape,
@@ -533,9 +533,21 @@ class EffectCollector {
 }
 
 /** The `graph` field of a mutation's effects, when the graph is known. */
-function withGraph(ir: {kind: string; shape: string; graph?: string; data?: IRNodeData}): {graph?: string} {
+function withGraph(ir: {
+  kind: string;
+  shape: string;
+  graph?: string;
+  data?: IRNodeData;
+  keepIncoming?: boolean;
+}): {graph?: string} {
   const graph = writtenGraph(ir);
   if (graph === undefined) return {};
+  // A delete by id removes the links to its subject in every graph that may hold one: when that
+  // is another graph than the subject's, the delete writes more than one.
+  if (ir.kind === 'delete' && !ir.keepIncoming) {
+    const routing = routingForShape(ir.shape);
+    if (routing && referringGraphsForShape(routing, ir.shape).some((g) => g !== graph)) return {};
+  }
   // A nested node the mutation does not own is written into its own shape's graph: when that is
   // another graph, the mutation writes more than one, and the effect names none.
   const routing = ir.data ? routingForShape(ir.shape) : undefined;

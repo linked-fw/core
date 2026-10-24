@@ -656,7 +656,7 @@ Master §K4 is the scope; this is its plan-mode detail, written against `named-g
   shape IRI, never by a class object.
 - **Across graphs, writes stay in one graph.** A delete by id removes incoming references only in
   the subject's graph; an `update_where`/`delete_where` filter or a computed update that traverses
-  into a linked node in another graph does not see it. Recorded as a backlog item.
+  into a linked node in another graph does not see it. Recorded as backlog 067; resolved in report 055.
 - **Owned nodes live in the owner's graph** (decision 9's fixture does the same): nested creates go
   into the plan's graph, whatever their own shape's route.
 - **`.into()` over the wire.** A builder with `.into()` sent through a remote dataset loses it by

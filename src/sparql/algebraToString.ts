@@ -527,7 +527,15 @@ export function deleteInsertPlanToSparql(
 
   // DELETE block
   const deleteTriples = serializeTriples(plan.deletePatterns, collector);
-  const deletePart = `DELETE {\n${indent(inGraphVar(deleteTriples))}\n}`;
+  const deleteBlocks = plan.deletePatterns.length > 0 || !plan.deleteInGraphs?.length
+    ? [inGraphVar(deleteTriples)]
+    : [];
+  for (const block of plan.deleteInGraphs ?? []) {
+    if (block.triples.length === 0) continue;
+    const triples = serializeTriples(block.triples, collector);
+    deleteBlocks.push(`GRAPH ?${sanitizeVarName(block.variable)} {\n${indent(triples)}\n}`);
+  }
+  const deletePart = `DELETE {\n${indent(deleteBlocks.join('\n'))}\n}`;
 
   // INSERT block (may be empty)
   let insertPart = '';

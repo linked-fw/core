@@ -500,6 +500,18 @@ export abstract class SparqlDataset implements IDataset {
       assertOwnedLinkTypes(links, ownedLinkTypesFromResults(json));
       return;
     }
+    if (ir.kind === 'update_where' && ir.writeGraphs && links.some((link) => !link.nestedIn)) {
+      // The matched owners may live in any graph of the read set, and a linked node lives in one:
+      // linking it to all of them would put an owned node in another graph than its owner.
+      const link = links.find((l) => !l.nestedIn)!;
+      throw new GraphQueryError(
+        'unsupported-query-kind',
+        `Cannot link <${link.id}> into the contains property "${link.label}" of every matched ` +
+          `<${link.shape}>: the matched nodes may live in any of ${ir.writeGraphs.length} graphs ` +
+          `(${ir.writeGraphs.map((g) => `<${g}>`).join(', ')}), and an owned node lives in its ` +
+          `owner's graph. Name the graph with .into(), or link it per owner with .for(id).`,
+      );
+    }
     // Under graph routing an owned node lives in its owner's graph, so an owner's cascades (which
     // run in the graph the owner lives in) reach it. One SELECT reads the types of every linked id
     // and of the owner in every graph; a linked node typed only in another graph is refused.
@@ -510,7 +522,7 @@ export abstract class SparqlDataset implements IDataset {
     const byGraph = ownedLinkGraphTypesFromResults(json);
     const ownerGraphs = new Set<string>();
     if (ir.kind === 'create') ownerGraphs.add(ir.graph ?? graphs.default);
-    else if (ir.kind !== 'update_where' && !ir.writeGraphs) ownerGraphs.add(ir.graph ?? graphs.default);
+    else if (!ir.writeGraphs) ownerGraphs.add(ir.graph ?? graphs.default);
     else if (owner) {
       for (const [graph, types] of byGraph) if (types.has(owner)) ownerGraphs.add(graph);
       if (ownerGraphs.size === 0 && ir.kind === 'upsert') ownerGraphs.add(ir.graph ?? graphs.default);
@@ -531,17 +543,21 @@ export abstract class SparqlDataset implements IDataset {
 
   async deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
     const ir = this.resolveWriteGraph(lower(query));
+    // Compiled with the routing (when there is one): a where clause reads a linked node in its own
+    // shape's graphs, and a delete by id removes the links to its subject in every graph that may
+    // hold one.
+    const options = this.writeOptions();
     if (ir.kind === 'delete_all') {
-      const sparql = deleteAllToSparql(ir, this.options);
+      const sparql = deleteAllToSparql(ir, options);
       await this.executeSparqlUpdate(sparql);
       return {deleted: [], count: 0};
     }
     if (ir.kind === 'delete_where') {
-      const sparql = deleteWhereToSparql(ir, this.options);
+      const sparql = deleteWhereToSparql(ir, options);
       await this.executeSparqlUpdate(sparql);
       return {deleted: [], count: 0};
     }
-    const sparql = deleteToSparql(ir, this.options);
+    const sparql = deleteToSparql(ir, options);
     await this.executeSparqlUpdate(sparql);
     return {
       deleted: ir.ids,
