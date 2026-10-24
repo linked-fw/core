@@ -292,6 +292,7 @@
   a sh:NodeShape ;
   rdfs:comment "The registry record of a package's ontology graph. (graph registry, ontology graph)" ;
   sh:property <https://linked.cm/shape/core/OntologyGraph/package> ;
+  sh:property <https://linked.cm/shape/core/OntologyGraph/packageHashes> ;
   sh:property <https://linked.cm/shape/core/OntologyGraph/version> ;
   sh:targetClass core:OntologyGraph ;
   core:isExtending <https://linked.cm/shape/core/NamedGraph> .
@@ -303,6 +304,13 @@
   sh:maxCount "1"^^xsd:integer ;
   sh:nodeKind sh:Literal ;
   sh:path core:package .
+
+<https://linked.cm/shape/core/OntologyGraph/packageHashes>
+  a sh:PropertyShape ;
+  rdfs:label "packageHashes" ;
+  sh:datatype xsd:string ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:packageHash .
 
 <https://linked.cm/shape/core/OntologyGraph/version>
   a sh:PropertyShape ;
@@ -793,6 +801,7 @@
   a sh:NodeShape ;
   rdfs:comment "The registry record of a package's shapes graph. (graph registry, shapes graph)" ;
   sh:property <https://linked.cm/shape/core/ShapesGraph/package> ;
+  sh:property <https://linked.cm/shape/core/ShapesGraph/packageHashes> ;
   sh:property <https://linked.cm/shape/core/ShapesGraph/version> ;
   sh:targetClass core:ShapesGraph ;
   core:isExtending <https://linked.cm/shape/core/NamedGraph> .
@@ -804,6 +813,13 @@
   sh:maxCount "1"^^xsd:integer ;
   sh:nodeKind sh:Literal ;
   sh:path core:package .
+
+<https://linked.cm/shape/core/ShapesGraph/packageHashes>
+  a sh:PropertyShape ;
+  rdfs:label "packageHashes" ;
+  sh:datatype xsd:string ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:packageHash .
 
 <https://linked.cm/shape/core/ShapesGraph/version>
   a sh:PropertyShape ;

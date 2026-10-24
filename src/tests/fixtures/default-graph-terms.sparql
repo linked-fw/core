@@ -1,0 +1,118 @@
+DELETE { ?r ?p ?o . ?d ?dp ?do }
+WHERE {
+  { SELECT DISTINCT ?r WHERE {
+      { ?r ?rp ?ro . FILTER(isIRI(?r) && (STRSTARTS(STR(?r), "http://example.org/ont/") || STRSTARTS(STR(?r), "http://example.org/vocab#"))) }
+      UNION
+      { VALUES ?r { <http://example.org/other#Thing> <https://linked.cm/pkg/core/ontology-sync/default-graph> } }
+  } }
+  {
+    ?r ?p ?o .
+  }
+  UNION
+  {
+    ?r ?q1 ?h1 . FILTER(isBlank(?h1))
+    ?h1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?d . FILTER(isBlank(?d))
+    ?d ?dp ?do .
+  }
+  UNION
+  {
+    ?r ?q1 ?h1 . FILTER(isBlank(?h1))
+    ?h1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c1 . FILTER(isBlank(?c1))
+    ?c1 ?q2 ?h2 . FILTER(isBlank(?h2))
+    ?h2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?d . FILTER(isBlank(?d))
+    ?d ?dp ?do .
+  }
+  UNION
+  {
+    ?r ?q1 ?h1 . FILTER(isBlank(?h1))
+    ?h1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c1 . FILTER(isBlank(?c1))
+    ?c1 ?q2 ?h2 . FILTER(isBlank(?h2))
+    ?h2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c2 . FILTER(isBlank(?c2))
+    ?c2 ?q3 ?h3 . FILTER(isBlank(?h3))
+    ?h3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?d . FILTER(isBlank(?d))
+    ?d ?dp ?do .
+  }
+  UNION
+  {
+    ?r ?q1 ?h1 . FILTER(isBlank(?h1))
+    ?h1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c1 . FILTER(isBlank(?c1))
+    ?c1 ?q2 ?h2 . FILTER(isBlank(?h2))
+    ?h2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c2 . FILTER(isBlank(?c2))
+    ?c2 ?q3 ?h3 . FILTER(isBlank(?h3))
+    ?h3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c3 . FILTER(isBlank(?c3))
+    ?c3 ?q4 ?h4 . FILTER(isBlank(?h4))
+    ?h4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?d . FILTER(isBlank(?d))
+    ?d ?dp ?do .
+  }
+  UNION
+  {
+    ?r ?q1 ?h1 . FILTER(isBlank(?h1))
+    ?h1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c1 . FILTER(isBlank(?c1))
+    ?c1 ?q2 ?h2 . FILTER(isBlank(?h2))
+    ?h2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c2 . FILTER(isBlank(?c2))
+    ?c2 ?q3 ?h3 . FILTER(isBlank(?h3))
+    ?h3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c3 . FILTER(isBlank(?c3))
+    ?c3 ?q4 ?h4 . FILTER(isBlank(?h4))
+    ?h4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c4 . FILTER(isBlank(?c4))
+    ?c4 ?q5 ?h5 . FILTER(isBlank(?h5))
+    ?h5 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?d . FILTER(isBlank(?d))
+    ?d ?dp ?do .
+  }
+  UNION
+  {
+    ?r ?q1 ?h1 . FILTER(isBlank(?h1))
+    ?h1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c1 . FILTER(isBlank(?c1))
+    ?c1 ?q2 ?h2 . FILTER(isBlank(?h2))
+    ?h2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c2 . FILTER(isBlank(?c2))
+    ?c2 ?q3 ?h3 . FILTER(isBlank(?h3))
+    ?h3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c3 . FILTER(isBlank(?c3))
+    ?c3 ?q4 ?h4 . FILTER(isBlank(?h4))
+    ?h4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c4 . FILTER(isBlank(?c4))
+    ?c4 ?q5 ?h5 . FILTER(isBlank(?h5))
+    ?h5 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c5 . FILTER(isBlank(?c5))
+    ?c5 ?q6 ?h6 . FILTER(isBlank(?h6))
+    ?h6 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?d . FILTER(isBlank(?d))
+    ?d ?dp ?do .
+  }
+  UNION
+  {
+    ?r ?q1 ?h1 . FILTER(isBlank(?h1))
+    ?h1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c1 . FILTER(isBlank(?c1))
+    ?c1 ?q2 ?h2 . FILTER(isBlank(?h2))
+    ?h2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c2 . FILTER(isBlank(?c2))
+    ?c2 ?q3 ?h3 . FILTER(isBlank(?h3))
+    ?h3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c3 . FILTER(isBlank(?c3))
+    ?c3 ?q4 ?h4 . FILTER(isBlank(?h4))
+    ?h4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c4 . FILTER(isBlank(?c4))
+    ?c4 ?q5 ?h5 . FILTER(isBlank(?h5))
+    ?h5 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c5 . FILTER(isBlank(?c5))
+    ?c5 ?q6 ?h6 . FILTER(isBlank(?h6))
+    ?h6 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c6 . FILTER(isBlank(?c6))
+    ?c6 ?q7 ?h7 . FILTER(isBlank(?h7))
+    ?h7 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?d . FILTER(isBlank(?d))
+    ?d ?dp ?do .
+  }
+  UNION
+  {
+    ?r ?q1 ?h1 . FILTER(isBlank(?h1))
+    ?h1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c1 . FILTER(isBlank(?c1))
+    ?c1 ?q2 ?h2 . FILTER(isBlank(?h2))
+    ?h2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c2 . FILTER(isBlank(?c2))
+    ?c2 ?q3 ?h3 . FILTER(isBlank(?h3))
+    ?h3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c3 . FILTER(isBlank(?c3))
+    ?c3 ?q4 ?h4 . FILTER(isBlank(?h4))
+    ?h4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c4 . FILTER(isBlank(?c4))
+    ?c4 ?q5 ?h5 . FILTER(isBlank(?h5))
+    ?h5 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c5 . FILTER(isBlank(?c5))
+    ?c5 ?q6 ?h6 . FILTER(isBlank(?h6))
+    ?h6 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c6 . FILTER(isBlank(?c6))
+    ?c6 ?q7 ?h7 . FILTER(isBlank(?h7))
+    ?h7 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?c7 . FILTER(isBlank(?c7))
+    ?c7 ?q8 ?h8 . FILTER(isBlank(?h8))
+    ?h8 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?d . FILTER(isBlank(?d))
+    ?d ?dp ?do .
+  }
+} ;
+INSERT DATA {
+<http://example.org/ont/A> <http://www.w3.org/2000/01/rdf-schema#label> "A" .
+}

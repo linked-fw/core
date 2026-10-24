@@ -312,6 +312,7 @@ export class OntologyGraph extends NamedGraph {
     version?: string;
     sources?: string | string[];
     feedsHierarchy?: boolean;
+    packageHashes?: string | string[];
   };
 
   /** The npm name of the package. */
@@ -323,6 +324,15 @@ export class OntologyGraph extends NamedGraph {
   /** The package version whose data the graph holds. */
   @literalProperty({path: coreOntology.version, datatype: xsd.string, maxCount: 1})
   get version(): string {
+    return null;
+  }
+
+  /**
+   * A shared graph's parts (one graph for every package, see `utils/graphTargets.ts`): one
+   * `"{npm name} {sha256 hex}"` per package whose data it holds. Unset on a package's own graph.
+   */
+  @literalProperty({path: coreOntology.packageHash, datatype: xsd.string})
+  get packageHashes(): string[] {
     return null;
   }
 
@@ -344,6 +354,7 @@ export class ShapesGraph extends NamedGraph {
     package: string;
     version?: string;
     sources?: string | string[];
+    packageHashes?: string | string[];
   };
 
   /** The npm name of the package. */
@@ -355,6 +366,15 @@ export class ShapesGraph extends NamedGraph {
   /** The package version whose shapes the graph holds. */
   @literalProperty({path: coreOntology.version, datatype: xsd.string, maxCount: 1})
   get version(): string {
+    return null;
+  }
+
+  /**
+   * A shared graph's parts (one graph for every package, see `utils/graphTargets.ts`): one
+   * `"{npm name} {sha256 hex}"` per package whose data it holds. Unset on a package's own graph.
+   */
+  @literalProperty({path: coreOntology.packageHash, datatype: xsd.string})
+  get packageHashes(): string[] {
     return null;
   }
 

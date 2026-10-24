@@ -146,7 +146,7 @@ describeFuseki('ontology sync on package graphs', () => {
     liveData = dogIsAnimal;
     otherData = catIsPet;
     const first = await syncOntologies(store, {packages: LIVE});
-    expect(first).toEqual({written: LIVE, skipped: [], pruned: []});
+    expect(first).toMatchObject({written: LIVE, skipped: [], pruned: []});
     const rows = await records();
     expect(rows.map((r) => r.package)).toEqual(LIVE);
     for (const row of rows) {
@@ -164,7 +164,7 @@ describeFuseki('ontology sync on package graphs', () => {
 
     store.updates = 0;
     const again = await syncOntologies(store, {packages: LIVE});
-    expect(again).toEqual({written: [], skipped: LIVE, pruned: []});
+    expect(again).toMatchObject({written: [], skipped: LIVE, pruned: []});
     expect(store.updates).toBe(0);
   });
 
@@ -174,7 +174,7 @@ describeFuseki('ontology sync on package graphs', () => {
     liveData = dogIsAnimal.replace('"Dog"', '"Hound"');
     store.updates = 0;
     const result = await syncOntologies(store, {packages: LIVE});
-    expect(result).toEqual({written: ['ontology-sync-live-test'], skipped: ['ontology-sync-live-other'], pruned: []});
+    expect(result).toMatchObject({written: ['ontology-sync-live-test'], skipped: ['ontology-sync-live-other'], pruned: []});
     expect(store.updates).toBe(1);
     expect(await modifiedOf(other)).toEqual(before);
     const graph = OntologyGraph.iriFor('ontology-sync-live-test');

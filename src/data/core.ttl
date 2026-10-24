@@ -130,6 +130,12 @@ core:package
     rdfs:label "package"@en ;
     rdfs:range xsd:string .
 
+core:packageHash
+    a owl:DatatypeProperty ;
+    rdfs:comment "One package's part of a shared ontology or shape graph, recorded in the graph registry: the package's npm name, a space, and the SHA-256 (hex) of its data."@en ;
+    rdfs:label "package hash"@en ;
+    rdfs:range xsd:string .
+
 core:packageName
     a owl:DatatypeProperty ;
     rdfs:comment "The npm name of the package an ontology sync record is for."@en ;

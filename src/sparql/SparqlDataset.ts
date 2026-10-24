@@ -76,6 +76,15 @@ import {attachCatalog, catalogOf} from '../utils/ShapeClass.js';
 import {graphs} from '../ontologies/graphs.js';
 import {sharedState} from '../utils/sharedState.js';
 import {
+  DEFAULT_GRAPH_TARGETS,
+  assertDistinctSharedGraphs,
+  parseGraphTargetOptions,
+  type GraphTargetOptions,
+  type GraphTargets,
+} from '../utils/graphTargets.js';
+import type {DefaultGraphTermsReplace} from '../queries/defaultGraphTerms.js';
+import {defaultGraphTermsToSparql} from './defaultGraphTerms.js';
+import {
   expandReadGraphs,
   invalidateGraphRegistry,
   noteGraphQuery,
@@ -137,8 +146,48 @@ export abstract class SparqlDataset implements IDataset {
   protected options?: SparqlOptions;
   private readonly instanceRegistryKey = `sparql-dataset:${registryKeys.next++}`;
 
+  /** The graph targets this store was given (options, then {@link setGraphTargets}). */
+  private targetSettings: Partial<GraphTargets>;
+
   constructor(options?: SparqlOptions) {
     this.options = options;
+    // Checked here, so a store built with an invalid value fails at load.
+    this.targetSettings = parseGraphTargetOptions(options);
+  }
+
+  /**
+   * Where the ontology and shape syncs write and where `graphs.allOntologies` /
+   * `graphs.allShapes` read (`SparqlOptions.ontologyGraph` / `.shapeGraph`, else `'package'`).
+   */
+  graphTargets(): GraphTargets {
+    return {...DEFAULT_GRAPH_TARGETS, ...this.targetSettings};
+  }
+
+  /**
+   * Set the graph targets (checked; an invalid value throws). With `onlyUnset`, only the settings
+   * this store has not been given yet are filled: a host fills them from `LINKED_ONTOLOGY_GRAPH` /
+   * `LINKED_SHAPE_GRAPH` this way, so the store's own options win.
+   */
+  setGraphTargets(options: GraphTargetOptions, how?: {onlyUnset?: boolean}): void {
+    const given = parseGraphTargetOptions(options);
+    const next: Partial<GraphTargets> = {...this.targetSettings};
+    for (const key of ['ontologyGraph', 'shapeGraph'] as const) {
+      const value = given[key];
+      if (value === undefined) continue;
+      if (how?.onlyUnset && next[key] !== undefined) continue;
+      next[key] = value;
+    }
+    assertDistinctSharedGraphs({...DEFAULT_GRAPH_TARGETS, ...next});
+    this.targetSettings = next;
+  }
+
+  /**
+   * Replace terms in the default graph in one update (the ontology sync's `'default'` mode): see
+   * `sparql/defaultGraphTerms.ts` for the SPARQL.
+   */
+  async replaceDefaultGraphTerms(request: DefaultGraphTermsReplace): Promise<void> {
+    const sparql = defaultGraphTermsToSparql(request);
+    if (sparql) await this.executeSparqlUpdate(sparql);
   }
 
   /**
@@ -285,6 +334,7 @@ export abstract class SparqlDataset implements IDataset {
     const expanded = await expandReadGraphs(ir.graphs, {
       registry: () => readGraphRegistry(this.graphRegistryKey(), () => this.loadGraphRegistry()),
       mapGraphName: this.options?.mapGraphName,
+      targets: this.graphTargets(),
     });
     if (!('graphs' in expanded)) {
       const {graphs: _named, ...rest} = ir;

@@ -149,6 +149,93 @@ export async function nTriplesFromTurtle(texts: string[], sources?: string[]): P
   return lines.join('');
 }
 
+/** What the `default` mode of the ontology sync needs of a package's data. */
+export interface DefaultGraphTermsData {
+  /** The default-graph triples as N-Triples, as {@link nTriplesFromTurtle} gives them. */
+  nTriples: string;
+  /** Every IRI subject, sorted. */
+  subjects: string[];
+  /**
+   * The most blank-node steps below an IRI subject any blank node lies (a step is a link to a
+   * blank node, then any number of `rdf:rest` links along a list); 0 without blank nodes.
+   */
+  blankDepth: number;
+  /** Blank nodes with triples of their own that no IRI subject reaches. */
+  unanchoredBlankNodes: number;
+}
+
+const RDF_REST = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#rest';
+
+/**
+ * The data of `texts` (Turtle) for a default-graph replace of its terms: the N-Triples text, the
+ * IRI subjects, and how deep its blank-node structures go (`blankDepth`, and those no IRI reaches,
+ * which a replace cannot address). Blank-node labels are prefixed per text with `labelPrefix` and
+ * the text's index (`{labelPrefix}f<i>_`), so two packages' labels never merge. A parse error
+ * rejects, naming the source.
+ */
+export async function defaultGraphTermsFromTurtle(
+  texts: string[],
+  sources?: string[],
+  labelPrefix = '',
+): Promise<DefaultGraphTermsData> {
+  const n3 = await loadN3();
+  const writer = new n3.Writer({format: 'N-Triples'});
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  const subjects = new Set<string>();
+  /** Blank node → the blank nodes it links to, with whether the link is `rdf:rest`. */
+  const blankLinks = new Map<string, Array<{to: string; rest: boolean}>>();
+  const roots: string[] = [];
+  const blankSubjects = new Set<string>();
+  for (let i = 0; i < texts.length; i++) {
+    await parseTurtle(
+      n3,
+      texts[i],
+      sourceName(sources, i),
+      (quad) => {
+        if (quad.graph.termType !== 'DefaultGraph') return;
+        const line = writer.quadToString(quad.subject, quad.predicate, quad.object);
+        if (seen.has(line)) return;
+        seen.add(line);
+        lines.push(line);
+        const {subject, object} = quad;
+        if (subject.termType === 'NamedNode') {
+          subjects.add(subject.value);
+          if (object.termType === 'BlankNode') roots.push(object.value);
+        } else if (subject.termType === 'BlankNode') {
+          blankSubjects.add(subject.value);
+          if (object.termType === 'BlankNode') {
+            const list = blankLinks.get(subject.value) ?? [];
+            list.push({to: object.value, rest: quad.predicate.value === RDF_REST});
+            blankLinks.set(subject.value, list);
+          }
+        }
+      },
+      `${labelPrefix}f${i}_`,
+    );
+  }
+  // 0-1 breadth-first walk: a link to a blank node costs a step, an `rdf:rest` link between
+  // blank nodes does not.
+  const depth = new Map<string, number>();
+  const queue: Array<{node: string; d: number}> = roots.map((node) => ({node, d: 1}));
+  while (queue.length) {
+    const {node, d} = queue.shift()!;
+    if ((depth.get(node) ?? Infinity) <= d) continue;
+    depth.set(node, d);
+    for (const {to, rest} of blankLinks.get(node) ?? []) {
+      const next = rest ? d : d + 1;
+      if ((depth.get(to) ?? Infinity) <= next) continue;
+      if (rest) queue.unshift({node: to, d: next});
+      else queue.push({node: to, d: next});
+    }
+  }
+  let blankDepth = 0;
+  for (const d of depth.values()) blankDepth = Math.max(blankDepth, d);
+  let unanchoredBlankNodes = 0;
+  for (const node of blankSubjects) if (!depth.has(node)) unanchoredBlankNodes++;
+  return {nTriples: lines.join(''), subjects: [...subjects].sort(), blankDepth, unanchoredBlankNodes};
+}
+
 /**
  * Every IRI that is the subject of a triple in `texts`: the terms the data defines. The mirror
  * check compares the terms a package uses against this set.

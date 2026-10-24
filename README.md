@@ -36,7 +36,10 @@ product or version.
 - **Polymorphic reads:** RDFS class inference. A node stored as `ex:Project` must also answer as
   every superclass (`schema:CreativeWork`, `schema:Thing`), with the hierarchy built from the
   stored `rdfs:subClassOf` triples of the **default graph** and of **every graph the registry marks
-  `core:feedsHierarchy true`** (the package ontology graphs `syncOntologies` writes). Class-scoped
+  `core:feedsHierarchy true`** (the package ontology graphs `syncOntologies` writes, or the shared
+  one; see [Ontology and shape graphs](#ontology-and-shape-graphs)). Under `ontologyGraph:
+  'default'` the ontology is in the default graph, so a store that infers from the default graph
+  only is enough there. Class-scoped
   selects, counts, asks and `EXISTS`, bulk mutations (`deleteAll`, `deleteWhere`,
   `update().forAll()` / `.where()`), the owned-link class check, the owned walk's cycle hops and
   the single-owner SHACL constraint rely on it. Only classes are inferred: `rdfs:subPropertyOf`,
@@ -46,8 +49,8 @@ product or version.
   classes infer before it is published.
 
 How the ontology sync measures the store (`syncOntologies`, `@_linked/core/ontology/syncOntologies`;
-run by `@_linked/server` at boot): before it writes its first package graph, it probes the store
-once per dataset. It writes a probe `rdfs:subClassOf` into a temporary registered graph and a typed
+run by `@_linked/server` at boot): before it writes its first package graph (or the shared graph),
+it probes the store once per dataset. It writes a probe `rdfs:subClassOf` into a temporary registered graph and a typed
 instance into a second graph that does not feed the hierarchy, asks through the normal query path
 whether the instance is found by its superclass, then removes the probe. A sync with nothing to
 write runs no probe; unless an earlier sync left a default-graph hierarchy to remove (once), it
@@ -63,7 +66,12 @@ decides a warning. See [ontologies](./docs/architecture/ontologies.md).
 | nothing | the same; warns once that class-scoped reads miss subclass instances |
 
 A store that infers only from the default graph therefore needs an inferring store (above) for
-polymorphic reads: core never copies the hierarchy into the default graph.
+polymorphic reads: core never copies the hierarchy into the default graph. Under `ontologyGraph:
+'default'` the probe tests the default graph instead (it writes a probe axiom and instance there,
+asks, and removes them) and warns once when the store does not infer from it.
+
+The probe runs only before a write: a sync with nothing to write sends no request beyond its reads,
+in every mode. Its answer never stops the sync.
 
 **Without inference** core still reads and writes, but everything that matches by class sees
 only nodes stored with exactly that class. Selects, counts and asks of a superclass miss the
@@ -72,6 +80,73 @@ subclass instance; the single-owner constraint does not see it.
 
 `@_linked/fuseki`'s image (`ghcr.io/linked-fw/fuseki`, its `tdb2` datasets) is one store that meets
 these requirements. Core does not depend on it: any store with the behaviour above works.
+
+### Ontology and shape graphs
+
+Where the syncs keep the registered packages' ontology data and shapes is set per store, by two
+settings with one string each:
+
+| Setting | Env variable (filled by `@_linked/server`) | Values |
+|---|---|---|
+| `ontologyGraph` | `LINKED_ONTOLOGY_GRAPH` | `'package'` (default), `'default'`, or an absolute graph IRI |
+| `shapeGraph` | `LINKED_SHAPE_GRAPH` | the same |
+
+A store takes them as options (`SparqlOptions.ontologyGraph` / `.shapeGraph`, an entry's
+`config.ontologyGraph` / `config.shapeGraph` in a datasets config read by `loadStores`, or
+`store.setGraphTargets({...})`). A host fills what the store leaves unset from the environment:
+`@_linked/server` reads both variables at boot, and `loadStores(config, {graphTargets:
+graphTargetOptionsFromEnv(process.env)})` does the same where an app builds its stores
+(`@_linked/core/utils/graphTargets`). Core itself never reads `process.env` for them. A value that
+is neither keyword must be an absolute IRI (not a portable graph name such as `graphs.default`, and
+not the same IRI for both settings); anything else fails when the store is built, naming the
+setting and where it came from.
+
+| Mode | Ontology sync (`syncOntologies`) | Shape sync (`syncShapeGraphs`) |
+|---|---|---|
+| `'package'` | One `OntologyGraph` per package, `{package IRI}/graph/ontology`, replaced whole when the package's hash changes. | One `ShapesGraph` per package, `{package IRI}/graph/shapes`, plus the app's generated shapes in `{DATA_ROOT}/graph/shapes`. |
+| an IRI | One shared `OntologyGraph` at that IRI (`feedsHierarchy` true) holding every registered package's ontology data. When any package's hash changes it is rebuilt whole in one update. Its record lists `packageHashes` (`"{package} {sha256}"`) and `sources` (`{package}/{file}`). | One shared `ShapesGraph` at that IRI with the run's packages' shapes and the app's generated ones, rebuilt whole on any change; the same record fields. `packages`, when given, names every package the graph holds (the server leaves out packages without `shapes.ttl`). |
+| `'default'` | The **whole** ontology (not only the hierarchy) in the default graph. When the combined hash changes, one update deletes every package-owned term and inserts every package's current data. | The default-graph shape sync (`syncShapes`): each shape replaced on its own hash, keeping the links other shapes hold to it. Every registered shape is synced (`packages` and `orphanScope` do not apply). |
+
+The shared graph IRI may not be a package's own graph name (`…/pkg/{slug}/graph/ontology` or
+`/graph/shapes`).
+
+The readers follow the mode: `graphs.allOntologies` and `graphs.allShapes` read the package graphs,
+the shared graph, or the default graph. `.from()` and readers built on them work the same in every
+mode. An unchanged sync writes nothing in every mode (and so probes nothing).
+
+**`'default'` mode's package-owned terms.** A package-owned term is every subject whose IRI starts
+with a registered package's ontology namespace (`ns('')` of each ontology that ships data), and
+every subject of a package's current Turtle. Each goes with all its outgoing triples and,
+recursively, the blank nodes they lead to (OWL restrictions, lists; at most
+`DEFAULT_GRAPH_TERMS_DEPTH`, 8, blank-node steps deep). Subjects outside that set are never
+touched: instance data uses the app's IRIs, and a class of no package stays. The combined hash is
+kept on `https://linked.cm/pkg/core/ontology-sync/default-graph`, replaced in the same update. The
+sync refuses, before writing, a namespace that holds the store's data root or a registered shape,
+a blank node no IRI subject links to, and a store without `replaceDefaultGraphTerms`
+(`SparqlDataset` has it). When a package's data cannot be read, the shared and default modes skip
+the rebuild with a warning, since a rebuild without it would drop its terms. What the sweep cannot
+see stays: a subject outside every namespace that a package drops from its Turtle (say
+`schema:Person rdfs:subClassOf …` written by a package that does not own `schema:`), and every
+term of a package that is no longer registered. Remove those by hand. A namespace must end in `/` or
+`#`. The `OntologySync` nodes the earlier default-graph sync wrote lie in core's namespace, so a
+`'default'` rebuild replaces them; the sync names them in its warning first.
+
+**A package's ontology Turtle is the source of its terms.** Any triples about a package's terms
+must live in that package's Turtle. Anything else written about them (by hand, by another tool) can
+be overwritten by the next sync: in `'default'` mode it is deleted, in the other modes the graph is
+replaced whole.
+
+**Switching modes needs clearing first.** Each kind of data lives only where its mode puts it, and
+the syncs never copy or move it. A sync that finds another mode's data (package graphs while in
+`'default'` or shared mode, a shared graph while in `'package'` mode, the default-graph ontology or
+default-graph shapes while in another mode) logs one warning naming it and leaves it. To switch, drop
+the old graphs and records (`OntologyGraph.delete(iri)`, `ShapesGraph.delete(iri)`), or remove the
+default-graph terms, then set the new mode and sync. The `'package'` mode still finishes the
+one-time removal of what the earlier default-graph syncs wrote (the class-hierarchy lines of
+`OntologySync` nodes, and default-graph shapes of the synced packages), as before.
+
+**CN-managed apps must use `'package'` for both.** Create Now reads package graphs (catalogs, the
+gateway's graph rules) and reports another mode as an error.
 
 ## Repository setup (contributors)
 
@@ -567,10 +642,10 @@ Validates a config of the shape `{ datasets: { <alias>: { store: <npm-path>, con
 
 ```ts
 // @_linked/core/utils/loadStores — async, backend-only
-loadStores<T>(config: DatasetsConfig): Promise<Record<string, T>>
+loadStores<T>(config: DatasetsConfig, options?: {graphTargets?: GraphTargetOptions}): Promise<Record<string, T>>
 ```
 
-Dynamically imports each alias's `store` path and instantiates the resolved class with `new StoreClass(entry.config)`. Returns alias → store. Convention: the last segment of the `store` path is the named export to use (with `default` as a fallback). **Async + uses runtime dynamic `import()`** — works in Node where module specifiers resolve at runtime. Frontends can't use this (webpack can't bundle `import(variableString)`); frontend code instead imports each store class statically and constructs per alias by hand.
+Dynamically imports each alias's `store` path and instantiates the resolved class with `new StoreClass(entry.config)`. Returns alias → store. An entry's `config.ontologyGraph` / `config.shapeGraph` are then set on the store (`setGraphTargets`), and `options.graphTargets` fills what they leave unset (see [Ontology and shape graphs](#ontology-and-shape-graphs)); an invalid value fails the load. Convention: the last segment of the `store` path is the named export to use (with `default` as a fallback). **Async + uses runtime dynamic `import()`** — works in Node where module specifiers resolve at runtime. Frontends can't use this (webpack can't bundle `import(variableString)`); frontend code instead imports each store class statically and constructs per alias by hand.
 
 **Host loader.** When `globalThis[Symbol.for('@_linked/core:importModule')]` is a function `(specifier: string) => Promise<unknown>`, `loadStores` imports each store through it instead of `import()`, passing the `store` specifier unchanged; it is read on every call. `linked start` (dev) sets it so a store comes from the same copy of its package as the app's own imports under Vite's SSR runner. Nothing else needs to set it.
 

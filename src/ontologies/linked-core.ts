@@ -90,6 +90,9 @@ const contentHash = ns('contentHash');
 const feedsHierarchy = ns('feedsHierarchy');
 const packageTerm = ns('package');
 const version = ns('version');
+// A shared ontology or shape graph (one graph for every package, `utils/graphTargets.ts`) records
+// each package's part as `"{npm name} {sha256 hex}"`.
+const packageHash = ns('packageHash');
 
 export const coreOntology = {
   Package,
@@ -119,4 +122,5 @@ export const coreOntology = {
   feedsHierarchy,
   package: packageTerm,
   version,
+  packageHash,
 };
