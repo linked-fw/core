@@ -2,18 +2,22 @@
 # dataset created with dbType=tdb2, and for `ds`, whose `shacl` endpoint the SHACL tests use).
 # Locally, before the image is published: LINKED_FUSEKI_IMAGE=linked-fuseki:dev (built from
 # linked-fw/fuseki's server/Dockerfile). Started by jest globalSetup under its own compose project
-# (`linked-core-test` unless LINKED_CORE_TEST_COMPOSE_PROJECT names another), on the port of
-# FUSEKI_BASE_URL (FUSEKI_TEST_PORT, default 3939).
+# (`linked-core-test-<port>` unless LINKED_CORE_TEST_COMPOSE_PROJECT names another), on the port of
+# FUSEKI_BASE_URL (FUSEKI_TEST_PORT) with the admin password of FUSEKI_ADMIN_PASSWORD
+# (FUSEKI_TEST_ADMIN_PASSWORD). Neither has a default. To start it by hand:
+#   FUSEKI_TEST_PORT=<port> FUSEKI_TEST_ADMIN_PASSWORD=admin \
+#     docker compose -p <project> -f src/tests/docker-compose.test.yml up -d --wait
+# and stop it with the same variables (`down`, never `down -v` on a project that is not yours).
 services:
   fuseki:
     image: ${LINKED_FUSEKI_IMAGE:-ghcr.io/linked-fw/fuseki:6.2.0-2}
     environment:
-      - ADMIN_PASSWORD=admin
+      - ADMIN_PASSWORD=${FUSEKI_TEST_ADMIN_PASSWORD:?set FUSEKI_ADMIN_PASSWORD (global setup passes it as FUSEKI_TEST_ADMIN_PASSWORD)}
       - ENABLE_SHACL=true
       - ENABLE_UPDATE=true
       - ENABLE_DATA_WRITE=true
     ports:
-      - '${FUSEKI_TEST_PORT:-3939}:3030'
+      - '${FUSEKI_TEST_PORT:?set the port in FUSEKI_BASE_URL (global setup passes it as FUSEKI_TEST_PORT)}:3030'
     # The test datasets live in memory: TDB2 commits on a container filesystem are slow (an fsync
     # per commit), and the datasets are thrown away with the container anyway.
     tmpfs:

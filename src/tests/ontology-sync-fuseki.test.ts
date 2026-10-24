@@ -10,7 +10,8 @@
  * The inference probe on real stores: the inferring image answers `'named-graphs'`; a `mem`
  * dataset on it (which does not infer) answers `'none'`, and the sync then writes the package
  * graphs only, keeps no default-graph copy of the hierarchy, and warns once. With
- * LINKED_SECOND_FUSEKI_URL (and LINKED_SECOND_FUSEKI_EXPECTS, default `none`) the same runs
+ * LINKED_SECOND_FUSEKI_URL (and LINKED_SECOND_FUSEKI_EXPECTS, default `none`; admin password
+ * FUSEKI_ADMIN_PASSWORD, and only when the main live store is configured) the same runs
  * against a second server: a stock `secoresearch/fuseki:6.2.0` answers `none`, the
  * `ghcr.io/linked-fw/fuseki:6.2.0-1` image `default-graph`.
  */
@@ -26,7 +27,7 @@ import {
   executeSparqlUpdate,
   FUSEKI_BASE_URL,
 } from '../test-helpers/fuseki-test-store';
-import {describeFuseki} from '../test-helpers/fuseki-live';
+import {describeFuseki, fusekiLive} from '../test-helpers/fuseki-live';
 import {FusekiStore} from '../test-helpers/FusekiStore';
 import {linkedPackage} from '../utils/Package';
 import {createNameSpace} from '../utils/NameSpace';
@@ -337,9 +338,13 @@ describeFuseki('ontology sync on a store that does not infer (a mem dataset on t
   degradedStoreTests(() => FUSEKI_BASE_URL, `${DATASET_NAME}-plain`, () => 'none');
 });
 
+// Runs only with the main live store configured too: it uses FUSEKI_ADMIN_PASSWORD for the second
+// store's admin calls, and deletes its dataset there in afterAll.
 const SECOND = process.env.LINKED_SECOND_FUSEKI_URL;
-(SECOND ? describe : describe.skip)(
-  `[fuseki] ontology sync on a second store${SECOND ? ` (${SECOND})` : ' (skipped: LINKED_SECOND_FUSEKI_URL unset)'}`,
+(SECOND && fusekiLive ? describe : describe.skip)(
+  `[fuseki] ontology sync on a second store${
+    !SECOND ? ' (skipped: LINKED_SECOND_FUSEKI_URL unset)' : fusekiLive ? ` (${SECOND})` : ' (skipped: the main live store is not configured)'
+  }`,
   () => {
     degradedStoreTests(
       () => SECOND!,

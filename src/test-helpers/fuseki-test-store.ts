@@ -16,19 +16,68 @@ import {execSync} from 'node:child_process';
 import {existsSync} from 'node:fs';
 import {basename, resolve} from 'node:path';
 
-export const FUSEKI_BASE_URL = process.env.FUSEKI_BASE_URL || 'http://localhost:3939';
+/**
+ * The environment variables the live tests need, every one set explicitly: the run never falls
+ * back to a port or a password, so it cannot reach (and reap datasets on) a Fuseki another project
+ * runs on the machine. Unset, global setup contacts no Fuseki at all (see {@link fusekiConfigMissing}).
+ */
+export const FUSEKI_ENV = {
+  baseUrl: 'FUSEKI_BASE_URL',
+  adminPassword: 'FUSEKI_ADMIN_PASSWORD',
+} as const;
+
+/**
+ * Stands in for an unset `FUSEKI_BASE_URL`, so a module that builds a store at load time still
+ * loads. `.invalid` never resolves (RFC 2606): a request to it fails rather than reaching a store.
+ */
+const UNSET_BASE_URL = 'http://fuseki-base-url-unset.invalid';
+
+/** `FUSEKI_BASE_URL`, trailing slashes trimmed (the unset placeholder when it is not set). */
+export const FUSEKI_BASE_URL = process.env[FUSEKI_ENV.baseUrl]?.trim().replace(/\/+$/, '') || UNSET_BASE_URL;
+
+/**
+ * The live-test variables that are not set (empty means not set). Empty: the live tests may run.
+ */
+export function fusekiConfigMissing(): string[] {
+  return Object.values(FUSEKI_ENV).filter((name) => !process.env[name]?.trim());
+}
+
+/** The message naming what to set, for a run whose live-test variables are missing. */
+export function fusekiConfigMessage(missing: string[]): string {
+  return (
+    `the live Fuseki tests need ${missing.join(' and ')} set explicitly (no default port or ` +
+    `password, so a run never touches a Fuseki another project runs). Start a store of your own ` +
+    `and export, e.g., FUSEKI_BASE_URL=http://localhost:<free port> FUSEKI_ADMIN_PASSWORD=admin ` +
+    `on a free port of your own; global setup starts the inferring image there when nothing answers.`
+  );
+}
+/** The port of `FUSEKI_BASE_URL` (or `FUSEKI_TEST_PORT`), empty when neither names one. */
+export function fusekiTestPort(): string {
+  if (process.env.FUSEKI_TEST_PORT) return process.env.FUSEKI_TEST_PORT;
+  try {
+    return new URL(FUSEKI_BASE_URL).port;
+  } catch {
+    return '';
+  }
+}
 /**
  * The compose project the test store runs under, so it never joins (or stops) another project's
- * Fuseki. Set LINKED_CORE_TEST_COMPOSE_PROJECT to run a second store next to it.
+ * Fuseki, nor a core run's store on another port: `linked-core-test-<port>` unless
+ * LINKED_CORE_TEST_COMPOSE_PROJECT names one.
  */
-const COMPOSE_PROJECT = process.env.LINKED_CORE_TEST_COMPOSE_PROJECT || 'linked-core-test';
+const COMPOSE_PROJECT =
+  process.env.LINKED_CORE_TEST_COMPOSE_PROJECT || `linked-core-test-${fusekiTestPort() || 'noport'}`;
 /** The image the compose file runs when LINKED_FUSEKI_IMAGE is unset. */
 const DEFAULT_IMAGE = 'ghcr.io/linked-fw/fuseki:6.2.0-2';
-/** Every dataset a test file creates is named with this prefix (see `datasetName`). */
-export const TEST_DATASET_PREFIX = 'nashville-test-';
+/**
+ * Every dataset core's tests create is named with this prefix (see `datasetName`), and
+ * `reapTestDatasets` deletes only datasets named with it: the prefix is core's own, so no other
+ * project's datasets match it.
+ */
+export const TEST_DATASET_PREFIX = 'linked-core-test-';
 /** The dataset global setup creates to check that the store infers, and drops again. */
-export const INFERENCE_PROBE_DATASET = 'linked-inference-probe';
-const FUSEKI_ADMIN_PASSWORD = process.env.FUSEKI_ADMIN_PASSWORD || 'admin';
+export const INFERENCE_PROBE_DATASET = `${TEST_DATASET_PREFIX}inference-probe`;
+const FUSEKI_ADMIN_PASSWORD = process.env[FUSEKI_ENV.adminPassword]?.trim() ?? '';
 /**
  * One dataset per test file. Each live suite seeds and clears its whole dataset, so two files
  * sharing one — in parallel workers, or one after another on the same worker — can clobber each
@@ -72,6 +121,7 @@ const adminAuth = `Basic ${Buffer.from(`admin:${FUSEKI_ADMIN_PASSWORD}`).toStrin
  * Returns true if a HEAD request to the base URL succeeds with status 200.
  */
 export async function isFusekiAvailable(): Promise<boolean> {
+  if (fusekiConfigMissing().length) return false;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2000);
@@ -114,6 +164,8 @@ function findComposeFile(): string | null {
  * Returns false if Docker is not installed or the compose file can't be found.
  */
 export async function ensureFuseki(): Promise<boolean> {
+  // Never reach, or start, a store the environment does not name.
+  if (fusekiConfigMissing().length) return false;
   if (await isFusekiAvailable()) return true;
 
   const composeFile = findComposeFile();
@@ -178,10 +230,19 @@ export async function stopFuseki(): Promise<void> {
   startedByUs = false;
 }
 
-/** The compose file's variables: the port of FUSEKI_BASE_URL, the rest from the environment. */
+/**
+ * The compose file's variables: the port of FUSEKI_BASE_URL (or FUSEKI_TEST_PORT) and the admin
+ * password of FUSEKI_ADMIN_PASSWORD, the rest from the environment.
+ */
 function composeEnv(): NodeJS.ProcessEnv {
-  const port = new URL(FUSEKI_BASE_URL).port || '3939';
-  return {...process.env, FUSEKI_TEST_PORT: process.env.FUSEKI_TEST_PORT || port};
+  const port = fusekiTestPort();
+  if (!port) {
+    throw new Error(
+      `[ensureFuseki] ${FUSEKI_BASE_URL} names no port; set one in FUSEKI_BASE_URL (or FUSEKI_TEST_PORT) ` +
+        'for the test store to listen on.',
+    );
+  }
+  return {...process.env, FUSEKI_TEST_PORT: port, FUSEKI_TEST_ADMIN_PASSWORD: FUSEKI_ADMIN_PASSWORD};
 }
 
 /**
@@ -246,14 +307,12 @@ export async function listDatasets(): Promise<string[]> {
 }
 
 /**
- * Delete every test dataset (`nashville-test-*`) and the inference probe. Run by global setup,
- * for what a killed run left behind, and by global teardown, even when tests failed: TDB2
- * datasets persist in the container.
+ * Delete every dataset core's tests create (`linked-core-test-*`, the inference probe included)
+ * and nothing else. Run by global setup, for what a killed run left behind, and by global
+ * teardown, even when tests failed: TDB2 datasets persist in the container.
  */
 export async function reapTestDatasets(): Promise<string[]> {
-  const names = (await listDatasets()).filter(
-    (name) => name.startsWith(TEST_DATASET_PREFIX) || name === INFERENCE_PROBE_DATASET,
-  );
+  const names = (await listDatasets()).filter((name) => name.startsWith(TEST_DATASET_PREFIX));
   for (const name of names) await deleteDataset(name);
   return names;
 }

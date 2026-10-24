@@ -15,4 +15,7 @@ jobs:
       pull-requests: write
     with:
       require-tests: true
+      # `test:ci` sets the live-test Fuseki (FUSEKI_BASE_URL, FUSEKI_ADMIN_PASSWORD) explicitly;
+      # `npm test` never defaults them. It refuses to run outside GitHub Actions.
+      test-script: test:ci
       run-e2e: false

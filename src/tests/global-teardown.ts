@@ -4,6 +4,7 @@
  * container if globalSetup started it.
  */
 import {
+  FUSEKI_LIVE_ENV,
   isFusekiAvailable,
   reapTestDatasets,
   stopFuseki,
@@ -11,7 +12,8 @@ import {
 
 export default async function globalTeardown() {
   try {
-    if (await isFusekiAvailable()) await reapTestDatasets();
+    // Only a store global setup reached and checked (it sets FUSEKI_LIVE_ENV to '1').
+    if (process.env[FUSEKI_LIVE_ENV] === '1' && (await isFusekiAvailable())) await reapTestDatasets();
   } catch (error) {
     console.warn('[globalTeardown] could not delete the test datasets:', (error as Error).message);
   }

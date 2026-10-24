@@ -1592,6 +1592,31 @@ implementer guide.
 - `SparqlStore` base class — included in `@_linked/core/sparql`, extend it for any SPARQL endpoint
 - `@_linked/rdf-mem-store` — in-memory RDF store
 
+## Running the tests
+
+`npm test` runs the unit tests and the typecheck. The live Fuseki tests (`[fuseki]` blocks) run
+only against a store the environment names, with no default:
+
+```bash
+export FUSEKI_BASE_URL=http://localhost:3321   # a free port, for a Fuseki of your own
+export FUSEKI_ADMIN_PASSWORD=admin
+REQUIRE_FUSEKI=1 npm test
+```
+
+- Without `FUSEKI_BASE_URL` and `FUSEKI_ADMIN_PASSWORD` no Fuseki is contacted: the live tests are
+  reported as skipped, and a run under `CI` or `REQUIRE_FUSEKI=1` fails, naming the variables.
+- When the URL is unreachable, global setup starts the inferring image
+  (`ghcr.io/linked-fw/fuseki`, `LINKED_FUSEKI_IMAGE` for another) with Docker on its port, and
+  stops it after the run. A reachable store must infer `rdf:type` through `rdfs:subClassOf`.
+- The tests create datasets named `linked-core-test-*`, and setup and teardown delete those and
+  nothing else. Two runs on one store would delete each other's: give each concurrent run its own
+  store (port).
+- A store global setup starts runs under the compose project `linked-core-test-<port>`
+  (`LINKED_CORE_TEST_COMPOSE_PROJECT` for another name).
+- Never point the variables at a store another project uses. `npm run test:fuseki` runs only the
+  live tests; CI runs `npm run test:ci`, which sets them for the runner and refuses to run
+  elsewhere.
+
 ## Changelog
 
 See [CHANGELOG.md](./CHANGELOG.md).
