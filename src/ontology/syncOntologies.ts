@@ -30,7 +30,7 @@
  * only from the default graph (`'default-graph'`) or not at all (`'none'`) gets one warning per
  * dataset that class-scoped reads miss subclass instances.
  *
- * That is the `'package'` mode, the default. The store's `ontologyGraph` target
+ * That is the `'package'` mode, the default. The global `ontologyGraph` target (`getGraphTargets`)
  * (`utils/graphTargets.ts`) chooses the others: a shared graph IRI holds every package's data in
  * one `OntologyGraph`, rebuilt whole when any package changes ({@link sharedOntologyGraphHash});
  * `'default'` keeps the whole ontology in the default graph, replacing every package-owned term in
@@ -64,7 +64,7 @@ import {
   RDFS_SUBCLASSOF,
   type HierarchyTriple,
 } from './hierarchy.js';
-import {graphTargetsOf, isSharedGraphTarget, type GraphTarget} from '../utils/graphTargets.js';
+import {getGraphTargets, isSharedGraphTarget, type GraphTarget} from '../utils/graphTargets.js';
 import {LinkedStorage} from '../utils/LinkedStorage.js';
 import {getAllShapeClasses} from '../utils/ShapeClass.js';
 import {dataRootOf} from '../utils/graphRouting.js';
@@ -107,7 +107,7 @@ export interface SyncOntologiesResult {
    */
   pruned: string[];
   /**
-   * Where the run wrote: the store's `ontologyGraph` target (`'package'`, `'default'` or the
+   * Where the run wrote: the global `ontologyGraph` target (`'package'`, `'default'` or the
    * shared graph's IRI). A store without graph queries in `'package'` or shared mode got the
    * default-graph hierarchy sync instead, reported as `'package'` or the IRI with `fallback` set.
    */
@@ -421,7 +421,7 @@ export async function syncOntologies(
     unreadable,
     registered: new Set(registrationsByPackage().keys()),
   };
-  const target = graphTargetsOf(ds).ontologyGraph;
+  const target = getGraphTargets().ontologyGraph;
   if (target === 'default') return syncDefaultMode(run);
   // A dataset class built against an older core has no graph queries.
   if (ds && typeof (ds as Partial<IDataset>).graphQuery !== 'function') {

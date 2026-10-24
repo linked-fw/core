@@ -25,7 +25,7 @@ import {GraphQueryError} from '../queries/graphQuery.js';
 import {graphs} from '../ontologies/graphs.js';
 import {coreOntology} from '../ontologies/linked-core.js';
 import {sharedState} from './sharedState.js';
-import type {GraphTargets} from './graphTargets.js';
+import {getGraphTargets, type GraphTargets} from './graphTargets.js';
 
 /** An entry older than this is re-read (30 seconds). */
 export const GRAPH_REGISTRY_MAX_AGE_MS = 30_000;
@@ -130,8 +130,7 @@ const REGISTRY_KINDS: ReadonlyMap<string, string> = new Map([
  * (`graphs.default` for `'default'`, the IRI of a shared graph), deduped in order; a `'package'`
  * target keeps the name for the registry expansion.
  */
-function followGraphTargets(names: readonly string[], targets?: GraphTargets): readonly string[] {
-  if (!targets) return names;
+function followGraphTargets(names: readonly string[], targets: GraphTargets): readonly string[] {
   const out: string[] = [];
   for (const name of names) {
     const target =
@@ -151,8 +150,8 @@ export type ExpandedReadGraphs = {defaultGraph: true} | {defaultGraph: false; gr
 
 /**
  * Expand a `.from()` set to the graphs a store reads:
- * - `graphs.allOntologies` / `graphs.allShapes` follow the store's graph targets
- *   (`context.targets`, see `utils/graphTargets.ts`): under `'package'` (the default) every graph
+ * - `graphs.allOntologies` / `graphs.allShapes` follow the process's graph targets
+ *   (`getGraphTargets()`, see `utils/graphTargets.ts`): under `'package'` (the default) every graph
  *   the registry lists with an `OntologyGraph` / `ShapesGraph` record (sorted, so the query text
  *   is stable); under a shared graph IRI that graph; under `'default'` the default graph (as if
  *   the set named `graphs.default`);
@@ -172,11 +171,9 @@ export async function expandReadGraphs(
   context: {
     registry: () => Promise<GraphRegistrySnapshot>;
     mapGraphName?: (iri: string) => string | null;
-    /** The store's graph targets; both `'package'` when absent. */
-    targets?: GraphTargets;
   },
 ): Promise<ExpandedReadGraphs> {
-  names = followGraphTargets(names, context.targets);
+  names = followGraphTargets(names, getGraphTargets());
   if (names.length === 1 && names[0] === graphs.default) return {defaultGraph: true};
   const out: string[] = [];
   const add = (iri: string) => {

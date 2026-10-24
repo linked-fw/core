@@ -32,6 +32,9 @@ export type {
   ValidatableShape,
 } from './shapes/validation.js';
 export {LinkedStorage} from './utils/LinkedStorage.js';
+// Where the ontology and shape syncs write, one global setting the host sets at boot.
+export {setGraphTargets, getGraphTargets} from './utils/graphTargets.js';
+export type {GraphTarget, GraphTargets, GraphTargetOptions} from './utils/graphTargets.js';
 // Conventions that make a second copy of a framework module harmless.
 export {sharedState, sharedStateKey} from './utils/sharedState.js';
 export {brandLinkedError, brandLinkedClass, isLinkedError, isLinkedInstance, linkedErrorBrand} from './utils/linkedError.js';

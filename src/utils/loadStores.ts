@@ -6,18 +6,6 @@
 // Backends import this directly; frontends never do.
 
 import type {DatasetsConfig} from './parseDatasetsConfig.js';
-import type {IDataset} from '../interfaces/IDataset.js';
-import {parseGraphTargetOptions, type GraphTargetOptions} from './graphTargets.js';
-
-/** Options of {@link loadStores}. */
-export interface LoadStoresOptions {
-  /**
-   * Graph targets for every store that takes them (`IDataset.setGraphTargets`), filling only what
-   * the entry's own `config.ontologyGraph` / `config.shapeGraph` leaves unset. A host passes its
-   * environment's (`graphTargetOptionsFromEnv(process.env)`); core never reads it itself.
-   */
-  graphTargets?: GraphTargetOptions;
-}
 
 /**
  * The module loader `loadStores` imports each store with. A host that
@@ -43,11 +31,10 @@ function importModule(specifier: string): Promise<unknown> {
 /**
  * Dynamically imports each alias's `store` (an npm specifier) and
  * instantiates the resolved class with the entry's `config` verbatim —
- * `new StoreClass(entry.config)`. Returns alias → store. The entry's
- * `config.ontologyGraph` / `config.shapeGraph` are then set on the store
- * (`setGraphTargets`), and `options.graphTargets` fills what they leave unset
- * (see `utils/graphTargets.ts`); an invalid value fails the load. Graph routing is not read from the
- * config (an entry with a `graphs` key gets a warning): the app routes shapes in code.
+ * `new StoreClass(entry.config)`. Returns alias → store. Graph routing is not read from the
+ * config (an entry with a `graphs` key gets a warning): the app routes shapes in code. The graph
+ * targets are not a store's either: they are one global setting the host sets (`setGraphTargets`,
+ * see `utils/graphTargets.ts`).
  *
  * Convention: the last segment of the `store` path is the named export
  * to use (e.g. `@_linked/fuseki/shapes/FusekiStore` → `FusekiStore`).
@@ -82,11 +69,8 @@ function importModule(specifier: string): Promise<unknown> {
  */
 export async function loadStores<T = unknown>(
   config: DatasetsConfig,
-  options: LoadStoresOptions = {},
 ): Promise<Record<string, T>> {
   const stores: Record<string, T> = {};
-  // Checked before any store is built: an invalid value fails the load, naming the setting.
-  const defaults = parseGraphTargetOptions(options.graphTargets);
   for (const [alias, entry] of Object.entries(config.datasets)) {
     // SECURITY: `entry.store` is a module specifier loaded and executed here.
     // It must come from a trusted developer artifact (datasets.json) and must
@@ -104,7 +88,6 @@ export async function loadStores<T = unknown>(
       );
     }
     const store = new (StoreClass as new (cfg: unknown) => T)(entry.config);
-    applyGraphTargets(store as unknown as IDataset, alias, entry.config, defaults);
     // Graph routing lives in the app's code, never in this file (see `graphRouting.ts`).
     if ((entry as {graphs?: unknown}).graphs !== undefined) {
       console.warn(
@@ -116,41 +99,4 @@ export async function loadStores<T = unknown>(
     stores[alias] = store;
   }
   return stores;
-}
-
-/**
- * Give `store` the entry's own graph targets (`config.ontologyGraph` / `config.shapeGraph`), then
- * fill what is still unset from `defaults`. A store that takes none (`setGraphTargets` absent)
- * runs `'package'` for both: an entry that sets another target for it throws, and defaults that
- * would set one are ignored with a warning.
- */
-function applyGraphTargets(
-  store: IDataset,
-  alias: string,
-  config: Record<string, unknown> | undefined,
-  defaults: GraphTargetOptions,
-): void {
-  const own = parseGraphTargetOptions(
-    {ontologyGraph: config?.ontologyGraph as string | undefined, shapeGraph: config?.shapeGraph as string | undefined},
-    {ontologyGraph: `datasets.${alias}.config.ontologyGraph`, shapeGraph: `datasets.${alias}.config.shapeGraph`},
-  );
-  const takes = typeof store?.setGraphTargets === 'function';
-  const name = (store as {constructor?: {name?: string}})?.constructor?.name ?? 'store';
-  if (!takes) {
-    if (Object.values(own).some((v) => v !== 'package')) {
-      throw new Error(
-        `loadStores: alias "${alias}" sets a graph target, but its store (${name}) takes none ` +
-          '(IDataset.setGraphTargets); it always runs \'package\'.',
-      );
-    }
-    if (Object.values(defaults).some((v) => v !== 'package')) {
-      console.warn(
-        `[linked] loadStores: alias "${alias}" (${name}) takes no graph targets, so it runs 'package' ` +
-          'for the ontology and shape graphs whatever the host sets.',
-      );
-    }
-    return;
-  }
-  store.setGraphTargets!(own);
-  store.setGraphTargets!(defaults, {onlyUnset: true});
 }

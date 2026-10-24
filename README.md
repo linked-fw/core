@@ -44,6 +44,9 @@ product or version.
   `update().forAll()` / `.where()`), the owned-link class check, the owned walk's cycle hops and
   the single-owner SHACL constraint rely on it. Only classes are inferred: `rdfs:subPropertyOf`,
   `rdfs:domain` and `rdfs:range` are not needed.
+- **No graph-target setting.** A store takes no ontology or shape graph setting: where the syncs
+  write is the process's one global setting (see [Ontology and shape graphs](#ontology-and-shape-graphs)),
+  and every store's readers follow it.
 - **A store that infers over all graphs** works too. The caveat: drafts and other graphs the
   registry marks `feedsHierarchy false` then feed the hierarchy as well, so a draft ontology's
   classes infer before it is published.
@@ -83,23 +86,33 @@ these requirements. Core does not depend on it: any store with the behaviour abo
 
 ### Ontology and shape graphs
 
-Where the syncs keep the registered packages' ontology data and shapes is set per store, by two
-settings with one string each:
+Where the syncs keep the registered packages' ontology data and shapes is **one global setting of
+the process**, two strings set by the host. It is not a store's setting: no store, store option or
+datasets config entry takes it.
 
-| Setting | Env variable (filled by `@_linked/server`) | Values |
+| Setting | Env variable (read by `@_linked/server`) | Values |
 |---|---|---|
-| `ontologyGraph` | `LINKED_ONTOLOGY_GRAPH` | `'package'` (default), `'default'`, or an absolute graph IRI |
+| `ontologyGraph` | `LINKED_ONTOLOGY_GRAPH` | `'package'` (the default), `'default'`, or an absolute graph IRI |
 | `shapeGraph` | `LINKED_SHAPE_GRAPH` | the same |
 
-A store takes them as options (`SparqlOptions.ontologyGraph` / `.shapeGraph`, an entry's
-`config.ontologyGraph` / `config.shapeGraph` in a datasets config read by `loadStores`, or
-`store.setGraphTargets({...})`). A host fills what the store leaves unset from the environment:
-`@_linked/server` reads both variables at boot, and `loadStores(config, {graphTargets:
-graphTargetOptionsFromEnv(process.env)})` does the same where an app builds its stores
-(`@_linked/core/utils/graphTargets`). Core itself never reads `process.env` for them. A value that
-is neither keyword must be an absolute IRI (not a portable graph name such as `graphs.default`, and
-not the same IRI for both settings); anything else fails when the store is built, naming the
-setting and where it came from.
+```ts
+import {setGraphTargets, getGraphTargets} from '@_linked/core';
+
+setGraphTargets({ontologyGraph: 'default'}); // once, at boot, before the stores load and the syncs
+getGraphTargets(); // {ontologyGraph: 'default', shapeGraph: 'package'}
+```
+
+`@_linked/server` reads both variables at boot and calls `setGraphTargets` once, before it loads
+the stores and before the syncs; an invalid value stops the boot. A host of its own does the same
+(`setGraphTargets(graphTargetOptionsFromEnv(process.env))`, `@_linked/core/utils/graphTargets`).
+Core itself never reads `process.env` for them. With nothing set both are `'package'`. Each call
+replaces both settings (one left out is `'package'`). A value that is neither keyword must be an
+absolute IRI (not a portable graph name such as `graphs.default`, and not the same IRI for both
+settings); anything else throws, naming the setting and where it came from.
+
+**The frontend needs nothing.** A browser's `.from(graphs.allOntologies)` or
+`.from(graphs.allShapes)` travels to the backend as the portable name, and the backend's store
+expands it under the backend's setting.
 
 | Mode | Ontology sync (`syncOntologies`) | Shape sync (`syncShapeGraphs`) |
 |---|---|---|
@@ -110,8 +123,8 @@ setting and where it came from.
 The shared graph IRI may not be a package's own graph name (`…/pkg/{slug}/graph/ontology` or
 `/graph/shapes`).
 
-The readers follow the mode: `graphs.allOntologies` and `graphs.allShapes` read the package graphs,
-the shared graph, or the default graph. `.from()` and readers built on them work the same in every
+The readers follow the mode: on every store, `graphs.allOntologies` and `graphs.allShapes` read the
+package graphs, the shared graph, or the default graph. `.from()` and readers built on them work the same in every
 mode. An unchanged sync writes nothing in every mode (and so probes nothing).
 
 **`'default'` mode's package-owned terms.** A package-owned term is every subject whose IRI starts
@@ -645,7 +658,7 @@ Validates a config of the shape `{ datasets: { <alias>: { store: <npm-path>, con
 loadStores<T>(config: DatasetsConfig, options?: {graphTargets?: GraphTargetOptions}): Promise<Record<string, T>>
 ```
 
-Dynamically imports each alias's `store` path and instantiates the resolved class with `new StoreClass(entry.config)`. Returns alias → store. An entry's `config.ontologyGraph` / `config.shapeGraph` are then set on the store (`setGraphTargets`), and `options.graphTargets` fills what they leave unset (see [Ontology and shape graphs](#ontology-and-shape-graphs)); an invalid value fails the load. Convention: the last segment of the `store` path is the named export to use (with `default` as a fallback). **Async + uses runtime dynamic `import()`** — works in Node where module specifiers resolve at runtime. Frontends can't use this (webpack can't bundle `import(variableString)`); frontend code instead imports each store class statically and constructs per alias by hand.
+Dynamically imports each alias's `store` path and instantiates the resolved class with `new StoreClass(entry.config)`. Returns alias → store. The graph targets are not part of a store's config: they are one global setting (see [Ontology and shape graphs](#ontology-and-shape-graphs)). Convention: the last segment of the `store` path is the named export to use (with `default` as a fallback). **Async + uses runtime dynamic `import()`** — works in Node where module specifiers resolve at runtime. Frontends can't use this (webpack can't bundle `import(variableString)`); frontend code instead imports each store class statically and constructs per alias by hand.
 
 **Host loader.** When `globalThis[Symbol.for('@_linked/core:importModule')]` is a function `(specifier: string) => Promise<unknown>`, `loadStores` imports each store through it instead of `import()`, passing the `store` specifier unchanged; it is read on every call. `linked start` (dev) sets it so a store comes from the same copy of its package as the app's own imports under Vite's SSR runner. Nothing else needs to set it.
 

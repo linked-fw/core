@@ -10,6 +10,8 @@
  *   instance data and a class of no package are untouched; the readers read the default graph; a
  *   shape rewrite keeps the links other shapes hold to it.
  *
+ * The targets are the process's one global setting (`setGraphTargets`), set before each store.
+ *
  * An unchanged sync sends no update (so no probe) in every mode, and a sync that finds another
  * mode's data warns once and leaves it.
  */
@@ -41,7 +43,7 @@ import {OntologyGraph, ShapesGraph} from '../shapes/NamedGraph';
 import {probeDefaultGraphInference} from '../ontology/hierarchyProbe';
 import {syncShapeGraphs} from '../shapes/syncShapeGraphs';
 import {packageShapesTurtle} from '../shapes/shapesToTurtle';
-import type {SparqlOptions} from '../sparql/sparqlUtils';
+import {setGraphTargets, type GraphTargetOptions} from '../utils/graphTargets';
 import type {IDataset} from '../interfaces/IDataset';
 import '../shapes/index';
 
@@ -94,13 +96,19 @@ class GmClass extends Shape {
 /** Counts the updates it sends. */
 class CountingStore extends FusekiStore {
   updates = 0;
-  constructor(options?: SparqlOptions) {
-    super(FUSEKI_BASE_URL, DATASET_NAME, options);
+  constructor() {
+    super(FUSEKI_BASE_URL, DATASET_NAME);
   }
   protected override async executeSparqlUpdate(sparql: string): Promise<void> {
     this.updates++;
     return super.executeSparqlUpdate(sparql);
   }
+}
+
+/** Set the process's graph targets (they are global, not a store's) and return a fresh store. */
+function storeIn(targets: GraphTargetOptions): CountingStore {
+  setGraphTargets(targets);
+  return new CountingStore();
 }
 
 type Exec<T> = {exec: (ds: IDataset) => Promise<T>};
@@ -147,6 +155,7 @@ describeFuseki('graph targets: ontologyGraph', () => {
     await createTestDataset();
   });
   afterAll(async () => {
+    setGraphTargets({});
     await dropAll();
   });
 
@@ -155,7 +164,7 @@ describeFuseki('graph targets: ontologyGraph', () => {
       await dropAll();
       aData = dogData();
       bData = catData();
-      const store = new CountingStore({ontologyGraph: 'package'});
+      const store = storeIn({ontologyGraph: 'package'});
       const first = await syncOntologies(store, {packages: [PKG_A, PKG_B]});
       expect(first).toMatchObject({written: [PKG_A, PKG_B], target: 'package'});
       expect(await ask(`ASK { GRAPH <${OntologyGraph.iriFor(PKG_A)}> { <${A}Dog> <${SUB}> <${A}Pet> } }`)).toBe(true);
@@ -171,7 +180,7 @@ describeFuseki('graph targets: ontologyGraph', () => {
     let store: CountingStore;
     beforeAll(async () => {
       await dropAll();
-      store = new CountingStore({ontologyGraph: SHARED_ONT});
+      store = storeIn({ontologyGraph: SHARED_ONT});
     });
 
     test('one registered graph holds every package; its record lists each package; nothing else is written', async () => {
@@ -237,7 +246,7 @@ describeFuseki('graph targets: ontologyGraph', () => {
 
     beforeAll(async () => {
       await dropAll();
-      store = new CountingStore({ontologyGraph: 'default'});
+      store = storeIn({ontologyGraph: 'default'});
       // Instance data under the app's IRIs, a class of no package, and a term of package a that
       // is not in its Turtle (written by hand: the next sync may overwrite it).
       await executeSparqlUpdate(
@@ -301,7 +310,7 @@ describeFuseki('graph targets: ontologyGraph', () => {
   describe("'default': what it refuses, and the probe", () => {
     test('a blank node no term links to is refused before anything is sent', async () => {
       await dropAll();
-      const store = new CountingStore({ontologyGraph: 'default'});
+      const store = storeIn({ontologyGraph: 'default'});
       aData = dogData() + `${PREFIXES}[] a owl:AllDisjointClasses ; owl:members ( a:Dog a:Pet ) .\n`;
       bData = catData();
       await expect(syncOntologies(store)).rejects.toThrow(/The ontology data of gmode-a has 3 blank node\(s\) that no IRI subject links to/);
@@ -310,7 +319,7 @@ describeFuseki('graph targets: ontologyGraph', () => {
     }, LIVE_TIMEOUT);
 
     test('a store that cannot replace default-graph terms is refused', async () => {
-      const store = new CountingStore({ontologyGraph: 'default'});
+      const store = storeIn({ontologyGraph: 'default'});
       (store as unknown as {replaceDefaultGraphTerms?: unknown}).replaceDefaultGraphTerms = undefined;
       await expect(syncOntologies(store)).rejects.toThrow(/cannot replace default-graph terms/);
     }, LIVE_TIMEOUT);
@@ -323,7 +332,8 @@ describeFuseki('graph targets: ontologyGraph', () => {
       await deleteDataset(plain);
       await createDataset(plain, {dbType: 'mem'});
       try {
-        const store = new FusekiStore(FUSEKI_BASE_URL, plain, {ontologyGraph: 'default'});
+        setGraphTargets({ontologyGraph: 'default'});
+        const store = new FusekiStore(FUSEKI_BASE_URL, plain);
         const warnings = await warningsOf(() => syncOntologies(store));
         expect(warnings.filter((w) => w.includes('does not infer rdf:type from the default graph'))).toHaveLength(1);
       } finally {
@@ -337,9 +347,9 @@ describeFuseki('graph targets: ontologyGraph', () => {
       await dropAll();
       aData = dogData();
       bData = catData();
-      await syncOntologies(new CountingStore({ontologyGraph: 'package'}), {packages: [PKG_A, PKG_B]});
+      await syncOntologies(storeIn({ontologyGraph: 'package'}), {packages: [PKG_A, PKG_B]});
 
-      const toDefault = new CountingStore({ontologyGraph: 'default'});
+      const toDefault = storeIn({ontologyGraph: 'default'});
       const warnings = (await warningsOf(() => syncOntologies(toDefault))).filter((w) => w.includes('also holds'));
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("ontologyGraph is 'default'");
@@ -347,13 +357,13 @@ describeFuseki('graph targets: ontologyGraph', () => {
       // Not moved: the package graphs are still there.
       expect(await ask(`ASK { GRAPH <${OntologyGraph.iriFor(PKG_A)}> { <${A}Dog> ?p ?o } }`)).toBe(true);
 
-      const toShared = new CountingStore({ontologyGraph: SHARED_ONT});
+      const toShared = storeIn({ontologyGraph: SHARED_ONT});
       const shared = (await warningsOf(() => syncOntologies(toShared))).filter((w) => w.includes('also holds'));
       expect(shared).toHaveLength(1);
       expect(shared[0]).toContain('package ontology graphs');
       expect(shared[0]).toContain("the ontology in the default graph (the 'default' mode");
 
-      const back = (await warningsOf(() => syncOntologies(new CountingStore({ontologyGraph: 'package'}), {packages: [PKG_A, PKG_B]}))).filter(
+      const back = (await warningsOf(() => syncOntologies(storeIn({ontologyGraph: 'package'}), {packages: [PKG_A, PKG_B]}))).filter(
         (w) => w.includes('also holds'),
       );
       expect(back).toHaveLength(1);
@@ -372,12 +382,13 @@ describeFuseki('graph targets: shapeGraph', () => {
     await createTestDataset();
   });
   afterAll(async () => {
+    setGraphTargets({});
     await dropAll();
   });
 
   test("'package': one graph per package and the app graph, then nothing", async () => {
     await dropAll();
-    const store = new CountingStore({shapeGraph: 'package'});
+    const store = storeIn({shapeGraph: 'package'});
     const first = await syncShapeGraphs(store, RUN);
     expect(first).toMatchObject({written: ['@_linked/core', PKG_A], appGraph: 'written', target: 'package'});
     expect(await ask(`ASK { GRAPH <${ShapesGraph.iriFor(PKG_A)}> { <${GmDog.shape.id}> ?p ?o } }`)).toBe(true);
@@ -396,7 +407,7 @@ describeFuseki('graph targets: shapeGraph', () => {
     };
     beforeAll(async () => {
       await dropAll();
-      store = new CountingStore({shapeGraph: SHARED_SHAPES});
+      store = storeIn({shapeGraph: SHARED_SHAPES});
     });
 
     test('one graph holds every package and the app shapes; its record lists them; nothing else is written', async () => {
@@ -440,7 +451,7 @@ describeFuseki('graph targets: shapeGraph', () => {
     let store: CountingStore;
     beforeAll(async () => {
       await dropAll();
-      store = new CountingStore({shapeGraph: 'default'});
+      store = storeIn({shapeGraph: 'default'});
     });
 
     test('the shapes go into the default graph; the readers read it; then nothing', async () => {
@@ -471,8 +482,8 @@ describeFuseki('graph targets: shapeGraph', () => {
 
   test('data of another mode is reported once by each sync, and left as it is', async () => {
     await dropAll();
-    await syncShapeGraphs(new CountingStore({shapeGraph: 'package'}), RUN);
-    const toDefault = (await warningsOf(() => syncShapeGraphs(new CountingStore({shapeGraph: 'default'}), RUN))).filter((w) =>
+    await syncShapeGraphs(storeIn({shapeGraph: 'package'}), RUN);
+    const toDefault = (await warningsOf(() => syncShapeGraphs(storeIn({shapeGraph: 'default'}), RUN))).filter((w) =>
       w.includes('also holds'),
     );
     expect(toDefault).toHaveLength(1);
@@ -480,14 +491,14 @@ describeFuseki('graph targets: shapeGraph', () => {
     expect(toDefault[0]).toContain(`the app's shape graph <${APP}>`);
     expect(await ask(`ASK { GRAPH <${ShapesGraph.iriFor(PKG_A)}> { <${GmDog.shape.id}> ?p ?o } }`)).toBe(true);
 
-    const toShared = (await warningsOf(() => syncShapeGraphs(new CountingStore({shapeGraph: SHARED_SHAPES}), RUN))).filter((w) =>
+    const toShared = (await warningsOf(() => syncShapeGraphs(storeIn({shapeGraph: SHARED_SHAPES}), RUN))).filter((w) =>
       w.includes('also holds'),
     );
     expect(toShared).toHaveLength(1);
     expect(toShared[0]).toContain('package shape graphs');
     expect(toShared[0]).toContain("registered shape(s) in the default graph (the 'default' mode)");
 
-    const back = (await warningsOf(() => syncShapeGraphs(new CountingStore({shapeGraph: 'package'}), RUN))).filter((w) =>
+    const back = (await warningsOf(() => syncShapeGraphs(storeIn({shapeGraph: 'package'}), RUN))).filter((w) =>
       w.includes('also holds'),
     );
     expect(back).toHaveLength(1);
