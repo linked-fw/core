@@ -373,3 +373,29 @@ export function sortGraphSet(set: Iterable<string>): string[] {
   const named = all.filter((g) => g !== graphs.default).sort();
   return all.includes(graphs.default) ? [graphs.default, ...named] : named;
 }
+
+/**
+ * The graphs that may hold a link to a node of `shapeId` under `routing`: the read set of every
+ * shape that declares a property whose value shape is the shape, one of its super-shapes or one
+ * of its sub-shapes (a sub-shape of such a shape is in its read set), in the stable order of
+ * {@link sortGraphSet}. A delete by id removes the links to its subject there. Shapes whose class
+ * stores its instances in a graph of its own (`storedInGraph`, the graph registry's records) are
+ * left out: mutations never write those graphs.
+ */
+export function referringGraphsForShape(routing: ShapeGraphRouting, shapeId: string): string[] {
+  const targets = new Set<string>([
+    shapeId,
+    ...getSuperShapes(shapeId).map((s) => s.id),
+    ...getSubShapes(shapeId).map((s) => s.id),
+  ]);
+  const out = new Set<string>();
+  for (const shape of getAllNodeShapes().values()) {
+    if (!getPropertyShapes(shape).some((ps) => ps.valueShape?.id !== undefined && targets.has(ps.valueShape.id))) {
+      continue;
+    }
+    const storedIn = (getRegisteredShapeClass(shape.id) as {storedInGraph?: unknown} | undefined)?.storedInGraph;
+    if (typeof storedIn === 'string' && storedIn) continue;
+    for (const graph of routing.readGraphsForShape(shape.id)) out.add(graph);
+  }
+  return sortGraphSet(out);
+}

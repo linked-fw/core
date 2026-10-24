@@ -11,6 +11,7 @@ import type {
   IRUpdateWhereMutation,
   IRGraphPattern,
   IRExpression,
+  IRTraversalPattern,
   IRFieldValue,
   IRNodeData,
   IRSetModificationValue,
@@ -42,7 +43,7 @@ import type {
   SparqlGraphTriples,
 } from './SparqlAlgebra.js';
 import {type SparqlCompileOptions, generateEntityUri} from './sparqlUtils.js';
-import type {ShapeGraphRouting} from '../utils/graphRouting.js';
+import {referringGraphsForShape, sortGraphSet, type ShapeGraphRouting} from '../utils/graphRouting.js';
 import {
   selectPlanToSparql,
   askPlanToSparql,
@@ -66,7 +67,12 @@ import {
   withShapeCatalog,
 } from '../utils/ShapeClass.js';
 import {UnresolvedContextError} from '../queries/QueryContext.js';
-import {scopeAlgebraToGraphs, type ReadGraphScope} from './graphScope.js';
+import {
+  scopeAlgebraToGraphs,
+  scopeMutationWhere,
+  type MutationSubjectGraph,
+  type ReadGraphScope,
+} from './graphScope.js';
 import {graphs} from '../ontologies/graphs.js';
 import {GraphQueryError} from '../queries/graphQuery.js';
 
@@ -1996,14 +2002,16 @@ function elsewhereBlocks(
 }
 
 /** The store's name for the default graph (`SparqlOptions.mapGraphName`), or a refusal. */
-function defaultGraphStoreName(options: SparqlCompileOptions | undefined): string {
+function defaultGraphStoreName(
+  options: SparqlCompileOptions | undefined,
+  what = 'This write may find its subject in the default graph or in named graphs',
+): string {
   const name = options?.mapGraphName ? options.mapGraphName(graphs.default) : null;
   if (!name) {
     throw new GraphQueryError(
       'unsupported-query-kind',
-      'This write may find its subject in the default graph or in named graphs, which a SPARQL ' +
-        'store addresses through its own name for the default graph; this store has none ' +
-        '(SparqlOptions.mapGraphName).',
+      `${what}, which a SPARQL store addresses through its own name for the default graph; this ` +
+        'store has none (SparqlOptions.mapGraphName).',
       graphs.default,
     );
   }
@@ -2238,8 +2246,10 @@ function generateNodeDataTriples(
 /**
  * A mutation plan writing into `graph` (the mutation's `.into()` graph or the store's routed one):
  * `INSERT DATA { GRAPH <g> { … } }`, or `WITH <g>` before a DELETE/INSERT, which makes the graph
- * the target of both templates and the dataset of the WHERE, so an update's old values, a
- * delete's incoming references and an owned walk are all read and removed in that graph only.
+ * the target of both templates and the dataset of the WHERE, so an update's old values and an
+ * owned walk are read and removed in that graph only (a delete's incoming references and a linked
+ * node's reads under routing name their own graphs inside it: `deleteInGraphs`,
+ * `readLinkedNodesInTheirGraphs`).
  * Without a graph the plan is unchanged (the default graph).
  */
 function inGraph<P extends SparqlInsertDataPlan | SparqlDeleteInsertPlan>(plan: P, graph: string | undefined): P {
@@ -2278,6 +2288,234 @@ function inWriteGraph(
       ...(subject ? {subject} : {}),
       ...(query.kind === 'upsert' ? {fallback: storeName(query.graph ?? graphs.default)} : {}),
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Writes across graphs: a mutation's WHERE reads a linked node in its own shape's graphs
+// ---------------------------------------------------------------------------
+
+/**
+ * A link a mutation's WHERE follows: `from` → `to` through `property`, along `pathExpr` when the
+ * pattern carries one (else the property's declared `sh:path`).
+ */
+type MutationTraversal = {from: string; property: string; to: string; pathExpr?: PathExpr};
+
+/** The alias a computed field's traversals start from (see `processUpdateFields`). */
+const COMPUTED_SUBJECT_ALIAS = '__mutation_subject__';
+
+/**
+ * Every traversal of a mutation's WHERE: computed fields' (`traversalPatterns`) and, for a bulk
+ * change, the where clause's patterns and the patterns of its `EXISTS` expressions.
+ */
+function mutationTraversals(query: {
+  traversalPatterns?: IRTraversalPattern[];
+  where?: IRExpression;
+  wherePatterns?: IRGraphPattern[];
+}): MutationTraversal[] {
+  const out: MutationTraversal[] = [...(query.traversalPatterns ?? [])];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    const node = value as {kind?: unknown; from?: unknown; to?: unknown; property?: unknown; pathExpr?: unknown};
+    if (
+      node.kind === 'traverse' &&
+      typeof node.from === 'string' &&
+      typeof node.to === 'string' &&
+      typeof node.property === 'string'
+    ) {
+      out.push({
+        from: node.from,
+        to: node.to,
+        property: node.property,
+        ...(node.pathExpr ? {pathExpr: node.pathExpr as PathExpr} : {}),
+      });
+    }
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(query.wherePatterns);
+  visit(query.where);
+  return out;
+}
+
+/**
+ * The graph set of every node a mutation's WHERE reads through a link, by variable, under graph
+ * routing: the routed read set of the property's value shape (where a read of that shape finds
+ * it), or every graph the routing knows for a property without a value shape. A node reached
+ * through `contains` lives in its owner's graph: from the subject it stays with the subject (it
+ * is not listed), from a linked node it has that node's set. `subjectAliases` are the aliases
+ * that stand for the mutation's subject.
+ */
+function linkedGraphSets(
+  traversals: MutationTraversal[],
+  subjectAliases: readonly string[],
+  routing: ShapeGraphRouting,
+): Map<string, readonly string[]> {
+  const linked = new Map<string, readonly string[]>();
+  const withSubject = new Set<string>(subjectAliases);
+  // Traversals come parent first, but a fixpoint does not depend on it.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const {from, property, to} of traversals) {
+      if (linked.has(to) || withSubject.has(to)) continue;
+      const fromSet = linked.get(from);
+      if (!fromSet && !withSubject.has(from)) continue;
+      const ps = findPropertyShapeById(property);
+      if (ps?.contains && ps.valueShape?.id) {
+        if (fromSet) linked.set(to, fromSet);
+        else withSubject.add(to);
+      } else if (ps?.valueShape?.id) {
+        linked.set(to, routedGraphsOfShape(ps.valueShape.id, routing));
+      } else {
+        linked.set(to, routing.allGraphs());
+      }
+      changed = true;
+    }
+  }
+  return linked;
+}
+
+/** The path a traversal follows when it is not one IRI (`undefined` for a plain predicate). */
+function complexPathOf(traversal: MutationTraversal): PathExpr | undefined {
+  if (traversal.pathExpr) return getSimplePathId(traversal.pathExpr) === null ? traversal.pathExpr : undefined;
+  const ps = findPropertyShapeById(traversal.property);
+  return ps && getSimplePathId(ps.path) === null ? ps.path : undefined;
+}
+
+/**
+ * The traversals into a node read in another graph whose path is `^<p>`: their stored triple is
+ * `?to <p> ?from`, held in the linked node's graph, so it is rewritten that way round (and read
+ * there). Any other complex path (a sequence, an alternative, a repetition) into such a node is
+ * refused: its intermediate nodes have no graph of their own to be read in.
+ */
+function inverseTraversals(
+  traversals: MutationTraversal[],
+  linkedElsewhere: (variable: string) => boolean,
+): {to: string; predicate: SparqlTerm}[] {
+  const out: {to: string; predicate: SparqlTerm}[] = [];
+  for (const traversal of traversals) {
+    if (!linkedElsewhere(traversal.to)) continue;
+    const path = complexPathOf(traversal);
+    if (!path) continue;
+    if (typeof path === 'object' && path !== null && 'inv' in path && getSimplePathId(path.inv) !== null) {
+      out.push({to: traversal.to, predicate: iriTerm(getSimplePathId(path.inv)!)});
+      continue;
+    }
+    throw new GraphQueryError(
+      'unsupported-query-kind',
+      `This write follows <${traversal.property}> (the property path ${pathExprToSparql(path)}) into a ` +
+        `node that lives in another graph than the mutation's subject; a path other than one IRI or ` +
+        `its inverse cannot be read across graphs. Read the ids first and change them by id.`,
+    );
+  }
+  return out;
+}
+
+/** `node` with every triple passed through `map` (EXISTS patterns in expressions included). */
+function mapAlgebraTriples(node: SparqlAlgebraNode, map: (t: SparqlTriple) => SparqlTriple): SparqlAlgebraNode {
+  const expr = (e: SparqlExpression): SparqlExpression => {
+    switch (e.kind) {
+      case 'exists_expr':
+        return {...e, pattern: mapAlgebraTriples(e.pattern, map)};
+      case 'binary_expr':
+        return {...e, left: expr(e.left), right: expr(e.right)};
+      case 'logical_expr':
+        return {...e, exprs: e.exprs.map(expr)};
+      case 'not_expr':
+        return {...e, inner: expr(e.inner)};
+      case 'function_expr':
+      case 'aggregate_expr':
+        return {...e, args: e.args.map(expr)};
+      case 'in_expr':
+        return {...e, value: expr(e.value), list: e.list.map(expr)};
+      default:
+        return e;
+    }
+  };
+  switch (node.type) {
+    case 'bgp':
+      return {...node, triples: node.triples.map(map)};
+    case 'join':
+    case 'union':
+    case 'minus':
+      return {...node, left: mapAlgebraTriples(node.left, map), right: mapAlgebraTriples(node.right, map)};
+    case 'left_join':
+      return {
+        ...node,
+        left: mapAlgebraTriples(node.left, map),
+        right: mapAlgebraTriples(node.right, map),
+        ...(node.condition ? {condition: expr(node.condition)} : {}),
+      };
+    case 'filter':
+    case 'extend':
+      return {...node, expression: expr(node.expression), inner: mapAlgebraTriples(node.inner, map)};
+    case 'subselect':
+    case 'graph':
+      return {...node, inner: mapAlgebraTriples(node.inner, map)};
+    case 'values':
+      return node;
+  }
+}
+
+/** Where a DELETE/INSERT plan writes its subject (see `inWriteGraph`). */
+function planSubjectGraph(plan: SparqlDeleteInsertPlan): MutationSubjectGraph {
+  if (plan.graphIn) return {kind: 'variable', variable: plan.graphIn.variable};
+  if (plan.graph) return {kind: 'fixed', iri: plan.graph};
+  return {kind: 'plain'};
+}
+
+/** Whether a node read in `set` is read where the subject lives anyway. */
+function readsWithSubject(subject: MutationSubjectGraph, set: readonly string[]): boolean {
+  if (subject.kind === 'variable') return false;
+  const graph = subject.kind === 'fixed' ? subject.iri : graphs.default;
+  return set.length === 1 && set[0] === graph;
+}
+
+/**
+ * Under graph routing, a plan whose WHERE follows a link to a node that may live in another graph
+ * than the subject (a where-clause traversal, a computed field's traversal) reads that node in
+ * its own shape's graph set, in a block nested in the plan's graph (`scopeMutationWhere`); the
+ * templates stay in the subject's graph. Otherwise (and always without routing) the plan is
+ * returned unchanged.
+ */
+function readLinkedNodesInTheirGraphs(
+  plan: SparqlDeleteInsertPlan,
+  traversals: MutationTraversal[],
+  subjectAliases: readonly string[],
+  options: SparqlCompileOptions | undefined,
+): SparqlDeleteInsertPlan {
+  if (!options?.routing || traversals.length === 0) return plan;
+  const linked = linkedGraphSets(traversals, subjectAliases, options.routing);
+  const subjectGraph = planSubjectGraph(plan);
+  const elsewhere = (variable: string): boolean => {
+    const set = linked.get(variable);
+    return set !== undefined && !readsWithSubject(subjectGraph, set);
+  };
+  if (![...linked.keys()].some(elsewhere)) return plan;
+  const inverses = inverseTraversals(traversals, elsewhere);
+  let whereAlgebra = plan.whereAlgebra;
+  if (inverses.length > 0) {
+    // `?from ^<p> ?to` → `?to <p> ?from`, grouped (and read) with the linked node. Matched on the
+    // target alias, which one traversal binds: a computed field's first hop starts from the plan's
+    // subject term (`<id>` or `?a0`), not from its alias.
+    whereAlgebra = mapAlgebraTriples(whereAlgebra, (t) => {
+      const inverse = inverses.find(
+        (i) => t.predicate.kind === 'path' && t.object.kind === 'variable' && t.object.name === i.to,
+      );
+      return inverse ? tripleOf(t.object, inverse.predicate, t.subject) : t;
+    });
+  }
+  // The plan's own graph variable (and its lookup's companions) is taken.
+  const reserved = plan.graphIn
+    ? ['', '_p', '_o', '_found'].map((suffix) => `${plan.graphIn!.variable}${suffix}`)
+    : [];
+  return {
+    ...plan,
+    whereAlgebra: scopeMutationWhere(whereAlgebra, {subjectGraph, linked, reserved}, options),
   };
 }
 
@@ -2513,7 +2751,7 @@ function processUpdateFields(
 
       // Discover additional property references in the expression and add OPTIONAL triples
       const registry = new VariableRegistry();
-      const mutationSubjectAlias = '__mutation_subject__';
+      const mutationSubjectAlias = COMPUTED_SUBJECT_ALIAS;
       // Pre-register the subject variable mapping for the field being updated
       registry.set(mutationSubjectAlias, field.property, `old_${suffix}`);
 
@@ -2618,7 +2856,12 @@ export function updateToAlgebra(
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => updateToAlgebra(query, options));
   }
-  return inWriteGraph(buildDeleteInsertPlan(query, options), query, options, query.id);
+  return readLinkedNodesInTheirGraphs(
+    inWriteGraph(buildDeleteInsertPlan(query, options), query, options, query.id),
+    mutationTraversals(query),
+    [COMPUTED_SUBJECT_ALIAS],
+    options,
+  );
 }
 
 /**
@@ -2638,11 +2881,12 @@ export function upsertToAlgebra(
   if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
     return withShapeCatalog(catalog, () => upsertToAlgebra(query, options));
   }
-  return inWriteGraph(buildDeleteInsertPlan(query, options, {
+  const plan = inWriteGraph(buildDeleteInsertPlan(query, options, {
     // Must match the IRI `create` asserts and `select` scans for; the raw shape id is
     // not the same thing, and a node typed with it would be invisible to queries.
     ensureType: resolveShapeScanIri(query.shape),
   }), query, options, query.id);
+  return readLinkedNodesInTheirGraphs(plan, mutationTraversals(query), [COMPUTED_SUBJECT_ALIAS], options);
 }
 
 /**
@@ -2787,7 +3031,7 @@ function buildUpdateWhere(
   // BEFORE expression BINDs since the BINDs reference the traversal variables.
   for (const trav of traversalPatterns ?? []) {
     const fromTerm =
-      trav.from === '__mutation_subject__' ? subjectTerm : varTerm(trav.from);
+      trav.from === COMPUTED_SUBJECT_ALIAS ? subjectTerm : varTerm(trav.from);
     const traversalTriple = tripleOf(
       fromTerm,
       // The declared `sh:path`, like every other predicate — not the property
@@ -3573,6 +3817,10 @@ export function deleteToAlgebra(
   const deletePatterns: SparqlTriple[] = [];
   const guards: SparqlTriple[] = [];
   const blocks: SparqlAlgebraNode[] = [];
+  // Under graph routing, the links to a deleted subject are removed in every graph that may hold
+  // one (`incomingGraphs`), not only in the subject's own graph.
+  const incomingGraphs = query.keepIncoming ? undefined : incomingReferenceGraphs(query, _options);
+  const deleteInGraphs: {variable: string; triples: SparqlTriple[]}[] = [];
 
   for (let i = 0; i < query.ids.length; i++) {
     const subjectTerm = iriTerm(query.ids[i].id);
@@ -3584,13 +3832,26 @@ export function deleteToAlgebra(
 
     // DELETE block: all patterns (subject-wildcard, object-wildcard, type); with
     // `keepIncoming` only the subject's own description, not the links to it.
-    deletePatterns.push(...(query.keepIncoming ? [subjWild, typeGuard] : [subjWild, objWild, typeGuard]));
+    deletePatterns.push(
+      ...(query.keepIncoming || incomingGraphs ? [subjWild, typeGuard] : [subjWild, objWild, typeGuard]),
+    );
 
     // WHERE: the type guard is required; the subject's own triples and its
     // incoming references (the entity may have none) are separate UNION blocks.
     guards.push(typeGuard);
     blocks.push({type: 'bgp', triples: [subjWild]});
-    if (!query.keepIncoming) blocks.push({type: 'bgp', triples: [objWild]});
+    if (incomingGraphs) {
+      // `VALUES ?g_in { … } GRAPH ?g_in { ?s ?p2 <id> }`, deleted from the graph it matched in.
+      const variable = `g_in${idx}`;
+      deleteInGraphs.push({variable, triples: [objWild]});
+      blocks.push({
+        type: 'join',
+        left: {type: 'values', variable, iris: incomingGraphs},
+        right: {type: 'graph', variable, inner: {type: 'bgp', triples: [objWild]}},
+      });
+    } else if (!query.keepIncoming) {
+      blocks.push({type: 'bgp', triples: [objWild]});
+    }
 
     // The subject's own blank values (through its blank-capable properties) and the blank
     // nodes below them.
@@ -3612,12 +3873,38 @@ export function deleteToAlgebra(
     right: unionOf(blocks),
   };
 
-  return inWriteGraph({
+  const plan = inWriteGraph({
     type: 'delete_insert',
     deletePatterns,
     insertPatterns: [],
     whereAlgebra,
   }, query, _options, query.ids[0]?.id);
+  return incomingGraphs ? {...plan, deleteInGraphs} : plan;
+}
+
+/**
+ * The graphs (store names) a delete by id removes the links to its subjects from, under graph
+ * routing: the graphs that may hold a link to the shape (`referringGraphsForShape`) and the subject's own
+ * graph set. `undefined` when that is only the one graph the delete runs in (or without routing):
+ * the links are then removed there, as before.
+ */
+function incomingReferenceGraphs(
+  query: IRDeleteMutation,
+  options: SparqlCompileOptions | undefined,
+): string[] | undefined {
+  if (!options?.routing) return undefined;
+  const own =
+    query.writeGraphs && query.writeGraphs.length > 0 ? query.writeGraphs : [query.graph ?? graphs.default];
+  const set = sortGraphSet([...own, ...referringGraphsForShape(options.routing, query.shape)]);
+  if (set.length === 1 && own.length === 1 && set[0] === own[0]) return undefined;
+  return set.map((graph) =>
+    graph === graphs.default
+      ? defaultGraphStoreName(
+          options,
+          'This delete removes the links to its subject held in the default graph and in named graphs',
+        )
+      : graph,
+  );
 }
 
 /**
@@ -3750,12 +4037,13 @@ export function deleteWhereToAlgebra(
     whereAlgebra = {type: 'join', left: whereAlgebra, right: union};
   }
 
-  return inWriteGraph({
+  const plan = inWriteGraph({
     type: 'delete_insert',
     deletePatterns,
     insertPatterns: [],
     whereAlgebra,
   }, query, _options);
+  return readLinkedNodesInTheirGraphs(plan, mutationTraversals(query), [subjectVar], _options);
 }
 
 /**
@@ -3813,13 +4101,19 @@ export function updateWhereToAlgebra(
   whereAlgebra = buildUpdateWhere(whereAlgebra, result, query.traversalPatterns, subjectTerm);
 
   const insertElsewhere = elsewhereBlocks(placement, options, withGraphOf(query));
-  return inWriteGraph({
+  const plan = inWriteGraph({
     type: 'delete_insert',
     deletePatterns: result.deletePatterns,
     insertPatterns: result.insertPatterns,
     whereAlgebra,
     ...(insertElsewhere ? {insertElsewhere} : {}),
   }, query, options);
+  return readLinkedNodesInTheirGraphs(
+    plan,
+    mutationTraversals(query),
+    [COMPUTED_SUBJECT_ALIAS, subjectTerm.kind === 'variable' ? subjectTerm.name : ''],
+    options,
+  );
 }
 
 // ---------------------------------------------------------------------------

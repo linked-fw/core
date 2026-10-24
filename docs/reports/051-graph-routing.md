@@ -393,7 +393,7 @@ before every jest run):
 
 ## Follow-ups
 
-- Backlog [067](../backlog/067-writes-across-graphs.md): a routed mutation runs in one graph;
+- Backlog 067 (resolved in report [056](056-writes-across-graphs.md)): a routed mutation runs in one graph;
   incoming references in other graphs and where-filters that traverse into another graph.
 - Backlogs 065 and 066 are resolved here (no linked type checks needed; the default graph through
   `VALUES`) and removed.
