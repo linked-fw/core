@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.42.0
+
+### Minor Changes
+
+- [#393](https://github.com/linked-fw/core/pull/393) [`c143ad6`](https://github.com/linked-fw/core/commit/c143ad60e3ad6f2e66535caf1dfdc2054c2f94c8) Thanks [@flyon](https://github.com/flyon)! - The graph targets (`ontologyGraph`, `shapeGraph`) are one global setting of the process, set by the host, instead of a store setting. New `setGraphTargets({ontologyGraph?, shapeGraph?})` and `getGraphTargets()` (root export and `@_linked/core/utils/graphTargets`); with nothing set both are `'package'`. Each call is checked and replaces both settings. `syncOntologies`, `syncShapeGraphs`, the `graphs.allOntologies` / `graphs.allShapes` expansion, the probe and the other-mode warnings read it. The state lives on `globalThis` (`sharedState('@_linked/core', 'graphTargets')`), so every copy of core sees one setting. `@_linked/server` sets it from `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH`; a frontend sets nothing.
+  
+  **Breaking** (the per-store paths are removed):
+  
+  - `SparqlOptions.ontologyGraph` and `SparqlOptions.shapeGraph`;
+  - `SparqlDataset.setGraphTargets()` and `SparqlDataset.graphTargets()`;
+  - `IDataset.setGraphTargets?()` and `IDataset.graphTargets?()`;
+  - `graphTargetsOf(ds)` (use `getGraphTargets()`);
+  - `loadStores`' second argument (`LoadStoresOptions`, `{graphTargets}`) and its handling of `config.ontologyGraph` / `config.shapeGraph` (a config is passed to the store verbatim).
+  
+  Every copy of core in a process must be at this version or later (an older copy's stores read targets of their own). `loadStores` warns about an entry whose config still sets `ontologyGraph` / `shapeGraph`. A host that set targets on a store calls `setGraphTargets` once at boot, before it loads its stores and runs the syncs.
+
 ## 2.41.0
 
 ### Minor Changes
