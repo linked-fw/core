@@ -110,9 +110,13 @@ replaces both settings (one left out is `'package'`). A value that is neither ke
 absolute IRI (not a portable graph name such as `graphs.default`, and not the same IRI for both
 settings); anything else throws, naming the setting and where it came from.
 
-**The frontend needs nothing.** A browser's `.from(graphs.allOntologies)` or
-`.from(graphs.allShapes)` travels to the backend as the portable name, and the backend's store
-expands it under the backend's setting.
+**The frontend needs nothing** when its queries go through the backend: a browser's
+`.from(graphs.allOntologies)` or `.from(graphs.allShapes)` travels to the backend as the portable
+name, and the backend's store expands it under the backend's setting. A store used directly in a
+browser expands it under the browser's own setting (`'package'` unless set).
+
+Every copy of core in a process must be this version or later: an older copy's stores still read
+targets of their own and ignore the global setting.
 
 | Mode | Ontology sync (`syncOntologies`) | Shape sync (`syncShapeGraphs`) |
 |---|---|---|
@@ -655,10 +659,10 @@ Validates a config of the shape `{ datasets: { <alias>: { store: <npm-path>, con
 
 ```ts
 // @_linked/core/utils/loadStores — async, backend-only
-loadStores<T>(config: DatasetsConfig, options?: {graphTargets?: GraphTargetOptions}): Promise<Record<string, T>>
+loadStores<T>(config: DatasetsConfig): Promise<Record<string, T>>
 ```
 
-Dynamically imports each alias's `store` path and instantiates the resolved class with `new StoreClass(entry.config)`. Returns alias → store. The graph targets are not part of a store's config: they are one global setting (see [Ontology and shape graphs](#ontology-and-shape-graphs)). Convention: the last segment of the `store` path is the named export to use (with `default` as a fallback). **Async + uses runtime dynamic `import()`** — works in Node where module specifiers resolve at runtime. Frontends can't use this (webpack can't bundle `import(variableString)`); frontend code instead imports each store class statically and constructs per alias by hand.
+Dynamically imports each alias's `store` path and instantiates the resolved class with `new StoreClass(entry.config)`. Returns alias → store. The graph targets are not part of a store's config: they are one global setting (see [Ontology and shape graphs](#ontology-and-shape-graphs)); an entry whose config still sets `ontologyGraph` / `shapeGraph` gets a warning. Convention: the last segment of the `store` path is the named export to use (with `default` as a fallback). **Async + uses runtime dynamic `import()`** — works in Node where module specifiers resolve at runtime. Frontends can't use this (webpack can't bundle `import(variableString)`); frontend code instead imports each store class statically and constructs per alias by hand.
 
 **Host loader.** When `globalThis[Symbol.for('@_linked/core:importModule')]` is a function `(specifier: string) => Promise<unknown>`, `loadStores` imports each store through it instead of `import()`, passing the `store` specifier unchanged; it is read on every call. `linked start` (dev) sets it so a store comes from the same copy of its package as the app's own imports under Vite's SSR runner. Nothing else needs to set it.
 

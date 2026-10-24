@@ -12,4 +12,4 @@ The graph targets (`ontologyGraph`, `shapeGraph`) are one global setting of the 
 - `graphTargetsOf(ds)` (use `getGraphTargets()`);
 - `loadStores`' second argument (`LoadStoresOptions`, `{graphTargets}`) and its handling of `config.ontologyGraph` / `config.shapeGraph` (a config is passed to the store verbatim).
 
-A host that set targets on a store calls `setGraphTargets` once at boot, before it loads its stores and runs the syncs.
+Every copy of core in a process must be at this version or later (an older copy's stores read targets of their own). `loadStores` warns about an entry whose config still sets `ontologyGraph` / `shapeGraph`. A host that set targets on a store calls `setGraphTargets` once at boot, before it loads its stores and runs the syncs.

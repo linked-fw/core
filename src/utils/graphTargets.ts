@@ -20,8 +20,9 @@
  * sets them from `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH` ({@link graphTargetOptionsFromEnv}
  * reads the env map it is given; core never reads `process.env` for them). Unset, both are
  * `'package'`. The syncs write where they say, and every store's readers (`graphs.allOntologies`,
- * `graphs.allShapes`) read there. A frontend sets nothing: it sends those portable names, and the
- * backend's store expands them. See "Ontology and shape graphs" in core's README.
+ * `graphs.allShapes`) read there. A frontend whose queries go through the backend sets nothing: it
+ * sends those portable names, and the backend's store expands them (a store used directly in a
+ * browser follows the browser's own setting). See "Ontology and shape graphs" in core's README.
  *
  * The state lives on `globalThis` (`sharedState`), so every copy of core in a process sees one
  * setting. Browser-safe: no I/O.

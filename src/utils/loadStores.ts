@@ -34,7 +34,7 @@ function importModule(specifier: string): Promise<unknown> {
  * `new StoreClass(entry.config)`. Returns alias → store. Graph routing is not read from the
  * config (an entry with a `graphs` key gets a warning): the app routes shapes in code. The graph
  * targets are not a store's either: they are one global setting the host sets (`setGraphTargets`,
- * see `utils/graphTargets.ts`).
+ * see `utils/graphTargets.ts`); an entry whose config still names one gets a warning.
  *
  * Convention: the last segment of the `store` path is the named export
  * to use (e.g. `@_linked/fuseki/shapes/FusekiStore` → `FusekiStore`).
@@ -94,6 +94,15 @@ export async function loadStores<T = unknown>(
         `[linked] loadStores: alias "${alias}" has a "graphs" key, which the datasets config ` +
           `does not read; route shapes in code with ` +
           `LinkedStorage.setDatasetForShapes(store, [Shape], {graph: 'own'}) (or dataGraph('slug')).`,
+      );
+    }
+    // The graph targets are one global setting (`setGraphTargets`); a store ignores them.
+    const targetKeys = ['ontologyGraph', 'shapeGraph'].filter((key) => entry.config?.[key] !== undefined);
+    if (targetKeys.length > 0) {
+      console.warn(
+        `[linked] loadStores: alias "${alias}" sets ${targetKeys.join(' and ')} in its config, which ` +
+          `no store reads: the graph targets are one global setting the host sets ` +
+          `(setGraphTargets; @_linked/server reads LINKED_ONTOLOGY_GRAPH / LINKED_SHAPE_GRAPH).`,
       );
     }
     stores[alias] = store;
