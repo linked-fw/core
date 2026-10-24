@@ -134,7 +134,7 @@ export function resetHierarchyInference(ds?: IDataset): void {
  * `probe:Default rdfs:subClassOf core:OntologySync` and `probe:default a probe:Default`, asks
  * through the `OntologySync` shape (a default-graph shape, unlike the registry's) whether
  * `probe:default` is found, then removes both terms (in `finally`, best effort; a leftover lies in
- * core's ontology namespace, which the next `'default'` sync replaces). Cached per dataset like
+ * core's ontology namespace, which the next `'default'` sync that writes replaces). Cached per dataset like
  * {@link probeHierarchyInference}; a rejected probe is not cached. Rejects when the store has no
  * `replaceDefaultGraphTerms`.
  */

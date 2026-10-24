@@ -227,8 +227,10 @@ const packageGraphsOf = (records: Map<string, ShapesRecord>): string[] =>
     .sort();
 
 /** An app's own shape graph among `records` (neither a package's nor a shared one), if any. */
-const appGraphOf = (records: Map<string, ShapesRecord>): string | undefined =>
-  [...records].find(([graph, record]) => !PACKAGE_SHAPES_GRAPH.test(graph) && !record.packageHashes.length)?.[0];
+const appGraphOf = (records: Map<string, ShapesRecord>, except?: string): string | undefined =>
+  [...records].find(
+    ([graph, record]) => graph !== except && !PACKAGE_SHAPES_GRAPH.test(graph) && !record.packageHashes.length,
+  )?.[0];
 
 /** The shared shape graphs among `records` (those listing package hashes), sorted. */
 const sharedGraphsOf = (records: Map<string, ShapesRecord>, except?: string): string[] =>
@@ -239,7 +241,8 @@ const sharedGraphsOf = (records: Map<string, ShapesRecord>, except?: string): st
 
 /**
  * The `'default'` mode: every shape in the default graph through `syncShapes` (each shape
- * replaced on its own hash, keeping the links other shapes hold to it). Other modes' graphs are
+ * replaced on its own hash, keeping the links other shapes hold to it). `packages` and
+ * `orphanScope` do not apply: every registered shape is synced and none is pruned. Other modes' graphs are
  * reported, never moved.
  */
 async function syncDefaultMode(ds: IDataset | undefined, options: SyncShapeGraphsOptions): Promise<SyncShapeGraphsResult> {
@@ -257,8 +260,10 @@ async function syncDefaultMode(ds: IDataset | undefined, options: SyncShapeGraph
 }
 
 /**
- * The shared mode (`shapeGraph` is an IRI): the shapes of every package of the run, and the app's
- * generated shapes when `appShapes` is given, in the one `ShapesGraph` at `graph`, rebuilt whole in
+ * The shared mode (`shapeGraph` is an IRI): the shapes of every package of the run (`packages`,
+ * when given, names every package the graph holds: a package left out is dropped from it, as the
+ * server leaves out packages without `shapes.ttl`) and the app's generated shapes, in the one
+ * `ShapesGraph` at `graph`, rebuilt whole in
  * one graph query when the combined hash ({@link sharedShapeGraphHash}) differs from the record's.
  * The record lists every package's hash (`packageHashes`) and file (`sources`). Other modes' data
  * is reported, never moved (the default-graph cleanup of the package mode does not run).
@@ -279,15 +284,14 @@ async function syncSharedGraph(
     if (text !== undefined) texts.push({name, text});
   }
   texts.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  const appText = options.appShapes
-    ? singleOwnerShapesTurtle(registered.flatMap((name) => packageShapes(name)))
-    : undefined;
+  // Always part of the shared graph, so a run without `appShapes` does not drop them.
+  const appText = singleOwnerShapesTurtle(registered.flatMap((name) => packageShapes(name)));
 
   const stale = await readStoredHashes(registered.flatMap((name) => packageShapes(name).map((shape) => shape.id)), ds);
   warnOtherModes(graph, {
     packageGraphs: packageGraphsOf(records),
     sharedGraphs: sharedGraphsOf(records, graph),
-    appGraph: appGraphOf(records),
+    appGraph: appGraphOf(records, graph),
     defaultGraphShapes: stale.size,
   });
 

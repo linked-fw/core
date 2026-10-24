@@ -94,6 +94,12 @@ export function parseGraphTarget(
         `itself and cannot be written; name a graph of its own.`,
     );
   }
+  if (/\/pkg\/[^/]+\/graph\/(?:ontology|shapes)$/.test(value)) {
+    throw new Error(
+      `Invalid ${setting} <${value}>${where}: that is the name of a package's own graph in the ` +
+        "'package' mode; name a shared graph of its own.",
+    );
+  }
   return value;
 }
 

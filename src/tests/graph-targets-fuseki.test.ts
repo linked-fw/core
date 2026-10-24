@@ -428,6 +428,11 @@ describeFuseki('graph targets: shapeGraph', () => {
       expect(result.written).toEqual(['@_linked/core', PKG_A]);
       expect(store.updates).toBe(1);
       expect(await ask(`ASK { GRAPH <${SHARED_SHAPES}> { <${EX}shapes/Extra> a <${SH}NodeShape> . <${GmPet.shape.id}> ?p ?o } }`)).toBe(true);
+      // A run without appShapes (a control-route sync) leaves the app's generated shapes in it.
+      store.updates = 0;
+      const {appShapes: _app, ...withoutApp} = RUN;
+      expect((await syncShapeGraphs(store, {...withoutApp, turtleFor})).written).toEqual([]);
+      expect(store.updates).toBe(0);
     }, LIVE_TIMEOUT);
   });
 

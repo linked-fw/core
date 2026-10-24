@@ -22,8 +22,10 @@
  * INSERT DATA { … }
  * ```
  *
- * A step is a link to a blank node followed by any number of `rdf:rest` links, and every node on
- * the way must be blank, so the delete never walks through an IRI into another term's blank nodes.
+ * A step is a link to a blank node followed by any number of `rdf:rest` links, and the node each
+ * step starts and ends on must be blank, so the delete does not walk through an IRI into another
+ * term's blank nodes (an `rdf:rest` chain with an IRI in its middle, which no well-formed list has,
+ * is the one way past that check).
  * Each branch binds `?r` itself, so it joins the subject set whatever order the store evaluates in.
  *
  * @module @_linked/core/sparql/defaultGraphTerms

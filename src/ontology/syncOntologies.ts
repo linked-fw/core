@@ -806,6 +806,8 @@ function defaultModeNamespaces(run: SyncRun, target: IDataset): string[] {
   for (const ns of namespaces) {
     const why = !ns
       ? 'it is empty'
+      : !/[/#]$/.test(ns)
+        ? 'it does not end in "/" or "#", so it would match other IRIs that start the same way'
       : root.startsWith(ns)
         ? `the data root <${root}> lies inside it`
         : shapeIris.some((iri) => iri.startsWith(ns))
@@ -841,14 +843,20 @@ async function syncDefaultMode(run: SyncRun): Promise<SyncOntologiesResult> {
         "has). Use 'package' or a shared graph IRI for this store.",
     );
   }
-  const {defaultState} = await readSyncState(ds);
+  const {nodes, defaultState} = await readSyncState(ds);
   let records = new Map<string, OntologyRecord>();
   try {
     records = await readOntologyRecords(ds);
   } catch {
     // A store without a graph registry holds no other mode's graphs.
   }
-  warnOtherModes('default', ds, {packageGraphs: packageRecords(records), sharedGraphs: sharedRecords(records)});
+  // The earlier default-graph sync's nodes lie in core's ontology namespace: a rebuild replaces
+  // them with the rest of core's terms, so they are named here before that happens.
+  warnOtherModes('default', ds, {
+    packageGraphs: packageRecords(records),
+    sharedGraphs: sharedRecords(records),
+    defaultGraphHierarchy: [...nodes.keys()].sort(),
+  });
   const names = [...run.parsed.keys()].sort();
   if (run.unreadable.length) return skipUnreadable(run, 'The ontology in the default graph', 'default');
 

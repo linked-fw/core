@@ -104,8 +104,11 @@ setting and where it came from.
 | Mode | Ontology sync (`syncOntologies`) | Shape sync (`syncShapeGraphs`) |
 |---|---|---|
 | `'package'` | One `OntologyGraph` per package, `{package IRI}/graph/ontology`, replaced whole when the package's hash changes. | One `ShapesGraph` per package, `{package IRI}/graph/shapes`, plus the app's generated shapes in `{DATA_ROOT}/graph/shapes`. |
-| an IRI | One shared `OntologyGraph` at that IRI (`feedsHierarchy` true) holding every package's ontology data. When any package's hash changes it is rebuilt whole in one update. Its record lists `packageHashes` (`"{package} {sha256}"`) and `sources` (`{package}/{file}`). | One shared `ShapesGraph` at that IRI with every package's shapes and the app's generated ones, rebuilt whole on any change; the same record fields. |
-| `'default'` | The **whole** ontology (not only the hierarchy) in the default graph. When the combined hash changes, one update deletes every package-owned term and inserts every package's current data. | The default-graph shape sync (`syncShapes`): each shape replaced on its own hash, keeping the links other shapes hold to it. |
+| an IRI | One shared `OntologyGraph` at that IRI (`feedsHierarchy` true) holding every registered package's ontology data. When any package's hash changes it is rebuilt whole in one update. Its record lists `packageHashes` (`"{package} {sha256}"`) and `sources` (`{package}/{file}`). | One shared `ShapesGraph` at that IRI with the run's packages' shapes and the app's generated ones, rebuilt whole on any change; the same record fields. `packages`, when given, names every package the graph holds (the server leaves out packages without `shapes.ttl`). |
+| `'default'` | The **whole** ontology (not only the hierarchy) in the default graph. When the combined hash changes, one update deletes every package-owned term and inserts every package's current data. | The default-graph shape sync (`syncShapes`): each shape replaced on its own hash, keeping the links other shapes hold to it. Every registered shape is synced (`packages` and `orphanScope` do not apply). |
+
+The shared graph IRI may not be a package's own graph name (`…/pkg/{slug}/graph/ontology` or
+`/graph/shapes`).
 
 The readers follow the mode: `graphs.allOntologies` and `graphs.allShapes` read the package graphs,
 the shared graph, or the default graph. `.from()` and readers built on them work the same in every
@@ -121,7 +124,12 @@ kept on `https://linked.cm/pkg/core/ontology-sync/default-graph`, replaced in th
 sync refuses, before writing, a namespace that holds the store's data root or a registered shape,
 a blank node no IRI subject links to, and a store without `replaceDefaultGraphTerms`
 (`SparqlDataset` has it). When a package's data cannot be read, the shared and default modes skip
-the rebuild with a warning, since a rebuild without it would drop its terms.
+the rebuild with a warning, since a rebuild without it would drop its terms. What the sweep cannot
+see stays: a subject outside every namespace that a package drops from its Turtle (say
+`schema:Person rdfs:subClassOf …` written by a package that does not own `schema:`), and every
+term of a package that is no longer registered. Remove those by hand. A namespace must end in `/` or
+`#`. The `OntologySync` nodes the earlier default-graph sync wrote lie in core's namespace, so a
+`'default'` rebuild replaces them; the sync names them in its warning first.
 
 **A package's ontology Turtle is the source of its terms.** Any triples about a package's terms
 must live in that package's Turtle. Anything else written about them (by hand, by another tool) can

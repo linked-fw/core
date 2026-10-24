@@ -65,6 +65,9 @@ describe('graph target values', () => {
     expect(() => parseGraphTarget(graphs.default, 'shapeGraph')).toThrow(/cannot be written/);
     expect(() => parseGraphTarget(graphs.registry, 'ontologyGraph')).toThrow(/cannot be written/);
     expect(() => parseGraphTarget('urn:x-arq:DefaultGraph', 'ontologyGraph')).toThrow(/cannot be written/);
+    expect(() => parseGraphTarget('https://linked.cm/pkg/schema/graph/ontology', 'ontologyGraph')).toThrow(
+      /a package's own graph/,
+    );
   });
 
   test('the env variables are read from the map given, named in errors, and may not share one graph', () => {
