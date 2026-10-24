@@ -17,6 +17,7 @@ import {deleteToSparql} from '../sparql/irToAlgebra';
 import {collectOwnedLinks} from '../sparql/ownedLinkCheck';
 import {lower} from '../queries/lower';
 import {DeleteBuilder} from '../queries/DeleteBuilder';
+import {lowerMutationJSON} from '../queries/lowerMutationJSON';
 import {isGraphQueryError} from '../queries/graphQuery';
 import {mutationEffects, queryDependencies} from '../queries/queryDependencies';
 import {LinkedStorage} from '../utils/LinkedStorage';
@@ -289,8 +290,32 @@ describe('a delete that keeps incoming links', () => {
     expect(keeping).toContain(`<${NG}avatar>`);
   });
 
-  test('is server-side only and by ids only', () => {
-    expect(() => DeleteBuilder.from(NGPerson, {id: ID})._keepingIncoming().toJSON()).toThrow(/server-side only/);
+  test('is by ids only', () => {
     expect(() => lower(DeleteBuilder.from(NGPerson)._keepingIncoming().all())).toThrow(/by ids/);
+    expect(() => DeleteBuilder.from(NGPerson)._keepingIncoming().all().toJSON()).toThrow(/by ids/);
+  });
+
+  test('round-trips through DSL-JSON and lowers to the same delete', () => {
+    const json = DeleteBuilder.from(NGPerson, {id: ID})._keepingIncoming().toJSON();
+    expect(json).toEqual(expect.objectContaining({op: 'delete', mode: 'ids', ids: [ID], keepIncoming: true}));
+    const wire = JSON.parse(JSON.stringify(json));
+    const back = DeleteBuilder.fromJSON(wire);
+    expect(back.toJSON()).toEqual(json);
+    expect(lower(back)).toEqual(expect.objectContaining({kind: 'delete', keepIncoming: true}));
+    expect(lowerMutationJSON(wire)).toEqual(expect.objectContaining({kind: 'delete', keepIncoming: true}));
+    expect(deleteToSparql(lower(back) as never)).toBe(
+      deleteToSparql(lower(DeleteBuilder.from(NGPerson, {id: ID})._keepingIncoming()) as never),
+    );
+    // A plain delete carries no flag.
+    const plain = DeleteBuilder.from(NGPerson, {id: ID}).toJSON();
+    expect(plain).not.toHaveProperty('keepIncoming');
+    expect(lower(DeleteBuilder.fromJSON(plain))).not.toHaveProperty('keepIncoming');
+  });
+
+  test('a malformed or misplaced flag is refused', () => {
+    const base = {op: 'delete', shape: NGPerson.shape.id} as const;
+    expect(() => DeleteBuilder.fromJSON({...base, mode: 'ids', ids: [ID], keepIncoming: 'yes'} as never)).toThrow(/boolean/);
+    expect(() => DeleteBuilder.fromJSON({...base, mode: 'all', keepIncoming: true} as never)).toThrow(/by ids/);
+    expect(() => lowerMutationJSON({...base, mode: 'all', keepIncoming: true} as never)).toThrow(/mode "ids"/);
   });
 });

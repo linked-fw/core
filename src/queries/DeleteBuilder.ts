@@ -10,7 +10,7 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import {type WhereClause, type WherePath, processWhereClause} from './SelectQuery.js';
-import {type DeleteMutationJSON} from './MutationSerialization.js';
+import {type DeleteMutationJSON, readKeepIncoming} from './MutationSerialization.js';
 import {serializeWherePath, deserializeWherePath} from './QueryBuilderSerialization.js';
 import type {DeleteLowerSpec} from './mutationLowerSpec.js';
 import {PendingQueryContext, asContextRef} from './QueryContext.js';
@@ -37,7 +37,7 @@ interface DeleteBuilderInit<S extends Shape> {
   where?: WherePath;
   /** The graph `.into()` names; never serialized (`toJSON` refuses a builder that has one). */
   into?: string;
-  /** Keep the incoming links of the deleted ids (internal; never serialized). */
+  /** Keep the incoming links of the deleted ids (internal; carried as `keepIncoming` in DSL-JSON). */
   keepIncoming?: boolean;
 }
 
@@ -121,7 +121,10 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
       const ids: DeleteId[] = json.ids.map((id) =>
         isContextRefJSON(id) ? new PendingQueryContext(id['@ctx']) : {id},
       );
-      return new DeleteBuilder({shape: resolved, ids, mode: 'ids'});
+      return new DeleteBuilder({shape: resolved, ids, mode: 'ids', keepIncoming: readKeepIncoming(json)});
+    }
+    if (readKeepIncoming(json)) {
+      throw new Error('DeleteBuilder.fromJSON(): "keepIncoming" needs a delete by ids.');
     }
     if (json.mode === 'all') {
       return new DeleteBuilder({shape: resolved, mode: 'all'});
@@ -177,8 +180,9 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
 
   /**
    * @internal Delete only the description of each id (its triples, blank values and owned
-   * subtree) and keep the links other nodes hold to it. Server-side only, by ids only; never
-   * serialized (`toJSON` refuses it).
+   * subtree) and keep the links other nodes hold to it. By ids only. Serializable: DSL-JSON
+   * carries it as `keepIncoming: true` on a `mode: 'ids'` delete. It removes strictly less than a
+   * plain delete, so a receiver applies the same access rules as for any delete.
    */
   _keepingIncoming(): DeleteBuilder<S, R> {
     return this.clone({keepIncoming: true}) as unknown as DeleteBuilder<S, R>;
@@ -231,11 +235,11 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
       return withShapeCatalog(catalog, () => this.toJSON());
     }
     refuseSerializedInto('DeleteBuilder', this._into);
-    if (this._keepIncoming) {
-      throw new Error('DeleteBuilder.toJSON(): a delete that keeps incoming links is server-side only.');
-    }
     const shape = this._shape.shape.id;
     const mode = this._mode || (this._ids ? 'ids' : undefined);
+    if (this._keepIncoming && mode !== 'ids') {
+      throw new Error('DeleteBuilder: keeping incoming links needs a delete by ids.');
+    }
     if (mode === 'all') {
       return {v: WIRE_VERSION, op: 'delete', shape, mode: 'all'};
     }
@@ -271,6 +275,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
             ? id
             : id.id,
       ),
+      ...(this._keepIncoming ? {keepIncoming: true as const} : {}),
     };
   }
 
@@ -293,4 +298,3 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
 
 }
 brandLinkedClass(DeleteBuilder, '@_linked/core', 'DeleteBuilder');
-
