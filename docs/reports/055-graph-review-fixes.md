@@ -1,7 +1,8 @@
 ---
 summary: >
   Fixes from the plan-071 overview review of named graphs and graph routing. The ontology sync
-  probes the store before it moves the hierarchy out of the default graph. Graph query conditions
+  probes the store before it moves the hierarchy out of the default graph (in 2.40.1: only
+  before a write, and no default-graph copy on any answer; see Follow-ups). Graph query conditions
   are now inside the update. A create of a populated unregistered graph is refused. Record-only
   updates report `changed: true`. The registry cache is on `globalThis`. Receivers can refuse
   `keepIncoming`. `'own'` routes work for a package slugged `import`. Live echo folding pairs each
@@ -185,3 +186,9 @@ An independent read-only review found two high and five medium findings.
   `appGatewayRoutes` already invalidates catalogs on `changed`, which now covers record-only
   updates.
 - `two-copies-built.test.ts` crashes in jest locally: backlog 060.
+- Done in 2.40.1: the probe runs only before the sync writes its first package graph (a sync with
+  nothing to write probed and so wrote at every boot, which forked every unforked CN branch), and
+  no answer keeps a default-graph copy of the hierarchy any more: `'default-graph'` and `'none'`
+  write package graphs only, remove what an earlier sync kept in the default graph, and warn once
+  that class-scoped reads miss subclass instances. This replaces the `'default-graph'` decision
+  under Deviations.

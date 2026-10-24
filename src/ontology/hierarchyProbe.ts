@@ -6,8 +6,9 @@
 
 /**
  * Which class hierarchy a store infers from, measured on the store itself before the ontology
- * sync moves the hierarchy out of the default graph. Core never checks a store's product or
- * version: it writes a probe and reads it back through the dataset's normal query path.
+ * sync writes its first package graph; the sync warns when the answer is not `'named-graphs'`.
+ * Core never checks a store's product or version: it writes a probe and reads it back through the
+ * dataset's normal query path.
  *
  * The probe uses two temporary graphs, both recorded as `OntologyGraph`s: a hierarchy graph that
  * feeds the hierarchy, and a data graph that does not (`feedsHierarchy false`):
@@ -76,7 +77,7 @@ const GLOBAL_ROUTER = {};
 
 const probeState = sharedState('@_linked/core', 'hierarchyProbe', () => ({
   results: new WeakMap<object, Promise<HierarchyInference>>(),
-  /** The datasets the sync has warned about (one warning per probe answer). */
+  /** The datasets the sync has warned about (one warning per dataset). */
   warned: new WeakSet<object>(),
 }));
 

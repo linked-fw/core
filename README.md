@@ -45,19 +45,25 @@ product or version.
   registry marks `feedsHierarchy false` then feed the hierarchy as well, so a draft ontology's
   classes infer before it is published.
 
-How the ontology sync adapts (`syncOntologies`, `@_linked/core/ontology/syncOntologies`; run by
-`@_linked/server` at boot): before it writes, it probes the store once per dataset. It writes a
-probe `rdfs:subClassOf` into a temporary registered graph and a typed instance into a second graph
-that does not feed the hierarchy, asks through the normal query path whether the instance is found
-by its superclass, then removes the probe. The ontology data is written into package graphs on
-every store with named graphs, so readers of `graphs.allOntologies` see the same everywhere. See
-[ontologies](./docs/architecture/ontologies.md).
+How the ontology sync measures the store (`syncOntologies`, `@_linked/core/ontology/syncOntologies`;
+run by `@_linked/server` at boot): before it writes its first package graph, it probes the store
+once per dataset. It writes a probe `rdfs:subClassOf` into a temporary registered graph and a typed
+instance into a second graph that does not feed the hierarchy, asks through the normal query path
+whether the instance is found by its superclass, then removes the probe. A sync with nothing to
+write runs no probe; unless an earlier sync left a default-graph hierarchy to remove (once), it
+sends nothing but its reads. On every store with named graphs the ontology
+data is written into package graphs only, and the hierarchy an earlier sync kept in the default
+graph is removed, so readers of `graphs.allOntologies` see the same everywhere. The answer only
+decides a warning. See [ontologies](./docs/architecture/ontologies.md).
 
 | The store infers from | The sync does |
 |---|---|
-| the registered graphs | writes each package's ontology data into its own graph, and removes the hierarchy an earlier sync kept in the default graph |
-| the default graph only | writes the package graphs and keeps the hierarchy in the default graph too; warns once |
-| nothing | writes the package graphs and keeps the hierarchy in the default graph too; warns once that class-scoped reads miss subclass instances |
+| the registered graphs | writes each package's ontology data into its own graph |
+| the default graph only | the same; warns once that class-scoped reads miss subclass instances |
+| nothing | the same; warns once that class-scoped reads miss subclass instances |
+
+A store that infers only from the default graph therefore needs an inferring store (above) for
+polymorphic reads: core never copies the hierarchy into the default graph.
 
 **Without inference** core still reads and writes, but everything that matches by class sees
 only nodes stored with exactly that class. Selects, counts and asks of a superclass miss the
