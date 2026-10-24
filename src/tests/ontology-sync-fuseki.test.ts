@@ -285,8 +285,8 @@ async function queryOn(baseUrl: string, dataset: string, sparql: string): Promis
 
 /**
  * The sync on a store that does not infer from the registered graphs: one warning naming what
- * degrades, the package graph written, the hierarchy kept in the default graph with its sync node,
- * nothing of the probe left behind, and a second sync that writes and warns nothing.
+ * degrades, the package graph written, no copy of the hierarchy in the default graph and no sync
+ * node, nothing of the probe left behind, and a second sync that writes and warns nothing.
  */
 function degradedStoreTests(baseUrl: () => string, dataset: string, expects: () => HierarchyInference) {
   let store: FusekiStore;
@@ -305,7 +305,7 @@ function degradedStoreTests(baseUrl: () => string, dataset: string, expects: () 
     expect(left.results.bindings).toEqual([]);
   });
 
-  test('the sync keeps the hierarchy in the default graph and warns once', async () => {
+  test('the sync writes the package graph only, keeps no default-graph copy and warns once', async () => {
     liveData = dogIsAnimal;
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
@@ -315,14 +315,15 @@ function degradedStoreTests(baseUrl: () => string, dataset: string, expects: () 
       expect(second.skipped).toEqual(['ontology-sync-live-test']);
       const warnings = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith('[syncOntologies]'));
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toMatch(expects() === 'none' ? /does not infer/ : /only from the default graph/);
+      expect(warnings[0]).toMatch(/does not infer rdf:type from the graphs the registry marks feedsHierarchy/);
+      expect(warnings[0]).toContain(`'${expects()}'`);
     } finally {
       warn.mockRestore();
     }
     const defaultAxiom = await queryOn(baseUrl(), dataset, `ASK { <${EX}Dog> <${SUB}> <${EX}Animal> }`);
-    expect(defaultAxiom.boolean).toBe(true);
+    expect(defaultAxiom.boolean).toBe(false);
     const node = await queryOn(baseUrl(), dataset, `ASK { <${ontologySyncNodeIri('ontology-sync-live-test')}> ?p ?o }`);
-    expect(node.boolean).toBe(true);
+    expect(node.boolean).toBe(false);
     // The ontology data is in the package graph on every store.
     const graph = OntologyGraph.iriFor('ontology-sync-live-test');
     const inGraph = await queryOn(baseUrl(), dataset, `ASK { GRAPH <${graph}> { <${EX}Dog> <${SUB}> <${EX}Animal> } }`);

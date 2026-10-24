@@ -114,10 +114,11 @@ describe('syncOntologies: the default-graph fallback', () => {
   test('a first sync writes one update per subject class, then the sync node, last', async () => {
     const result = await syncOntologies(ds, {packages: ['sync-a']});
     expect(result).toEqual({written: ['sync-a'], skipped: [], pruned: []});
-    // The inference probe's first graph query was refused (then its two best-effort drops),
-    // before anything was read or written.
+    // The sync read the records and sync nodes, then the inference probe's first graph query was
+    // refused (then its two best-effort drops), before anything was written; the default-graph
+    // sync reads the sync nodes again.
     expect(ds.graphQueries).toBe(3);
-    expect(ds.selects).toBe(1);
+    expect(ds.selects).toBe(2);
     expect(ds.updates).toHaveLength(3);
     expect(ds.updates[0]).toContain(`<${NS}A> rdfs:subClassOf <${NS}B> .`);
     expect(ds.updates[1]).toContain(`<${NS}B> rdfs:subClassOf <${NS}C> .`);

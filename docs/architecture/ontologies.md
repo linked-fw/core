@@ -184,9 +184,9 @@ ontology graph (see the next section):
   is created or replaced whole in one graph query, the body sent as N-Triples (each file parsed
   with its own blank-node prefix, so prefixes and blank-node labels of several files never
   clash); `force` replaces every package;
-- after a package's graph is written (or found unchanged), and only when the store infers from
-  the registered graphs (below), what the earlier default-graph sync kept for it is removed: the lines its `OntologySync` node lists, except those another
-  remaining node lists, then the node; a hand-written default-graph axiom no node lists stays,
+- after a package's graph is written (or found unchanged), whatever the store infers from
+  (below), what the earlier default-graph sync kept for it is removed: the lines its
+  `OntologySync` node lists, except those another remaining node lists, then the node; a hand-written default-graph axiom no node lists stays,
   and the store keeps inferring through it;
 - `orphanScope: 'all'` (without `packages`) drops the ontology graph of every package no longer
   registered, and removes the default-graph lines and node of such a package.
@@ -200,7 +200,8 @@ class at a time (`ClassAxioms`); only lines a node lists are ever removed, and a
 package lists is kept.
 
 **The inference probe** (`probeHierarchyInference(ds?)`, `@_linked/core/ontology/hierarchyProbe`)
-decides whether the hierarchy may leave the default graph. Before the sync writes, it creates two
+decides only a warning. Before the sync writes its first package graph (a sync with nothing to
+write runs no probe, so it sends nothing but its reads), it creates two
 temporary graphs recorded as `OntologyGraph`s (record `package` `@_linked/inference-probe`): the
 hierarchy graph `{data root}/graph/import/linked-inference-probe-{random}`, which feeds the
 hierarchy and holds `probe:Named rdfs:subClassOf sd:NamedGraph`, and the data graph `…-data`
@@ -210,9 +211,12 @@ about a hierarchy reaching nodes stored in other graphs:
 
 | Answer | How it is found | The sync |
 |---|---|---|
-| `'named-graphs'` | `probe:named` is an `sd:NamedGraph` | package graphs; the default-graph hierarchy removed |
-| `'default-graph'` | not; after `probe:Default rdfs:subClassOf sd:NamedGraph` is written into the default graph, `probe:default` is | package graphs and the default-graph sync; one warning |
-| `'none'` | neither | package graphs and the default-graph sync; one warning that class-scoped reads miss subclass instances |
+| `'named-graphs'` | `probe:named` is an `sd:NamedGraph` | package graphs; no warning |
+| `'default-graph'` | not; after `probe:Default rdfs:subClassOf sd:NamedGraph` is written into the default graph, `probe:default` is | package graphs; one warning that class-scoped reads miss subclass instances |
+| `'none'` | neither | package graphs; the same warning |
+
+On every answer the default-graph hierarchy an earlier sync kept is removed: core never keeps a
+copy of the hierarchy in the default graph.
 
 The default-graph axiom is removed and both graphs dropped whatever the answer (best effort; when
 the axiom cannot be removed the graphs stay as the marker). The next probe sweeps probe records
@@ -221,7 +225,7 @@ too. A package graph whose create is refused (`graph-exists`: another process cr
 holds triples without an `OntologyGraph` record) is replaced, or dropped and created again. The answer is cached per
 dataset object for the process (`resetHierarchyInference(ds?)` drops it). A probe that fails
 with `unsupported-query-kind` takes the default-graph sync, as a store without graph queries; any
-other failure is warned about and handled as `'none'`. Measured on the stores core is tested
+other failure is warned about, and the sync writes the package graphs. Measured on the stores core is tested
 against: `ghcr.io/linked-fw/fuseki:6.2.0-2` answers `'named-graphs'`, `6.2.0-1`
 `'default-graph'`, a stock `secoresearch/fuseki:6.2.0` (and a `mem` dataset on the image)
 `'none'`.

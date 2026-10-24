@@ -20,13 +20,13 @@
  * each package's `rdfs:subClassOf` triples diffed into the default graph against an
  * `OntologySync` node (hash `linked-ontology-sync/1\n` + the lines).
  *
- * Before anything is written, the store is probed once per dataset (`hierarchyProbe.ts`) for the
- * hierarchy it infers from, and the move out of the default graph happens only when it is the
- * registered graphs':
- * - `'named-graphs'`: package graphs, and the default-graph hierarchy is removed (above).
- * - `'default-graph'` and `'none'`: package graphs and the default-graph sync both (the hierarchy
- *   stays in the default graph too, so the ontology data is in package graphs on every store);
- *   one warning, for `'none'` that class-scoped reads miss subclass instances.
+ * Before the first package graph is written, the store is probed once per dataset
+ * (`hierarchyProbe.ts`) for the hierarchy it infers from; a sync with nothing to write probes
+ * nothing, so it sends no request beyond its reads (an unforked branch stays unforked). The
+ * answer only decides a warning: on every store with graph queries the ontology data goes into
+ * package graphs and nothing of the hierarchy is kept in the default graph. A store that infers
+ * only from the default graph (`'default-graph'`) or not at all (`'none'`) gets one warning per
+ * dataset that class-scoped reads miss subclass instances.
  *
  * Runs at app boot and through the app's control route, before shape sync. Server only (the
  * readers load `n3`).
@@ -284,61 +284,50 @@ export async function syncOntologies(
   if (ds && typeof (ds as Partial<IDataset>).graphQuery !== 'function') {
     return syncDefaultGraph(run);
   }
+  return syncGraphs(run);
+}
+
+/** The README section a store that does not infer from the registered graphs is pointed to. */
+const STORE_REQUIREMENTS = 'See "Store requirements" in @_linked/core\'s README.';
+
+/**
+ * Probe the store before the first package graph is written (once per dataset, cached), and warn
+ * once when it does not infer from the registered graphs. The answer only drives that warning:
+ * the sync writes package graphs on every store. Returns `'unsupported'` for a store that refuses
+ * graph queries (the probe's are the first it is sent).
+ */
+async function probeBeforeWrite(ds?: IDataset): Promise<HierarchyInference | 'unsupported' | 'unknown'> {
   let inference: HierarchyInference;
   try {
     inference = await probeHierarchyInference(ds);
   } catch (error) {
-    // A store either runs graph queries or refuses the first one (the probe's), before anything
-    // was written.
-    if (isGraphQueryError(error, 'unsupported-query-kind')) return syncDefaultGraph(run);
+    if (isGraphQueryError(error, 'unsupported-query-kind')) return 'unsupported';
     warnOnceForDataset(
       ds,
       `[syncOntologies] Could not measure which class hierarchy the store infers from ` +
-        `(${(error as Error)?.message ?? error}); the hierarchy stays in the default graph as ` +
-        'well as in the package graphs.',
+        `(${(error as Error)?.message ?? error}); the ontology data is written into package graphs ` +
+        'only, so a class-scoped read misses the instances of subclasses unless the store infers ' +
+        `from those graphs. ${STORE_REQUIREMENTS}`,
     );
-    inference = 'none';
+    return 'unknown';
   }
-  if (inference === 'default-graph') {
+  if (inference !== 'named-graphs') {
     warnOnceForDataset(
       ds,
-      '[syncOntologies] The store infers classes only from the default graph, not from the ' +
-        "graphs the registry marks feedsHierarchy: the ontology data is written into package " +
-        'graphs and the class hierarchy kept in the default graph as well. See "Store ' +
-        `requirements" in @_linked/core's README.`,
-    );
-  } else if (inference === 'none') {
-    warnOnceForDataset(
-      ds,
-      '[syncOntologies] The store does not infer rdf:type through rdfs:subClassOf: a read of a ' +
-        "class will not return its subclasses' instances. The ontology data is written into " +
-        'package graphs and the class hierarchy kept in the default graph as well. See "Store ' +
-        `requirements" in @_linked/core's README.`,
+      '[syncOntologies] The store does not infer rdf:type from the graphs the registry marks ' +
+        `feedsHierarchy (the probe answered '${inference}'): a class-scoped read misses the ` +
+        `instances of subclasses. ${STORE_REQUIREMENTS}`,
     );
   }
-  const keepDefaultGraph = inference !== 'named-graphs';
-  const graphsResult = await syncGraphs(run, keepDefaultGraph);
-  if (!keepDefaultGraph) return graphsResult;
-  return mergeResults(graphsResult, await syncDefaultGraph(run));
+  return inference;
 }
-
-/** The results of the two syncs of one run: a package written by either is written. */
-function mergeResults(a: SyncOntologiesResult, b: SyncOntologiesResult): SyncOntologiesResult {
-  const written = new Set([...a.written, ...b.written]);
-  const skipped = new Set([...a.skipped, ...b.skipped].filter((name) => !written.has(name)));
-  return {
-    written: [...written].sort(),
-    skipped: [...skipped].sort(),
-    pruned: [...new Set([...a.pruned, ...b.pruned])].sort(),
-  };
-}
-
 
 /**
- * The sync on package graphs. With `keepDefaultGraph` (a store that does not infer from the
- * registered graphs) what the default-graph sync kept stays; the caller runs that sync as well.
+ * The sync on package graphs. The store is probed only when a package graph is about to be
+ * written, so a sync with nothing to write sends no request beyond its reads. On every probe
+ * answer, what an earlier sync kept in the default graph for a package goes.
  */
-async function syncGraphs(run: SyncRun, keepDefaultGraph = false): Promise<SyncOntologiesResult> {
+async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
   const {ds, options, only} = run;
   const result: SyncOntologiesResult = {written: [], skipped: [], pruned: []};
 
@@ -358,17 +347,28 @@ async function syncGraphs(run: SyncRun, keepDefaultGraph = false): Promise<SyncO
   }
   const nodes = await readSyncNodes(ds);
 
+  const plan = [...run.parsed.keys()]
+    .sort()
+    .filter((name) => !only || only.has(name))
+    .map((name) => {
+      const data = run.parsed.get(name)!;
+      const graph = OntologyGraph.iriFor(name);
+      const hash = ontologyGraphHash(data.texts);
+      const record = recordByGraph.get(graph);
+      return {name, data, graph, hash, record, write: Boolean(options?.force) || record?.contentHash !== hash};
+    });
+
+  if (plan.some((p) => p.write) && (await probeBeforeWrite(ds)) === 'unsupported') {
+    // Nothing was written yet: the store gets the default-graph sync instead.
+    return syncDefaultGraph(run);
+  }
+
   for (const name of run.unreadable) {
     if (!only || only.has(name)) result.skipped.push(name);
   }
 
-  for (const name of [...run.parsed.keys()].sort()) {
-    if (only && !only.has(name)) continue;
-    const data = run.parsed.get(name)!;
-    const graph = OntologyGraph.iriFor(name);
-    const hash = ontologyGraphHash(data.texts);
-    const record = recordByGraph.get(graph);
-    if (!options?.force && record?.contentHash === hash) {
+  for (const {name, data, graph, hash, record, write} of plan) {
+    if (!write) {
       result.skipped.push(name);
     } else {
       const content = {
@@ -386,10 +386,9 @@ async function syncGraphs(run: SyncRun, keepDefaultGraph = false): Promise<SyncO
       }
       result.written.push(name);
     }
-    // Written or unchanged, the package's graph holds its data: what the default-graph sync kept
-    // for it goes (also finishing a removal an earlier run did not complete), once the store is
-    // known to infer from the package graphs.
-    if (!keepDefaultGraph) await removeSyncNode(name, nodes, ds);
+    // Written or unchanged, the package's graph holds its data: what an earlier sync kept for it
+    // in the default graph goes (also finishing a removal an earlier run did not complete).
+    await removeSyncNode(name, nodes, ds);
   }
 
   if (options?.orphanScope === 'all' && !only) {
@@ -399,8 +398,7 @@ async function syncGraphs(run: SyncRun, keepDefaultGraph = false): Promise<SyncO
       await OntologyGraph.delete(graph).exec(ds);
       pruned.add(record.package);
     }
-    // The default-graph sync that follows prunes its own orphans.
-    for (const name of keepDefaultGraph ? [] : [...nodes.keys()].sort()) {
+    for (const name of [...nodes.keys()].sort()) {
       if (run.registered.has(name)) continue;
       await removeSyncNode(name, nodes, ds);
       pruned.add(name);
