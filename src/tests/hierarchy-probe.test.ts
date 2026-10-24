@@ -175,6 +175,41 @@ describe('syncOntologies by the probe answer', () => {
     expect(syncWarnings()).toEqual([]);
   });
 
+  test('an unchanged sync with a default-graph hierarchy left from an earlier sync removes it, without a probe', async () => {
+    const store = new StubStore('none');
+    store.records = [record(ontologyGraphHash([PKG_TEXT]))];
+    store.nodes = [oldNode()];
+    const result = await syncOntologies(store, {packages: [PKG]});
+    expect(result.skipped).toEqual([PKG]);
+    expect(store.probeQueries).toEqual([]);
+    expect(store.graphQueries).toEqual([]);
+    const removal = syncUpdates(store);
+    expect(removal.some((u) => u.includes('DELETE') && u.includes(`<${NS}A>`))).toBe(true);
+    expect(removal.at(-1)).toContain(`ontologySync/${PKG}`);
+    expect(syncWarnings()).toEqual([]);
+  });
+
+  test('force probes, also when the hash matches', async () => {
+    const store = new StubStore('named-graphs');
+    store.records = [record(ontologyGraphHash([PKG_TEXT]))];
+    await syncOntologies(store, {packages: [PKG], force: true});
+    expect(store.probeQueries).toHaveLength(4);
+    expect(store.graphQueries.map((q) => q.kind)).toEqual(['graph_replace']);
+  });
+
+  test("orphanScope 'all' on a store that does not infer removes an unregistered package's default-graph lines", async () => {
+    const store = new StubStore('none');
+    const text = line('X', 'Y');
+    store.nodes = [
+      {id: ontologySyncNodeIri('gone-pkg'), packageName: 'gone-pkg', ontologyHash: ontologySyncHash(text), ontologyTriples: text},
+    ];
+    const result = await syncOntologies(store, {orphanScope: 'all'});
+    expect(result.pruned).toContain('gone-pkg');
+    const removal = syncUpdates(store);
+    expect(removal.some((u) => u.includes('DELETE') && u.includes(`<${NS}X>`))).toBe(true);
+    expect(defaultGraphInserts(store)).toEqual([]);
+  });
+
   test('a changed sync probes once, before it writes', async () => {
     const store = new StubStore('named-graphs');
     store.records = [record('an-older-hash')];

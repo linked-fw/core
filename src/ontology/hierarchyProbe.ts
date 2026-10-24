@@ -77,7 +77,7 @@ const GLOBAL_ROUTER = {};
 
 const probeState = sharedState('@_linked/core', 'hierarchyProbe', () => ({
   results: new WeakMap<object, Promise<HierarchyInference>>(),
-  /** The datasets the sync has warned about (one warning per probe answer). */
+  /** The datasets the sync has warned about (one warning per dataset). */
   warned: new WeakSet<object>(),
 }));
 

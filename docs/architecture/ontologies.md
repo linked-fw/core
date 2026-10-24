@@ -180,7 +180,8 @@ ontology graph (see the next section):
 - the hash is `ontologyGraphHash(texts)`: SHA-256 of `linked-ontology-sync/2\n` + the package's
   raw data file texts in registration order, joined with `\n`, recorded as the graph's
   `core:contentHash`; bumping the prefix makes every dataset rewrite its graphs once;
-- an unchanged hash writes nothing (an unforked branch stays unforked); a changed or new package
+- an unchanged hash writes no graph (an unforked branch stays unforked, unless the removal below
+  has default-graph lines of an earlier sync to remove, once); a changed or new package
   is created or replaced whole in one graph query, the body sent as N-Triples (each file parsed
   with its own blank-node prefix, so prefixes and blank-node labels of several files never
   clash); `force` replaces every package;

@@ -50,7 +50,8 @@ run by `@_linked/server` at boot): before it writes its first package graph, it 
 once per dataset. It writes a probe `rdfs:subClassOf` into a temporary registered graph and a typed
 instance into a second graph that does not feed the hierarchy, asks through the normal query path
 whether the instance is found by its superclass, then removes the probe. A sync with nothing to
-write runs no probe and sends nothing but its reads. On every store with named graphs the ontology
+write runs no probe; unless an earlier sync left a default-graph hierarchy to remove (once), it
+sends nothing but its reads. On every store with named graphs the ontology
 data is written into package graphs only, and the hierarchy an earlier sync kept in the default
 graph is removed, so readers of `graphs.allOntologies` see the same everywhere. The answer only
 decides a warning. See [ontologies](./docs/architecture/ontologies.md).

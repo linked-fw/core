@@ -12,7 +12,7 @@
  * Skipped by a content hash per package (`linked-ontology-sync/2\n` + the package's raw file
  * texts), compared with the record's `core:contentHash`: an unchanged package writes nothing, a
  * changed or new one is replaced whole in one graph query (the body as N-Triples). After a
- * package's graph is written, the class hierarchy an earlier sync kept in the default graph for
+ * package's graph is written or found unchanged, the class hierarchy an earlier sync kept in the default graph for
  * that package (its `OntologySync` node's lines) is removed there, then the node; hand-written
  * default-graph axioms stay.
  *
@@ -22,7 +22,9 @@
  *
  * Before the first package graph is written, the store is probed once per dataset
  * (`hierarchyProbe.ts`) for the hierarchy it infers from; a sync with nothing to write probes
- * nothing, so it sends no request beyond its reads (an unforked branch stays unforked). The
+ * nothing, so with no default-graph hierarchy left from an earlier sync it sends no request
+ * beyond its reads (an unforked branch stays unforked). Removing such a leftover is a write,
+ * made once. The
  * answer only decides a warning: on every store with graph queries the ontology data goes into
  * package graphs and nothing of the hierarchy is kept in the default graph. A store that infers
  * only from the default graph (`'default-graph'`) or not at all (`'none'`) gets one warning per
@@ -256,8 +258,8 @@ function packageSources(name: string): string[] {
  * Sync the ontology data of every registered package (or of `options.packages`) into `ds`
  * (default: the global router), one named graph per package; see the module doc.
  *
- * Per package: skipped when its record's hash matches (no write at all, so an unforked branch
- * stays unforked); otherwise its graph is created or replaced in one graph query, then what an
+ * Per package: skipped when its record's hash matches (no write, so an unforked branch stays
+ * unforked, unless an earlier sync left default-graph lines for it to remove); otherwise its graph is created or replaced in one graph query, then what an
  * earlier sync kept for it in the default graph is removed. A package whose data cannot be read
  * is skipped with a warning (see `readPackageOntologies`). A store without graph queries gets the
  * earlier default-graph sync.

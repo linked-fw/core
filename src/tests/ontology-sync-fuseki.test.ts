@@ -8,8 +8,8 @@
  * Plus the measurement of a first sync of schema.org's data, and of the second, skipped one.
  *
  * The inference probe on real stores: the inferring image answers `'named-graphs'`; a `mem`
- * dataset on it (which does not infer) answers `'none'`, and the sync then keeps the hierarchy in
- * the default graph as well as writing the package graphs, with one warning. With
+ * dataset on it (which does not infer) answers `'none'`, and the sync then writes the package
+ * graphs only, keeps no default-graph copy of the hierarchy, and warns once. With
  * LINKED_SECOND_FUSEKI_URL (and LINKED_SECOND_FUSEKI_EXPECTS, default `none`) the same runs
  * against a second server: a stock `secoresearch/fuseki:6.2.0` answers `none`, the
  * `ghcr.io/linked-fw/fuseki:6.2.0-1` image `default-graph`.
