@@ -481,7 +481,8 @@ select (`w.articles.title`, or `w.articles` and `w.articles.size()` as values), 
 (`EXISTS` included), a count and an ask. Any other complex path (a
 sequence, an alternative, `*`, `+`, `?`) between ends that may live in different graphs is refused
 (`GraphQueryError('unsupported-query-kind')`): its middle nodes have no graph to be read in. Ends
-that both read the same one graph are read as before.
+that both read the same one graph are read as before, and so are a path to a literal and an
+alternative of forward IRIs (`<a>|<b>`), which are stored with their subject.
 
 `VALUES` is written where a subject's graph variable is first bound, not again in the OPTIONAL
 blocks that join on it. With `SparqlOptions.namedGraphUriParameter` the `FROM NAMED` set goes to

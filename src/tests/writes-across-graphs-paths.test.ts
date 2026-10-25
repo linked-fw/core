@@ -56,6 +56,11 @@ class WAWriter extends NGPerson {
   get reviewedPhotos(): NGPhoto[] {
     return [];
   }
+
+  @objectProperty({path: {alt: [{id: `${NG}pinned`}, {id: `${NG}featured`}]}, shape: NGArticle})
+  get highlighted(): NGArticle[] {
+    return [];
+  }
 }
 
 const D = 'https://acme.example/data/';
@@ -274,6 +279,14 @@ WHERE {
     const error = await errorOf(defaultUnderWith(s));
     expect(isGraphQueryError(error, 'unsupported-query-kind')).toBe(true);
     expect(s.updates).toEqual([]);
+  });
+
+  test('an alternative of forward IRIs into another graph is read with the subject, the linked node in its graph', async () => {
+    const sparql = await sparqlOf((s) =>
+      WAWriter.update({name: 'z'}).where((w: any) => w.highlighted.some((a: any) => a.title.equals('one'))).exec(s),
+    );
+    expect(sparql).toContain(`WITH <${G_PEOPLE}>`);
+    expect(sparql).toMatch(new RegExp(`FILTER\\(EXISTS \\{\\n    \\?a0 <${NG}pinned>\\|<${NG}featured> \\?a1 \\.\\n    GRAPH <${G_ARTICLES}> \\{\\n      \\?a1 <${NG}title> \\?a1_title \\.`));
   });
 
   test('a sequence path into a node in another graph is refused before anything is sent', async () => {
