@@ -1,41 +1,52 @@
 ---
-summary: Expose sum/avg/min/max aggregates on the query DSL (IR + SPARQL already support them); count is the only one reachable today.
+summary: >
+  Expose sum/avg/min/max on the query DSL. The IR, the SPARQL layers and the DSL-JSON decoder
+  already carry all five aggregates; the DSL surface reaches count only (`.size()`). Absorbs the
+  former backlog 016 (aggregations).
+packages: [core]
 ---
 
 # DSL aggregates: sum / avg / min / max
 
-## Context
+## What exists
 
-`.size()`/`.count()` on a collection is the only aggregate reachable from the
-DSL. The IR (`IRAggregateExpression`, `name: 'count' | 'sum' | 'avg' | 'min' |
-'max'`) and the SPARQL serializer already handle all five generically — the gap
-is purely the DSL surface and the lowering that hardcodes `aggregation: 'count'`.
+- The IR's `IRAggregateExpression` names `count | sum | avg | min | max`
+  (`src/queries/IntermediateRepresentation.ts:295`); `irToAlgebra` and `algebraToString` lower
+  and serialize any of them, and infer `GROUP BY` from the non-aggregate projections.
+- The DSL-JSON decoder already accepts all five as expression heads
+  (`src/queries/DslJsonExpression.ts:275`), so a wire query can ask for a sum the DSL cannot.
+- The DSL reaches count only: `QueryShapeSet.size()` / `QueryPrimitiveSet.size()` return a
+  `SetSize` (`src/queries/SelectQuery.ts:1070`, `:1456`, `:1464`), and
+  `FieldSetEntry.aggregation` is typed `'count'` (`src/queries/FieldSet.ts:73`, set at `:928`).
 
-Deferred out of the linked-query test-coverage effort (plan 001) because adding
-a DSL surface is feature work, not test coverage. Pick up as its own workflow
-cycle; the coverage tests for these land with the implementation.
+Settled elsewhere, so not part of this item:
 
-## Sketch (≈5 edits)
+- `.count()` vs `.size()`: `.count()` is the match count of a whole query, `.size()` a property's
+  value count per row (README §Counting; report 030). No alias.
+- Explicit `.groupBy()` and HAVING-style aggregate filters: backlog 012.
+- `COUNT(DISTINCT …)` and other DISTINCT aggregates: backlog 020.
 
-1. Add `.sum()/.avg()/.min()/.max()` to `QueryShapeSet` / numeric
-   `QueryPrimitive` (mirror `SetSize`), returning `SetSum`/`SetAvg`/… markers
-   — `src/queries/SelectQuery.ts`.
-2. Widen `FieldSetEntry.aggregation` from `'count'` to
-   `'count' | 'sum' | 'avg' | 'min' | 'max'` — `src/queries/FieldSet.ts:55`.
-3. Detect the new markers in `convertTraceResult` and set the aggregation name
-   — `src/queries/FieldSet.ts:~646`.
-4. Generalize `DesugaredCountStep` → aggregate step carrying `name`
-   — `src/queries/IRDesugar.ts`.
-5. Pass the name through projection (already generic) —
-   `src/queries/IRProjection.ts:~97`.
+## Sketch
+
+1. Add `.sum()/.avg()/.min()/.max()` beside `size()` in `src/queries/SelectQuery.ts`,
+   generalizing `SetSize` into an aggregate marker that carries its name.
+2. Widen `FieldSetEntry.aggregation` to the five names (`src/queries/FieldSet.ts:73`) and set it
+   from the marker in `convertTraceResult` (`:928`).
+3. Generalize `DesugaredCountStep` (`src/queries/IRDesugar.ts:54`) into an aggregate step that
+   carries the name; the projection (`src/queries/IRProjection.ts:99`) is already generic.
 
 ## Open questions
 
-- Numeric-only constraint + return-type inference for each aggregate.
-- `min`/`max` over dates (and strings?) — define supported operand types.
-- Interaction with GROUP BY scoping already used by `count`.
+- **Placement.** Methods on collections (`p.friends.age.avg()`), standalone functions
+  (`Expr.avg(p.friends.age)`), or both?
+- **Scope.** Per row over a multi-valued path (`p.friends.age.avg()`, one value per person) is
+  the `size()` shape. What does a single-valued property mean (`p.age.avg()`: across every
+  matching person, one number for the query, like `.count()`)?
+- **Operand types and result types.** Numeric only for `sum`/`avg`? `min`/`max` over dates, and
+  strings? What type does each infer (`avg` of integers is a decimal; `min` of dates is a date)?
+- **More SPARQL aggregates.** `GROUP_CONCAT` and `SAMPLE` exist in SPARQL; in scope or not?
 
-## Tests to add when implemented
+## Tests to add with it
 
-- Exact-result E2E (store contract) for `sum/avg/min/max` over a multi-valued
-  numeric field on the `Metric` shape (plan 001 seeds this field).
+Exact-result store-contract tests for `sum/avg/min/max` over `Metric.scores`, the multi-valued
+decimal field in `src/test-helpers/query-fixtures.ts`.
