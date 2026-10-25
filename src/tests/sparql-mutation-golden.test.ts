@@ -123,10 +123,12 @@ INSERT {
   <${ENT}p1> <${PROP}hobby> "Chess" .
 }
 WHERE {
-  <${ENT}p1> rdf:type ?t .
   OPTIONAL {
     <${ENT}p1> <${PROP}hobby> ?old_hobby .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -142,10 +144,12 @@ INSERT {
   <${ENT}p1> <${PROP}hasFriend> <${ENT}p2> .
 }
 WHERE {
-  <${ENT}p1> rdf:type ?t .
   OPTIONAL {
     <${ENT}p1> <${PROP}hasFriend> ?old_friends .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -158,10 +162,12 @@ DELETE {
   <${ENT}p1> <${PROP}hobby> ?old_hobby .
 }
 WHERE {
-  <${ENT}p1> rdf:type ?t .
   OPTIONAL {
     <${ENT}p1> <${PROP}hobby> ?old_hobby .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -174,10 +180,12 @@ DELETE {
   <${ENT}p1> <${PROP}hobby> ?old_hobby .
 }
 WHERE {
-  <${ENT}p1> rdf:type ?t .
   OPTIONAL {
     <${ENT}p1> <${PROP}hobby> ?old_hobby .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -209,10 +217,12 @@ INSERT {
   <${ENT}p1> <${PROP}bestFriend> <${ENT}p2> .
 }
 WHERE {
-  <${ENT}p1> rdf:type ?t .
   OPTIONAL {
     <${ENT}p1> <${PROP}bestFriend> ?old_bestFriend .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -228,10 +238,12 @@ INSERT {
   <${ENT}p1> <${PROP}hasFriend> <${ENT}p2> .
 }
 WHERE {
-  <${ENT}p1> rdf:type ?t .
   OPTIONAL {
     <${ENT}p1> <${PROP}hasFriend> <${ENT}p3> .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -244,10 +256,12 @@ DELETE {
   <${ENT}p1> <${PROP}hasFriend> <${ENT}p2> .
 }
 WHERE {
-  <${ENT}p1> rdf:type ?t .
   OPTIONAL {
     <${ENT}p1> <${PROP}hasFriend> <${ENT}p2> .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -263,10 +277,12 @@ INSERT {
   <${ENT}p1> <${PROP}hasFriend> <${ENT}p2> .
 }
 WHERE {
-  <${ENT}p1> rdf:type ?t .
   OPTIONAL {
     <${ENT}p1> <${PROP}hasFriend> <${ENT}p3> .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -279,10 +295,12 @@ DELETE {
   <${ENT}p1> <${PROP}hasFriend> ?old_friends .
 }
 WHERE {
-  <${ENT}p1> rdf:type ?t .
   OPTIONAL {
     <${ENT}p1> <${PROP}hasFriend> ?old_friends .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -300,10 +318,12 @@ INSERT {
   <${ENT}p3-best-friend> <${PROP}name> "Bestie" .
 }
 WHERE {
-  <${ENT}p1> rdf:type ?t .
   OPTIONAL {
     <${ENT}p1> <${PROP}bestFriend> ?old_bestFriend .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -320,10 +340,12 @@ INSERT {
   <${ENT}p1> <${PROP}birthDate> "2020-01-01T00:00:00.000Z"^^xsd:dateTime .
 }
 WHERE {
-  <${ENT}p1> rdf:type ?t .
   OPTIONAL {
     <${ENT}p1> <${PROP}birthDate> ?old_birthDate .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 });
@@ -713,7 +735,7 @@ WHERE {
     // The upsert's INSERT asserts the type; the update's WHERE requires the node to have one
     // (an update of an absent id writes nothing). Both need the PREFIX header.
     expect(added).toEqual([`  <${ENT}p1> rdf:type <${PT}> .`]);
-    expect(removed).toEqual([`  <${ENT}p1> rdf:type ?t .`]);
+    expect(removed).toEqual(['  FILTER(EXISTS {', `    <${ENT}p1> rdf:type ?t .`, '  })']);
   });
 
   test('the WHERE is a bare OPTIONAL, so the INSERT fires when the node is absent', async () => {

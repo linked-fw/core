@@ -235,7 +235,6 @@ INSERT {
 WHERE {
   { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <${D}graph/people> <${D}graph/staff> } GRAPH ?g_w { <${D}bob> rdf:type ?g_w_o } } }
   GRAPH ?g_w {
-    <${D}bob> rdf:type ?t .
     OPTIONAL {
       <${D}bob> <https://example.org/props/bestFriend> ?__trav_0__ .
       OPTIONAL {
@@ -249,6 +248,9 @@ WHERE {
       <${D}bob> <https://example.org/props/hobby> ?old_hobby .
     }
     BIND(UCASE(?__trav_0___name) AS ?computed_hobby)
+    FILTER(EXISTS {
+      <${D}bob> rdf:type ?t .
+    })
   }
 }`);
   });

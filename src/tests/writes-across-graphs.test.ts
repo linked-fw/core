@@ -147,7 +147,6 @@ INSERT {
   <${D}a/1> <https://example.org/graph-routing-nested/title> ?computed_title .
 }
 WHERE {
-  <${D}a/1> rdf:type ?t .
   OPTIONAL {
     <${D}a/1> <https://example.org/graph-routing-nested/author> ?__trav_0__ .
     OPTIONAL {
@@ -158,6 +157,9 @@ WHERE {
     <${D}a/1> <https://example.org/graph-routing-nested/title> ?old_title .
   }
   BIND(UCASE(?__trav_0___name) AS ?computed_title)
+  FILTER(EXISTS {
+    <${D}a/1> rdf:type ?t .
+  })
 }`,
   // delete of two ids
   `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -348,7 +350,6 @@ INSERT {
   <${D}a/1> <https://example.org/graph-routing-nested/title> ?computed_title .
 }
 WHERE {
-  <${D}a/1> rdf:type ?t .
   OPTIONAL {
     <${D}a/1> <https://example.org/graph-routing-nested/author> ?__trav_0__ .
     OPTIONAL {
@@ -361,6 +362,9 @@ WHERE {
     <${D}a/1> <https://example.org/graph-routing-nested/title> ?old_title .
   }
   BIND(UCASE(?__trav_0___name) AS ?computed_title)
+  FILTER(EXISTS {
+    <${D}a/1> rdf:type ?t .
+  })
 }`,
   // delete of two ids
   `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>

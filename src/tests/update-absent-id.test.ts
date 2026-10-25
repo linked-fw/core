@@ -86,10 +86,12 @@ INSERT {
   <${X}> <${NG}title> "new" .
 }
 WHERE {
-  <${X}> rdf:type ?t .
   OPTIONAL {
     <${X}> <${NG}title> ?old_title .
   }
+  FILTER(EXISTS {
+    <${X}> rdf:type ?t .
+  })
 }`);
   });
 
@@ -103,10 +105,12 @@ INSERT {
   <${X}> <${NG}title> "new" .
 }
 WHERE {
-  <${X}> rdf:type ?t .
   OPTIONAL {
     <${X}> <${NG}title> ?old_title .
   }
+  FILTER(EXISTS {
+    <${X}> rdf:type ?t .
+  })
 }`);
   });
 
@@ -125,10 +129,12 @@ INSERT {
 WHERE {
   { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <${G_PEOPLE}> <${G_STAFF}> } GRAPH ?g_w { <${X}> rdf:type ?g_w_o } } }
   GRAPH ?g_w {
-    <${X}> rdf:type ?t .
     OPTIONAL {
       <${X}> <${P}name> ?old_name .
     }
+    FILTER(EXISTS {
+      <${X}> rdf:type ?t .
+    })
   }
 }`);
   });
@@ -141,10 +147,11 @@ WHERE {
     expect(where).not.toContain('rdf:type ?t .');
   });
 
-  test('a name the update already uses is not taken for the type variable', async () => {
+  test('a computed update requires the type in an EXISTS, after its BIND (one solution per node, whatever its types)', async () => {
     const s = capture('unrouted');
     await Person.update((p: any) => ({hobby: p.bestFriend.name.ucase()})).for({id: X}).exec(s);
-    expect(s.updates[0]).toContain(`<${X}> rdf:type ?t .`);
+    const where = s.updates[0].slice(s.updates[0].indexOf('WHERE {'));
+    expect(where).toMatch(/BIND\(UCASE\([^)]*\) AS \?computed_hobby\)\n  FILTER\(EXISTS \{\n    <[^>]+> rdf:type \?t \.\n  \}\)\n\}$/);
     expect(s.updates[0].match(/\?t\b/g)).toHaveLength(1);
   });
 });

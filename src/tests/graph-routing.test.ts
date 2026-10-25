@@ -575,10 +575,12 @@ INSERT {
 WHERE {
   { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <${G_PEOPLE}> <${G_STAFF}> } GRAPH ?g_w { <${BOB}> rdf:type ?g_w_o } } }
   GRAPH ?g_w {
-    <${BOB}> rdf:type ?t .
     OPTIONAL {
       <${BOB}> <${P}name> ?old_name .
     }
+    FILTER(EXISTS {
+      <${BOB}> rdf:type ?t .
+    })
   }
 }`);
     await Person.upsert({name: 'Robert'}).for({id: BOB}).exec(store);
