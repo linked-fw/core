@@ -121,3 +121,31 @@ describe('loadStores without a host loader', () => {
     expect(store.config).toEqual({url: 'fixture'});
   });
 });
+
+describe('loadStores and a store constructor that throws', () => {
+  test('the error names the alias and the store path, and keeps the original as cause', async () => {
+    const original = new Error('FusekiStore needs an endpoint');
+    class ThrowingStore {
+      constructor() {
+        throw original;
+      }
+    }
+    globals[IMPORT_MODULE] = async () => ({ThrowingStore});
+
+    let caught: unknown;
+    try {
+      await loadStores(
+        config({
+          appData: {store: '@_linked/example/shapes/ThrowingStore', config: {}},
+        }),
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe(
+      'loadStores: alias "appData" (@_linked/example/shapes/ThrowingStore): FusekiStore needs an endpoint',
+    );
+    expect((caught as Error).cause).toBe(original);
+  });
+});
