@@ -15,9 +15,11 @@
  * ```
  *
  * Every package's ontology module imports this one, and those modules are reachable from a
- * browser bundle, so this module is safe to import anywhere: `node:fs/promises` is imported
- * dynamically through a variable specifier (which keeps it out of bundles, as `loadStores`
- * keeps store modules out), only when the function runs. Calling it in a browser rejects.
+ * client bundle. A client build never gets this module: the `browser` and `react-native` export
+ * conditions of `@_linked/core/ontology/loadOntologyFiles` resolve to `loadOntologyFiles.browser`,
+ * a stub that rejects and holds no `import()`. Import it by that package specifier, never by a
+ * relative path (which ignores the conditions). On a server, `node:fs/promises` is imported
+ * dynamically through a variable specifier, only when the function runs.
  *
  * @module @_linked/core/ontology/loadOntologyFiles
  */

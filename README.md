@@ -559,6 +559,13 @@ delete them by IRI prefix (`…/owners/inv`, `…/seq/…`), to remove them.
 Read a stored path's structure in the same query that finds it (`?ps sh:path ?p .
 ?p sh:inversePath ?x`): a blank node's label is not stable across queries.
 
+Each step of a path is a prefixed name (`ex:name`) or an absolute IRI (`https://…`, `{id:
+'urn:x:name'}`, or `<urn:x:name>` in the string syntax). A string step is written into a query as a
+prefixed name only when it is one SPARQL prefixed-name token whose prefix is registered; any other
+step is written as `<IRI>`, so `urn:prop:a` stays an IRI. A path read as data (`fromWire`,
+`ShapeCatalog.from`, `registerRuntimeShape`) or given to a decorator is checked when it loads: a
+step that is neither throws `InvalidPropertyPathError`, naming the step and its property shape.
+
 The declaring shape owns its generated shapes through `core:generatedShape`, a `contains` edge:
 `<…/Thing> core:generatedShape <…/Thing/image.singleOwner>`. Syncing a shape is still two
 requests: deleting the shape deletes the generated shapes with it (their own triples, property
