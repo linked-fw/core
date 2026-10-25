@@ -17,6 +17,7 @@
     "types": ["node", "jest"],
     "baseUrl": "./",
     "paths": {
+      "@_linked/core/ontology/loadOntologyFiles": ["src/ontology/loadOntologyFiles.ts"],
       "*": ["node_modules/@types/*", "../../node_modules/@types/*", "*"]
     }
   },

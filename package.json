@@ -37,6 +37,20 @@
       "types": "./lib/esm/sparql/index.d.ts",
       "import": "./lib/esm/sparql/index.js"
     },
+    "./ontology/loadOntologyFiles": {
+      "types": "./lib/esm/ontology/loadOntologyFiles.d.ts",
+      "react-native": "./lib/esm/ontology/loadOntologyFiles.browser.js",
+      "browser": "./lib/esm/ontology/loadOntologyFiles.browser.js",
+      "import": "./lib/esm/ontology/loadOntologyFiles.js",
+      "default": "./lib/esm/ontology/loadOntologyFiles.js"
+    },
+    "./ontology/loadOntologyFiles.js": {
+      "types": "./lib/esm/ontology/loadOntologyFiles.d.ts",
+      "react-native": "./lib/esm/ontology/loadOntologyFiles.browser.js",
+      "browser": "./lib/esm/ontology/loadOntologyFiles.browser.js",
+      "import": "./lib/esm/ontology/loadOntologyFiles.js",
+      "default": "./lib/esm/ontology/loadOntologyFiles.js"
+    },
     "./*.js": {
       "types": "./lib/esm/*.d.ts",
       "import": "./lib/esm/*.js"
