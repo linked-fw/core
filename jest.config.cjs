@@ -23,5 +23,8 @@ module.exports = {
   // `.ts` source (NodeNext-style specifiers carry `.js`; jest maps back to src).
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
+    // Core's ontology modules import this one by its package specifier (for its client export
+    // conditions); in the tests it is the source module, as a relative import would be.
+    '^@_linked/core/ontology/loadOntologyFiles$': '<rootDir>/src/ontology/loadOntologyFiles.ts',
   },
 };

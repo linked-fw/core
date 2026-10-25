@@ -24,6 +24,7 @@ export {Shape} from './shapes/Shape.js';
 // SHACL-aligned validation of plain data objects against a shape.
 export {validate, validateByClass, assertValid, ShapeValidationError} from './shapes/validation.js';
 export {UnresolvedShapeError, type UnresolvedShapeDetails} from './utils/unresolvedShape.js';
+export {InvalidPropertyPathError} from './paths/propertyPathSafety.js';
 export type {
   ValidationReport,
   ValidationResult,

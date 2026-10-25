@@ -65,7 +65,8 @@ function importModule(specifier: string): Promise<unknown> {
  *
  * @param config  Parsed config from {@link parseDatasetsConfig}.
  * @returns       Map of alias → constructed store instance.
- * @throws        If a `store` path can't be resolved to a class export.
+ * @throws        If a `store` path can't be resolved to a class export, or a store's constructor
+ *                throws (rethrown with the alias and store path, the original as `cause`).
  */
 export async function loadStores<T = unknown>(
   config: DatasetsConfig,
@@ -87,7 +88,14 @@ export async function loadStores<T = unknown>(
           `Expected a named export "${exportName}" or a default export that is a class.`,
       );
     }
-    const store = new (StoreClass as new (cfg: unknown) => T)(entry.config);
+    // A store's constructor cannot name the entry it came from, so its error is prefixed here.
+    let store: T;
+    try {
+      store = new (StoreClass as new (cfg: unknown) => T)(entry.config);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`loadStores: alias "${alias}" (${entry.store}): ${message}`, {cause: error});
+    }
     // Graph routing lives in the app's code, never in this file (see `graphRouting.ts`).
     if ((entry as {graphs?: unknown}).graphs !== undefined) {
       console.warn(

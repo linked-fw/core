@@ -179,7 +179,11 @@ class PathParser {
   }
 
   // iri = '<' chars '>' | prefixedName
-  private parseIri(): string {
+  //
+  // A bracketed IRI with `://` stays a string: no prefixed name contains `//`, so it reads as an
+  // IRI wherever it goes. One without (`<urn:prop:a>`) becomes `{id}`, because as a bare string
+  // it would read as a prefixed name — the brackets are the only record that it is an IRI.
+  private parseIri(): PathRef {
     this.skipWhitespace();
     if (this.peek() === '<') {
       this.advance(); // consume '<'
@@ -192,7 +196,7 @@ class PathParser {
       }
       const iri = this.input.slice(start, this.pos);
       this.advance(); // consume '>'
-      return iri;
+      return iri.includes('://') ? iri : {id: iri};
     }
     return this.parsePrefixedName();
   }

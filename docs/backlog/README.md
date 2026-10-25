@@ -5,6 +5,11 @@ Deferred / future work — one file per item, `NNN-topic.md`, with YAML frontmat
 the `todo` skill creates items here, and `ideation` consumes one to seed a plan in
 `docs/plans/`. Completed work is recorded in `docs/reports/`.
 
+Closed without a report: 040 (one inheritance walk, `getSuperShapes`, commit 67e015b) left two small
+gaps — an undecorated class between two shapes inherits its parent's static `shape`, so
+`getSuperShapes` lists that parent twice; and `getSuperShapesClasses`/`getSubShapesClasses` return
+classes only, so a data-only shape never appears in them.
+
 ## Consolidation note (was `docs/ideas/`)
 
 The former `docs/ideas/` directory — a pre-workflow convention for exploratory

@@ -3,14 +3,24 @@ import type {PathExpr} from '../paths/PropertyPathExpr';
 import {selectPlanToSparql} from '../sparql/algebraToString';
 import type {SparqlSelectPlan} from '../sparql/SparqlAlgebra';
 
+import {Prefix} from '../utils/Prefix';
+
 // Ensure rdf prefix is registered for prefix-shortening tests
 import '../ontologies/rdf';
+
+// A string step is written as a prefixed name only when its prefix is registered.
+const EX = 'http://ex.test/';
+Prefix.add('ex', EX);
 
 describe('pathExprToSparql', () => {
   // ------ Simple refs ------
 
   it('renders a prefixed name', () => {
     expect(pathExprToSparql('ex:name')).toBe('ex:name');
+  });
+
+  it('writes a step with an unregistered prefix as an IRI', () => {
+    expect(pathExprToSparql('zz:name')).toBe('<zz:name>');
   });
 
   it('renders a full IRI string in angle brackets', () => {
@@ -194,8 +204,8 @@ describe('collectPathUris', () => {
     expect(collectPathUris({id: 'http://example.org/name'})).toEqual(['http://example.org/name']);
   });
 
-  it('does not collect prefixed-name string ref', () => {
-    expect(collectPathUris('ex:name')).toEqual([]);
+  it('collects the full IRI of a prefixed-name string ref', () => {
+    expect(collectPathUris('ex:name')).toEqual([`${EX}name`]);
   });
 
   it('collects all IRIs from sequence', () => {
@@ -227,9 +237,9 @@ describe('collectPathUris', () => {
     expect(collectPathUris(expr)).toEqual(['http://ex.org/a', 'http://ex.org/b']);
   });
 
-  it('skips prefixed names in mixed expression', () => {
+  it('expands prefixed names in a mixed expression', () => {
     const expr: PathExpr = {seq: ['ex:a', {id: 'http://ex.org/b'}]};
-    expect(collectPathUris(expr)).toEqual(['http://ex.org/b']);
+    expect(collectPathUris(expr)).toEqual([`${EX}a`, 'http://ex.org/b']);
   });
 });
 

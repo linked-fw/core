@@ -1,19 +1,19 @@
 ---
 summary: >
-  `src/tests/two-copies-built.test.ts` fails to run on Node 22.23 with jest 30: every worker
-  crashes with "Module cache already has entry …/lib/esm/shapes/SHACL.js. This is a bug in Jest",
-  so its 39 tests never run. Seen on main and on the store-inference branch alike.
+  `src/tests/two-copies-built.test.ts` crashes with "Module cache already has entry …/lib/esm/shapes/SHACL.js.
+  This is a bug in Jest" when it runs under Create Now's hoisted jest 29.7 (a localized core in
+  `packages-local/`). Under core's own jest 30 it passes. The fix belongs in Create Now.
 packages: [core]
 ---
 
-# 060 — two-copies-built does not run (jest module cache)
+# 060 — two-copies-built does not run under Create Now's jest 29.7
 
 Source: CN plan 070, step K1 (report 042), which found it while recording its baseline.
 
 ## Problem
 
-`two-copies-built.test.ts` (report 039) loads the built `lib/esm` twice in one process. On the
-current toolchain (Node v22.23.3, jest 30, `--experimental-vm-modules`) the suite fails before any
+`two-copies-built.test.ts` (report 039) loads the built `lib/esm` twice in one process. In a
+localized checkout inside Create Now (`packages-local/_linked-core`), the suite fails before any
 test runs:
 
 ```
@@ -22,12 +22,15 @@ Error: Module cache already has entry /…/_linked-core/lib/esm/shapes/SHACL.js.
     at Runtime.loadEsmModule (…/jest-runtime/build/index.js:542:35)
 ```
 
-Reproduced in the main checkout at `main` (4afe035), so it predates the store-inference work.
-`npm test` therefore exits non-zero on every branch while it stands.
+## Cause
 
-## First questions
+It is not jest 30. A checkout in `packages-local/` resolves `jest` from Create Now's root
+`node_modules`, where npm hoists jest 29.7, and jest-runtime 29.7 has the module-cache race. Core
+declares jest ^30, and in a standalone clone (core's own jest 30) the suite runs and passes, as it
+does in core's CI.
 
-- Which change brought it: the Node minor, a jest-runtime patch, or an import added to the built
-  graph that is now reached twice concurrently (two dynamic imports of the same module racing)?
-- Can the suite load the second copy from a separate directory (a copy of `lib/esm`) instead of
-  a cache-busting query, so jest sees two distinct module paths?
+## Fix
+
+In Create Now: give the localized checkouts core's own jest (or raise CN's hoisted jest to 30), so
+`npm test` in `packages-local/_linked-core` runs the jest core declares. That work is being done in
+Create Now; this item closes when it lands.
