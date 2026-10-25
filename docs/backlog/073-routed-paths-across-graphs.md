@@ -18,7 +18,9 @@ Source: core reports 056 (writes across graphs) and 077 (routed complex-path rea
   alternative, a repetition) only when its two ends may live in different graphs. In
   `^<author>/<reviewer>` from a writer to a person in the same people graph, the middle node (the
   article, in the articles graph) has no variable and so no graph: the whole path is read in the
-  people graph and matches nothing.
+  people graph and matches nothing. The same holds for a path to a literal through another node
+  (`^<author>/<title>` as a literal property): a literal is not judged, so the path is read in the
+  subject's graphs.
 - **Inverse paths under `.from()` of several graphs.** The stored-way rewrite applies under graph
   routing only. `.from([g1, g2])` gives every subject its own graph variable as well, so
   `?a0 ^<author> ?a1` is read in `?a0`'s graph and misses an article stored in the other one.

@@ -20,7 +20,7 @@ import {setShapeGraphs} from '../utils/graphRouting';
 import {graphs} from '../ontologies/graphs';
 import {isGraphQueryError} from '../queries/graphQuery';
 import {linkedPackage} from '../utils/Package';
-import {objectProperty} from '../shapes/SHACL';
+import {literalProperty, objectProperty} from '../shapes/SHACL';
 import {NG, NGArticle, NGPerson, NGPhoto} from '../test-helpers/graph-routing-nested-fixtures';
 import {createTestDataset, DATASET_NAME, deleteTestDataset, executeSparqlUpdate, FUSEKI_BASE_URL} from '../test-helpers/fuseki-test-store';
 import {describeFuseki} from '../test-helpers/fuseki-live';
@@ -53,6 +53,16 @@ class RAWriter extends NGPerson {
 
   @objectProperty({path: {seq: [{id: `${NG}friend`}, {id: `${NG}friend`}]}, shape: NGPerson})
   get friendsOfFriends(): NGPerson[] {
+    return [];
+  }
+
+  @literalProperty({path: {alt: [{id: `${NG}nickname`}, {id: `${NG}name`}]}, maxCount: 1})
+  get handle(): string {
+    return '';
+  }
+
+  @objectProperty({path: {alt: [{id: `${NG}pinned`}, {id: `${NG}featured`}]}, shape: NGArticle})
+  get highlighted(): NGArticle[] {
     return [];
   }
 }
@@ -279,6 +289,17 @@ describe('routed reads through complex paths: golden SPARQL', () => {
     expect(sparql).toContain(`?a0 <${NG}friend>/<${NG}friend> ?a1 .`);
   });
 
+  test('a path stored with its subject (a literal, an alternative of forward IRIs) is read as before', async () => {
+    for (const [run, path] of [
+      [(s: CaptureStore) => RAWriter.select((w: any) => w.handle).exec(s), `<${NG}nickname>|<${NG}name>`],
+      [(s: CaptureStore) => RAWriter.select().where((w: any) => w.handle.equals('w')).exec(s), `<${NG}nickname>|<${NG}name>`],
+      [(s: CaptureStore) => RAWriter.select((w: any) => w.highlighted.title).exec(s), `<${NG}pinned>|<${NG}featured>`],
+    ] as const) {
+      const sparql = await sparqlOf(run, true);
+      expect(sparql).toContain(`?a0 ${path} ?`);
+    }
+  });
+
   test('a sequence path into a node in another graph is refused before anything is sent', async () => {
     for (const run of [
       (s: CaptureStore) => RAWriter.select((w: any) => w.reviewedPhotos).exec(s),
@@ -355,6 +376,11 @@ describeFuseki('routed reads through complex paths', () => {
     ]);
     const sizes = (await RAWriter.select((w: any) => w.articles.size()).exec(store)) as unknown as {id: string; articles: number}[];
     expect(new Map(sizes.map((r) => [r.id, Number(r.articles)])).get(W)).toBe(2);
+  });
+
+  test('a literal through an alternative path is read with its subject', async () => {
+    const rows = (await RAWriter.select((w: any) => w.handle).exec(store)) as unknown as {id: string; handle: string}[];
+    expect(new Map(rows.map((r) => [r.id, r.handle])).get(W)).toBe('w');
   });
 
   test('a sequence path across graphs is refused, on the live store too', async () => {

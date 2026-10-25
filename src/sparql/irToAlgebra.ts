@@ -707,6 +707,9 @@ function routedPathsTheStoredWay(
   // last step, `w.articles`, `w.articles.size()`), bound to the variable the registry gave them.
   const links: MutationTraversal[] = [...traverseNodesIn(parts)];
   for (const {sourceAlias, property, pathExpr} of propertyExpressionsIn(parts)) {
+    // A literal value has no graph of its own (a path to it that passes through another node:
+    // backlog 073).
+    if (findPropertyShapeById(property)?.nodeKind?.id === shacl.Literal.id) continue;
     const to = registry.get(sourceAlias, property);
     if (to) links.push({from: sourceAlias, property, to, ...(pathExpr ? {pathExpr} : {})});
   }
@@ -2480,7 +2483,7 @@ function inverseTraversals(
   for (const traversal of traversals) {
     if (!linkedElsewhere(traversal)) continue;
     const path = complexPathOf(traversal);
-    if (!path) continue;
+    if (!path || storedWithItsSubject(path)) continue;
     if (typeof path === 'object' && path !== null && 'inv' in path && getSimplePathId(path.inv) !== null) {
       out.push({to: traversal.to, predicate: iriTerm(getSimplePathId(path.inv)!)});
       continue;
@@ -2515,6 +2518,15 @@ function storedWayRound(
     );
     return inverse ? tripleOf(t.object, inverse.predicate, t.subject) : t;
   });
+}
+
+/**
+ * Whether every triple `path` matches is stored with its subject: an alternative of forward IRIs
+ * (`<a>|<b>`), which has no middle node and no inverse step, and so is read in the subject's graph.
+ */
+function storedWithItsSubject(path: PathExpr): boolean {
+  if (getSimplePathId(path) !== null) return true;
+  return typeof path === 'object' && path !== null && 'alt' in path && path.alt.every((p) => storedWithItsSubject(p as PathExpr));
 }
 
 /** `node` with every triple passed through `map` (EXISTS patterns in expressions included). */
