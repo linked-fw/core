@@ -1,6 +1,6 @@
 ---
 summary: >
-  What is left of routed paths across graphs after report 077 (reads through `^<p>` follow the
+  What is left of routed paths across graphs after report 078 (reads through `^<p>` follow the
   stored triple; other complex paths between graphs are refused on reads and writes): a complex
   path whose ends share one graph but whose middle node lives in another, inverse paths under a
   `.from()` of several graphs, referrers without a value shape, and an update-where's shared
@@ -10,7 +10,7 @@ packages: [core]
 
 # 073 — Routed paths across graphs
 
-Source: core reports 056 (writes across graphs) and 077 (routed complex-path reads).
+Source: core reports 056 (writes across graphs) and 078 (routed complex-path reads).
 
 ## Problem
 

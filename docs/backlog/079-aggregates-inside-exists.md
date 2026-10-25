@@ -6,9 +6,9 @@ summary: >
 packages: [core]
 ---
 
-# 078 — Aggregates inside EXISTS and in orderBy
+# 079 — Aggregates inside EXISTS and in orderBy
 
-Source: the review of report 077 (seen on `main` too; not caused by that change).
+Source: the review of report 078 (seen on `main` too; not caused by that change).
 
 ## Problem
 
