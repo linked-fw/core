@@ -96,5 +96,4 @@ assumes a writer owns whole packages; `'owned'` assumes only that a writer owns 
 - [linked-fw/server#117](https://github.com/linked-fw/server/pull/117) — the server passes the mode
   explicitly and logs it.
 - `src/shapes/syncShapes.ts` — `SyncShapesOptions.orphanScope`, the sweep in step 3.
-- [025](025-storage-config-and-graph-management.md) — storage config and graph management (graph
-  placement of the tags).
+- [Report 051](../reports/051-graph-routing.md) — graph routing (graph placement of the tags).

@@ -76,5 +76,5 @@ prisma.user.findMany({ distinct: ['name'] })  // field-level distinct
 - This is a small change — the SPARQL layers already support everything
 - Most users probably won't need to think about DISTINCT since auto-DISTINCT is sensible for RDF (where graph traversal naturally produces duplicates from optional patterns)
 - `DISTINCT ON` (PostgreSQL-specific) has no SPARQL equivalent — skip for now
-- `COUNT(DISTINCT ...)` would be useful alongside the aggregations work (backlog 016)
+- `COUNT(DISTINCT ...)` would be useful alongside the aggregations work (backlog 006)
 - Risk: removing auto-DISTINCT could surprise users with duplicate results. Recommend keeping auto-DISTINCT as default

@@ -269,8 +269,8 @@ This `@_linked/core` ideation can land independently — the primitive is useful
 7. Document in `@_linked/core` README.
 
 **Related ideation:**
-- `017-upsert.md` — orthogonal but referenced from CN's Phase 1.7 ideation (we hit a similar upsert gap with `UserProjectContextProvider.setActiveBranch`).
-- `012-aggregate-group-filtering.md` and `016-aggregations.md` — related but distinct (this idea is about WHERE-clause text predicates; those are about SELECT aggregations).
+- Upsert (`Shape.upsert`, plan `002-shape-upsert.md`) — orthogonal but referenced from CN's Phase 1.7 ideation (we hit a similar upsert gap with `UserProjectContextProvider.setActiveBranch`).
+- `012-aggregate-group-filtering.md` and `006-dsl-aggregates-sum-avg-min-max.md` — related but distinct (this idea is about WHERE-clause text predicates; those are about SELECT aggregations).
 - `020-distinct.md` — also a WHERE/SELECT modifier; not directly related but similar surface-area question.
 
 ## Notes / open hands

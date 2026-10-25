@@ -21,9 +21,9 @@ following an old `docs/ideas/NNN` reference in a historical report:
 
 | Old `ideas/NNN` | Now |
 |---|---|
-| 002 storage-config-and-graph-management | backlog **025** |
+| 002 storage-config-and-graph-management | backlog 025, **retired** → reports 048–057, 075 (implemented) |
 | 004 sparql-construct-support | backlog **004** |
-| 005 named-graph-support | backlog **005** |
+| 005 named-graph-support | backlog 005, **retired** → reports 049, 051, 056 (implemented) |
 | 008 shared-variable-bindings | backlog **026** |
 | 009 shape-remapping | backlog **027** |
 | 010 strict-null-checks | backlog **028** |
@@ -32,8 +32,8 @@ following an old `docs/ideas/NNN` reference in a historical report:
 | 013 shacl-property-paths | **retired** → report 011 (implemented) |
 | 014 prefixed-uris-in-json | backlog **014** |
 | 015 shacl-rdf-serialization | **retired** → report 016 (write side); reader → backlog **030** |
-| 016 aggregations | backlog **016** |
-| 017 upsert | backlog **017** |
+| 016 aggregations | backlog 016, merged into backlog **006** |
+| 017 upsert | backlog 017, **retired** → plan 002 (`Shape.upsert`, implemented) |
 | 018 transactions | backlog **018** |
 | 019 multi-column-sorting | backlog **019** |
 | 020 distinct | backlog **020** |
