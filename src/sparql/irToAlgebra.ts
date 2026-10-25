@@ -2903,12 +2903,24 @@ function buildDeleteInsertPlan(
   const placement = nestedPlacement(options, knownPlanGraph(query));
   const result = processUpdateFields(query.data, subjectTerm, options, placement);
 
-  const whereAlgebra = buildUpdateWhere(
-    {type: 'bgp', triples: []},
-    result,
-    query.traversalPatterns,
-    subjectTerm,
-  );
+  // An update changes a node that exists: the WHERE requires the subject's type (any type), so an
+  // update of an absent id matches nothing and writes nothing (an untyped node does not count as
+  // one). An upsert's WHERE stays bare: it creates the node when it is absent. A shape without a
+  // targetClass (core's `ClassAxioms`) has no instances to exist: it can only be updated by id,
+  // and its update writes whatever node it names, typed or not.
+  const base: SparqlBGP = {type: 'bgp', triples: []};
+  if (!opts?.ensureType && getTargetClassId(query.shape)) {
+    const used = collectVariableNames(
+      [result.deletePatterns, result.insertPatterns, result.oldValueTriples, result.extends, result.cascadeOptionals],
+      new Set(),
+    );
+    for (const t of query.traversalPatterns ?? []) used.add(t.to);
+    for (const ext of result.extends) used.add(ext.variable);
+    let typeVar = 't';
+    for (let n = 2; used.has(typeVar); n++) typeVar = `t${n}`;
+    base.triples.push(tripleOf(subjectTerm, iriTerm(RDF_TYPE), varTerm(typeVar)));
+  }
+  const whereAlgebra = buildUpdateWhere(base, result, query.traversalPatterns, subjectTerm);
 
   // The type triple leads the INSERT, mirroring `create`'s triple order.
   const insertPatterns = opts?.ensureType

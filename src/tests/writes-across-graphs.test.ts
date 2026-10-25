@@ -139,13 +139,15 @@ WHERE {
   FILTER(?a1_name = "x")
 }`,
   // computed update by id
-  `DELETE {
+  `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   <${D}a/1> <https://example.org/graph-routing-nested/title> ?old_title .
 }
 INSERT {
   <${D}a/1> <https://example.org/graph-routing-nested/title> ?computed_title .
 }
 WHERE {
+  <${D}a/1> rdf:type ?t .
   OPTIONAL {
     <${D}a/1> <https://example.org/graph-routing-nested/author> ?__trav_0__ .
     OPTIONAL {
@@ -337,7 +339,8 @@ WHERE {
   FILTER(?a1_name = "x")
 }`,
   // computed update by id
-  `WITH <${D}graph/articles>
+  `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+WITH <${D}graph/articles>
 DELETE {
   <${D}a/1> <https://example.org/graph-routing-nested/title> ?old_title .
 }
@@ -345,6 +348,7 @@ INSERT {
   <${D}a/1> <https://example.org/graph-routing-nested/title> ?computed_title .
 }
 WHERE {
+  <${D}a/1> rdf:type ?t .
   OPTIONAL {
     <${D}a/1> <https://example.org/graph-routing-nested/author> ?__trav_0__ .
     OPTIONAL {

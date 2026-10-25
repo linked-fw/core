@@ -98,6 +98,8 @@ function serializeTriples(
 // additive > relational. Used to parenthesize nested `binary_expr` operands so
 // arithmetic groups correctly (`(a+b)*c`, not `a+b*c`) and relational chains
 // (`a=b=c`, a non-associative syntax error) get parenthesized.
+const RDF_TYPE_IRI = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+
 const RELATIONAL_OPS = new Set(['=', '!=', '<', '>', '<=', '>=']);
 function binaryPrecedence(op: string): number {
   if (op === '*' || op === '/') return 3;
@@ -574,9 +576,10 @@ export function deleteInsertPlanToSparql(
 /**
  * The WHERE of a mutation that runs in the graph holding its subject (`plan.graphIn`):
  *
- * - by subject: `{ SELECT DISTINCT ?g WHERE { VALUES ?g { … } GRAPH ?g { <s> ?p ?o } } }` binds
- *   the graph that holds the subject (once: a subject lives in one graph), then
- *   `GRAPH ?g { where }`; a subject found in none of them matches nothing;
+ * - by subject: `{ SELECT DISTINCT ?g WHERE { VALUES ?g { … } GRAPH ?g { <s> a ?o } } }` binds
+ *   the graph that holds the subject's type (once: a subject lives in one graph; an untyped
+ *   half-node does not count), then `GRAPH ?g { where }`; a subject found in none of them
+ *   matches nothing;
  * - with a fallback (an upsert): the same lookup is OPTIONAL and `?g` is `COALESCE`d with the
  *   fallback graph, so a subject found nowhere is created there;
  * - in bulk: `VALUES ?g { … } GRAPH ?g { where }`, every graph of the set in which it matches.
@@ -597,16 +600,20 @@ function graphInWhere(
   if (!graphIn.subject) return `VALUES ?${v} { ${values} }\n${inGraph}`;
   collectUri(collector, graphIn.subject);
   const subject = formatUri(graphIn.subject);
+  // The subject is found where it is typed: an untyped half-node (properties without
+  // `rdf:type`) is not the node, and does not decide the graph.
+  collectUri(collector, RDF_TYPE_IRI);
+  const typed = `${subject} ${formatUri(RDF_TYPE_IRI)} ?${v}_o`;
   if (graphIn.fallback === undefined) {
     return (
-      `{ SELECT DISTINCT ?${v} WHERE { VALUES ?${v} { ${values} } GRAPH ?${v} { ${subject} ?${v}_p ?${v}_o } } }\n` +
+      `{ SELECT DISTINCT ?${v} WHERE { VALUES ?${v} { ${values} } GRAPH ?${v} { ${typed} } } }\n` +
       inGraph
     );
   }
   collectUri(collector, graphIn.fallback);
   return (
     `OPTIONAL { SELECT DISTINCT ?${v}_found WHERE { VALUES ?${v}_found { ${values} } ` +
-    `GRAPH ?${v}_found { ${subject} ?${v}_p ?${v}_o } } }\n` +
+    `GRAPH ?${v}_found { ${typed} } } }\n` +
     `BIND(COALESCE(?${v}_found, ${formatUri(graphIn.fallback)}) AS ?${v})\n` +
     `OPTIONAL {\n${indent(inGraph)}\n}`
   );

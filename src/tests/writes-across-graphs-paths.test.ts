@@ -221,7 +221,8 @@ WHERE {
   });
 
   test('a subject found at write time (GRAPH ?g_w) reads its linked node through VALUES nested in it', async () => {
-    expect(await sparqlOf((s) => computedFoundAtWriteTime(s))).toBe(`DELETE {
+    expect(await sparqlOf((s) => computedFoundAtWriteTime(s))).toBe(`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   GRAPH ?g_w {
     <${D}bob> <https://example.org/props/hobby> ?old_hobby .
   }
@@ -232,8 +233,9 @@ INSERT {
   }
 }
 WHERE {
-  { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <${D}graph/people> <${D}graph/staff> } GRAPH ?g_w { <${D}bob> ?g_w_p ?g_w_o } } }
+  { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <${D}graph/people> <${D}graph/staff> } GRAPH ?g_w { <${D}bob> rdf:type ?g_w_o } } }
   GRAPH ?g_w {
+    <${D}bob> rdf:type ?t .
     OPTIONAL {
       <${D}bob> <https://example.org/props/bestFriend> ?__trav_0__ .
       OPTIONAL {
