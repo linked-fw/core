@@ -2322,8 +2322,8 @@ function inWriteGraph(
 // ---------------------------------------------------------------------------
 
 /**
- * A link a mutation's WHERE follows: `from` → `to` through `property`, along `pathExpr` when the
- * pattern carries one (else the property's declared `sh:path`).
+ * A link a query follows (a mutation's WHERE, a routed read): `from` → `to` through `property`,
+ * along `pathExpr` when the pattern carries one (else the property's declared `sh:path`).
  */
 type MutationTraversal = {from: string; property: string; to: string; pathExpr?: PathExpr};
 
@@ -2417,10 +2417,11 @@ function complexPathOf(traversal: MutationTraversal): PathExpr | undefined {
 }
 
 /**
- * The traversals into a node read in another graph whose path is `^<p>`: their stored triple is
- * `?to <p> ?from`, held in the linked node's graph, so it is rewritten that way round (and read
- * there). Any other complex path (a sequence, an alternative, a repetition) into such a node is
- * refused: its intermediate nodes have no graph of their own to be read in.
+ * The traversals between nodes read in different graphs (`linkedElsewhere`) whose path is `^<p>`:
+ * their stored triple is `?to <p> ?from`, held in the linked node's graph, so it is rewritten that
+ * way round (`storedWayRound`, and read there). Any other complex path (a sequence, an
+ * alternative, a repetition) between such nodes is refused, for a write or a read: its
+ * intermediate nodes have no graph of their own to be read in.
  */
 function inverseTraversals(
   traversals: MutationTraversal[],
@@ -2915,10 +2916,10 @@ export function updateToAlgebra(
 /**
  * Converts an IRUpsertMutation to a SparqlDeleteInsertPlan.
  *
- * The same plan `update` produces, plus `<id> a <targetClass>` in the INSERT. Nothing else
- * differs: `update`'s WHERE is already a bare OPTIONAL, so it matches — and therefore
- * inserts — whether or not the node exists. The type triple is what turns that into a
- * create. Re-asserting it on an existing node is a no-op, RDF graphs being sets, so it
+ * The plan `update` produces, with `<id> a <targetClass>` in the INSERT and without the
+ * update's required `<id> a ?t` in the WHERE: the WHERE is a bare OPTIONAL, so it matches —
+ * and therefore inserts — whether or not the node exists. The type triple is what turns that
+ * into a create. Re-asserting it on an existing node is a no-op, RDF graphs being sets, so it
  * needs no guard.
  */
 export function upsertToAlgebra(
@@ -2939,8 +2940,8 @@ export function upsertToAlgebra(
 
 /**
  * Shared body of the id-targeted DELETE/INSERT/WHERE plans. `ensureType` is the only
- * difference between `update` and `upsert`; when absent the output is exactly what the
- * update path has always emitted.
+ * difference between `update` and `upsert`: with it the INSERT types the subject, without it
+ * the WHERE requires the subject to be typed.
  */
 function buildDeleteInsertPlan(
   query: IRUpdateMutation | IRUpsertMutation,

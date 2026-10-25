@@ -326,13 +326,12 @@ export abstract class Shape {
    * old edge and writes a fresh node, so the value replaces cleanly. (Use `Shape.create`
    * for `__id` at creation; use `.delete()` or `{remove: […]}` for full owned-node cleanup.)
    *
-   * **On a node that does not exist, this still writes — untyped.** `update`'s WHERE is a
-   * bare `OPTIONAL`, so it matches whether or not the subject exists, and the INSERT fires
-   * either way. What it never writes is `rdf:type`, so the result is an id carrying
-   * properties that no shape-scoped select can find, and the call reports success. If the
-   * node may be absent, use {@link Shape.upsert} instead, which asserts the type. (Whether
-   * `update` should instead no-op on an absent node is an open semantic question — core
-   * backlog 039.)
+   * **On a node that does not exist, this writes nothing.** The update's WHERE requires the
+   * subject to have an `rdf:type` (any type), so an absent id, or an id that carries properties
+   * but no type, matches nothing and nothing is written, in the default graph and under graph
+   * routing alike. The call still resolves with the fields it was given: a SPARQL update does not
+   * report what it changed, so knowing would cost another round trip. If the node may be absent,
+   * use {@link Shape.upsert}, which creates it.
    */
   static update<S extends Shape>(
     this: ShapeConstructor<S>,
@@ -371,8 +370,8 @@ export abstract class Shape {
    * Semantics:
    * - Replaces **only the properties named**; others on an existing node are untouched.
    *   It is not a whole-node replace.
-   * - Always asserts the node's type, which `update().for({id})` does not — an update
-   *   against an absent id writes its properties onto an untyped node.
+   * - Always asserts the node's type, and works on an absent node, which
+   *   `update().for({id})` does not: an update against an absent id writes nothing.
    * - Returns what `update` returns. It deliberately does **not** report whether it
    *   created or replaced: knowing that needs the extra read this avoids.
    * - `.where()` / `.forAll()` are rejected — an upsert targets one known id.

@@ -10,8 +10,9 @@ import {rdfs} from '../ontologies/rdfs.js';
 
 /**
  * The write side of the ontology sync: a class's `rdfs:subClassOf` edges, updated one class at a
- * time. Core-internal. It has **no targetClass** on purpose: an update by id never writes
- * `rdf:type`, so the sync adds and removes hierarchy triples without typing the class, and the
+ * time. Core-internal. It has **no targetClass** on purpose: an update by id of such a shape never
+ * writes `rdf:type` nor requires one (an update of a shape with a targetClass changes only a typed
+ * node), so the sync adds and removes hierarchy triples without typing the class, and the
  * shape takes no part in class resolution or the shape check. Not a built-in, so shape sync
  * never writes it into a dataset.
  *

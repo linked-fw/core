@@ -320,6 +320,7 @@ describeFuseki('routed reads through complex paths', () => {
     expect(await countWithArticle(store)).toBe(1);
     expect(await askWithArticle(store)).toBe(true);
   });
+
   test('a sequence path across graphs is refused, on the live store too', async () => {
     const thrown = await errorOf(RAWriter.select((w: any) => w.reviewedPhotos.caption).exec(store));
     const error = (thrown as {cause?: unknown}).cause ?? thrown;
