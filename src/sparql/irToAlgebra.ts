@@ -663,7 +663,7 @@ function routedReadScope(
   rootShape: string,
   registry: VariableRegistry,
   routing: ShapeGraphRouting,
-): ReadGraphScope | undefined {
+): {bySubject: Map<string, readonly string[]>; otherSubjects: readonly string[]} | undefined {
   const bySubject = new Map<string, readonly string[]>([
     [rootAlias, routedGraphsOfShape(rootShape, routing)],
   ]);
@@ -683,6 +683,32 @@ function routedReadScope(
   const onlyDefault = (set: readonly string[]) => set.length === 1 && set[0] === graphs.default;
   if ([...bySubject.values()].every(onlyDefault)) return undefined;
   return {bySubject, otherSubjects};
+}
+
+/**
+ * A routed read's algebra with its complex paths made readable across graphs. The scoper reads a
+ * triple in its subject's graphs, but `?a ^<p> ?b` is stored as `?b <p> ?a`, in `?b`'s graph: when
+ * the two ends of a pure inverse step may live in different graphs it is written the stored way
+ * round (and so read with `?b`). Any other complex path (a sequence, an alternative, a repetition)
+ * between such ends is refused with `GraphQueryError('unsupported-query-kind')`: its middle nodes
+ * have no graph to be read in. Ends that both read the same one graph are left as they are. Covers
+ * the select's patterns, its where clause (`EXISTS` included) and so counts and asks, which reuse
+ * this algebra.
+ */
+function routedPathsTheStoredWay(
+  algebra: SparqlAlgebraNode,
+  query: IRSelectQuery,
+  scope: {bySubject: ReadonlyMap<string, readonly string[]>; otherSubjects: readonly string[]},
+): SparqlAlgebraNode {
+  const setOf = (variable: string) => scope.bySubject.get(variable) ?? scope.otherSubjects;
+  const oneSameGraph = (a: readonly string[], b: readonly string[]) =>
+    a.length === 1 && b.length === 1 && a[0] === b[0];
+  const inverses = inverseTraversals(
+    traverseNodesIn([query.patterns, query.where, query.projection, query.orderBy]),
+    (t) => !oneSameGraph(setOf(t.from), setOf(t.to)),
+    'read',
+  );
+  return inverses.length > 0 ? storedWayRound(algebra, inverses) : algebra;
 }
 
 /**
@@ -1264,7 +1290,7 @@ export function selectToAlgebra(
       ? routedReadScope(rootAlias, query.root.shape, registry, _options.routing)
       : undefined;
   const scoped = scopeAlgebraToGraphs(
-    algebra,
+    routed ? routedPathsTheStoredWay(algebra, query, routed) : algebra,
     query.graphs ?? routed ?? (storedIn ? [storedIn] : undefined),
     _options,
   );
@@ -2313,7 +2339,12 @@ function mutationTraversals(query: {
   where?: IRExpression;
   wherePatterns?: IRGraphPattern[];
 }): MutationTraversal[] {
-  const out: MutationTraversal[] = [...(query.traversalPatterns ?? [])];
+  return [...(query.traversalPatterns ?? []), ...traverseNodesIn([query.wherePatterns, query.where])];
+}
+
+/** Every `traverse` pattern in `value` (an IR query, or part of one), at any depth, in order. */
+function traverseNodesIn(value: unknown): MutationTraversal[] {
+  const out: MutationTraversal[] = [];
   const visit = (value: unknown): void => {
     if (Array.isArray(value)) {
       value.forEach(visit);
@@ -2336,8 +2367,7 @@ function mutationTraversals(query: {
     }
     for (const child of Object.values(value)) visit(child);
   };
-  visit(query.wherePatterns);
-  visit(query.where);
+  visit(value);
   return out;
 }
 
@@ -2394,11 +2424,12 @@ function complexPathOf(traversal: MutationTraversal): PathExpr | undefined {
  */
 function inverseTraversals(
   traversals: MutationTraversal[],
-  linkedElsewhere: (variable: string) => boolean,
+  linkedElsewhere: (traversal: MutationTraversal) => boolean,
+  operation: 'read' | 'write' = 'write',
 ): {to: string; predicate: SparqlTerm}[] {
   const out: {to: string; predicate: SparqlTerm}[] = [];
   for (const traversal of traversals) {
-    if (!linkedElsewhere(traversal.to)) continue;
+    if (!linkedElsewhere(traversal)) continue;
     const path = complexPathOf(traversal);
     if (!path) continue;
     if (typeof path === 'object' && path !== null && 'inv' in path && getSimplePathId(path.inv) !== null) {
@@ -2407,12 +2438,34 @@ function inverseTraversals(
     }
     throw new GraphQueryError(
       'unsupported-query-kind',
-      `This write follows <${traversal.property}> (the property path ${pathExprToSparql(path)}) into a ` +
-        `node that lives in another graph than the mutation's subject; a path other than one IRI or ` +
-        `its inverse cannot be read across graphs. Read the ids first and change them by id.`,
+      operation === 'write'
+        ? `This write follows <${traversal.property}> (the property path ${pathExprToSparql(path)}) into a ` +
+          `node that lives in another graph than the mutation's subject; a path other than one IRI or ` +
+          `its inverse cannot be read across graphs. Read the ids first and change them by id.`
+        : `This read follows <${traversal.property}> (the property path ${pathExprToSparql(path)}) from a ` +
+          `node to one that may live in another graph under the store's graph routing; a path other than ` +
+          `one IRI or its inverse cannot be read across graphs (its middle nodes have no graph to be read ` +
+          `in). Follow the path one property at a time, or route both shapes to one graph.`,
     );
   }
   return out;
+}
+
+/**
+ * `node` with each inverse-path triple into one of `inverses`' targets (`?from ^<p> ?to`) written
+ * the way it is stored, `?to <p> ?from`, so a graph scoper groups (and reads) it with `?to`.
+ * Matched on the target, which one traversal binds.
+ */
+function storedWayRound(
+  node: SparqlAlgebraNode,
+  inverses: {to: string; predicate: SparqlTerm}[],
+): SparqlAlgebraNode {
+  return mapAlgebraTriples(node, (t) => {
+    const inverse = inverses.find(
+      (i) => t.predicate.kind === 'path' && t.object.kind === 'variable' && t.object.name === i.to,
+    );
+    return inverse ? tripleOf(t.object, inverse.predicate, t.subject) : t;
+  });
 }
 
 /** `node` with every triple passed through `map` (EXISTS patterns in expressions included). */
@@ -2496,18 +2549,13 @@ function readLinkedNodesInTheirGraphs(
     return set !== undefined && !readsWithSubject(subjectGraph, set);
   };
   if (![...linked.keys()].some(elsewhere)) return plan;
-  const inverses = inverseTraversals(traversals, elsewhere);
+  const inverses = inverseTraversals(traversals, (t) => elsewhere(t.to));
   let whereAlgebra = plan.whereAlgebra;
   if (inverses.length > 0) {
     // `?from ^<p> ?to` → `?to <p> ?from`, grouped (and read) with the linked node. Matched on the
     // target alias, which one traversal binds: a computed field's first hop starts from the plan's
     // subject term (`<id>` or `?a0`), not from its alias.
-    whereAlgebra = mapAlgebraTriples(whereAlgebra, (t) => {
-      const inverse = inverses.find(
-        (i) => t.predicate.kind === 'path' && t.object.kind === 'variable' && t.object.name === i.to,
-      );
-      return inverse ? tripleOf(t.object, inverse.predicate, t.subject) : t;
-    });
+    whereAlgebra = storedWayRound(whereAlgebra, inverses);
   }
   // The plan's own graph variable (and its lookup's companions) is taken.
   const reserved = plan.graphIn

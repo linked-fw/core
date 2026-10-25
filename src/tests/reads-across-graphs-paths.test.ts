@@ -15,6 +15,7 @@ import {afterAll, beforeAll, describe, expect, test} from '@jest/globals';
 import {SparqlDataset} from '../sparql/SparqlDataset';
 import type {SparqlOptions} from '../sparql/sparqlUtils';
 import type {SparqlQueryResults} from '../sparql/resultMapping';
+import {isSparqlSelectResults} from '../sparql/resultMapping';
 import {setShapeGraphs} from '../utils/graphRouting';
 import {graphs} from '../ontologies/graphs';
 import {isGraphQueryError} from '../queries/graphQuery';
@@ -152,11 +153,85 @@ ASK WHERE {
 }`,
 };
 
+/**
+ * The same reads with routes: the inverse step is read as `?a1 <author> ?a0`, with the article. A
+ * linked node bound only inside `EXISTS` reads every graph the routing knows (`?g_a1`).
+ */
 const ROUTED = {
-  articleTitles: ``,
-  withArticle: ``,
-  countWithArticle: ``,
-  askWithArticle: ``,
+  articleTitles: `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a1_title ?a1
+FROM NAMED <${G_ARTICLES}>
+FROM NAMED <${G_PEOPLE}>
+WHERE {
+  GRAPH <${G_PEOPLE}> {
+    ?a0 rdf:type <https://example.org/graph-routing-nested/RWriter> .
+  }
+  OPTIONAL {
+    GRAPH <${G_ARTICLES}> {
+      ?a1 <https://example.org/graph-routing-nested/author> ?a0 .
+    }
+    OPTIONAL {
+      GRAPH <${G_ARTICLES}> {
+        ?a1 <https://example.org/graph-routing-nested/title> ?a1_title .
+      }
+    }
+  }
+}`,
+  withArticle: `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name
+WHERE {
+  GRAPH <${G_PEOPLE}> {
+    ?a0 rdf:type <https://example.org/graph-routing-nested/RWriter> .
+  }
+  OPTIONAL {
+    GRAPH <${G_PEOPLE}> {
+      ?a0 <https://example.org/graph-routing-nested/name> ?a0_name .
+    }
+  }
+  FILTER(EXISTS {
+    VALUES ?g_a1 { <urn:x-arq:DefaultGraph> <${G_ARTICLES}> <${G_PEOPLE}> }
+    GRAPH ?g_a1 {
+      ?a1 <https://example.org/graph-routing-nested/author> ?a0 .
+    }
+    GRAPH ?g_a1 {
+      ?a1 <https://example.org/graph-routing-nested/title> ?a1_title .
+    }
+    FILTER(?a1_title = "one")
+  })
+}`,
+  countWithArticle: `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT (COUNT(DISTINCT ?a0) AS ?count)
+WHERE {
+  GRAPH <${G_PEOPLE}> {
+    ?a0 rdf:type <https://example.org/graph-routing-nested/RWriter> .
+  }
+  FILTER(EXISTS {
+    VALUES ?g_a1 { <urn:x-arq:DefaultGraph> <${G_ARTICLES}> <${G_PEOPLE}> }
+    GRAPH ?g_a1 {
+      ?a1 <https://example.org/graph-routing-nested/author> ?a0 .
+    }
+    GRAPH ?g_a1 {
+      ?a1 <https://example.org/graph-routing-nested/title> ?a1_title .
+    }
+    FILTER(?a1_title = "one")
+  })
+}`,
+  askWithArticle: `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+ASK WHERE {
+  GRAPH <${G_PEOPLE}> {
+    ?a0 rdf:type <https://example.org/graph-routing-nested/RWriter> .
+  }
+  FILTER(EXISTS {
+    VALUES ?g_a1 { <urn:x-arq:DefaultGraph> <${G_ARTICLES}> <${G_PEOPLE}> }
+    GRAPH ?g_a1 {
+      ?a1 <https://example.org/graph-routing-nested/author> ?a0 .
+    }
+    GRAPH ?g_a1 {
+      ?a1 <https://example.org/graph-routing-nested/title> ?a1_title .
+    }
+    FILTER(?a1_title = "one")
+  })
+}`,
 };
 
 const reads = {articleTitles, withArticle, countWithArticle, askWithArticle};
@@ -188,7 +263,9 @@ describe('routed reads through complex paths: golden SPARQL', () => {
         RAWriter.select().where((w: any) => w.reviewedPhotos.some((p: any) => p.caption.equals('x'))).count(s as never),
     ]) {
       const s = capture(true);
-      const error = await errorOf(run(s));
+      // A select names the query in its error and keeps the typed one as its `cause`.
+      const thrown = await errorOf(run(s));
+      const error = (thrown as {cause?: unknown}).cause ?? thrown;
       expect(isGraphQueryError(error, 'unsupported-query-kind')).toBe(true);
       expect(String((error as Error).message)).toContain('property path');
       expect(s.queries).toEqual([]);
@@ -225,10 +302,9 @@ describeFuseki('routed reads through complex paths', () => {
   });
 
   test('the stored triples are where the routing put them', async () => {
-    const json = (await store.rawQuery(
-      `SELECT ?g WHERE { GRAPH ?g { <${D}article/1> <${NG}author> <${W}> } }`,
-    )) as {results: {bindings: {g: {value: string}}[]}};
-    expect(json.results.bindings.map((b) => b.g.value)).toEqual([G_ARTICLES]);
+    const json = await store.rawQuery(`SELECT ?g WHERE { GRAPH ?g { <${D}article/1> <${NG}author> <${W}> } }`);
+    if (!json || !isSparqlSelectResults(json)) throw new Error('expected a result set');
+    expect(json.results.bindings.map((b) => b.g!.value)).toEqual([G_ARTICLES]);
   });
 
   test('Writer.select(w => w.articles.title) reads the articles in their graph', async () => {
@@ -243,5 +319,10 @@ describeFuseki('routed reads through complex paths', () => {
     expect(rows.map((r) => r.id)).toEqual([W]);
     expect(await countWithArticle(store)).toBe(1);
     expect(await askWithArticle(store)).toBe(true);
+  });
+  test('a sequence path across graphs is refused, on the live store too', async () => {
+    const thrown = await errorOf(RAWriter.select((w: any) => w.reviewedPhotos.caption).exec(store));
+    const error = (thrown as {cause?: unknown}).cause ?? thrown;
+    expect(isGraphQueryError(error, 'unsupported-query-kind')).toBe(true);
   });
 });
