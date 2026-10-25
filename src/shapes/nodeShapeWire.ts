@@ -27,6 +27,7 @@
  */
 
 import type {NodeShapeData, PropertyShapeData} from './nodeShapeData.js';
+import {assertSafeShapePaths} from '../paths/propertyPathSafety.js';
 
 /** `PropertyShapeData` minus the circular parent link, with `pattern` as a string. */
 export type PropertyShapeWire = Omit<
@@ -78,7 +79,12 @@ export function toWire(shape: NodeShapeData): NodeShapeWire {
   };
 }
 
-/** Wire → metamodel. Restores the parent back-reference, recompiles the pattern. */
+/**
+ * Wire → metamodel. Restores the parent back-reference, recompiles the pattern, and checks every
+ * property path.
+ *
+ * @throws InvalidPropertyPathError when a path step is neither an IRI nor a prefixed name.
+ */
 export function fromWire(wire: NodeShapeWire): NodeShapeData {
   const shape: NodeShapeData = {
     ...wire,
@@ -87,6 +93,9 @@ export function fromWire(wire: NodeShapeWire): NodeShapeData {
   shape.propertyShapes = (wire.propertyShapes ?? []).map((prop) =>
     propertyFromWire(prop, shape),
   );
+  // A wire shape comes from outside the process (a store, a catalog response): its paths are
+  // data, and a step that is not a single IRI or prefixed name is refused here, by name.
+  assertSafeShapePaths(shape);
   return shape;
 }
 

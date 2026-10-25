@@ -5,6 +5,7 @@
  */
 
 import {type PathExpr, parsePropertyPath, PATH_OPERATOR_CHARS} from './PropertyPathExpr.js';
+import {assertSafePropertyPath, isBareIri} from './propertyPathSafety.js';
 
 /**
  * Input type for property path decorators.
@@ -15,23 +16,6 @@ export type PropertyPathDecoratorInput =
   | {id: string}
   | PropertyPathDecoratorInput[]
   | PathExpr;
-
-/**
- * An absolute IRI written bare, e.g. `https://schema.org/name` or `urn:prop:sku`.
- *
- * Two forms, and the distinction from a PREFIXED-NAME SEQUENCE is the whole difficulty:
- *
- *  - A hierarchical IRI carries `://`, which `ex:friend/ex:name` never does. The `/` inside it
- *    is part of the IRI, not a sequence separator.
- *  - A non-hierarchical IRI (`urn:prop:sku`) has a scheme and NO path operator at all.
- *
- * So `ex:friend/ex:name` is still read as a sequence, and `<a>/<b>` — which starts with `<`,
- * not a scheme — still parses as an expression.
- */
-const isBareIri = (value: string): boolean => {
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value)) return !/[|^*+?()!<>\s]/.test(value);
-  return /^[A-Za-z][A-Za-z0-9+.-]*:/.test(value) && !PATH_OPERATOR_CHARS.test(value);
-};
 
 /** Path expression operator keys used to detect structured PathExpr objects. */
 const PATH_EXPR_KEYS = new Set(['seq', 'alt', 'inv', 'zeroOrMore', 'oneOrMore', 'zeroOrOne', 'negatedPropertySet']);
@@ -50,8 +34,17 @@ const isStructuredPathExpr = (value: unknown): boolean => {
  * - `{id: string}` → preserved as PathRef
  * - `PathExpr` structured object → passed through
  * - `Array` → converted to `{seq: [...]}`
+ *
+ * Every step of the result is checked (`assertSafePropertyPath`): a step that is neither a
+ * prefixed-name token nor an absolute IRI throws `InvalidPropertyPathError`.
  */
 export function normalizePropertyPath(input: PropertyPathDecoratorInput): PathExpr {
+  const result = normalizeUnchecked(input);
+  assertSafePropertyPath(result);
+  return result;
+}
+
+function normalizeUnchecked(input: PropertyPathDecoratorInput): PathExpr {
   let result: PathExpr;
 
   // String input
@@ -77,7 +70,7 @@ export function normalizePropertyPath(input: PropertyPathDecoratorInput): PathEx
   }
   // Array → sequence shorthand
   else if (Array.isArray(input)) {
-    const normalized = input.map((item) => normalizePropertyPath(item));
+    const normalized = input.map((item) => normalizeUnchecked(item));
     result = normalized.length === 1 ? normalized[0] : {seq: normalized};
   }
   // Object

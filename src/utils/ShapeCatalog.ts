@@ -32,6 +32,7 @@ import {getRegisteredShapeClass} from './ShapeClass.js';
 import '../shapes/PathNode.js';
 import '../shapes/OntologySync.js';
 import '../shapes/NamedGraph.js';
+import {assertSafeShapePaths} from '../paths/propertyPathSafety.js';
 
 export {
   withShapeCatalog,
@@ -125,7 +126,10 @@ export class ShapeCatalog {
     }
     for (const shape of list) {
       if (!shape?.id || shapeClasses.has(shape.id)) continue;
-      const data = isNodeShapeWire(shape) ? fromWire(shape) : (shape as NodeShapeData);
+      // `fromWire` checks the paths of a wire shape; shape data is checked here.
+      const isWire = isNodeShapeWire(shape);
+      const data = isWire ? fromWire(shape) : (shape as NodeShapeData);
+      if (!isWire) assertSafeShapePaths(data);
       for (const ps of data.propertyShapes ?? []) {
         warnOnReservedPropertyLabel(ps.label, data.label, data.id);
       }

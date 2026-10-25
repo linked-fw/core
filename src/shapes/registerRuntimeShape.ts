@@ -34,6 +34,7 @@ import {warnDataOnlyOverrides} from './tightenOnly.js';
 import {warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
 import type {NodeShapeData} from './nodeShapeData.js';
 import {fromWire, isNodeShapeWire, type NodeShapeWire} from './nodeShapeWire.js';
+import {assertSafeShapePaths} from '../paths/propertyPathSafety.js';
 
 /**
  * Register one shape's metadata under its IRI.
@@ -52,7 +53,10 @@ export function registerRuntimeShape(
   assertNoActiveCatalog();
   if (!shape?.id) return false;
   if (getShapeClass(shape.id)) return false;
-  const data = isNodeShapeWire(shape) ? fromWire(shape) : (shape as NodeShapeData);
+  // `fromWire` checks the paths of a wire shape; shape data is checked here.
+  const isWire = isNodeShapeWire(shape);
+  const data = isWire ? fromWire(shape) : (shape as NodeShapeData);
+  if (!isWire) assertSafeShapePaths(data);
   // A data-only shape never passes through registerPropertyShape, so the collision
   // check has to happen here too — otherwise a shape authored in a builder is the one
   // kind of shape that gets no warning until the field tracer fails.

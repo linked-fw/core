@@ -8,6 +8,7 @@ import type {PathExpr, PathRef} from './PropertyPathExpr.js';
 import {isPathRef} from './PropertyPathExpr.js';
 import {formatUri} from '../sparql/sparqlUtils.js';
 import {Prefix} from '../utils/Prefix.js';
+import {pathRefIri} from './propertyPathSafety.js';
 
 // ---------------------------------------------------------------------------
 // Precedence levels (higher = tighter binding)
@@ -17,22 +18,21 @@ const PREC_SEQ = 2;
 const PREC_UNARY = 3;
 const PREC_PRIMARY = 4;
 
+/**
+ * Write one path step. Every step goes through `formatUri` (angle brackets, `assertSafeIri`,
+ * prefix shortening): a string step is read as a prefixed name only when it is one SPARQL
+ * prefixed-name token with a registered prefix, and is expanded first. Any other string is an
+ * IRI — `urn:prop:a` included, which is not a prefixed name unless `urn` is registered. Nothing
+ * from a step reaches the query text verbatim, so a stored `sh:path` step cannot add patterns.
+ */
 function refToSparql(ref: PathRef): string {
-  if (typeof ref === 'string') {
-    // If it looks like a full IRI (contains ://), use formatUri for prefix shortening
-    if (ref.includes('://')) return formatUri(ref);
-    // Otherwise treat as prefixed name (already in prefix:local form)
-    return ref;
-  }
-  // {id} refs always contain full IRIs — use formatUri for prefix shortening
-  return formatUri(ref.id);
+  return formatUri(pathRefIri(ref));
 }
 
 /**
- * Collect all full IRIs from a PathExpr AST.
- * Returns IRIs that need PREFIX declarations (full URIs from string refs
- * containing `://` and from `{id}` refs). Does not collect prefixed-name
- * string refs since those are already in prefix:local form.
+ * Collect every IRI a PathExpr AST names, as `pathExprToSparql` writes it: string and `{id}`
+ * steps alike, with a registered prefixed name expanded to its full IRI. The PREFIX block of a
+ * query is built from these, so a step written in its short form gets its declaration.
  */
 export function collectPathUris(expr: PathExpr): string[] {
   const uris: string[] = [];
@@ -41,11 +41,7 @@ export function collectPathUris(expr: PathExpr): string[] {
 }
 
 function collectRef(ref: PathRef, uris: string[]): void {
-  if (typeof ref === 'string') {
-    if (ref.includes('://')) uris.push(ref);
-  } else {
-    uris.push(ref.id);
-  }
+  uris.push(pathRefIri(ref));
 }
 
 function walkPathExpr(expr: PathExpr, uris: string[]): void {
