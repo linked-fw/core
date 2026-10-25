@@ -56,6 +56,11 @@ class WAWriter extends NGPerson {
   get reviewedPhotos(): NGPhoto[] {
     return [];
   }
+
+  @objectProperty({path: {alt: [{id: `${NG}pinned`}, {id: `${NG}featured`}]}, shape: NGArticle})
+  get highlighted(): NGArticle[] {
+    return [];
+  }
 }
 
 const D = 'https://acme.example/data/';
@@ -221,7 +226,8 @@ WHERE {
   });
 
   test('a subject found at write time (GRAPH ?g_w) reads its linked node through VALUES nested in it', async () => {
-    expect(await sparqlOf((s) => computedFoundAtWriteTime(s))).toBe(`DELETE {
+    expect(await sparqlOf((s) => computedFoundAtWriteTime(s))).toBe(`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   GRAPH ?g_w {
     <${D}bob> <https://example.org/props/hobby> ?old_hobby .
   }
@@ -232,7 +238,7 @@ INSERT {
   }
 }
 WHERE {
-  { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <${D}graph/people> <${D}graph/staff> } GRAPH ?g_w { <${D}bob> ?g_w_p ?g_w_o } } }
+  { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <${D}graph/people> <${D}graph/staff> } GRAPH ?g_w { <${D}bob> rdf:type ?g_w_o } } }
   GRAPH ?g_w {
     OPTIONAL {
       <${D}bob> <https://example.org/props/bestFriend> ?__trav_0__ .
@@ -247,6 +253,9 @@ WHERE {
       <${D}bob> <https://example.org/props/hobby> ?old_hobby .
     }
     BIND(UCASE(?__trav_0___name) AS ?computed_hobby)
+    FILTER(EXISTS {
+      <${D}bob> rdf:type ?t .
+    })
   }
 }`);
   });
@@ -270,6 +279,14 @@ WHERE {
     const error = await errorOf(defaultUnderWith(s));
     expect(isGraphQueryError(error, 'unsupported-query-kind')).toBe(true);
     expect(s.updates).toEqual([]);
+  });
+
+  test('an alternative of forward IRIs into another graph is read with the subject, the linked node in its graph', async () => {
+    const sparql = await sparqlOf((s) =>
+      WAWriter.update({name: 'z'}).where((w: any) => w.highlighted.some((a: any) => a.title.equals('one'))).exec(s),
+    );
+    expect(sparql).toContain(`WITH <${G_PEOPLE}>`);
+    expect(sparql).toMatch(new RegExp(`FILTER\\(EXISTS \\{\\n    \\?a0 <${NG}pinned>\\|<${NG}featured> \\?a1 \\.\\n    GRAPH <${G_ARTICLES}> \\{\\n      \\?a1 <${NG}title> \\?a1_title \\.`));
   });
 
   test('a sequence path into a node in another graph is refused before anything is sent', async () => {

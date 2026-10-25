@@ -154,7 +154,14 @@ describe('mutation WHERE — algebra', () => {
         UpdateBuilder.from(UBox).for(`${U}b1`).set({tags: ['x'], refs: [{id: `${U}r`}]} as any),
       ) as IRUpdateMutation,
     );
-    const where = plan.whereAlgebra as any;
+    // The required type of the subject wraps the WHERE: an update of an absent id matches nothing.
+    const filter = plan.whereAlgebra as any;
+    expect(filter.type).toBe('filter');
+    expect(filter.expression.kind).toBe('exists_expr');
+    expect(filter.expression.pattern.triples).toEqual([
+      expect.objectContaining({predicate: {kind: 'iri', value: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'}, object: {kind: 'variable', name: 't'}}),
+    ]);
+    const where = filter.inner;
     expect(where.type).toBe('left_join');
     expect(where.left).toEqual({type: 'bgp', triples: []});
     expect(where.right.type).toBe('union');

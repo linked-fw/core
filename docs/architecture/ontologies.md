@@ -474,6 +474,16 @@ of unknown shape may be in any routed graph or the default graph. The forms:
 | named graphs only | `FROM NAMED` their union; per subject `GRAPH <g>` (one graph), `GRAPH ?g` (the whole union) or, for a type-checked subject with a narrower set, `VALUES ?g { … }` + `GRAPH ?g` |
 | the default graph with named graphs | no `FROM NAMED`; default-only subjects plain, one-graph subjects `GRAPH <g>`, others `VALUES ?g { <store default name> … }` + `GRAPH ?g` |
 
+A link through a complex `sh:path` is read where it is stored. An inverse step `?a ^<p> ?b` whose
+two ends may live in different graphs is written the stored way round, `?b <p> ?a`, and read with
+`?b`: a writer's articles (`Writer.articles = ^author`) are read in the articles graph, in a
+select (`w.articles.title`, or `w.articles` and `w.articles.size()` as values), a where clause
+(`EXISTS` included), a count and an ask. Any other complex path (a
+sequence, an alternative, `*`, `+`, `?`) between ends that may live in different graphs is refused
+(`GraphQueryError('unsupported-query-kind')`): its middle nodes have no graph to be read in. Ends
+that both read the same one graph are read as before, and so are a path to a literal and an
+alternative of forward IRIs (`<a>|<b>`), which are stored with their subject.
+
 `VALUES` is written where a subject's graph variable is first bound, not again in the OPTIONAL
 blocks that join on it. With `SparqlOptions.namedGraphUriParameter` the `FROM NAMED` set goes to
 the transport as the protocol's `named-graph-uri` parameters instead
@@ -495,12 +505,13 @@ the graph:
 ```sparql
 DELETE { GRAPH ?g_w { … } } INSERT { GRAPH ?g_w { … } }
 WHERE {
-  { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <people> <staff> } GRAPH ?g_w { <bob> ?p ?o } } }
-  GRAPH ?g_w { … }
+  { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <people> <staff> } GRAPH ?g_w { <bob> a ?o } } }
+  GRAPH ?g_w { … FILTER(EXISTS { <bob> a ?t }) }
 }
 ```
 
-A subject found in none of them is left alone; an upsert of one creates it in the shape's graph
+The lookup finds the graph where the subject is typed (an untyped half-node does not count). A
+subject found in none of them is left alone; an upsert of one creates it in the shape's graph
 (`BIND(COALESCE(…))`); a bulk update or delete runs in every graph of the set where it matches; a
 delete of several ids is one operation per id in one request. Old values and owned walks are read
 and removed in that graph only. Two reads leave it, inside the same update:
@@ -520,7 +531,7 @@ and removed in that graph only. Two reads leave it, inside the same update:
   its owner, and a link inside the subject's own one graph compiles as before. The templates stay
   in the subject's graph. An inverse path `^<p>` into another graph is written the stored way round
   (`?linked <p> ?subject`) and read with the linked node; any other complex path into a node in
-  another graph is refused (`GraphQueryError('unsupported-query-kind')`; reads: backlog 073).
+  another graph is refused (`GraphQueryError('unsupported-query-kind')`), as on reads.
 
 Under routing an owned node lives in its owner's graph: the owned-link check reads the linked
 node's types in every graph and refuses one that lives elsewhere. For an update-where that links

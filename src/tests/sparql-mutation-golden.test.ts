@@ -115,7 +115,8 @@ describe('SPARQL golden — update mutations', () => {
     const ir = (await captureQuery(queryFactories.updateSimple)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
     expect(sparql).toBe(
-`DELETE {
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   <${ENT}p1> <${PROP}hobby> ?old_hobby .
 }
 INSERT {
@@ -125,6 +126,9 @@ WHERE {
   OPTIONAL {
     <${ENT}p1> <${PROP}hobby> ?old_hobby .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -132,7 +136,8 @@ WHERE {
     const ir = (await captureQuery(queryFactories.updateOverwriteSet)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
     expect(sparql).toBe(
-`DELETE {
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   <${ENT}p1> <${PROP}hasFriend> ?old_friends .
 }
 INSERT {
@@ -142,6 +147,9 @@ WHERE {
   OPTIONAL {
     <${ENT}p1> <${PROP}hasFriend> ?old_friends .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -149,13 +157,17 @@ WHERE {
     const ir = (await captureQuery(queryFactories.updateUnsetSingleUndefined)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
     expect(sparql).toBe(
-`DELETE {
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   <${ENT}p1> <${PROP}hobby> ?old_hobby .
 }
 WHERE {
   OPTIONAL {
     <${ENT}p1> <${PROP}hobby> ?old_hobby .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -163,13 +175,17 @@ WHERE {
     const ir = (await captureQuery(queryFactories.updateUnsetSingleNull)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
     expect(sparql).toBe(
-`DELETE {
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   <${ENT}p1> <${PROP}hobby> ?old_hobby .
 }
 WHERE {
   OPTIONAL {
     <${ENT}p1> <${PROP}hobby> ?old_hobby .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -193,7 +209,8 @@ WHERE {
     const ir = (await captureQuery(queryFactories.updatePassIdReferences)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
     expect(sparql).toBe(
-`DELETE {
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   <${ENT}p1> <${PROP}bestFriend> ?old_bestFriend .
 }
 INSERT {
@@ -203,6 +220,9 @@ WHERE {
   OPTIONAL {
     <${ENT}p1> <${PROP}bestFriend> ?old_bestFriend .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -210,7 +230,8 @@ WHERE {
     const ir = (await captureQuery(queryFactories.updateAddRemoveMulti)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
     expect(sparql).toBe(
-`DELETE {
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   <${ENT}p1> <${PROP}hasFriend> <${ENT}p3> .
 }
 INSERT {
@@ -220,6 +241,9 @@ WHERE {
   OPTIONAL {
     <${ENT}p1> <${PROP}hasFriend> <${ENT}p3> .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -227,13 +251,17 @@ WHERE {
     const ir = (await captureQuery(queryFactories.updateRemoveMulti)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
     expect(sparql).toBe(
-`DELETE {
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   <${ENT}p1> <${PROP}hasFriend> <${ENT}p2> .
 }
 WHERE {
   OPTIONAL {
     <${ENT}p1> <${PROP}hasFriend> <${ENT}p2> .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -241,7 +269,8 @@ WHERE {
     const ir = (await captureQuery(queryFactories.updateAddRemoveSame)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
     expect(sparql).toBe(
-`DELETE {
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   <${ENT}p1> <${PROP}hasFriend> <${ENT}p3> .
 }
 INSERT {
@@ -251,6 +280,9 @@ WHERE {
   OPTIONAL {
     <${ENT}p1> <${PROP}hasFriend> <${ENT}p3> .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -258,13 +290,17 @@ WHERE {
     const ir = (await captureQuery(queryFactories.updateUnsetMultiUndefined)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
     expect(sparql).toBe(
-`DELETE {
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   <${ENT}p1> <${PROP}hasFriend> ?old_friends .
 }
 WHERE {
   OPTIONAL {
     <${ENT}p1> <${PROP}hasFriend> ?old_friends .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -285,6 +321,9 @@ WHERE {
   OPTIONAL {
     <${ENT}p1> <${PROP}bestFriend> ?old_bestFriend .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 
@@ -292,7 +331,8 @@ WHERE {
     const ir = (await captureQuery(queryFactories.updateBirthDate)) as IRUpdateMutation;
     const sparql = updateToSparql(ir);
     expect(sparql).toBe(
-`PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 DELETE {
   <${ENT}p1> <${PROP}birthDate> ?old_birthDate .
 }
@@ -303,6 +343,9 @@ WHERE {
   OPTIONAL {
     <${ENT}p1> <${PROP}birthDate> ?old_birthDate .
   }
+  FILTER(EXISTS {
+    <${ENT}p1> rdf:type ?t .
+  })
 }`);
   });
 });
@@ -681,7 +724,7 @@ WHERE {
 }`);
   });
 
-  test('the ONLY difference from update is one INSERT triple', async () => {
+  test('upsert differs from update in two lines: the INSERT asserts the type, the WHERE does not require one', async () => {
     const ir = (await captureQuery(queryFactories.updateSimple)) as IRUpdateMutation;
     const update = updateToSparql(ir).split('\n');
     const upsert = upsertToSparql(asUpsert(ir)).split('\n');
@@ -689,12 +732,10 @@ WHERE {
     const added = upsert.filter((l) => !update.includes(l));
     const removed = update.filter((l) => !upsert.includes(l));
 
-    // Two added lines: the type triple, and the PREFIX header it needs.
-    expect(added).toEqual([
-      'PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>',
-      `  <${ENT}p1> rdf:type <${PT}> .`,
-    ]);
-    expect(removed).toEqual([]);
+    // The upsert's INSERT asserts the type; the update's WHERE requires the node to have one
+    // (an update of an absent id writes nothing). Both need the PREFIX header.
+    expect(added).toEqual([`  <${ENT}p1> rdf:type <${PT}> .`]);
+    expect(removed).toEqual(['  FILTER(EXISTS {', `    <${ENT}p1> rdf:type ?t .`, '  })']);
   });
 
   test('the WHERE is a bare OPTIONAL, so the INSERT fires when the node is absent', async () => {

@@ -663,7 +663,7 @@ function routedReadScope(
   rootShape: string,
   registry: VariableRegistry,
   routing: ShapeGraphRouting,
-): ReadGraphScope | undefined {
+): {bySubject: Map<string, readonly string[]>; otherSubjects: readonly string[]} | undefined {
   const bySubject = new Map<string, readonly string[]>([
     [rootAlias, routedGraphsOfShape(rootShape, routing)],
   ]);
@@ -683,6 +683,80 @@ function routedReadScope(
   const onlyDefault = (set: readonly string[]) => set.length === 1 && set[0] === graphs.default;
   if ([...bySubject.values()].every(onlyDefault)) return undefined;
   return {bySubject, otherSubjects};
+}
+
+/**
+ * A routed read's algebra with its complex paths made readable across graphs. The scoper reads a
+ * triple in its subject's graphs, but `?a ^<p> ?b` is stored as `?b <p> ?a`, in `?b`'s graph: when
+ * the two ends of a pure inverse step may live in different graphs it is written the stored way
+ * round (and so read with `?b`). Any other complex path (a sequence, an alternative, a repetition)
+ * between such ends is refused with `GraphQueryError('unsupported-query-kind')`: its middle nodes
+ * have no graph to be read in. Ends that both read the same one graph are left as they are. Covers
+ * the select's traversals and the properties it reads as values (in its projection, where clause,
+ * `EXISTS` included, and order), and so counts and asks, which reuse this algebra.
+ */
+function routedPathsTheStoredWay(
+  algebra: SparqlAlgebraNode,
+  query: IRSelectQuery,
+  registry: VariableRegistry,
+  scope: {bySubject: ReadonlyMap<string, readonly string[]>; otherSubjects: readonly string[]},
+  routing: ShapeGraphRouting,
+): SparqlAlgebraNode {
+  const parts = [query.patterns, query.where, query.projection, query.orderBy];
+  // Every link the read follows: its traversals, and the properties it reads as values (a path's
+  // last step, `w.articles`, `w.articles.size()`), bound to the variable the registry gave them.
+  const links: MutationTraversal[] = [...traverseNodesIn(parts)];
+  for (const {sourceAlias, property, pathExpr} of propertyExpressionsIn(parts)) {
+    // A literal value has no graph of its own (a path to it that passes through another node:
+    // backlog 073).
+    if (findPropertyShapeById(property)?.nodeKind?.id === shacl.Literal.id) continue;
+    const to = registry.get(sourceAlias, property);
+    if (to) links.push({from: sourceAlias, property, to, ...(pathExpr ? {pathExpr} : {})});
+  }
+  // The graphs of each end. A node the scoper has no set for (one bound only inside `EXISTS` or
+  // `MINUS`, which it reads in every graph) is judged by its link, as a mutation's linked node is
+  // (`linkedGraphSets`): its value shape's read set, its owner's through `contains`.
+  const sets = new Map<string, readonly string[]>(scope.bySubject);
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const {from, property, to} of links) {
+      const fromSet = sets.get(from);
+      if (sets.has(to) || !fromSet) continue;
+      const ps = findPropertyShapeById(property);
+      if (ps?.contains && ps.valueShape?.id) sets.set(to, fromSet);
+      else if (ps?.valueShape?.id) sets.set(to, routedGraphsOfShape(ps.valueShape.id, routing));
+      else sets.set(to, scope.otherSubjects);
+      changed = true;
+    }
+  }
+  const setOf = (variable: string) => sets.get(variable) ?? scope.otherSubjects;
+  const oneSameGraph = (a: readonly string[], b: readonly string[]) =>
+    a.length === 1 && b.length === 1 && a[0] === b[0];
+  const inverses = inverseTraversals(links, (t) => !oneSameGraph(setOf(t.from), setOf(t.to)), 'read');
+  return inverses.length > 0 ? storedWayRound(algebra, inverses) : algebra;
+}
+
+/** Every `property_expr` in `value` (part of an IR query), at any depth. */
+function propertyExpressionsIn(value: unknown): {sourceAlias: string; property: string; pathExpr?: PathExpr}[] {
+  const out: {sourceAlias: string; property: string; pathExpr?: PathExpr}[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    const node = value as {kind?: unknown; sourceAlias?: unknown; property?: unknown; pathExpr?: unknown};
+    if (node.kind === 'property_expr' && typeof node.sourceAlias === 'string' && typeof node.property === 'string') {
+      out.push({
+        sourceAlias: node.sourceAlias,
+        property: node.property,
+        ...(node.pathExpr ? {pathExpr: node.pathExpr as PathExpr} : {}),
+      });
+    }
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(value);
+  return out;
 }
 
 /**
@@ -1264,7 +1338,9 @@ export function selectToAlgebra(
       ? routedReadScope(rootAlias, query.root.shape, registry, _options.routing)
       : undefined;
   const scoped = scopeAlgebraToGraphs(
-    algebra,
+    routed && _options?.routing
+      ? routedPathsTheStoredWay(algebra, query, registry, routed, _options.routing)
+      : algebra,
     query.graphs ?? routed ?? (storedIn ? [storedIn] : undefined),
     _options,
   );
@@ -2264,7 +2340,7 @@ function inGraph<P extends SparqlInsertDataPlan | SparqlDeleteInsertPlan>(plan: 
  */
 function inWriteGraph(
   plan: SparqlDeleteInsertPlan,
-  query: {kind: string; graph?: string; writeGraphs?: string[]},
+  query: {kind: string; shape: string; graph?: string; writeGraphs?: string[]},
   options: SparqlCompileOptions | undefined,
   subject?: string,
 ): SparqlDeleteInsertPlan {
@@ -2287,6 +2363,7 @@ function inWriteGraph(
       graphs: query.writeGraphs.map(storeName),
       ...(subject ? {subject} : {}),
       ...(query.kind === 'upsert' ? {fallback: storeName(query.graph ?? graphs.default)} : {}),
+      ...(subject && !getTargetClassId(query.shape) ? {untyped: true as const} : {}),
     },
   };
 }
@@ -2296,8 +2373,8 @@ function inWriteGraph(
 // ---------------------------------------------------------------------------
 
 /**
- * A link a mutation's WHERE follows: `from` → `to` through `property`, along `pathExpr` when the
- * pattern carries one (else the property's declared `sh:path`).
+ * A link a query follows (a mutation's WHERE, a routed read): `from` → `to` through `property`,
+ * along `pathExpr` when the pattern carries one (else the property's declared `sh:path`).
  */
 type MutationTraversal = {from: string; property: string; to: string; pathExpr?: PathExpr};
 
@@ -2313,7 +2390,12 @@ function mutationTraversals(query: {
   where?: IRExpression;
   wherePatterns?: IRGraphPattern[];
 }): MutationTraversal[] {
-  const out: MutationTraversal[] = [...(query.traversalPatterns ?? [])];
+  return [...(query.traversalPatterns ?? []), ...traverseNodesIn([query.wherePatterns, query.where])];
+}
+
+/** Every `traverse` pattern in `value` (an IR query, or part of one), at any depth, in order. */
+function traverseNodesIn(value: unknown): MutationTraversal[] {
+  const out: MutationTraversal[] = [];
   const visit = (value: unknown): void => {
     if (Array.isArray(value)) {
       value.forEach(visit);
@@ -2336,8 +2418,7 @@ function mutationTraversals(query: {
     }
     for (const child of Object.values(value)) visit(child);
   };
-  visit(query.wherePatterns);
-  visit(query.where);
+  visit(value);
   return out;
 }
 
@@ -2387,32 +2468,65 @@ function complexPathOf(traversal: MutationTraversal): PathExpr | undefined {
 }
 
 /**
- * The traversals into a node read in another graph whose path is `^<p>`: their stored triple is
- * `?to <p> ?from`, held in the linked node's graph, so it is rewritten that way round (and read
- * there). Any other complex path (a sequence, an alternative, a repetition) into such a node is
- * refused: its intermediate nodes have no graph of their own to be read in.
+ * The traversals between nodes read in different graphs (`linkedElsewhere`) whose path is `^<p>`:
+ * their stored triple is `?to <p> ?from`, held in the linked node's graph, so it is rewritten that
+ * way round (`storedWayRound`, and read there). Any other complex path (a sequence, an
+ * alternative, a repetition) between such nodes is refused, for a write or a read: its
+ * intermediate nodes have no graph of their own to be read in.
  */
 function inverseTraversals(
   traversals: MutationTraversal[],
-  linkedElsewhere: (variable: string) => boolean,
+  linkedElsewhere: (traversal: MutationTraversal) => boolean,
+  operation: 'read' | 'write' = 'write',
 ): {to: string; predicate: SparqlTerm}[] {
   const out: {to: string; predicate: SparqlTerm}[] = [];
   for (const traversal of traversals) {
-    if (!linkedElsewhere(traversal.to)) continue;
+    if (!linkedElsewhere(traversal)) continue;
     const path = complexPathOf(traversal);
-    if (!path) continue;
+    if (!path || storedWithItsSubject(path)) continue;
     if (typeof path === 'object' && path !== null && 'inv' in path && getSimplePathId(path.inv) !== null) {
       out.push({to: traversal.to, predicate: iriTerm(getSimplePathId(path.inv)!)});
       continue;
     }
     throw new GraphQueryError(
       'unsupported-query-kind',
-      `This write follows <${traversal.property}> (the property path ${pathExprToSparql(path)}) into a ` +
-        `node that lives in another graph than the mutation's subject; a path other than one IRI or ` +
-        `its inverse cannot be read across graphs. Read the ids first and change them by id.`,
+      operation === 'write'
+        ? `This write follows <${traversal.property}> (the property path ${pathExprToSparql(path)}) into a ` +
+          `node that lives in another graph than the mutation's subject; a path other than one IRI or ` +
+          `its inverse cannot be read across graphs. Read the ids first and change them by id.`
+        : `This read follows <${traversal.property}> (the property path ${pathExprToSparql(path)}) from a ` +
+          `node to one that may live in another graph under the store's graph routing; a path other than ` +
+          `one IRI or its inverse cannot be read across graphs (its middle nodes have no graph to be read ` +
+          `in). Follow the path one property at a time, or route both shapes to one graph.`,
     );
   }
   return out;
+}
+
+/**
+ * `node` with each inverse-path triple into one of `inverses`' targets (`?from ^<p> ?to`) written
+ * the way it is stored, `?to <p> ?from`, so a graph scoper groups (and reads) it with `?to`.
+ * Matched on the target, which one traversal binds.
+ */
+function storedWayRound(
+  node: SparqlAlgebraNode,
+  inverses: {to: string; predicate: SparqlTerm}[],
+): SparqlAlgebraNode {
+  return mapAlgebraTriples(node, (t) => {
+    const inverse = inverses.find(
+      (i) => t.predicate.kind === 'path' && t.object.kind === 'variable' && t.object.name === i.to,
+    );
+    return inverse ? tripleOf(t.object, inverse.predicate, t.subject) : t;
+  });
+}
+
+/**
+ * Whether every triple `path` matches is stored with its subject: an alternative of forward IRIs
+ * (`<a>|<b>`), which has no middle node and no inverse step, and so is read in the subject's graph.
+ */
+function storedWithItsSubject(path: PathExpr): boolean {
+  if (getSimplePathId(path) !== null) return true;
+  return typeof path === 'object' && path !== null && 'alt' in path && path.alt.every((p) => storedWithItsSubject(p as PathExpr));
 }
 
 /** `node` with every triple passed through `map` (EXISTS patterns in expressions included). */
@@ -2496,18 +2610,13 @@ function readLinkedNodesInTheirGraphs(
     return set !== undefined && !readsWithSubject(subjectGraph, set);
   };
   if (![...linked.keys()].some(elsewhere)) return plan;
-  const inverses = inverseTraversals(traversals, elsewhere);
+  const inverses = inverseTraversals(traversals, (t) => elsewhere(t.to));
   let whereAlgebra = plan.whereAlgebra;
   if (inverses.length > 0) {
     // `?from ^<p> ?to` → `?to <p> ?from`, grouped (and read) with the linked node. Matched on the
     // target alias, which one traversal binds: a computed field's first hop starts from the plan's
     // subject term (`<id>` or `?a0`), not from its alias.
-    whereAlgebra = mapAlgebraTriples(whereAlgebra, (t) => {
-      const inverse = inverses.find(
-        (i) => t.predicate.kind === 'path' && t.object.kind === 'variable' && t.object.name === i.to,
-      );
-      return inverse ? tripleOf(t.object, inverse.predicate, t.subject) : t;
-    });
+    whereAlgebra = storedWayRound(whereAlgebra, inverses);
   }
   // The plan's own graph variable (and its lookup's companions) is taken.
   const reserved = plan.graphIn
@@ -2867,10 +2976,10 @@ export function updateToAlgebra(
 /**
  * Converts an IRUpsertMutation to a SparqlDeleteInsertPlan.
  *
- * The same plan `update` produces, plus `<id> a <targetClass>` in the INSERT. Nothing else
- * differs: `update`'s WHERE is already a bare OPTIONAL, so it matches — and therefore
- * inserts — whether or not the node exists. The type triple is what turns that into a
- * create. Re-asserting it on an existing node is a no-op, RDF graphs being sets, so it
+ * The plan `update` produces, with `<id> a <targetClass>` in the INSERT and without the
+ * update's required `<id> a ?t` in the WHERE: the WHERE is a bare OPTIONAL, so it matches —
+ * and therefore inserts — whether or not the node exists. The type triple is what turns that
+ * into a create. Re-asserting it on an existing node is a no-op, RDF graphs being sets, so it
  * needs no guard.
  */
 export function upsertToAlgebra(
@@ -2891,8 +3000,8 @@ export function upsertToAlgebra(
 
 /**
  * Shared body of the id-targeted DELETE/INSERT/WHERE plans. `ensureType` is the only
- * difference between `update` and `upsert`; when absent the output is exactly what the
- * update path has always emitted.
+ * difference between `update` and `upsert`: with it the INSERT types the subject, without it
+ * the WHERE requires the subject to be typed.
  */
 function buildDeleteInsertPlan(
   query: IRUpdateMutation | IRUpsertMutation,
@@ -2903,12 +3012,35 @@ function buildDeleteInsertPlan(
   const placement = nestedPlacement(options, knownPlanGraph(query));
   const result = processUpdateFields(query.data, subjectTerm, options, placement);
 
-  const whereAlgebra = buildUpdateWhere(
-    {type: 'bgp', triples: []},
-    result,
-    query.traversalPatterns,
-    subjectTerm,
-  );
+  let whereAlgebra = buildUpdateWhere({type: 'bgp', triples: []}, result, query.traversalPatterns, subjectTerm);
+
+  // An update changes a node that exists: the WHERE requires the subject's type (any type), so an
+  // update of an absent id matches nothing and writes nothing (an untyped node does not count as
+  // one). As `FILTER(EXISTS { <id> a ?t })`, so a node with several types is still one solution
+  // (a computed `UUID()` or `RAND()` stays one value). An upsert's WHERE stays bare: it creates
+  // the node when it is absent. A shape without a targetClass (core's `ClassAxioms`) has no
+  // instances to exist: it can only be updated by id, and its update writes whatever node it
+  // names, typed or not.
+  if (!opts?.ensureType && getTargetClassId(query.shape)) {
+    // `?t` must not be bound outside the EXISTS, or it would constrain the type.
+    const used = collectVariableNames(
+      [result.deletePatterns, result.insertPatterns, result.oldValueTriples, result.extends, result.cascadeOptionals],
+      new Set(),
+    );
+    for (const t of query.traversalPatterns ?? []) used.add(t.to);
+    for (const ext of result.extends) used.add(ext.variable);
+    let typeVar = 't';
+    for (let n = 2; used.has(typeVar); n++) typeVar = `t${n}`;
+    whereAlgebra = {
+      type: 'filter',
+      expression: {
+        kind: 'exists_expr',
+        pattern: {type: 'bgp', triples: [tripleOf(subjectTerm, iriTerm(RDF_TYPE), varTerm(typeVar))]},
+        negated: false,
+      },
+      inner: whereAlgebra,
+    };
+  }
 
   // The type triple leads the INSERT, mirroring `create`'s triple order.
   const insertPatterns = opts?.ensureType

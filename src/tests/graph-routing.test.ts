@@ -561,7 +561,8 @@ describe('routed writes', () => {
     setShapeGraphs(store, {[Person.shape.id]: G_PEOPLE, [Employee.shape.id]: G_STAFF});
     const BOB = 'https://acme.example/data/bob';
     await Person.update({name: 'Robert'}).for({id: BOB}).exec(store);
-    expect(lastUpdate(store)).toBe(`DELETE {
+    expect(lastUpdate(store)).toBe(`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
   GRAPH ?g_w {
     <${BOB}> <${P}name> ?old_name .
   }
@@ -572,11 +573,14 @@ INSERT {
   }
 }
 WHERE {
-  { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <${G_PEOPLE}> <${G_STAFF}> } GRAPH ?g_w { <${BOB}> ?g_w_p ?g_w_o } } }
+  { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <${G_PEOPLE}> <${G_STAFF}> } GRAPH ?g_w { <${BOB}> rdf:type ?g_w_o } } }
   GRAPH ?g_w {
     OPTIONAL {
       <${BOB}> <${P}name> ?old_name .
     }
+    FILTER(EXISTS {
+      <${BOB}> rdf:type ?t .
+    })
   }
 }`);
     await Person.upsert({name: 'Robert'}).for({id: BOB}).exec(store);

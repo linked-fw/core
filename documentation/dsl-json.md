@@ -336,11 +336,10 @@ predefined id (and `__shape` records a concrete subclass — see mutation node d
 `mode` is `"for"` (single target — `targetId` is an id or `{@ctx}`), `"forAll"` (every instance),
 or `"where"` (a `where` condition, same as select's).
 
-**An `update` against an id that does not exist still writes — untyped.** The lowered `WHERE` is a
-bare `OPTIONAL`, so it matches either way and the `INSERT` fires; what it never emits is
-`rdf:type`. The result is an id carrying properties that no shape-scoped select can find, reported
-as a success. Use `upsert` when the node may be absent. (Whether `update` should no-op instead is
-open — core backlog 039.)
+**An `update` against an id that does not exist writes nothing.** The lowered `WHERE` requires the
+subject's type (`FILTER(EXISTS { <id> rdf:type ?t })`, any type), so an absent id, or an id with properties but no
+type, matches nothing. The result still echoes the id and the fields sent: a SPARQL update does not
+report what it changed. Use `upsert` when the node may be absent.
 
 **`__id` in `update` — only for *new* nodes.** Use `__id` to fix the id of a node being
 **created**: in a `create` `data`, or when **adding** a node to a relation
@@ -371,11 +370,10 @@ those select existing nodes, and there is nothing to create when they match noth
 The target id is `targetId`, never a field of `data` — unlike `create`, where an `id`/`__id` in
 `data` names the node being created. In an upsert, `data` is properties only.
 
-It lowers to the same `DELETE/INSERT/WHERE` an `update` does, **plus** `?id rdf:type <targetClass>`.
-That one triple is the entire difference. `update`'s `WHERE` is a bare `OPTIONAL`, so it already
-matches — and therefore inserts — when the node is absent; what it never writes is the type, which
-is why an `update` against a missing id leaves an *untyped* node that shape-scoped selects cannot
-see.
+It lowers to the `DELETE/INSERT/WHERE` an `update` does, with two differences: the `INSERT` adds
+`?id rdf:type <targetClass>`, and the `WHERE` does not require the node's type. Its `WHERE` is a
+bare `OPTIONAL`, so it matches — and therefore inserts — when the node is absent, and the type
+triple makes what it inserts a node shape-scoped selects find.
 
 Expression-valued fields are **rejected**. An expression reads the node's current value; when the
 upsert is creating the node that reference is unbound, and SPARQL drops any `INSERT` triple
