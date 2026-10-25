@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.43.0
+
+### Minor Changes
+
+- [#398](https://github.com/linked-fw/core/pull/398) [`8170773`](https://github.com/linked-fw/core/commit/8170773f1bc9a4bed0b5409fa4321db3458c0990) Thanks [@flyon](https://github.com/flyon)! - Client builds no longer contain `loadOntologyFiles`'s dynamic `import()`. `@_linked/core/ontology/loadOntologyFiles` has `browser` and `react-native` export conditions that resolve to a stub, which rejects with a "server only" error; Node (`import`/`default`) still gets the real module. Core's own ontology modules now import it by that package specifier, so a Vite browser build or a Metro (Expo) export of an app on core has no `import(variable)` from it, and a React Native app no longer needs a Babel plugin to compile with Hermes.
+  
+  A test environment that sets the `browser` condition (jest's `jsdom` environment, Vitest's browser environments) gets the stub too, so `loadData()` rejects there; run such tests with a Node environment.
+
+- [#398](https://github.com/linked-fw/core/pull/398) [`8170773`](https://github.com/linked-fw/core/commit/8170773f1bc9a4bed0b5409fa4321db3458c0990) Thanks [@flyon](https://github.com/flyon)! - A property path step can no longer reach a query verbatim. A string step is written as a prefixed name only when it is one SPARQL `PN_PREFIX ':' PN_LOCAL` token with a registered prefix; every other step goes through `formatUri` (`<…>` plus the IRI check). So a stored `sh:path` step such as `rdf:type?o.?s?p?o.FILTER(true)#` is one IRI, not extra patterns, and a `urn:prop:a` step in a complex path is now `<urn:prop:a>` instead of a parse error. The path parser keeps `<urn:…>` as an `{id}` step. Paths are also checked when they load (`normalizePropertyPath`, `fromWire`, `ShapeCatalog.from`, `registerRuntimeShape`): a step that is neither a prefixed-name token nor an absolute IRI throws the new `InvalidPropertyPathError`. `collectPathUris` now returns the full IRI of a registered prefixed-name step, so its PREFIX is declared.
+  
+  Behaviour changes:
+  
+  - A string step whose prefix is not registered is written as `<prefix:local>` rather than `prefix:local`, and warns once per prefix (except bare-IRI schemes such as `urn:` and `mailto:`). Import the ontology that registers the prefix before querying.
+  - A shape whose stored path has a refused step fails to load: `ShapeCatalog.from` throws for the whole catalog. Write such a step as `{id}` (a hierarchical IRI with `?`, `*`, `+`, `(` or `!` in it is refused as a bare string).
+
+### Patch Changes
+
+- [#398](https://github.com/linked-fw/core/pull/398) [`8170773`](https://github.com/linked-fw/core/commit/8170773f1bc9a4bed0b5409fa4321db3458c0990) Thanks [@flyon](https://github.com/flyon)! - `loadStores` rethrows a store constructor's error as `loadStores: alias "<alias>" (<store>): <message>`, with the original error as `cause`.
+
 ## 2.42.1
 
 ### Patch Changes
