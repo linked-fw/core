@@ -477,7 +477,8 @@ of unknown shape may be in any routed graph or the default graph. The forms:
 A link through a complex `sh:path` is read where it is stored. An inverse step `?a ^<p> ?b` whose
 two ends may live in different graphs is written the stored way round, `?b <p> ?a`, and read with
 `?b`: a writer's articles (`Writer.articles = ^author`) are read in the articles graph, in a
-select, a where clause (`EXISTS` included), a count and an ask. Any other complex path (a
+select (`w.articles.title`, or `w.articles` and `w.articles.size()` as values), a where clause
+(`EXISTS` included), a count and an ask. Any other complex path (a
 sequence, an alternative, `*`, `+`, `?`) between ends that may live in different graphs is refused
 (`GraphQueryError('unsupported-query-kind')`): its middle nodes have no graph to be read in. Ends
 that both read the same one graph are read as before.
@@ -504,7 +505,7 @@ the graph:
 DELETE { GRAPH ?g_w { … } } INSERT { GRAPH ?g_w { … } }
 WHERE {
   { SELECT DISTINCT ?g_w WHERE { VALUES ?g_w { <people> <staff> } GRAPH ?g_w { <bob> a ?o } } }
-  GRAPH ?g_w { <bob> a ?t . … }
+  GRAPH ?g_w { … FILTER(EXISTS { <bob> a ?t }) }
 }
 ```
 

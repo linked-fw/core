@@ -94,12 +94,12 @@ function serializeTriples(
 // Expression serialization
 // ---------------------------------------------------------------------------
 
+const RDF_TYPE_IRI = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+
 // SPARQL binary-operator precedence (higher binds tighter): multiplicative >
 // additive > relational. Used to parenthesize nested `binary_expr` operands so
 // arithmetic groups correctly (`(a+b)*c`, not `a+b*c`) and relational chains
 // (`a=b=c`, a non-associative syntax error) get parenthesized.
-const RDF_TYPE_IRI = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
-
 const RELATIONAL_OPS = new Set(['=', '!=', '<', '>', '<=', '>=']);
 function binaryPrecedence(op: string): number {
   if (op === '*' || op === '/') return 3;
@@ -601,9 +601,13 @@ function graphInWhere(
   collectUri(collector, graphIn.subject);
   const subject = formatUri(graphIn.subject);
   // The subject is found where it is typed: an untyped half-node (properties without
-  // `rdf:type`) is not the node, and does not decide the graph.
-  collectUri(collector, RDF_TYPE_IRI);
-  const typed = `${subject} ${formatUri(RDF_TYPE_IRI)} ?${v}_o`;
+  // `rdf:type`) is not the node, and does not decide the graph. A shape without a targetClass has
+  // untyped nodes: any triple finds them.
+  let typed = `${subject} ?${v}_p ?${v}_o`;
+  if (!graphIn.untyped) {
+    collectUri(collector, RDF_TYPE_IRI);
+    typed = `${subject} ${formatUri(RDF_TYPE_IRI)} ?${v}_o`;
+  }
   if (graphIn.fallback === undefined) {
     return (
       `{ SELECT DISTINCT ?${v} WHERE { VALUES ?${v} { ${values} } GRAPH ?${v} { ${typed} } } }\n` +

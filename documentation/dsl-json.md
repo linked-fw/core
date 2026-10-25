@@ -337,7 +337,7 @@ predefined id (and `__shape` records a concrete subclass — see mutation node d
 or `"where"` (a `where` condition, same as select's).
 
 **An `update` against an id that does not exist writes nothing.** The lowered `WHERE` requires the
-subject's type (`<id> rdf:type ?t`, any type), so an absent id, or an id with properties but no
+subject's type (`FILTER(EXISTS { <id> rdf:type ?t })`, any type), so an absent id, or an id with properties but no
 type, matches nothing. The result still echoes the id and the fields sent: a SPARQL update does not
 report what it changed. Use `upsert` when the node may be absent.
 

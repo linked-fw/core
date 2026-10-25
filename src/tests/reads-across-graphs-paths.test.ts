@@ -50,6 +50,11 @@ class RAWriter extends NGPerson {
   get friendOf(): NGPerson[] {
     return [];
   }
+
+  @objectProperty({path: {seq: [{id: `${NG}friend`}, {id: `${NG}friend`}]}, shape: NGPerson})
+  get friendsOfFriends(): NGPerson[] {
+    return [];
+  }
 }
 
 const D = 'https://acme.example/data/';
@@ -254,8 +259,29 @@ describe('routed reads through complex paths: golden SPARQL', () => {
     expect(sparql).toContain(`^<${NG}friend>`);
   });
 
+  test('an inverse path read as a value (ids, a count of them) is read the stored way round too', async () => {
+    for (const run of [
+      (s: CaptureStore) => RAWriter.select((w: any) => w.articles).exec(s),
+      (s: CaptureStore) => RAWriter.select((w: any) => w.articles.size()).exec(s),
+    ]) {
+      const sparql = await sparqlOf(run, true);
+      expect(sparql).not.toContain('^<');
+      expect(sparql).toContain(`?a0_articles <${NG}author> ?a0 .`);
+      expect(sparql).toMatch(new RegExp(`GRAPH <${G_ARTICLES}> \\{\\n\\s+\\?a0_articles <${NG}author> \\?a0 \\.`));
+    }
+  });
+
+  test('a sequence path inside EXISTS whose ends read one same graph is read as before', async () => {
+    const sparql = await sparqlOf(
+      (s) => RAWriter.select().where((w: any) => w.friendsOfFriends.some((f: any) => f.name.equals('x'))).exec(s),
+      true,
+    );
+    expect(sparql).toContain(`?a0 <${NG}friend>/<${NG}friend> ?a1 .`);
+  });
+
   test('a sequence path into a node in another graph is refused before anything is sent', async () => {
     for (const run of [
+      (s: CaptureStore) => RAWriter.select((w: any) => w.reviewedPhotos).exec(s),
       (s: CaptureStore) => RAWriter.select((w: any) => w.reviewedPhotos.caption).exec(s),
       (s: CaptureStore) =>
         RAWriter.select().where((w: any) => w.reviewedPhotos.some((p: any) => p.caption.equals('x'))).exec(s),
@@ -319,6 +345,16 @@ describeFuseki('routed reads through complex paths', () => {
     expect(rows.map((r) => r.id)).toEqual([W]);
     expect(await countWithArticle(store)).toBe(1);
     expect(await askWithArticle(store)).toBe(true);
+  });
+
+  test('the articles read as ids and counted are found in their graph', async () => {
+    const ids = (await RAWriter.select((w: any) => w.articles).exec(store)) as unknown as {id: string; articles: {id: string}[]}[];
+    expect(new Map(ids.map((r) => [r.id, r.articles.map((a) => a.id).sort()])).get(W)).toEqual([
+      `${D}article/1`,
+      `${D}article/2`,
+    ]);
+    const sizes = (await RAWriter.select((w: any) => w.articles.size()).exec(store)) as unknown as {id: string; articles: number}[];
+    expect(new Map(sizes.map((r) => [r.id, Number(r.articles)])).get(W)).toBe(2);
   });
 
   test('a sequence path across graphs is refused, on the live store too', async () => {

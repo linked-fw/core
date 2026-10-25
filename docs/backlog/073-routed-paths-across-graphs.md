@@ -25,7 +25,8 @@ Source: core reports 056 (writes across graphs) and 077 (routed complex-path rea
 - **A linked node bound only inside `EXISTS`** (`w.articles.some(…)`) reads every graph the
   routing knows (`VALUES ?g_a1 { <default> <articles> <people> }`), not its value shape's read set:
   `routedReadScope` takes its sets from the select's variable registry, which does not hold the
-  `EXISTS` traversals. Correct, but wider than needed.
+  `EXISTS` traversals. Correct, but wider than needed. (Whether such a link is rewritten or
+  refused is already judged by its value shape's read set.)
 - **Referrers without a value shape.** A delete by id removes the links held in the read sets of
   shapes whose property has the deleted shape (or a super- or sub-shape) as value shape. An object
   property without a value shape can link to anything, and its links in other graphs stay.

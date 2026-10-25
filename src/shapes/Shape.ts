@@ -331,7 +331,8 @@ export abstract class Shape {
    * but no type, matches nothing and nothing is written, in the default graph and under graph
    * routing alike. The call still resolves with the fields it was given: a SPARQL update does not
    * report what it changed, so knowing would cost another round trip. If the node may be absent,
-   * use {@link Shape.upsert}, which creates it.
+   * use {@link Shape.upsert}, which creates it. (A shape without a targetClass has no typed
+   * instances: its update writes whatever node it names.)
    */
   static update<S extends Shape>(
     this: ShapeConstructor<S>,

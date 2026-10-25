@@ -267,9 +267,11 @@ export type SparqlDeleteInsertPlan = {
    * The templates and the WHERE run in the graph `?variable` binds to, one of `graphs` (store
    * names): the graph holding `subject` (a subject in none of them matches nothing), or, without a
    * subject, every graph of the set in which the WHERE matches. With `fallback` (an upsert), a
-   * subject found in none of them is written to `fallback`.
+   * subject found in none of them is written to `fallback`. The subject is found where it is
+   * typed, or, with `untyped` (a shape without a targetClass, whose nodes carry no type), where
+   * it has any triple.
    */
-  graphIn?: {variable: string; graphs: string[]; subject?: string; fallback?: string};
+  graphIn?: {variable: string; graphs: string[]; subject?: string; fallback?: string; untyped?: true};
   /** INSERT template blocks in other graphs (see {@link SparqlGraphTriples}). */
   insertElsewhere?: SparqlGraphTriples[];
   /**

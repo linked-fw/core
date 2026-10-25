@@ -233,8 +233,9 @@ describe('updateToAlgebra', () => {
     expect(insertHobby).toBeDefined();
     expect(insertHobby!.object).toEqual({kind: 'literal', value: 'Chess'});
 
-    // WHERE wraps old triples in OPTIONAL (left_join)
-    expect(plan.whereAlgebra.type).toBe('left_join');
+    // WHERE requires the subject's type (FILTER EXISTS) around the old triples in OPTIONAL
+    expect(plan.whereAlgebra.type).toBe('filter');
+    expect(plan.whereAlgebra.type === 'filter' && plan.whereAlgebra.inner.type).toBe('left_join');
   });
 
   test('updateOverwriteSet produces wildcard delete + specific insert', async () => {

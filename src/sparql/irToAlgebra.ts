@@ -692,23 +692,68 @@ function routedReadScope(
  * round (and so read with `?b`). Any other complex path (a sequence, an alternative, a repetition)
  * between such ends is refused with `GraphQueryError('unsupported-query-kind')`: its middle nodes
  * have no graph to be read in. Ends that both read the same one graph are left as they are. Covers
- * the select's patterns, its where clause (`EXISTS` included) and so counts and asks, which reuse
- * this algebra.
+ * the select's traversals and the properties it reads as values (in its projection, where clause,
+ * `EXISTS` included, and order), and so counts and asks, which reuse this algebra.
  */
 function routedPathsTheStoredWay(
   algebra: SparqlAlgebraNode,
   query: IRSelectQuery,
+  registry: VariableRegistry,
   scope: {bySubject: ReadonlyMap<string, readonly string[]>; otherSubjects: readonly string[]},
+  routing: ShapeGraphRouting,
 ): SparqlAlgebraNode {
-  const setOf = (variable: string) => scope.bySubject.get(variable) ?? scope.otherSubjects;
+  const parts = [query.patterns, query.where, query.projection, query.orderBy];
+  // Every link the read follows: its traversals, and the properties it reads as values (a path's
+  // last step, `w.articles`, `w.articles.size()`), bound to the variable the registry gave them.
+  const links: MutationTraversal[] = [...traverseNodesIn(parts)];
+  for (const {sourceAlias, property, pathExpr} of propertyExpressionsIn(parts)) {
+    const to = registry.get(sourceAlias, property);
+    if (to) links.push({from: sourceAlias, property, to, ...(pathExpr ? {pathExpr} : {})});
+  }
+  // The graphs of each end. A node the scoper has no set for (one bound only inside `EXISTS` or
+  // `MINUS`, which it reads in every graph) is judged by its link, as a mutation's linked node is
+  // (`linkedGraphSets`): its value shape's read set, its owner's through `contains`.
+  const sets = new Map<string, readonly string[]>(scope.bySubject);
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const {from, property, to} of links) {
+      const fromSet = sets.get(from);
+      if (sets.has(to) || !fromSet) continue;
+      const ps = findPropertyShapeById(property);
+      if (ps?.contains && ps.valueShape?.id) sets.set(to, fromSet);
+      else if (ps?.valueShape?.id) sets.set(to, routedGraphsOfShape(ps.valueShape.id, routing));
+      else sets.set(to, scope.otherSubjects);
+      changed = true;
+    }
+  }
+  const setOf = (variable: string) => sets.get(variable) ?? scope.otherSubjects;
   const oneSameGraph = (a: readonly string[], b: readonly string[]) =>
     a.length === 1 && b.length === 1 && a[0] === b[0];
-  const inverses = inverseTraversals(
-    traverseNodesIn([query.patterns, query.where, query.projection, query.orderBy]),
-    (t) => !oneSameGraph(setOf(t.from), setOf(t.to)),
-    'read',
-  );
+  const inverses = inverseTraversals(links, (t) => !oneSameGraph(setOf(t.from), setOf(t.to)), 'read');
   return inverses.length > 0 ? storedWayRound(algebra, inverses) : algebra;
+}
+
+/** Every `property_expr` in `value` (part of an IR query), at any depth. */
+function propertyExpressionsIn(value: unknown): {sourceAlias: string; property: string; pathExpr?: PathExpr}[] {
+  const out: {sourceAlias: string; property: string; pathExpr?: PathExpr}[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    const node = value as {kind?: unknown; sourceAlias?: unknown; property?: unknown; pathExpr?: unknown};
+    if (node.kind === 'property_expr' && typeof node.sourceAlias === 'string' && typeof node.property === 'string') {
+      out.push({
+        sourceAlias: node.sourceAlias,
+        property: node.property,
+        ...(node.pathExpr ? {pathExpr: node.pathExpr as PathExpr} : {}),
+      });
+    }
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(value);
+  return out;
 }
 
 /**
@@ -1290,7 +1335,9 @@ export function selectToAlgebra(
       ? routedReadScope(rootAlias, query.root.shape, registry, _options.routing)
       : undefined;
   const scoped = scopeAlgebraToGraphs(
-    routed ? routedPathsTheStoredWay(algebra, query, routed) : algebra,
+    routed && _options?.routing
+      ? routedPathsTheStoredWay(algebra, query, registry, routed, _options.routing)
+      : algebra,
     query.graphs ?? routed ?? (storedIn ? [storedIn] : undefined),
     _options,
   );
@@ -2290,7 +2337,7 @@ function inGraph<P extends SparqlInsertDataPlan | SparqlDeleteInsertPlan>(plan: 
  */
 function inWriteGraph(
   plan: SparqlDeleteInsertPlan,
-  query: {kind: string; graph?: string; writeGraphs?: string[]},
+  query: {kind: string; shape: string; graph?: string; writeGraphs?: string[]},
   options: SparqlCompileOptions | undefined,
   subject?: string,
 ): SparqlDeleteInsertPlan {
@@ -2313,6 +2360,7 @@ function inWriteGraph(
       graphs: query.writeGraphs.map(storeName),
       ...(subject ? {subject} : {}),
       ...(query.kind === 'upsert' ? {fallback: storeName(query.graph ?? graphs.default)} : {}),
+      ...(subject && !getTargetClassId(query.shape) ? {untyped: true as const} : {}),
     },
   };
 }

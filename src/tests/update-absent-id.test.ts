@@ -26,6 +26,25 @@ import {FusekiStore} from '../test-helpers/FusekiStore';
 
 import '../ontologies/rdf';
 import '../ontologies/xsd';
+import {Shape} from '../shapes/Shape';
+import {literalProperty} from '../shapes/SHACL';
+import {linkedPackage} from '../utils/Package';
+
+const {linkedShape} = linkedPackage('update-absent-id-test');
+
+/** A shape without a targetClass (as core's `ClassAxioms`): its nodes carry no type. */
+@linkedShape
+class UANote extends Shape {
+  @literalProperty({path: {id: 'https://example.org/props/text'}, maxCount: 1})
+  get text(): string {
+    return '';
+  }
+}
+
+@linkedShape
+class UASubNote extends UANote {
+  static targetClass = {id: 'https://example.org/props/SubNote'};
+}
 
 const D = 'https://acme.example/data/';
 const G_ARTICLES = `${D}graph/articles`;
@@ -145,6 +164,17 @@ WHERE {
     const where = s.updates[0].slice(s.updates[0].indexOf('WHERE {'));
     expect(where).toContain(`OPTIONAL { SELECT DISTINCT ?g_w_found WHERE { VALUES ?g_w_found { <${G_PEOPLE}> <${G_STAFF}> } GRAPH ?g_w_found { <${X}> rdf:type ?g_w_o } } }`);
     expect(where).not.toContain('rdf:type ?t .');
+  });
+
+  test('a shape without a targetClass updates any node it names, and its lookup finds the node by any triple', async () => {
+    const plain = capture('unrouted');
+    await UANote.update({text: 'new'}).for({id: X}).exec(plain);
+    expect(plain.updates[0]).not.toContain('rdf:type');
+    const s = new CaptureStore({mapGraphName: jena, dataRoot: D.replace(/\/$/, '')});
+    setShapeGraphs(s, {[UANote.shape.id]: G_PEOPLE, [UASubNote.shape.id]: G_STAFF});
+    await UANote.update({text: 'new'}).for({id: X}).exec(s);
+    expect(s.updates[0]).toContain(`GRAPH ?g_w { <${X}> ?g_w_p ?g_w_o } } }`);
+    expect(s.updates[0]).not.toContain('rdf:type');
   });
 
   test('a computed update requires the type in an EXISTS, after its BIND (one solution per node, whatever its types)', async () => {
