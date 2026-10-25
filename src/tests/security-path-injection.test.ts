@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
-import {describe, expect, test} from '@jest/globals';
+import {describe, expect, jest, test} from '@jest/globals';
 import '../utils/Package';
 import '../ontologies/rdf';
 import {Prefix} from '../utils/Prefix';
@@ -71,8 +71,17 @@ describe('SEC4 — path steps are never written verbatim', () => {
     expect(pathExprToSparql('ex:')).toBe('ex:');
   });
 
-  test('a prefixed name whose prefix is not registered is written as an IRI', () => {
-    expect(pathExprToSparql({seq: ['nope:a', 'ex:b']})).toBe('<nope:a>/ex:b');
+  test('a prefixed name whose prefix is not registered is written as an IRI, with one warning', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(pathExprToSparql({seq: ['nope:a', 'ex:b']})).toBe('<nope:a>/ex:b');
+      expect(pathExprToSparql('nope:c')).toBe('<nope:c>');
+      expect(pathExprToSparql('urn:prop:a')).toBe('<urn:prop:a>');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toMatch(/prefix 'nope', which is not registered/);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('a short form with a registered prefix declares its PREFIX', () => {

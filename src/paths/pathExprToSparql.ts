@@ -8,7 +8,11 @@ import type {PathExpr, PathRef} from './PropertyPathExpr.js';
 import {isPathRef} from './PropertyPathExpr.js';
 import {formatUri} from '../sparql/sparqlUtils.js';
 import {Prefix} from '../utils/Prefix.js';
-import {pathRefIri} from './propertyPathSafety.js';
+import {
+  expandRegisteredPrefixedName,
+  isPrefixedNameToken,
+  pathRefIri,
+} from './propertyPathSafety.js';
 
 // ---------------------------------------------------------------------------
 // Precedence levels (higher = tighter binding)
@@ -26,7 +30,28 @@ const PREC_PRIMARY = 4;
  * from a step reaches the query text verbatim, so a stored `sh:path` step cannot add patterns.
  */
 function refToSparql(ref: PathRef): string {
+  if (typeof ref === 'string') warnOnUnregisteredPrefix(ref);
   return formatUri(pathRefIri(ref));
+}
+
+/**
+ * IRI schemes a string step commonly uses bare (`urn:prop:a`). A prefixed-name token with any
+ * other unregistered prefix is far more likely a misspelt or not-yet-imported prefix than an IRI,
+ * and as `<shcema:name>` it matches nothing — so it warns, once per prefix.
+ */
+const BARE_IRI_SCHEMES = new Set(['urn', 'mailto', 'tag', 'did', 'data', 'tel', 'uuid', 'geo', 'info']);
+const warnedPrefixes = new Set<string>();
+
+function warnOnUnregisteredPrefix(ref: string): void {
+  if (!isPrefixedNameToken(ref) || expandRegisteredPrefixedName(ref) !== undefined) return;
+  const prefix = ref.slice(0, ref.indexOf(':'));
+  if (BARE_IRI_SCHEMES.has(prefix.toLowerCase()) || warnedPrefixes.has(prefix)) return;
+  warnedPrefixes.add(prefix);
+  console.warn(
+    `[linked] Property path step '${ref}' has the prefix '${prefix}', which is not registered, so it ` +
+      `is written as the IRI <${ref}>. Import the ontology module that registers '${prefix}', or ` +
+      `write the step as a full IRI.`,
+  );
 }
 
 /**
