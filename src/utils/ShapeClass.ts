@@ -16,6 +16,7 @@ import type {ShapeCatalog} from './ShapeCatalog.js';
 import {RegistryCache} from './registryCache.js';
 import {sharedState} from './sharedState.js';
 import {isLinkedInstance} from './linkedError.js';
+import {inProduction} from './inProduction.js';
 
 export {RegistryCache};
 
@@ -164,9 +165,7 @@ let warnedPromiseInScope = false;
  * return value: it captured the catalog and re-enters it.
  */
 function warnPromiseInScope(): void {
-  if (warnedPromiseInScope) return;
-  const env = (globalThis as {process?: {env?: Record<string, string | undefined>}}).process?.env;
-  if (env?.NODE_ENV === 'production') return;
+  if (warnedPromiseInScope || inProduction()) return;
   warnedPromiseInScope = true;
   console.warn(
     '[linked] withShapeCatalog(catalog, fn): fn returned a promise. The scope ended when fn ' +

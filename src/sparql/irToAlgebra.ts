@@ -42,7 +42,7 @@ import type {
   SparqlFilter,
   SparqlGraphTriples,
 } from './SparqlAlgebra.js';
-import {type SparqlCompileOptions, generateEntityUri} from './sparqlUtils.js';
+import {type SparqlCompileOptions, assertSafeIri, generateEntityUri} from './sparqlUtils.js';
 import {referringGraphsForShape, sortGraphSet, type ShapeGraphRouting} from '../utils/graphRouting.js';
 import {
   selectPlanToSparql,
@@ -4522,6 +4522,36 @@ export function upsertToSparql(
   }
   const plan = upsertToAlgebra(query, options);
   return deleteInsertPlanToSparql(plan, options);
+}
+
+/**
+ * `ASK` whether the subject of an update by id has an `rdf:type` (any type) where the update
+ * looks for it: its `WITH` graph, every graph of its `writeGraphs`, or the default graph. The
+ * update's WHERE requires exactly that, so a `false` answer after the update means it matched no
+ * node and wrote nothing (see `SparqlDataset.updateQuery`). `null` for a shape without a
+ * targetClass: its update writes whatever node it names, typed or not.
+ */
+export function updateSubjectTypedAsk(
+  query: IRUpdateMutation,
+  options?: SparqlCompileOptions,
+): string | null {
+  const catalog = catalogOf(query);
+  if (catalog !== undefined && catalog !== getActiveShapeCatalog()) {
+    return withShapeCatalog(catalog, () => updateSubjectTypedAsk(query, options));
+  }
+  if (!getTargetClassId(query.shape)) return null;
+  const iri = (value: string): string => {
+    assertSafeIri(value);
+    return `<${value}>`;
+  };
+  const typed = `${iri(query.id)} ${iri(RDF_TYPE)} ?t`;
+  if (query.writeGraphs && query.writeGraphs.length > 0) {
+    const values = query.writeGraphs
+      .map((graph) => iri(graph === graphs.default ? defaultGraphStoreName(options) : graph))
+      .join(' ');
+    return `ASK { VALUES ?g { ${values} } GRAPH ?g { ${typed} } }`;
+  }
+  return query.graph === undefined ? `ASK { ${typed} }` : `ASK { GRAPH ${iri(query.graph)} { ${typed} } }`;
 }
 
 /**

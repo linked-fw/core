@@ -330,9 +330,11 @@ export abstract class Shape {
    * subject to have an `rdf:type` (any type), so an absent id, or an id that carries properties
    * but no type, matches nothing and nothing is written, in the default graph and under graph
    * routing alike. The call still resolves with the fields it was given: a SPARQL update does not
-   * report what it changed, so knowing would cost another round trip. If the node may be absent,
-   * use {@link Shape.upsert}, which creates it. (A shape without a targetClass has no typed
-   * instances: its update writes whatever node it names.)
+   * report what it changed, so knowing costs another round trip. Outside production
+   * (`NODE_ENV` is not `production`) a SPARQL store makes that round trip, an `ASK` scoped as the
+   * update's WHERE, and `console.warn`s when the update matched no node. If the node may be
+   * absent, use {@link Shape.upsert}, which creates it. (A shape without a targetClass has no
+   * typed instances: its update writes whatever node it names, and is not checked.)
    */
   static update<S extends Shape>(
     this: ShapeConstructor<S>,

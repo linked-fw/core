@@ -46,6 +46,7 @@ import {
   countToSparql,
   createToSparql,
   updateToSparql,
+  updateSubjectTypedAsk,
   upsertToSparql,
   updateWhereToSparql,
   deleteToSparql,
@@ -71,6 +72,7 @@ import {askToAlgebra, countToAlgebra, selectToAlgebra} from './irToAlgebra.js';
 import {askPlanToSparql, selectPlanToSparql} from './algebraToString.js';
 import type {SparqlAskPlan, SparqlSelectPlan} from './SparqlAlgebra.js';
 import {withShapeCatalog} from '../utils/ShapeClass.js';
+import {inProduction} from '../utils/inProduction.js';
 import {lower} from '../queries/lower.js';
 import {attachCatalog, catalogOf} from '../utils/ShapeClass.js';
 import {graphs} from '../ontologies/graphs.js';
@@ -491,7 +493,40 @@ export abstract class SparqlDataset implements IDataset {
         ? upsertToSparql(ir, this.writeOptions())
         : updateToSparql(ir, this.writeOptions());
     await this.executeSparqlUpdate(sparql);
+    if (ir.kind === 'update') await this.warnWhenUpdateMatchedNoNode(ir);
     return mapSparqlUpdateResult(ir);
+  }
+
+  /**
+   * Outside production, say when an update by id matched no node. Its WHERE requires the
+   * subject's type, so an absent id (or an untyped half-node) writes nothing, and the update
+   * still resolves with the fields it was given: a SPARQL update returns no count. One `ASK`,
+   * scoped as the update's WHERE (`updateSubjectTypedAsk`), tells. A diagnostic only: its own
+   * failure is swallowed, and it never changes the result. Skipped for a shape without a
+   * targetClass, whose update writes whatever node it names.
+   */
+  private async warnWhenUpdateMatchedNoNode(ir: IRUpdateMutation): Promise<void> {
+    if (inProduction()) return;
+    let typed: boolean;
+    try {
+      const ask = updateSubjectTypedAsk(ir, this.writeOptions());
+      if (ask === null) return;
+      typed = mapSparqlAskResult(await this.executeSparqlSelect(ask));
+    } catch {
+      return;
+    }
+    if (typed) return;
+    const where = ir.writeGraphs?.length
+      ? `in any of ${ir.writeGraphs.map((g) => `<${g}>`).join(', ')}`
+      : ir.graph
+        ? `in <${ir.graph}>`
+        : 'in the default graph';
+    console.warn(
+      `[linked] update().for(<${ir.id}>) on <${ir.shape}> matched no node: <${ir.id}> has no ` +
+        `rdf:type ${where}, so nothing was written (the call still resolves with the fields it ` +
+        'was given). If the node may not exist yet, use upsert(values).for({id}), or create it ' +
+        'first. (Said outside production only.)',
+    );
   }
 
   /**

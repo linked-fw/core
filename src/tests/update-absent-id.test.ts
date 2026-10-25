@@ -9,9 +9,10 @@
  * update of an absent id, or of an untyped half-node, writes nothing: without routes, with a
  * route to one graph (`WITH <g>`) and with a shape that reads several graphs (`GRAPH ?g_w`, where
  * the lookup finds the subject by its type). An upsert is unchanged: it creates an absent node.
- * Golden SPARQL, then the same updates on the inferring store.
+ * Golden SPARQL, then the same updates on the inferring store, where an update that matched no
+ * node is said in a development warning.
  */
-import {afterAll, beforeAll, describe, expect, test} from '@jest/globals';
+import {afterAll, beforeAll, describe, expect, jest, test} from '@jest/globals';
 import {SparqlDataset} from '../sparql/SparqlDataset';
 import type {SparqlOptions} from '../sparql/sparqlUtils';
 import type {SparqlQueryResults} from '../sparql/resultMapping';
@@ -199,6 +200,17 @@ describeFuseki('update on an absent id', () => {
     return json.results.bindings.map((b) => `${b.p!.value} ${b.o!.value}`).sort();
   }
 
+  /** The development warnings `run` printed: the store's check that an update matched no node. */
+  async function warningsOf(run: () => Promise<unknown>): Promise<string[]> {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await run();
+      return warn.mock.calls.map((call) => String(call[0]));
+    } finally {
+      warn.mockRestore();
+    }
+  }
+
   async function storeFor(routing: Routing): Promise<FusekiStore> {
     const s = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME);
     if (routing !== 'unrouted') setShapeGraphs(s, ROUTES[routing]);
@@ -222,8 +234,11 @@ describeFuseki('update on an absent id', () => {
   test.each(ROUTINGS)('%s: an absent id writes nothing', async (routing) => {
     const s = await storeFor(routing);
     const id = `${D}absent/${routing.replace(/ /g, '-')}`;
-    await updateOf(routing, id, s);
+    const warnings = await warningsOf(() => updateOf(routing, id, s));
     expect(await triplesOf(id)).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`update().for(<${id}>)`);
+    expect(warnings[0]).toContain('matched no node');
   });
 
   test.each(ROUTINGS)('%s: an untyped half-node is not updated', async (routing) => {
@@ -233,8 +248,10 @@ describeFuseki('update on an absent id', () => {
     const predicate = routing === 'several graphs' ? `${P}name` : `${NG}title`;
     const triple = `<${id}> <${predicate}> "old" .`;
     await executeSparqlUpdate(`INSERT DATA { ${graph ? `GRAPH <${graph}> { ${triple} }` : triple} }`);
-    await updateOf(routing, id, s);
+    const warnings = await warningsOf(() => updateOf(routing, id, s));
     expect(await triplesOf(id)).toEqual([`${predicate} old`]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`<${id}> has no rdf:type`);
   });
 
   test.each(ROUTINGS)('%s: a present id is still updated', async (routing) => {
@@ -246,9 +263,11 @@ describeFuseki('update on an absent id', () => {
     } else {
       await NGArticle.create({__id: id, title: 'old'} as never).exec(s);
     }
-    await updateOf(routing, id, s);
+    const warnings = await warningsOf(() => updateOf(routing, id, s));
     const predicate = routing === 'several graphs' ? `${P}name` : `${NG}title`;
     expect((await triplesOf(id)).filter((t) => t.startsWith(predicate))).toEqual([`${predicate} new`]);
+    // The check is scoped as the update's WHERE: a node it updated is found.
+    expect(warnings).toEqual([]);
   });
 
   test('an upsert next to an untyped half-node in another graph of the set creates the node in its routed graph', async () => {

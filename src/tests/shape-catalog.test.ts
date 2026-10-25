@@ -119,6 +119,9 @@ class RecordingDataset extends SparqlDataset {
   /** The catalog active when the dataset was called (decision: never the query's). */
   calledIn: Array<ShapeCatalog | undefined> = [];
   protected async executeSparqlSelect(sparql: string): Promise<SparqlQueryResults> {
+    // The development check after an update by id (an ASK whether its subject is typed) is not
+    // what these tests count: the subject is there.
+    if (sparql.startsWith('ASK')) return {head: {}, boolean: true};
     this.selects.push(sparql);
     return {head: {vars: []}, results: {bindings: []}} as SparqlQueryResults;
   }
