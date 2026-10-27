@@ -24,7 +24,7 @@ Copied verbatim from plan 057; the rest are there. A step that changes one updat
   `https://linked.cm/ont/core/AssetPackage`, `rdfs:subClassOf core:Package`, exported as
   `coreOntology.OntologyPackage` / `coreOntology.AssetPackage`. Core has no `npm` module and no
   `core:packageName`; it refers to npm terms by IRI only. Registry records keep `core:package` /
-  `core:version`.
+  `core:version`. `core:Package ⊑ npm:Package`, by IRI (added by PR).
 - **K-npm** (provider CK; consumers PR, CN): package `@_linked/npm`, namespace
   `https://linked.cm/ont/npm/`, terms: classes `npm:Package` (⊑ `schema:SoftwareSourceCode`),
   `npm:Dependency`; literals `npm:name`, `npm:version`, `npm:description`, `npm:keyword`,
