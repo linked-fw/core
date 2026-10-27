@@ -5,7 +5,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {getRegisteredOntologies} from '../utils/Package';
 import {readPackageOntologies} from '../ontology/registryData';
-import {registerInstalledOntologies} from '../ontology/registerInstalled';
+import {registerInstalledOntologies, slashedPath} from '../ontology/registerInstalled';
 
 const FIXTURES = path.resolve(process.cwd(), 'src/tests/fixtures/installed');
 const WITH = path.join(FIXTURES, 'with-ontology');
@@ -198,5 +198,17 @@ describe('registerInstalledOntologies', () => {
       expect(warned).toHaveLength(1);
       expect(warned[0]).toMatch(/broken\.register\.js/);
     });
+  });
+});
+
+describe('slashedPath', () => {
+  test('a Windows path reaches importModule with / separators', () => {
+    const native = path.win32.join('C:\\work\\app', 'src', 'ontologies', 'x.register.ts');
+    expect(native).toBe('C:\\work\\app\\src\\ontologies\\x.register.ts');
+    expect(slashedPath(native)).toBe('C:/work/app/src/ontologies/x.register.ts');
+  });
+  test('a POSIX path is unchanged', () => {
+    const native = path.posix.join('/work/app', 'src', 'ontologies', 'x.register.ts');
+    expect(slashedPath(native)).toBe(native);
   });
 });

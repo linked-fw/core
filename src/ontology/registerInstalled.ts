@@ -55,8 +55,9 @@ const SOURCE_REGISTER_SUFFIX = '.register.ts';
 
 export type RegisterInstalledOptions = {
   /**
-   * Imports a source register module (`src/ontologies/*.register.ts`, absolute path) of a package
-   * directory that has no built ones, e.g. Vite's `ssrLoadModule` in dev. Without it such a
+   * Imports a source register module (`src/ontologies/*.register.ts`) of a package directory that
+   * has no built ones, e.g. Vite's `ssrLoadModule` in dev. It gets an absolute path with `/`
+   * separators (`C:/…` on Windows), a module id rather than a native path. Without it such a
    * directory is skipped.
    */
   importModule?: (file: string) => Promise<unknown>;
@@ -131,10 +132,11 @@ export async function registerInstalledOntologies(
     let files = await registerFiles(fs, ontologiesDir, REGISTER_SUFFIX);
     let load = (filePath: string): Promise<unknown> =>
       import(/* @vite-ignore */ /* webpackIgnore: true */ pathToFileURL(filePath).href);
-    if (files.length === 0 && options.importModule) {
+    const importModule = options.importModule;
+    if (files.length === 0 && importModule) {
       ontologiesDir = path.join(dir, ...SOURCE_ONTOLOGIES_DIR);
       files = await registerFiles(fs, ontologiesDir, SOURCE_REGISTER_SUFFIX);
-      load = options.importModule;
+      load = (filePath) => importModule(slashedPath(filePath));
     }
     if (files.length === 0) continue;
     const ok = await importAll(
@@ -166,6 +168,14 @@ async function importAll(
     }
   }
   return ok;
+}
+
+/**
+ * An absolute file path with `/` separators: what module loaders such as Vite's `ssrLoadModule`
+ * take as a module id. A POSIX path is returned as is. @internal
+ */
+export function slashedPath(filePath: string): string {
+  return filePath.replace(/\\/g, '/');
 }
 
 async function registerFiles(fs: Fs, dir: string, suffix: string): Promise<string[]> {

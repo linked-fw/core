@@ -1,5 +1,5 @@
 import {describe, expect, test, jest, beforeEach} from '@jest/globals';
-import {linkedPackage} from '../utils/Package';
+import {getRegisteredPackageNames, isRegisteredPackage, linkedPackage} from '../utils/Package';
 import {Shape, createShapeTarget} from '../shapes/Shape';
 import {literalProperty, objectProperty} from '../shapes/SHACL';
 import {CoreSet} from '../collections/CoreSet';
@@ -324,6 +324,17 @@ describe('QueryContext edge cases', () => {
 });
 
 describe('Package registration helpers', () => {
+  test('isRegisteredPackage and getRegisteredPackageNames see linkedPackage() registrations', () => {
+    expect(isRegisteredPackage('package-test')).toBe(true);
+    expect(isRegisteredPackage('@_linked/core')).toBe(true);
+    expect(isRegisteredPackage('never-registered-package')).toBe(false);
+    expect(isRegisteredPackage('toString')).toBe(false);
+    expect(getRegisteredPackageNames()).toEqual(
+      expect.arrayContaining(['@_linked/core', 'shapeclass-test', 'context-test', 'package-test']),
+    );
+    expect(getRegisteredPackageNames()).not.toContain('never-registered-package');
+  });
+
   test('getPackageShape returns a shape class by name', () => {
     expect(getPackageShape(PackagePerson.name)).toBe(PackagePerson);
   });
