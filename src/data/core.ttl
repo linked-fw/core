@@ -38,6 +38,11 @@ core:OntologyPackage
     rdfs:label "ontology package"@en ;
     rdfs:subClassOf core:Package .
 
+core:OntologyStatus
+    a owl:Class ;
+    rdfs:comment "The stage an ontology is at in its life: a draft, ready for review, or published."@en ;
+    rdfs:label "ontology status"@en .
+
 core:OntologySync
     a owl:Class ;
     rdfs:comment "The record the 'default' graph mode of ontology sync keeps in the default graph: the combined hash of the ontology it last wrote there."@en ;
@@ -49,10 +54,25 @@ core:Package
     rdfs:label "package"@en ;
     rdfs:subClassOf <https://linked.cm/ont/npm/Package> .
 
+core:Draft
+    a owl:NamedIndividual, core:OntologyStatus ;
+    rdfs:comment "The status of an ontology that is being written and is not yet ready for review."@en ;
+    rdfs:label "draft"@en .
+
 core:PathNode
     a owl:Class ;
     rdfs:comment "An operator node of a SHACL property path that is not a plain predicate or sequence, such as an inverse, alternative or repeated path."@en ;
     rdfs:label "path node"@en .
+
+core:Published
+    a owl:NamedIndividual, core:OntologyStatus ;
+    rdfs:comment "The status of an ontology that has been published for others to use."@en ;
+    rdfs:label "published"@en .
+
+core:ReadyForReview
+    a owl:NamedIndividual, core:OntologyStatus ;
+    rdfs:comment "The status of an ontology its authors consider complete and ready to be reviewed."@en ;
+    rdfs:label "ready for review"@en .
 
 core:ShapeClass
     a owl:Class ;

@@ -43,3 +43,23 @@ describe('core: package kinds', () => {
     expect(coreRegistrations.map((r) => r.prefix)).toEqual(['core']);
   });
 });
+
+describe('core: ontology status', () => {
+  test('core:OntologyStatus is an exported, labelled class', () => {
+    expect(coreOntology.OntologyStatus.id).toBe(`${CORE}OntologyStatus`);
+    expect(objects(`${CORE}OntologyStatus`, RDF_TYPE)).toEqual([OWL_CLASS]);
+    expect(objects(`${CORE}OntologyStatus`, LABEL)).toHaveLength(1);
+  });
+
+  test.each(['Draft', 'ReadyForReview', 'Published'] as const)(
+    '%s is an exported named individual of core:OntologyStatus, labelled and described',
+    (name) => {
+      expect(coreOntology[name].id).toBe(`${CORE}${name}`);
+      expect(new Set(objects(`${CORE}${name}`, RDF_TYPE))).toEqual(
+        new Set(['http://www.w3.org/2002/07/owl#NamedIndividual', coreOntology.OntologyStatus.id]),
+      );
+      expect(objects(`${CORE}${name}`, LABEL)).toHaveLength(1);
+      expect(objects(`${CORE}${name}`, 'http://www.w3.org/2000/01/rdf-schema#comment')).toHaveLength(1);
+    },
+  );
+});

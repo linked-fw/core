@@ -84,6 +84,14 @@ const sharedTargetClass = ns('sharedTargetClass');
 const OntologySync = ns('OntologySync');
 const ontologyHash = ns('ontologyHash');
 
+// Ontology status: the stage an ontology is at (`core:OntologyStatus`), one of three public
+// individuals, stated on the ontology as `adms:status` (ADMS's own status vocabulary has none of
+// these stages).
+const OntologyStatus = ns('OntologyStatus');
+const Draft = ns('Draft');
+const ReadyForReview = ns('ReadyForReview');
+const Published = ns('Published');
+
 // Named graphs (`shapes/NamedGraph.ts`): the classes of graph-registry records (each
 // `rdfs:subClassOf sd:NamedGraph`) and the record fields core adds to SPARQL Service Description.
 const OntologyGraph = ns('OntologyGraph');
@@ -118,6 +126,10 @@ export const coreOntology = {
   sharedTargetClass,
   OntologySync,
   ontologyHash,
+  OntologyStatus,
+  Draft,
+  ReadyForReview,
+  Published,
   OntologyGraph,
   ShapesGraph,
   DraftGraph,
