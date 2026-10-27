@@ -1,15 +1,15 @@
 ---
 summary: >
-  Four lows from the review of the ontology sync and the shape check, not fixed: a registered
+  Three lows from the review of the ontology sync and the shape check, not fixed: a registered
   package that stops passing `loadData` keeps its synced triples; `hierarchy.ts`'s literal
-  `import('n3')` reaches browser bundles through `checkShapeHierarchy`; `registerInstalled`
-  passes a native path to `importModule`; `@types/n3` lags `n3`.
+  `import('n3')` reaches browser bundles through `checkShapeHierarchy`; `@types/n3` lags `n3`.
 packages: [core]
 ---
 
 # 062 — Ontology sync and shape check: review lows
 
-Source: CN plan 070, independent review of `store-inference` (reports 042-047).
+Source: CN plan 070, independent review of `store-inference` (reports 042-047). The fourth low
+(`registerInstalled` passed a native path to `importModule`) is fixed: report 081.
 
 ## 1. A registered package that stops passing `loadData` is never pruned
 
@@ -23,23 +23,19 @@ lines against an empty set), or as an orphan under `orphanScope: 'all'` only? A 
 
 ## 2. `import('n3')` reaches browser bundles through `checkShapeHierarchy`
 
-`src/ontology/hierarchy.ts:45` imports `n3` with a literal specifier, so bundlers follow it.
+`src/ontology/hierarchy.ts:48` imports `n3` with a literal specifier, so bundlers follow it.
 `checkShapeHierarchy` imports `subClassClosure` from `hierarchy.js` statically, so a browser
 bundle that pulls in the shape check also bundles `n3`.
 
-First questions: move `subClassClosure` (pure) into a browser-safe module (`classHierarchy.ts`),
-or hide the specifier (`/* @vite-ignore */` with a variable)? Measure a Vite build's chunk before
-and after.
+The `n3` import is already dynamic, so the effect is an emitted (lazy) `n3` chunk, not parser code
+in the entry chunk. Moving `subClassClosure` alone does not remove the edge: `checkShapeHierarchy`
+also reaches `hierarchy.js` through two dynamic imports (`loadOntologyHierarchy`,
+`definedTermsFromTurtle`).
 
-## 3. `registerInstalled` passes a native path to `importModule`
-
-`registerInstalledOntologies` (`src/ontology/registerInstalled.ts:89-92`) hands
-`path.join(ontologiesDir, file)` to `options.importModule`. On Windows that is `C:\…`, which
-Vite's `ssrLoadModule` and other loaders may not resolve as a module id (the built path already
-goes through `pathToFileURL`).
-
-First questions: pass a normalized `/`-separated absolute path, or a file URL, and document which?
-A test with a Windows-style path through `path.win32`.
+First questions: is a lazy chunk a problem at all (measure a Vite browser build that imports the
+shape check)? If so: move `subClassClosure` (pure) into `classHierarchy.ts` and hide the `n3`
+specifier (`/* @vite-ignore */` with a variable), or keep the shape check out of browser entry
+points.
 
 ## 4. `@types/n3` lags `n3`
 
