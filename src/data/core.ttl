@@ -14,6 +14,12 @@ core:
     dcterms:title "Linked core"@en ;
     owl:versionInfo "2.37.0" .
 
+core:AssetPackage
+    a owl:Class ;
+    rdfs:comment "A package that holds assets (files such as images, documents and data an app uses), with no ontology of its own."@en ;
+    rdfs:label "asset package"@en ;
+    rdfs:subClassOf core:Package .
+
 core:DraftGraph
     a owl:Class ;
     rdfs:comment "A named graph of drafts a dataset owns, under its data root; it never feeds the class hierarchy."@en ;
@@ -26,9 +32,15 @@ core:OntologyGraph
     rdfs:label "ontology graph"@en ;
     rdfs:subClassOf sd:NamedGraph .
 
+core:OntologyPackage
+    a owl:Class ;
+    rdfs:comment "A package that holds an ontology (its Turtle data and term module), and may carry shapes for its own terms."@en ;
+    rdfs:label "ontology package"@en ;
+    rdfs:subClassOf core:Package .
+
 core:OntologySync
     a owl:Class ;
-    rdfs:comment "What ontology sync last wrote into a dataset for one package: its rdfs:subClassOf triples and their hash."@en ;
+    rdfs:comment "The record the 'default' graph mode of ontology sync keeps in the default graph: the combined hash of the ontology it last wrote there."@en ;
     rdfs:label "ontology sync"@en .
 
 core:Package
@@ -116,13 +128,8 @@ core:module
 
 core:ontologyHash
     a owl:DatatypeProperty ;
-    rdfs:comment "The content hash of the class hierarchy ontology sync last wrote for a package."@en ;
+    rdfs:comment "The combined content hash of the ontology the 'default' graph mode of ontology sync last wrote into the default graph."@en ;
     rdfs:label "ontology hash"@en .
-
-core:ontologyTriples
-    a owl:DatatypeProperty ;
-    rdfs:comment "The class hierarchy ontology sync last wrote for a package, as sorted N-Triples lines."@en ;
-    rdfs:label "ontology triples"@en .
 
 core:package
     a owl:DatatypeProperty ;
@@ -135,11 +142,6 @@ core:packageHash
     rdfs:comment "One package's part of a shared ontology or shape graph, recorded in the graph registry: the package's npm name, a space, and the SHA-256 (hex) of its data."@en ;
     rdfs:label "package hash"@en ;
     rdfs:range xsd:string .
-
-core:packageName
-    a owl:DatatypeProperty ;
-    rdfs:comment "The npm name of the package an ontology sync record is for."@en ;
-    rdfs:label "package name"@en .
 
 core:shapeHash
     a owl:DatatypeProperty ;
