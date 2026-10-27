@@ -4,7 +4,7 @@ summary: >
   `@_linked/npm`: step CK — package kinds `core:OntologyPackage` / `core:AssetPackage` in core,
   core's `npm:` module, `core:packageName` and the default-graph `OntologySync` fallback removed,
   and a new hand-made `@_linked/npm` package (ontology + shapes after `package.json`). Lands on `dev`.
-status: Plan
+status: Done
 ---
 
 # 005 — Package kinds and `@_linked/npm`
@@ -44,6 +44,13 @@ Copied verbatim from plan 057; the rest are there. A step that changes one updat
 
   (CK consumes it for `@_linked/npm`'s own `package.json`: `"linked": {"kind": "ontology"}`. Core's
   own `package.json` gets `"library"` in step RK, not here.)
+
+As built in CK (detail under K-npm, not a change to it): `NpmPackage` extends `CreativeWork` of
+`@_linked/schema` (the shape check requires it, `npm:Package ⊑ schema:SoftwareSourceCode ⊑
+schema:CreativeWork`), so its inherited `name` / `description` are `schema:name` /
+`schema:description` and the `npm:name` / `npm:description` accessors are `npmName` /
+`npmDescription`. `NpmDependency` has `name` and `range`. The term `npm:private` is exported as
+`private_` (a reserved word).
 
 ## CK — Package kinds in core; `@_linked/npm`
 
@@ -205,4 +212,13 @@ New `@_linked/npm` (`packages-local/_linked-npm`), on the layout of `packages-lo
 
 ## Progress
 
-- [ ] CK
+- [x] CK — landed on `dev` (core and the new npm repo); reports core
+  [080](../reports/080-package-kinds-and-npm-out-of-core.md), npm `docs/reports/001-npm-ontology.md`.
+
+## Follow-ups
+
+- `@_linked/server` still reads the ontology sync's removed `fallback` result field
+  (`src/utils/ontologySync.ts:35,222`), now always unset: server
+  `docs/backlog/006-ontology-sync-fallback-field.md`.
+- `@_linked/npm` first release (remote, lockfile, first publish, trusted publisher): npm
+  `docs/backlog/001-first-release.md`; plan 057 §Owner actions.
