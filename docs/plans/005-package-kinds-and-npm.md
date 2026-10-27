@@ -38,8 +38,11 @@ Copied verbatim from plan 057; the rest are there. A step that changes one updat
   `"linked": { "kind": "app" | "ontology" | "assets" | "library" }`, merged into an existing
   `linked` object (e.g. `linked.serverOnly`), never replacing it. `linkedPackage` and `linkedApp`
   are gone; no reader accepts them. One helper, `linkedKind(json)` →
-  `'app'|'ontology'|'assets'|'library'|undefined`, exported by `@_linked/cli`; `@_linked/server`
-  keeps a byte-identical copy. A linked package is `kind !== undefined && kind !== 'app'`.
+  `'app'|'ontology'|'assets'|'library'|undefined`, exported by `@_linked/cli/installed-packages`
+  (with `LinkedKind`, `LINKED_KINDS`, `isLinkedPackageJson`); `@_linked/server` keeps a
+  byte-identical copy in `@_linked/server/utils/linkedDependencies`, between marker comments that
+  name the twin. `discoverLinkedDependencies(appDir, pkg, isLinked?)` takes an optional test; only
+  CN's `appPackagesOf` passes one (accepting `linkedPackage: true` too, until the release). A linked package is `kind !== undefined && kind !== 'app'`.
   `ontology` packages may carry shapes for their own terms; `library` is framework code.
 
   (CK consumes it for `@_linked/npm`'s own `package.json`: `"linked": {"kind": "ontology"}`. Core's
