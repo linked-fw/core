@@ -217,8 +217,6 @@ New `@_linked/npm` (`packages-local/_linked-npm`), on the layout of `packages-lo
 
 ## Follow-ups
 
-- `@_linked/server` still reads the ontology sync's removed `fallback` result field
-  (`src/utils/ontologySync.ts:35,222`), now always unset: server
-  `docs/backlog/006-ontology-sync-fallback-field.md`.
+- ~~`@_linked/server` reads the removed `fallback` result field~~ — done (core report 080, addendum).
 - `@_linked/npm` first release (remote, lockfile, first publish, trusted publisher): npm
   `docs/backlog/001-first-release.md`; plan 057 §Owner actions.

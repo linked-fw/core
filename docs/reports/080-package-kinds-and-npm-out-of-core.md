@@ -105,7 +105,7 @@ is gone with the per-package `OntologySync` records it wrote.
 
 ### Follow-ups
 
-- Server `docs/backlog/006-ontology-sync-fallback-field.md` — drop the dead `fallback` branch.
+- ~~Server `docs/backlog/006-ontology-sync-fallback-field.md`~~ — done, see the addendum.
 - The cn-main purl check after the owner's next CN restart — owner, at the next restart (sub-plan
   005 Verify).
 
@@ -118,3 +118,19 @@ is gone with the per-package `OntologySync` records it wrote.
   rebuild replaces core's namespace.
 - `syncOntologies` still reads every registered package also with `packages` set: the shared and
   default modes rebuild from all, and the in-memory hierarchy needs all.
+
+## Addendum — server (2026-10-27)
+
+The removal broke one `@_linked/server` test on `dev`: `remote-dataset-graphs.test.ts` "lets the
+ontology sync fall back to the default graph behind a gateway without graph queries" (13 passed /
+1 failed). Fixed in server, with server backlog 006 done and deleted:
+
+- The test now expects the refusal: behind a gateway without graph queries the sync rejects with
+  `has no graph queries`, and no `updateQuery` is sent.
+- `src/utils/ontologySync.ts`: `fallback` gone from the `OntologyCore` type, and the log's
+  "(default graph: the store has no graph queries)" case with it (also the older-core heuristic:
+  the server needs core `^2.42.0`, which always sets `target`). `boot-ontology-sync.test.ts` loses
+  the two cases that printed it.
+- Changeset `ontology-sync-no-fallback.md` (patch).
+- Server `npm test`: `Test Suites: 2 skipped, 33 passed, 33 of 35 total`, `Tests: 2 skipped, 485
+  passed, 487 total` (11.0 s); `npx linked build`: `✔ Build successful`.
