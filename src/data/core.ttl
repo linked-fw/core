@@ -45,8 +45,9 @@ core:OntologySync
 
 core:Package
     a owl:Class ;
-    rdfs:comment "A Linked package as core's package registry records it (getPackageMetadata), typed so on the package's metadata node."@en ;
-    rdfs:label "package"@en .
+    rdfs:comment "A Linked package as core's package registry records it (getPackageMetadata), typed so on the package's metadata node. A Linked package is an npm package."@en ;
+    rdfs:label "package"@en ;
+    rdfs:subClassOf <https://linked.cm/ont/npm/Package> .
 
 core:PathNode
     a owl:Class ;

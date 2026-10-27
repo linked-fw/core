@@ -1,7 +1,7 @@
 /*
  * Core's own vocabulary (`core:`): the package kinds are classes under `core:Package`, typed and
  * labelled in `core.ttl`; nothing npm-specific is left in core (no `npm:` registration, no
- * `core:packageName`).
+ * `core:packageName`) beyond `core:Package ⊑ npm:Package`, stated by IRI.
  */
 import {describe, expect, test} from '@jest/globals';
 import {readFileSync} from 'node:fs';
@@ -28,6 +28,10 @@ describe('core: package kinds', () => {
     expect(objects(`${CORE}${name}`, RDF_TYPE)).toEqual([OWL_CLASS]);
     expect(objects(`${CORE}${name}`, SUBCLASS)).toEqual([coreOntology.Package.id]);
     expect(objects(`${CORE}${name}`, LABEL)).toHaveLength(1);
+  });
+
+  test('core:Package is an npm:Package, named by IRI (core does not depend on @_linked/npm)', () => {
+    expect(objects(coreOntology.Package.id, SUBCLASS)).toEqual(['https://linked.cm/ont/npm/Package']);
   });
 
   test('core names no npm term: no packageName, no ontologyTriples, no npm: registration', () => {
