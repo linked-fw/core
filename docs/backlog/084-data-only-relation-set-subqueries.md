@@ -8,7 +8,7 @@ summary: >
 packages: [core]
 ---
 
-# 082 — Sub-queries on a set of data-only members
+# 084 — Sub-queries on a set of data-only members
 
 Source: report 081 (the `.some()` fix of backlog 050), measured with a throwaway jest test.
 

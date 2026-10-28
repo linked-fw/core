@@ -45,7 +45,7 @@ the query DSL, one additive public API (Create Now switches to it), one Windows 
   `pathToFileURL`.
 - **Create Now** `src/utils/shapeUtils.ts`: `isRegisteredPackageName` and
   `registeredPackageNamesForSlug` use the two new functions instead of
-  `globalThis._linked._packages` (CN report 186).
+  `globalThis._linked._packages` (CN report 192).
 
 ### Verification
 
@@ -65,7 +65,7 @@ of `data-only-relation-some.test.ts` without the `SelectQuery.ts` change.
 `Successfully built: @_linked/core, @_linked/maps, @_linked/access, @semantu/execution-gateway,
 @_linked/documents`.
 
-CN `npm run test:regular`: quoted in CN report 186. It runs after this commit lands: in a worktree
+CN `npm run test:regular`: quoted in CN report 192. It runs after this commit lands: in a worktree
 with only core checked out, CN's typecheck sees two copies of core (the worktree's, and the main
 checkout's through `@_linked/server` and `@_linked/fuseki`), and the gate fails with 77
 `typeof X is not assignable to typeof Shape` errors unrelated to the change.
@@ -93,7 +93,7 @@ checkout's through `@_linked/server` and `@_linked/fuseki`), and the gate fails 
 ### Follow-ups
 
 - `.select()`, `.where()`, `.selectAll()` on a set of data-only members still throw the same way
-  (measured): backlog 082.
+  (measured): backlog 084.
 - 062 §1, §2, §4: backlog 062 (trimmed).
 
 ## Details
