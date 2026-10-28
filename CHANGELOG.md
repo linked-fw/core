@@ -1,5 +1,44 @@
 # Changelog
 
+## 2.45.0
+
+### Minor Changes
+
+- [#405](https://github.com/linked-fw/core/pull/405) [`1240c0a`](https://github.com/linked-fw/core/commit/1240c0aa641a133d3afdab2c66986c723e19517a) Thanks [@flyon](https://github.com/flyon)! - `core:Package rdfs:subClassOf npm:Package` (`https://linked.cm/ont/npm/Package`, by IRI; core does
+  not depend on `@_linked/npm`): a Linked package is an npm package, so a shape for a package kind
+  may extend `@_linked/npm`'s `NpmPackage`.
+
+- [#405](https://github.com/linked-fw/core/pull/405) [`25109b4`](https://github.com/linked-fw/core/commit/25109b408421d7e65729a06b4ab6c74eb39bfbdd) Thanks [@flyon](https://github.com/flyon)! - Ontology status values: class `core:OntologyStatus` with the named individuals `core:Draft`,
+  `core:ReadyForReview` and `core:Published` (`https://linked.cm/ont/core/…`), in `core.ttl` and on
+  `coreOntology`. An ontology states its status as `adms:status <iri>`.
+
+- [#405](https://github.com/linked-fw/core/pull/405) [`8262e09`](https://github.com/linked-fw/core/commit/8262e09b48a4361397faddb78fabb1ea564d0704) Thanks [@flyon](https://github.com/flyon)! - Package kinds `core:OntologyPackage` and `core:AssetPackage` (`rdfs:subClassOf core:Package`),
+  exported as `coreOntology.OntologyPackage` / `coreOntology.AssetPackage`.
+  
+  Removed (small breaking changes): the `npm:` module (`@_linked/core/ontologies/npm`, the
+  `http://purl.org/on/npm/` terms; npm's terms are now `@_linked/npm` on `https://linked.cm/ont/npm/`),
+  `core:packageName` and `core:ontologyTriples` with the `OntologySync.packageName` /
+  `ontologyTriples` properties, and the ontology sync's default-graph fallback with its exports
+  `ontologySyncNodeIri`, `toNTriplesLine`, `ontologyTriplesText`, `ontologySyncHash` and the
+  result's `fallback`. A store without graph queries is now refused by the `'package'` and shared
+  `ontologyGraph` modes with an error naming the store; `'default'` still serves it. The
+  `'package'` mode no longer removes per-package `OntologySync` nodes an earlier sync left.
+
+- [#405](https://github.com/linked-fw/core/pull/405) [`f18c8eb`](https://github.com/linked-fw/core/commit/f18c8eb02af586f943c818b67e5099a2636ab2a6) Thanks [@flyon](https://github.com/flyon)! - `isRegisteredPackage(name)` and `getRegisteredPackageNames()` (`@_linked/core/utils/Package`) say
+  which packages `linkedPackage()` registered, so callers no longer read `globalThis._linked._packages`.
+  Fixes: the callbacks waiting on a shape (value-shape links, the deferred tighten-only comparison)
+  run for a shape with no decorated properties of its own; `.some()` / `.every()` / `.none()` and
+  property access on a plural relation to a data-only shape (or a `sh:class`-only relation) no longer
+  throw; `registerInstalledOntologies` hands `importModule` a `/`-separated path.
+
+- [#405](https://github.com/linked-fw/core/pull/405) [`70a6b01`](https://github.com/linked-fw/core/commit/70a6b01ccc4fd0c815565167e11167b39df39771) Thanks [@flyon](https://github.com/flyon)! - Outside production, an update by id that matched no node says so.
+  
+  `update().for({id})` on an absent id (or an id with properties but no `rdf:type`) writes nothing and still resolves with the fields it was given. A `SparqlDataset` now follows such an update with one `ASK` whether the subject is typed where the update's WHERE looked (its `WITH` graph, every graph of a routed read set, or the default graph), and `console.warn`s naming the id and the shape, and pointing to `upsert()`, when it is not. The result does not change and a failing check is ignored. Skipped when `NODE_ENV` is `production` (no `ASK` is sent), for an upsert, a bulk update (`forAll`/`where`) and a shape without a `targetClass`.
+
+### Patch Changes
+
+- [#405](https://github.com/linked-fw/core/pull/405) [`0faee8b`](https://github.com/linked-fw/core/commit/0faee8bab41ecb33bcc7768174adaa0d72942e59) Thanks [@flyon](https://github.com/flyon)! - `package.json` says what this package is in `"linked": {"kind": "library"}` instead of `"linkedPackage": true`, which the CLI and server no longer read.
+
 ## 2.44.0
 
 ### Minor Changes
