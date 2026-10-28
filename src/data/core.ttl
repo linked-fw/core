@@ -14,6 +14,12 @@ core:
     dcterms:title "Linked core"@en ;
     owl:versionInfo "2.37.0" .
 
+core:AssetPackage
+    a owl:Class ;
+    rdfs:comment "A package that holds assets (files such as images, documents and data an app uses), with no ontology of its own."@en ;
+    rdfs:label "asset package"@en ;
+    rdfs:subClassOf core:Package .
+
 core:DraftGraph
     a owl:Class ;
     rdfs:comment "A named graph of drafts a dataset owns, under its data root; it never feeds the class hierarchy."@en ;
@@ -26,20 +32,47 @@ core:OntologyGraph
     rdfs:label "ontology graph"@en ;
     rdfs:subClassOf sd:NamedGraph .
 
+core:OntologyPackage
+    a owl:Class ;
+    rdfs:comment "A package that holds an ontology (its Turtle data and term module), and may carry shapes for its own terms."@en ;
+    rdfs:label "ontology package"@en ;
+    rdfs:subClassOf core:Package .
+
+core:OntologyStatus
+    a owl:Class ;
+    rdfs:comment "The stage an ontology is at in its life: a draft, ready for review, or published."@en ;
+    rdfs:label "ontology status"@en .
+
 core:OntologySync
     a owl:Class ;
-    rdfs:comment "What ontology sync last wrote into a dataset for one package: its rdfs:subClassOf triples and their hash."@en ;
+    rdfs:comment "The record the 'default' graph mode of ontology sync keeps in the default graph: the combined hash of the ontology it last wrote there."@en ;
     rdfs:label "ontology sync"@en .
 
 core:Package
     a owl:Class ;
-    rdfs:comment "A Linked package as core's package registry records it (getPackageMetadata), typed so on the package's metadata node."@en ;
-    rdfs:label "package"@en .
+    rdfs:comment "A Linked package as core's package registry records it (getPackageMetadata), typed so on the package's metadata node. A Linked package is an npm package."@en ;
+    rdfs:label "package"@en ;
+    rdfs:subClassOf <https://linked.cm/ont/npm/Package> .
+
+core:Draft
+    a owl:NamedIndividual, core:OntologyStatus ;
+    rdfs:comment "The status of an ontology that is being written and is not yet ready for review."@en ;
+    rdfs:label "draft"@en .
 
 core:PathNode
     a owl:Class ;
     rdfs:comment "An operator node of a SHACL property path that is not a plain predicate or sequence, such as an inverse, alternative or repeated path."@en ;
     rdfs:label "path node"@en .
+
+core:Published
+    a owl:NamedIndividual, core:OntologyStatus ;
+    rdfs:comment "The status of an ontology that has been published for others to use."@en ;
+    rdfs:label "published"@en .
+
+core:ReadyForReview
+    a owl:NamedIndividual, core:OntologyStatus ;
+    rdfs:comment "The status of an ontology its authors consider complete and ready to be reviewed."@en ;
+    rdfs:label "ready for review"@en .
 
 core:ShapeClass
     a owl:Class ;
@@ -116,13 +149,8 @@ core:module
 
 core:ontologyHash
     a owl:DatatypeProperty ;
-    rdfs:comment "The content hash of the class hierarchy ontology sync last wrote for a package."@en ;
+    rdfs:comment "The combined content hash of the ontology the 'default' graph mode of ontology sync last wrote into the default graph."@en ;
     rdfs:label "ontology hash"@en .
-
-core:ontologyTriples
-    a owl:DatatypeProperty ;
-    rdfs:comment "The class hierarchy ontology sync last wrote for a package, as sorted N-Triples lines."@en ;
-    rdfs:label "ontology triples"@en .
 
 core:package
     a owl:DatatypeProperty ;
@@ -135,11 +163,6 @@ core:packageHash
     rdfs:comment "One package's part of a shared ontology or shape graph, recorded in the graph registry: the package's npm name, a space, and the SHA-256 (hex) of its data."@en ;
     rdfs:label "package hash"@en ;
     rdfs:range xsd:string .
-
-core:packageName
-    a owl:DatatypeProperty ;
-    rdfs:comment "The npm name of the package an ontology sync record is for."@en ;
-    rdfs:label "package name"@en .
 
 core:shapeHash
     a owl:DatatypeProperty ;

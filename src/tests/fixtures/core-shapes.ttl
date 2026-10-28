@@ -322,10 +322,8 @@
 
 <https://linked.cm/shape/core/OntologySync>
   a sh:NodeShape ;
-  rdfs:comment "What the ontology sync last wrote into this dataset for one package: its rdfs:subClassOf triples and their hash. (ontology sync, class hierarchy)" ;
+  rdfs:comment "The combined hash of the ontology the 'default' graph mode of ontology sync last wrote into the default graph. (ontology sync)" ;
   sh:property <https://linked.cm/shape/core/OntologySync/ontologyHash> ;
-  sh:property <https://linked.cm/shape/core/OntologySync/ontologyTriples> ;
-  sh:property <https://linked.cm/shape/core/OntologySync/packageName> ;
   sh:targetClass core:OntologySync .
 
 <https://linked.cm/shape/core/OntologySync/ontologyHash>
@@ -335,22 +333,6 @@
   sh:maxCount "1"^^xsd:integer ;
   sh:nodeKind sh:Literal ;
   sh:path core:ontologyHash .
-
-<https://linked.cm/shape/core/OntologySync/ontologyTriples>
-  a sh:PropertyShape ;
-  rdfs:label "ontologyTriples" ;
-  sh:datatype xsd:string ;
-  sh:maxCount "1"^^xsd:integer ;
-  sh:nodeKind sh:Literal ;
-  sh:path core:ontologyTriples .
-
-<https://linked.cm/shape/core/OntologySync/packageName>
-  a sh:PropertyShape ;
-  rdfs:label "packageName" ;
-  sh:datatype xsd:string ;
-  sh:maxCount "1"^^xsd:integer ;
-  sh:nodeKind sh:Literal ;
-  sh:path core:packageName .
 
 <https://linked.cm/shape/core/PathList>
   a sh:NodeShape ;

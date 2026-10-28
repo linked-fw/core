@@ -181,6 +181,34 @@ describe('every widening throws at registration', () => {
     expect(getPropertyShape(TWaiter.shape, 'waitsFor')?.valueShape).toEqual({id: laterBad?.id});
   });
 
+  test('a property-less value shape registered after the override is compared once it is', () => {
+    @linkedShape
+    class TDeferredBare extends TBase {
+      @objectProperty({path: ex('part'), shape: ['tighten-only-test', 'TBareLater'], contains: true})
+      get part(): TBase {
+        return null;
+      }
+    }
+    @linkedShape
+    class TBareWaiter extends Shape {
+      @objectProperty({path: ex('waitsForBare'), shape: ['tighten-only-test', 'TBareLater']})
+      get waitsFor(): unknown {
+        return null;
+      }
+    }
+    expect(() => {
+      // No decorated properties of its own.
+      @linkedShape
+      class TBareLater extends Shape {
+        static targetClass = ex('TBareLater');
+      }
+      return TBareLater;
+    }).toThrow(/TDeferredBare\.part: value shape .*TBareLater is not/);
+    const bare = [...getAllNodeShapes().values()].find((n) => n.label === 'TBareLater');
+    expect(bare?.targetClass).toEqual(ex('TBareLater'));
+    expect(getPropertyShape(TBareWaiter.shape, 'waitsFor')?.valueShape).toEqual({id: bare?.id});
+  });
+
   test('contains: false drops ownership', () => {
     expect(() => {
       @linkedShape

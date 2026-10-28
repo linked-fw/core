@@ -145,8 +145,7 @@ the rebuild with a warning, since a rebuild without it would drop its terms. Wha
 see stays: a subject outside every namespace that a package drops from its Turtle (say
 `schema:Person rdfs:subClassOf …` written by a package that does not own `schema:`), and every
 term of a package that is no longer registered. Remove those by hand. A namespace must end in `/` or
-`#`. The `OntologySync` nodes the earlier default-graph sync wrote lie in core's namespace, so a
-`'default'` rebuild replaces them; the sync names them in its warning first.
+`#`.
 
 **A package's ontology Turtle is the source of its terms.** Any triples about a package's terms
 must live in that package's Turtle. Anything else written about them (by hand, by another tool) can
@@ -158,9 +157,8 @@ the syncs never copy or move it. A sync that finds another mode's data (package 
 `'default'` or shared mode, a shared graph while in `'package'` mode, the default-graph ontology or
 default-graph shapes while in another mode) logs one warning naming it and leaves it. To switch, drop
 the old graphs and records (`OntologyGraph.delete(iri)`, `ShapesGraph.delete(iri)`), or remove the
-default-graph terms, then set the new mode and sync. The `'package'` mode still finishes the
-one-time removal of what the earlier default-graph syncs wrote (the class-hierarchy lines of
-`OntologySync` nodes, and default-graph shapes of the synced packages), as before.
+default-graph terms, then set the new mode and sync. The `'package'` and shared modes need a
+store with graph queries; the ontology sync refuses one without them.
 
 **CN-managed apps must use `'package'` for both.** Create Now reads package graphs (catalogs, the
 gateway's graph rules) and reports another mode as an error.

@@ -87,6 +87,22 @@ export function getRegisteredOntologies(): OntologyRegistration[] {
 }
 
 /**
+ * Whether `linkedPackage()` has registered the package with npm name `packageName` in this
+ * process. Only for a registered package does `getNodeShapeUri` use the package's own base URI;
+ * for any other name it falls back to the shared root.
+ */
+export function isRegisteredPackage(packageName: string): boolean {
+  const packages = typeof _linked !== 'undefined' ? _linked._packages : undefined;
+  return Boolean(packages) && Object.prototype.hasOwnProperty.call(packages, packageName);
+}
+
+/** The npm names of every package `linkedPackage()` has registered in this process. */
+export function getRegisteredPackageNames(): string[] {
+  const packages = typeof _linked !== 'undefined' ? _linked._packages : undefined;
+  return packages ? Object.keys(packages) : [];
+}
+
+/**
  * The namespaces each package declared it mirrors (`linkedPackage(name, {mirrors})`), by
  * package name. Read by the shape check.
  * @internal
@@ -482,21 +498,23 @@ export function linkedPackage(
       // run deferred callbacks from property decorators. A callback that throws (a refused
       // override, possibly another shape's, compared once this one registered) does not stop
       // the others or the rest of this registration: the first error is rethrown at the end.
+      // Callbacks waiting on this shape's id (value-shape links, deferred comparisons) run
+      // whether or not the class has decorated properties of its own.
+      const run = (callback: (shape: NodeShapeData) => void) => {
+        try {
+          callback(nodeShape);
+        } catch (error) {
+          callbackErrors.push(error);
+        }
+      };
       if (constructor['shapeCallbacks'])
       {
-        const run = (callback: (shape: NodeShapeData) => void) => {
-          try {
-            callback(nodeShape);
-          } catch (error) {
-            callbackErrors.push(error);
-          }
-        };
         constructor['shapeCallbacks'].forEach(run);
-        const nodeCallbacks = getAndClearCallbacks(nodeShape.id);
-        if(nodeCallbacks) {
-          nodeCallbacks.forEach(run);
-        }
         delete constructor['shapeCallbacks'];
+      }
+      const nodeCallbacks = getAndClearCallbacks(nodeShape.id);
+      if(nodeCallbacks) {
+        nodeCallbacks.forEach(run);
       }
     }
     else

@@ -339,7 +339,9 @@ or `"where"` (a `where` condition, same as select's).
 **An `update` against an id that does not exist writes nothing.** The lowered `WHERE` requires the
 subject's type (`FILTER(EXISTS { <id> rdf:type ?t })`, any type), so an absent id, or an id with properties but no
 type, matches nothing. The result still echoes the id and the fields sent: a SPARQL update does not
-report what it changed. Use `upsert` when the node may be absent.
+report what it changed. Outside production (`NODE_ENV` is not `production`) a SPARQL store then asks
+whether the subject is typed where the update looked, and `console.warn`s when it is not; the result
+is the same either way. Use `upsert` when the node may be absent.
 
 **`__id` in `update` — only for *new* nodes.** Use `__id` to fix the id of a node being
 **created**: in a `create` `data`, or when **adding** a node to a relation

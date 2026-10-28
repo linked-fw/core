@@ -8,7 +8,7 @@ There are two kinds, and they are not the same thing wearing different names.
 
 ## Core's vocabularies are shortcuts
 
-`src/ontologies/` here holds `rdf`, `rdfs`, `owl`, `shacl`, `xsd`, `npm` and `linked-core`.
+`src/ontologies/` here holds `rdf`, `rdfs`, `owl`, `shacl`, `xsd` and `linked-core`.
 `rdf`, `rdfs`, `owl`, `shacl` and `xsd` are **shortcuts core needs without depending on the packages that carry the full
 ontologies**. Core cannot import `@_linked/xsd` to know what `xsd:string` is — that package
 depends on core.
@@ -23,16 +23,21 @@ They are not a smaller version of the real thing and should not grow into one. I
 itself wanting a term it does not have, the question is whether core should be reaching for
 that term at all.
 
-`linked-core` (`core:`) and `npm` are different: they are registered like a package's ontology
-(`linked-core.register.ts`, `npm.register.ts`, imported by core's index), with Turtle data in
-`src/data/core.ttl` and `src/data/npm.ttl` that types, labels and describes every term.
+`linked-core` (`core:`) is different: it is registered like a package's ontology
+(`linked-core.register.ts`, imported by core's index), with Turtle data in `src/data/core.ttl`
+that types, labels and describes every term.
 
-`linked-core` is core's own vocabulary: the terms of its SHACL meta-model extensions, such as
+`linked-core` is core's own vocabulary: the package kinds `core:OntologyPackage` and
+`core:AssetPackage` (`rdfs:subClassOf core:Package`), the terms of its SHACL meta-model extensions, such as
 `core:contains`, `core:dependent`, `core:displayHidden`, and `core:generated` /
 `core:generatedShape` (the marker and ownership edge of the shapes shape sync generates, see
 [owned-values](owned-values.md)), and `core:shapeHash` (the content hash shape sync stores on each
 NodeShape it writes, so the next sync skips an unchanged shape). The `shacl` shortcut likewise grows only by the terms core
 writes, e.g. `sh:targetObjectsOf` for those generated shapes.
+
+Core names nothing npm-specific: npm's terms (a package's name, version, repository, dependencies)
+are the vocabulary package `@_linked/npm` (`https://linked.cm/ont/npm/`), which core refers to by
+IRI only. The graph registry's own `core:package` / `core:version` stay in core.
 
 ## A package's ontology is the full thing
 
@@ -180,25 +185,16 @@ ontology graph (see the next section):
 - the hash is `ontologyGraphHash(texts)`: SHA-256 of `linked-ontology-sync/2\n` + the package's
   raw data file texts in registration order, joined with `\n`, recorded as the graph's
   `core:contentHash`; bumping the prefix makes every dataset rewrite its graphs once;
-- an unchanged hash writes no graph (an unforked branch stays unforked, unless the removal below
-  has default-graph lines of an earlier sync to remove, once); a changed or new package
+- an unchanged hash writes no graph (an unforked branch stays unforked); a changed or new package
   is created or replaced whole in one graph query, the body sent as N-Triples (each file parsed
   with its own blank-node prefix, so prefixes and blank-node labels of several files never
   clash); `force` replaces every package;
-- after a package's graph is written (or found unchanged), whatever the store infers from
-  (below), what the earlier default-graph sync kept for it is removed: the lines its
-  `OntologySync` node lists, except those another remaining node lists, then the node; a hand-written default-graph axiom no node lists stays,
-  and the store keeps inferring through it;
 - `orphanScope: 'all'` (without `packages`) drops the ontology graph of every package no longer
-  registered, and removes the default-graph lines and node of such a package.
+  registered.
 
 A store without graph queries (`unsupported-query-kind`, or a dataset class without
-`graphQuery`) gets the earlier **default-graph sync**: each package's `rdfs:subClassOf` triples
-as sorted N-Triples lines, hashed with `linked-ontology-sync/1\n` + the lines, stored on a sync
-node per package (`https://linked.cm/ont/core/ontologySync/<encodeURIComponent(packageName)>`,
-the built-in shape `OntologySync`, deprecated) and diffed into the default graph one subject
-class at a time (`ClassAxioms`); only lines a node lists are ever removed, and a triple another
-package lists is kept.
+`graphQuery`) is refused in the `'package'` and shared modes: the sync throws an error naming the
+store before it writes anything. Such a store can only use `ontologyGraph: 'default'`.
 
 **The inference probe** (`probeHierarchyInference(ds?)`, `@_linked/core/ontology/hierarchyProbe`)
 decides only a warning. Before the sync writes its first package graph (a sync with nothing to
@@ -216,8 +212,7 @@ about a hierarchy reaching nodes stored in other graphs:
 | `'default-graph'` | not; after `probe:Default rdfs:subClassOf sd:NamedGraph` is written into the default graph, `probe:default` is | package graphs; one warning that class-scoped reads miss subclass instances |
 | `'none'` | neither | package graphs; the same warning |
 
-On every answer the default-graph hierarchy an earlier sync kept is removed: core never keeps a
-copy of the hierarchy in the default graph.
+On every answer core keeps no copy of the hierarchy in the default graph.
 
 The default-graph axiom is removed and both graphs dropped whatever the answer (best effort; when
 the axiom cannot be removed the graphs stay as the marker). The next probe sweeps probe records
@@ -225,7 +220,7 @@ older than five minutes, with their default-graph axioms, and `orphanScope: 'all
 too. A package graph whose create is refused (`graph-exists`: another process created it, or it
 holds triples without an `OntologyGraph` record) is replaced, or dropped and created again. The answer is cached per
 dataset object for the process (`resetHierarchyInference(ds?)` drops it). A probe that fails
-with `unsupported-query-kind` takes the default-graph sync, as a store without graph queries; any
+with `unsupported-query-kind` is refused as a store without graph queries; any
 other failure is warned about, and the sync writes the package graphs. Measured on the stores core is tested
 against: `ghcr.io/linked-fw/fuseki:6.2.0-2` answers `'named-graphs'`, `6.2.0-1`
 `'default-graph'`, a stock `secoresearch/fuseki:6.2.0` (and a `mem` dataset on the image)
@@ -270,10 +265,9 @@ value is checked when it is set. The README's
   default graph (alone, `{defaultGraph: true}`; with other graphs, `graphs.default` through
   `mapGraphName`).
 - **Other modes' data** is reported in one warning per sync (registry records of package graphs,
-  shared records, the default-graph hash node, `OntologySync` nodes, default-graph shapes) and never
+  shared records, the default-graph hash node, default-graph shapes) and never
   moved or pruned. `orphanScope: 'all'` in the package mode skips shared records.
-- **Results** carry `target` (the mode the run wrote in) and `fallback` (a store without graph
-  queries took the default-graph sync instead).
+- **Results** carry `target` (the mode the run wrote in).
 
 ## Named graphs and the graph registry
 

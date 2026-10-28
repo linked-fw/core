@@ -26,6 +26,10 @@ Prefix.add('linked_core', _self.id);
 Prefix.add('core', _self.id);
 
 const Package = ns('Package');
+// The kinds of package (`rdfs:subClassOf core:Package`): one that holds an ontology (and may carry
+// shapes for its own terms), and one that holds assets.
+const OntologyPackage = ns('OntologyPackage');
+const AssetPackage = ns('AssetPackage');
 const ShapeClass = ns('ShapeClass');
 const definesShape = ns('definesShape');
 const moduleProperty = ns('module');
@@ -74,14 +78,19 @@ const shapeHash = ns('shapeHash');
 // so the shape check does not report it as borrowing another shape's class.
 const sharedTargetClass = ns('sharedTargetClass');
 
-// Ontology sync (`syncOntologies`): one `core:OntologySync` node per package records the class
-// hierarchy it last wrote into the dataset (`core:ontologyTriples`, sorted N-Triples) and its
-// content hash (`core:ontologyHash`), so an unchanged package is skipped and a changed one is
-// replaced by a diff.
+// Ontology sync (`syncOntologies`): in the `'default'` graph mode one `core:OntologySync` node in
+// the default graph records the combined hash of the ontology written there (`core:ontologyHash`),
+// so an unchanged ontology is skipped.
 const OntologySync = ns('OntologySync');
-const packageName = ns('packageName');
 const ontologyHash = ns('ontologyHash');
-const ontologyTriples = ns('ontologyTriples');
+
+// Ontology status: the stage an ontology is at (`core:OntologyStatus`), one of three public
+// individuals, stated on the ontology as `adms:status` (ADMS's own status vocabulary has none of
+// these stages).
+const OntologyStatus = ns('OntologyStatus');
+const Draft = ns('Draft');
+const ReadyForReview = ns('ReadyForReview');
+const Published = ns('Published');
 
 // Named graphs (`shapes/NamedGraph.ts`): the classes of graph-registry records (each
 // `rdfs:subClassOf sd:NamedGraph`) and the record fields core adds to SPARQL Service Description.
@@ -98,6 +107,8 @@ const packageHash = ns('packageHash');
 
 export const coreOntology = {
   Package,
+  OntologyPackage,
+  AssetPackage,
   ShapeClass,
   definesShape,
   module: moduleProperty,
@@ -114,9 +125,11 @@ export const coreOntology = {
   shapeHash,
   sharedTargetClass,
   OntologySync,
-  packageName,
   ontologyHash,
-  ontologyTriples,
+  OntologyStatus,
+  Draft,
+  ReadyForReview,
+  Published,
   OntologyGraph,
   ShapesGraph,
   DraftGraph,

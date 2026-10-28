@@ -11,20 +11,15 @@
  *
  * Skipped by a content hash per package (`linked-ontology-sync/2\n` + the package's raw file
  * texts), compared with the record's `core:contentHash`: an unchanged package writes nothing, a
- * changed or new one is replaced whole in one graph query (the body as N-Triples). After a
- * package's graph is written or found unchanged, the class hierarchy an earlier sync kept in the default graph for
- * that package (its `OntologySync` node's lines) is removed there, then the node; hand-written
- * default-graph axioms stay.
+ * changed or new one is replaced whole in one graph query (the body as N-Triples).
  *
- * A store without graph queries (`unsupported-query-kind`) gets the earlier default-graph sync:
- * each package's `rdfs:subClassOf` triples diffed into the default graph against an
- * `OntologySync` node (hash `linked-ontology-sync/1\n` + the lines).
+ * The `'package'` and shared modes need a store with graph queries: one without them (a dataset
+ * class without `graphQuery`, or one that answers `unsupported-query-kind`) is refused with an
+ * error naming it.
  *
  * Before the first package graph is written, the store is probed once per dataset
  * (`hierarchyProbe.ts`) for the hierarchy it infers from; a sync with nothing to write probes
- * nothing, so with no default-graph hierarchy left from an earlier sync it sends no request
- * beyond its reads (an unforked branch stays unforked). Removing such a leftover is a write,
- * made once. The
+ * nothing and sends no request beyond its reads (an unforked branch stays unforked). The
  * answer only decides a warning: on every store with graph queries the ontology data goes into
  * package graphs and nothing of the hierarchy is kept in the default graph. A store that infers
  * only from the default graph (`'default-graph'`) or not at all (`'none'`) gets one warning per
@@ -45,11 +40,9 @@
 
 import type {IDataset} from '../interfaces/IDataset.js';
 import {QueryBuilder} from '../queries/QueryBuilder.js';
-import {DeleteBuilder} from '../queries/DeleteBuilder.js';
 import {assertNoActiveCatalog} from '../utils/ShapeClass.js';
 import {sha256Hex} from '../utils/sha256.js';
 import {OntologySync} from '../shapes/OntologySync.js';
-import {ClassAxioms} from '../shapes/ClassAxioms.js';
 import {NamedGraph, OntologyGraph} from '../shapes/NamedGraph.js';
 import {isGraphQueryError} from '../queries/graphQuery.js';
 import {
@@ -58,12 +51,7 @@ import {
   warnOnceForDataset,
   type HierarchyInference,
 } from './hierarchyProbe.js';
-import {
-  defaultGraphTermsFromTurtle,
-  nTriplesFromTurtle,
-  RDFS_SUBCLASSOF,
-  type HierarchyTriple,
-} from './hierarchy.js';
+import {defaultGraphTermsFromTurtle, nTriplesFromTurtle} from './hierarchy.js';
 import {getGraphTargets, isSharedGraphTarget, type GraphTarget} from '../utils/graphTargets.js';
 import {LinkedStorage} from '../utils/LinkedStorage.js';
 import {getAllShapeClasses} from '../utils/ShapeClass.js';
@@ -79,41 +67,29 @@ import {
 } from './registryData.js';
 
 export interface SyncOntologiesOptions {
-  /**
-   * Write every package, even when its stored hash matches: its graph is replaced whole. On a
-   * store without graph queries, every triple the package lists is inserted again (and the
-   * stored lines it no longer lists are removed), which repairs a dataset whose triples were
-   * removed while its sync nodes stayed.
-   */
+  /** Write every package, even when its stored hash matches: its graph is replaced whole. */
   force?: boolean;
   /** Only these packages (npm names). */
   packages?: string[];
   /**
    * `'all'` (without `packages`): drop the ontology graph of every package that is no longer
-   * registered, and remove what an earlier sync kept in the default graph for it. Default
-   * `'none'`.
+   * registered. Default `'none'`.
    */
   orphanScope?: 'none' | 'all';
 }
 
 export interface SyncOntologiesResult {
-  /** Packages whose ontology graph (or, without graph queries, hierarchy) was written. */
+  /** Packages whose ontology graph was written (in the `'default'` mode: whose terms were). */
   written: string[];
   /** Packages left as they were: unchanged, or their data could not be read. */
   skipped: string[];
   /**
-   * Packages no longer registered whose graph or hierarchy was removed (`orphanScope: 'all'`); in
-   * a shared graph, the packages its record listed that the rebuild left out.
+   * Packages no longer registered whose graph was dropped (`orphanScope: 'all'`); in a shared
+   * graph, the packages its record listed that the rebuild left out.
    */
   pruned: string[];
-  /**
-   * Where the run wrote: the global `ontologyGraph` target (`'package'`, `'default'` or the
-   * shared graph's IRI). A store without graph queries in `'package'` or shared mode got the
-   * default-graph hierarchy sync instead, reported as `'package'` or the IRI with `fallback` set.
-   */
+  /** Where the run wrote: the global `ontologyGraph` target (`'package'`, `'default'` or the shared graph's IRI). */
   target?: GraphTarget;
-  /** Set when a store without graph queries got the default-graph hierarchy sync instead. */
-  fallback?: true;
 }
 
 /** What the ontology graph hash covers before the package's texts; a new prefix re-syncs every dataset once. */
@@ -128,94 +104,7 @@ export function ontologyGraphHash(texts: string[]): string {
   return sha256Hex(ONTOLOGY_GRAPH_HASH_PREFIX + texts.join('\n'));
 }
 
-/**
- * The sync node of a package (the default-graph sync of stores without graph queries).
- * @deprecated Used by that fallback and by the removal of its data; package graphs need none.
- */
-export function ontologySyncNodeIri(packageName: string): string {
-  return `https://linked.cm/ont/core/ontologySync/${encodeURIComponent(packageName)}`;
-}
-
-/** One kept triple as an N-Triples line. @deprecated The default-graph fallback's form. */
-export const toNTriplesLine = ({s, o}: HierarchyTriple): string =>
-  `<${s}> <${RDFS_SUBCLASSOF}> <${o}> .`;
-
-const LINE = /^<([^>]*)> <[^>]*> <([^>]*)> \.$/;
-const fromNTriplesLine = (line: string): HierarchyTriple | undefined => {
-  const match = LINE.exec(line);
-  return match ? {s: match[1], o: match[2]} : undefined;
-};
-
-/**
- * The stored form of a package's triples: sorted N-Triples lines joined with `\n`, no trailing newline.
- * @deprecated The default-graph fallback's form.
- */
-export function ontologyTriplesText(triples: HierarchyTriple[]): string {
-  return [...new Set(triples.map(toNTriplesLine))].sort().join('\n');
-}
-
-/**
- * The content hash of a package's stored triples (`linked-ontology-sync/1\n` + the lines).
- * @deprecated The default-graph fallback's hash; package graphs use {@link ontologyGraphHash}.
- */
-export function ontologySyncHash(ontologyTriples: string): string {
-  return sha256Hex(`linked-ontology-sync/1\n${ontologyTriples}`);
-}
-
-const splitLines = (text: string | undefined): string[] =>
-  text ? text.split('\n').filter((line) => line.length > 0) : [];
-
 type Exec = {exec: (target?: IDataset) => Promise<unknown>};
-
-/** Runs `tasks` with at most `limit` in flight; rejects with the first failure. */
-async function runBounded(tasks: Array<() => Promise<unknown>>, limit: number): Promise<void> {
-  let next = 0;
-  const worker = async () => {
-    while (next < tasks.length) {
-      const task = tasks[next++];
-      await task();
-    }
-  };
-  await Promise.all(Array.from({length: Math.min(limit, tasks.length)}, worker));
-}
-
-/**
- * The per-class updates that turn the stored lines `old` into `next`, never removing a line in
- * `keep`: one update per subject class whose superclass set changes. With `addAll`, every line of
- * `next` is added, also those already in `old` (the dataset may have lost them).
- */
-function diffUpdates(
-  old: Set<string>,
-  next: Set<string>,
-  keep: Set<string>,
-  ds?: IDataset,
-  addAll = false,
-): Array<() => Promise<unknown>> {
-  const bySubject = new Map<string, {add: string[]; remove: string[]}>();
-  const entry = (s: string) => {
-    let e = bySubject.get(s);
-    if (!e) bySubject.set(s, (e = {add: [], remove: []}));
-    return e;
-  };
-  for (const line of next) {
-    if (!addAll && old.has(line)) continue;
-    const t = fromNTriplesLine(line);
-    if (t) entry(t.s).add.push(t.o);
-  }
-  for (const line of old) {
-    if (next.has(line) || keep.has(line)) continue;
-    const t = fromNTriplesLine(line);
-    if (t) entry(t.s).remove.push(t.o);
-  }
-  return [...bySubject.keys()].sort().map((s) => {
-    const {add, remove} = bySubject.get(s)!;
-    const change: {add?: {id: string}[]; remove?: {id: string}[]} = {};
-    if (add.length) change.add = add.sort().map((id) => ({id}));
-    if (remove.length) change.remove = remove.sort().map((id) => ({id}));
-    return () =>
-      (ClassAxioms.update({subClassOf: change} as never).for({id: s}) as unknown as Exec).exec(ds);
-  });
-}
 
 /** What one run knows before it writes: the parsed packages and the scope. */
 interface SyncRun {
@@ -227,53 +116,24 @@ interface SyncRun {
   registered: Set<string>;
 }
 
-/** A plan-070 sync node as read. */
-type StoredNode = {hash?: string; lines: Set<string>};
-
 /**
- * The node the `'default'` mode records its combined hash on, in the default graph: an
- * `OntologySync` without a package name. Outside every package namespace, and replaced in the same
- * update as the terms.
+ * The node the `'default'` mode records its combined hash on, in the default graph (an
+ * `OntologySync`). Outside every package namespace, and replaced in the same update as the terms.
  */
 export const DEFAULT_GRAPH_ONTOLOGY_NODE = 'https://linked.cm/pkg/core/ontology-sync/default-graph';
 
-/** Every `OntologySync` node in `ds`, by package name. */
-async function readSyncNodes(ds?: IDataset): Promise<Map<string, StoredNode>> {
-  return (await readSyncState(ds)).nodes;
-}
-
 /**
- * The `OntologySync` nodes of `ds` in one read: the default-graph sync's (by package name) and the
- * `'default'` mode's node (its hash, or `undefined` when there is none).
+ * The `'default'` mode's record in `ds`: its hash, or `undefined` when there is none. Read in
+ * every mode, so a run can name that mode's data.
  */
-async function readSyncState(
-  ds?: IDataset,
-): Promise<{nodes: Map<string, StoredNode>; defaultState?: {hash?: string}}> {
+async function readDefaultModeState(ds?: IDataset): Promise<{hash?: string} | undefined> {
   const rows =
-    ((await (QueryBuilder.from(OntologySync).select([
-      'packageName',
-      'ontologyHash',
-      'ontologyTriples',
-    ]) as unknown as Exec).exec(ds)) as Array<{
+    ((await (QueryBuilder.from(OntologySync).select(['ontologyHash']) as unknown as Exec).exec(ds)) as Array<{
       id: string;
-      packageName?: unknown;
       ontologyHash?: unknown;
-      ontologyTriples?: unknown;
     }> | null) ?? [];
-  const nodes = new Map<string, StoredNode>();
-  let defaultState: {hash?: string} | undefined;
-  for (const row of rows) {
-    if (row?.id === DEFAULT_GRAPH_ONTOLOGY_NODE) {
-      defaultState = {hash: typeof row.ontologyHash === 'string' ? row.ontologyHash : undefined};
-      continue;
-    }
-    if (!row || typeof row.packageName !== 'string') continue;
-    nodes.set(row.packageName, {
-      hash: typeof row.ontologyHash === 'string' ? row.ontologyHash : undefined,
-      lines: new Set(splitLines(typeof row.ontologyTriples === 'string' ? row.ontologyTriples : '')),
-    });
-  }
-  return {nodes, defaultState};
+  const row = rows.find((r) => r?.id === DEFAULT_GRAPH_ONTOLOGY_NODE);
+  return row ? {hash: typeof row.ontologyHash === 'string' ? row.ontologyHash : undefined} : undefined;
 }
 
 /** An `OntologyGraph` record as the sync reads it. */
@@ -327,7 +187,6 @@ interface OtherModeFindings {
   packageGraphs?: string[];
   sharedGraphs?: string[];
   defaultGraphOntology?: boolean;
-  defaultGraphHierarchy?: string[];
 }
 
 /**
@@ -345,9 +204,6 @@ function warnOtherModes(mode: GraphTarget, ds: IDataset | undefined, found: Othe
   if (found.defaultGraphOntology) {
     parts.push(`the ontology in the default graph (the 'default' mode, <${DEFAULT_GRAPH_ONTOLOGY_NODE}>)`);
   }
-  if (found.defaultGraphHierarchy?.length) {
-    parts.push(`a default-graph class hierarchy of ${found.defaultGraphHierarchy.join(', ')} (the earlier default-graph sync)`);
-  }
   if (!parts.length) return;
   const where = mode === 'package' ? "'package'" : mode === 'default' ? "'default'" : `<${mode}>`;
   console.warn(
@@ -361,26 +217,6 @@ const datasetLabel = (ds?: IDataset): string => {
   const name = (ds as {dataset?: unknown} | undefined)?.dataset;
   return typeof name === 'string' && name ? ` ${name}` : '';
 };
-
-/**
- * Remove what the default-graph sync kept for `name`: every line its node lists that no node in
- * `remaining` (other than its own) lists, then the node. `remaining` loses `name`.
- */
-async function removeSyncNode(
-  name: string,
-  remaining: Map<string, StoredNode>,
-  ds?: IDataset,
-): Promise<void> {
-  const node = remaining.get(name);
-  if (!node) return;
-  const keep = new Set<string>();
-  for (const [other, entry] of remaining) {
-    if (other !== name) entry.lines.forEach((line) => keep.add(line));
-  }
-  await runBounded(diffUpdates(node.lines, new Set(), keep, ds), 8);
-  await (DeleteBuilder.from(OntologySync, {id: ontologySyncNodeIri(name)}) as unknown as Exec).exec(ds);
-  remaining.delete(name);
-}
 
 /** A registration's data file as recorded in `dcterms:source`: leading `./` and `../` removed. */
 const sourceFile = (file: string): string => file.replace(/^(?:\.\.?\/)+/, '');
@@ -398,18 +234,17 @@ function packageSources(name: string): string[] {
  * (default: the global router), one named graph per package; see the module doc.
  *
  * Per package: skipped when its record's hash matches (no write, so an unforked branch stays
- * unforked, unless an earlier sync left default-graph lines for it to remove); otherwise its graph is created or replaced in one graph query, then what an
- * earlier sync kept for it in the default graph is removed. A package whose data cannot be read
- * is skipped with a warning (see `readPackageOntologies`). A store without graph queries gets the
- * earlier default-graph sync.
+ * unforked); otherwise its graph is created or replaced in one graph query. A package whose data
+ * cannot be read is skipped with a warning (see `readPackageOntologies`). A store without graph
+ * queries is refused in the `'package'` and shared modes.
  */
 export async function syncOntologies(
   ds?: IDataset,
   options?: SyncOntologiesOptions,
 ): Promise<SyncOntologiesResult> {
   assertNoActiveCatalog();
-  // Every registered package is read, also outside `packages`: the default-graph sync needs
-  // their triples to decide what a changed package may remove.
+  // Every registered package is read, also outside `packages`: the shared and default modes
+  // rebuild from all of them, and the in-memory hierarchy needs every package.
   const {packages: parsed, skipped: unreadable} = await readPackageOntologies();
   // The same parse fills the in-memory hierarchy (what `loadOntologyHierarchy` does).
   setHierarchyFromPackages(parsed);
@@ -424,11 +259,23 @@ export async function syncOntologies(
   const target = getGraphTargets().ontologyGraph;
   if (target === 'default') return syncDefaultMode(run);
   // A dataset class built against an older core has no graph queries.
-  if (ds && typeof (ds as Partial<IDataset>).graphQuery !== 'function') {
-    return {...(await syncDefaultGraph(run)), target, fallback: true};
-  }
+  if (ds && typeof (ds as Partial<IDataset>).graphQuery !== 'function') throw noGraphQueries(target, ds);
   if (isSharedGraphTarget(target)) return syncSharedGraph(run, target);
   return syncGraphs(run);
+}
+
+/**
+ * The error for a store without graph queries in the `'package'` or a shared mode: those modes
+ * write named graphs, and there is no other way to keep the ontology in them.
+ */
+function noGraphQueries(mode: GraphTarget, ds?: IDataset): Error {
+  const where = mode === 'package' ? "'package'" : `<${mode}>`;
+  const store = ds?.constructor?.name ? ` ${ds.constructor.name}` : '';
+  return new Error(
+    `[syncOntologies] ontologyGraph is ${where}, but the store${store}${datasetLabel(ds)} has no graph ` +
+      "queries (IDataset.graphQuery, which SparqlDataset has), so it cannot hold ontology graphs. " +
+      "Use a store with graph queries, or ontologyGraph 'default'.",
+  );
 }
 
 /** The README section a store that does not infer from the registered graphs is pointed to. */
@@ -468,15 +315,14 @@ async function probeBeforeWrite(ds?: IDataset): Promise<HierarchyInference | 'un
 
 /**
  * The sync on package graphs. The store is probed only when a package graph is about to be
- * written, so a sync with nothing to write sends no request beyond its reads. On every probe
- * answer, what an earlier sync kept in the default graph for a package goes.
+ * written, so a sync with nothing to write sends no request beyond its reads.
  */
 async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
   const {ds, options, only} = run;
   const result: SyncOntologiesResult = {written: [], skipped: [], pruned: []};
 
   const recordByGraph = await readOntologyRecords(ds);
-  const {nodes, defaultState} = await readSyncState(ds);
+  const defaultState = await readDefaultModeState(ds);
   warnOtherModes('package', ds, {
     sharedGraphs: sharedRecords(recordByGraph),
     defaultGraphOntology: defaultState !== undefined,
@@ -494,8 +340,7 @@ async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
     });
 
   if (plan.some((p) => p.write) && (await probeBeforeWrite(ds)) === 'unsupported') {
-    // Nothing was written yet: the store gets the default-graph sync instead.
-    return {...(await syncDefaultGraph(run)), target: 'package', fallback: true};
+    throw noGraphQueries('package', ds);
   }
 
   for (const name of run.unreadable) {
@@ -521,9 +366,6 @@ async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
       }
       result.written.push(name);
     }
-    // Written or unchanged, the package's graph holds its data: what an earlier sync kept for it
-    // in the default graph goes (also finishing a removal an earlier run did not complete).
-    await removeSyncNode(name, nodes, ds);
   }
 
   if (options?.orphanScope === 'all' && !only) {
@@ -533,11 +375,6 @@ async function syncGraphs(run: SyncRun): Promise<SyncOntologiesResult> {
       if (!record.package || run.registered.has(record.package) || record.packageHashes.length) continue;
       await OntologyGraph.delete(graph).exec(ds);
       pruned.add(record.package);
-    }
-    for (const name of [...nodes.keys()].sort()) {
-      if (run.registered.has(name)) continue;
-      await removeSyncNode(name, nodes, ds);
-      pruned.add(name);
     }
     result.pruned.push(...[...pruned].sort());
   }
@@ -594,86 +431,6 @@ async function createOntologyGraph(
     await NamedGraph.delete(graph).exec(ds);
     await create();
   }
-}
-
-/**
- * The default-graph sync, for a store without graph queries: each package's class hierarchy (its
- * `rdfs:subClassOf` triples) diffed into the default graph.
- *
- * Per package: skipped when the stored hash matches (no write at all); otherwise one update per
- * subject class whose superclass set changed, at most eight at a time, then the sync node, last,
- * so an interrupted sync is redone by the next one. The triples a changed package no longer
- * lists are removed unless another package lists them. Only triples a package's sync node lists
- * are ever removed: a triple no stored node lists (written by hand, or by an earlier tool) stays.
- * `force` inserts every listed triple again, repairing a dataset that lost them.
- */
-async function syncDefaultGraph(run: SyncRun): Promise<SyncOntologiesResult> {
-  const {ds, options, only} = run;
-  const result: SyncOntologiesResult = {written: [], skipped: [], pruned: []};
-  const nextLines = new Map<string, Set<string>>();
-  for (const [name, data] of run.parsed) {
-    nextLines.set(name, new Set(splitLines(ontologyTriplesText(data.triples))));
-  }
-  const stored = await readSyncNodes(ds);
-
-  /** Every line another package lists: its new lines when readable, else its stored ones. */
-  const listedElsewhere = (pkg: string, exclude: Set<string> = new Set()): Set<string> => {
-    const lines = new Set<string>();
-    const names = new Set([...nextLines.keys(), ...stored.keys()]);
-    for (const other of names) {
-      if (other === pkg || exclude.has(other)) continue;
-      const source = nextLines.get(other) ?? stored.get(other)?.lines;
-      source?.forEach((line) => lines.add(line));
-    }
-    return lines;
-  };
-
-  for (const name of run.unreadable) {
-    if (!only || only.has(name)) result.skipped.push(name);
-  }
-
-  for (const name of [...nextLines.keys()].sort()) {
-    if (only && !only.has(name)) continue;
-    const next = nextLines.get(name)!;
-    const text = [...next].join('\n');
-    const hash = ontologySyncHash(text);
-    const previous = stored.get(name);
-    if (!options?.force && previous?.hash === hash) {
-      result.skipped.push(name);
-      continue;
-    }
-    // `force` adds against an empty stored set, so lines the dataset lost come back; it still
-    // removes the stored lines the package no longer lists.
-    const updates = diffUpdates(
-      previous?.lines ?? new Set(),
-      next,
-      listedElsewhere(name),
-      ds,
-      options?.force === true,
-    );
-    await runBounded(updates, 8);
-    await (OntologySync.upsert({
-      packageName: name,
-      ontologyHash: hash,
-      ontologyTriples: text,
-    } as never).for({id: ontologySyncNodeIri(name)}) as unknown as Exec).exec(ds);
-    result.written.push(name);
-  }
-
-  if (options?.orphanScope === 'all' && !only) {
-    const orphans = new Set([...stored.keys()].filter((name) => !run.registered.has(name)));
-    for (const name of [...orphans].sort()) {
-      // Other orphans are pruned in the same run, so their lines do not keep this one's.
-      const keep = listedElsewhere(name, orphans);
-      const updates = diffUpdates(stored.get(name)!.lines, new Set(), keep, ds);
-      await runBounded(updates, 8);
-      await (DeleteBuilder.from(OntologySync, {id: ontologySyncNodeIri(name)}) as unknown as Exec).exec(ds);
-      result.pruned.push(name);
-    }
-  }
-
-  result.skipped.sort();
-  return result;
 }
 
 /** What a shared ontology graph's hash covers before its parts; a new prefix rebuilds it once. */
@@ -746,12 +503,11 @@ function skipUnreadable(run: SyncRun, where: string, target: GraphTarget): SyncO
 async function syncSharedGraph(run: SyncRun, graph: string): Promise<SyncOntologiesResult> {
   const {ds, options} = run;
   const records = await readOntologyRecords(ds);
-  const {nodes, defaultState} = await readSyncState(ds);
+  const defaultState = await readDefaultModeState(ds);
   warnOtherModes(graph, ds, {
     packageGraphs: packageRecords(records),
     sharedGraphs: sharedRecords(records, graph),
     defaultGraphOntology: defaultState !== undefined,
-    defaultGraphHierarchy: [...nodes.keys()].sort(),
   });
   const names = [...run.parsed.keys()].sort();
   if (run.unreadable.length) return skipUnreadable(run, `The shared ontology graph <${graph}>`, graph);
@@ -762,9 +518,7 @@ async function syncSharedGraph(run: SyncRun, graph: string): Promise<SyncOntolog
   if (!options?.force && record?.contentHash === hash) {
     return {written: [], skipped: reported(run, names), pruned: [], target: graph};
   }
-  if ((await probeBeforeWrite(ds)) === 'unsupported') {
-    return {...(await syncDefaultGraph(run)), target: graph, fallback: true};
-  }
+  if ((await probeBeforeWrite(ds)) === 'unsupported') throw noGraphQueries(graph, ds);
   const content = {
     mediaType: 'application/n-triples' as const,
     text: await nTriplesFromTurtle(
@@ -843,19 +597,16 @@ async function syncDefaultMode(run: SyncRun): Promise<SyncOntologiesResult> {
         "has). Use 'package' or a shared graph IRI for this store.",
     );
   }
-  const {nodes, defaultState} = await readSyncState(ds);
+  const defaultState = await readDefaultModeState(ds);
   let records = new Map<string, OntologyRecord>();
   try {
     records = await readOntologyRecords(ds);
   } catch {
     // A store without a graph registry holds no other mode's graphs.
   }
-  // The earlier default-graph sync's nodes lie in core's ontology namespace: a rebuild replaces
-  // them with the rest of core's terms, so they are named here before that happens.
   warnOtherModes('default', ds, {
     packageGraphs: packageRecords(records),
     sharedGraphs: sharedRecords(records),
-    defaultGraphHierarchy: [...nodes.keys()].sort(),
   });
   const names = [...run.parsed.keys()].sort();
   if (run.unreadable.length) return skipUnreadable(run, 'The ontology in the default graph', 'default');

@@ -9,14 +9,12 @@ import {objectProperty} from './SHACL.js';
 import {rdfs} from '../ontologies/rdfs.js';
 
 /**
- * The write side of the ontology sync: a class's `rdfs:subClassOf` edges, updated one class at a
- * time. Core-internal. It has **no targetClass** on purpose: an update by id of such a shape never
+ * A class's `rdfs:subClassOf` edges, updated one class at a time: how the hierarchy probe writes
+ * and removes its default-graph axiom. Core-internal. It has **no targetClass** on purpose: an update by id of such a shape never
  * writes `rdf:type` nor requires one (an update of a shape with a targetClass changes only a typed
- * node), so the sync adds and removes hierarchy triples without typing the class, and the
+ * node), so the probe adds and removes a hierarchy triple without typing the class, and the
  * shape takes no part in class resolution or the shape check. Not a built-in, so shape sync
  * never writes it into a dataset.
- *
- * Used by the sync's default-graph fallback and by the removal of what that fallback wrote.
  *
  * @internal
  */

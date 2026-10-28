@@ -8,7 +8,6 @@ import {CoreSet} from '../collections/CoreSet.js';
 import {
   getPropertyShapeByLabel,
   resolveShapeConstructor,
-  getQueryShapeClass,
 } from '../utils/ShapeClass.js';
 
 import {NodeReferenceValue,type Prettify,type ShapeReferenceValue} from './QueryFactory.js';
@@ -21,6 +20,7 @@ import type {QueryBuilder, QueryBuilderJSON} from './QueryBuilder.js';
 import {ExpressionNode, ExistsCondition, isExpressionNode, isExistsCondition, tracedPropertyExpression, tracedAliasExpression} from '../expressions/ExpressionNode.js';
 import {PendingQueryContext} from './QueryContext.js';
 import {unresolvedValueShapeError} from '../utils/unresolvedShape.js';
+import {resolveRelationShape} from '../shapes/relationShape.js';
 import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
 
 /**
@@ -873,6 +873,22 @@ export const evaluateSortCallback = <S extends Shape>(
   return {paths, directions: paths.map(() => direction)};
 };
 
+/**
+ * The shape class of a query set's members: the least specific authored class, else the shape the
+ * set's relation resolves to (`sh:node`, or for a relation declared with `sh:class` only, the
+ * shape targeting that class), through its adapter when it exists only as data. A function, not a
+ * member, so it reserves no name on the query proxies.
+ */
+function memberShapeClass(set: QueryShapeSet<any>): ShapeConstructor | undefined {
+  const original = set.getOriginalValue();
+  if ([...original].every((member) => member?.nodeShape)) {
+    const authored = original.getLeastSpecificShape();
+    if (authored) return authored;
+  }
+  const shapeId = set.property ? resolveRelationShape(set.property).shapeId : undefined;
+  return shapeId ? resolveShapeConstructor(shapeId) : undefined;
+}
+
 export class QueryShapeSet<
   S extends Shape = Shape,
   Source = any,
@@ -933,20 +949,13 @@ export class QueryShapeSet<
           //As in Shape.friends.name -> key would be name, which is requested from (each item in!) a ShapeSet of Shapes
           //So here we find back the shape that all items have in common, and then find the property shape that matches the key
           //NOTE: this will only work if the key corresponds with an accessor in the shape that uses a @linkedProperty decorator
-          let leastSpecificShape = queryShapeSet
-            .getOriginalValue()
-            .getLeastSpecificShape();
-          let valueShape = leastSpecificShape ? leastSpecificShape.shape : null;
+          const valueShape = memberShapeClass(queryShapeSet)?.shape ?? null;
           if (!valueShape && queryShapeSet.property?.valueShape) {
-            const shapeClass = getQueryShapeClass(queryShapeSet.property.valueShape);
-            valueShape = shapeClass?.shape;
-            if (!valueShape) {
-              // Not an undecorated key: the set's shape itself is missing.
-              throw unresolvedValueShapeError(
-                `Shape class not found for ${queryShapeSet.property.valueShape.id}`,
-                queryShapeSet.property,
-              );
-            }
+            // Not an undecorated key: the set's shape itself is missing.
+            throw unresolvedValueShapeError(
+              `Shape class not found for ${queryShapeSet.property.valueShape.id}`,
+              queryShapeSet.property,
+            );
           }
           let propertyShape: PropertyShapeData = valueShape
             ? getPropertyShapes(valueShape, true).find(
@@ -1137,9 +1146,11 @@ export class QueryShapeSet<
   }
 
   private buildPredicateExpression(validation: WhereClause<S>): ExpressionNode {
-    const leastSpecificShape = this.getOriginalValue().getLeastSpecificShape();
     if (validation instanceof Function) {
-      const proxy = createProxiedPathBuilder(leastSpecificShape) as any;
+      // A relation with no resolvable shape (`sh:class` only, no shape targeting the class)
+      // still allows `equals` and `id` on its members, through the base Shape.
+      const memberClass = memberShapeClass(this) ?? (Shape as unknown as ShapeConstructor);
+      const proxy = createProxiedPathBuilder(memberClass) as any;
       const result = validation(proxy);
       if (isExpressionNode(result)) {
         return result;

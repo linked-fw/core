@@ -2,9 +2,8 @@
  * The ontology sync on the inferring store (an image that builds its hierarchy from the graph
  * registry, `6.2.0-2`): the first sync writes one ontology graph per package with its record, the
  * second writes nothing, a label change rewrites only that package, a superclass select returns
- * subclass instances through a package graph and loses them when the axiom goes; a dataset the
- * default-graph sync wrote ends with no hierarchy of synced packages in the default graph, a
- * hand-written axiom kept and inference intact; a store without graph queries takes the old path.
+ * subclass instances through a package graph and loses them when the axiom goes; a store without
+ * graph queries is refused and nothing is written.
  * Plus the measurement of a first sync of schema.org's data, and of the second, skipped one.
  *
  * The inference probe on real stores: the inferring image answers `'named-graphs'`; a `mem`
@@ -30,11 +29,12 @@ import {
 import {describeFuseki, fusekiLive} from '../test-helpers/fuseki-live';
 import {FusekiStore} from '../test-helpers/FusekiStore';
 import {linkedPackage} from '../utils/Package';
+import {OntologySync} from '../shapes/OntologySync';
 import {createNameSpace} from '../utils/NameSpace';
 import {Shape} from '../shapes/Shape';
 import {literalProperty} from '../shapes/SHACL';
 import {QueryBuilder} from '../queries/QueryBuilder';
-import {ontologyGraphHash, ontologySyncNodeIri, syncOntologies} from '../ontology/syncOntologies';
+import {ontologyGraphHash, syncOntologies} from '../ontology/syncOntologies';
 import {OntologyGraph} from '../shapes/NamedGraph';
 import {probeHierarchyInference, type HierarchyInference} from '../ontology/hierarchyProbe';
 import {unsupportedGraphQuery} from '../queries/graphQuery';
@@ -206,43 +206,13 @@ describeFuseki('ontology sync on package graphs', () => {
     await executeSparqlUpdate(`DELETE WHERE { <${EX}rex> ?p ?o } ; DELETE WHERE { <${EX}tom> ?p ?o }`);
   });
 
-  test('a dataset the default-graph sync wrote ends with no hierarchy of synced packages there; hand-written axioms stay', async () => {
-    await dropAll();
-    // The default-graph sync (a store without graph queries) writes both packages' hierarchy.
-    liveData = dogIsAnimal;
-    otherData = `${PREFIXES}<${EX}Cat> rdfs:subClassOf <${EX}Pet> .\n<${EX}Dog> rdfs:subClassOf <${EX}Animal> .\n`;
-    const legacy = new NoGraphStore(FUSEKI_BASE_URL, DATASET_NAME);
-    const old = await syncOntologies(legacy, {packages: LIVE});
-    expect(old.written).toEqual(LIVE);
-    expect(await defaultGraphHierarchy()).toEqual([`${EX}Cat ${EX}Pet`, `${EX}Dog ${EX}Animal`]);
-    expect(await ask(`ASK { <${ontologySyncNodeIri('ontology-sync-live-test')}> ?p ?o }`)).toBe(true);
-    // A hand-written axiom no package lists, and an instance of the subclass.
-    await executeSparqlUpdate(
-      `INSERT DATA { <${EX}Puppy> <${SUB}> <${EX}Dog> . <${EX}bo> a <${EX}Puppy> ; <${EX}name> "Bo" . }`,
-    );
-    expect(await animalNames()).toEqual(['Bo']);
-
-    const result = await syncOntologies(store, {packages: LIVE});
-    expect(result.written).toEqual(LIVE);
-    expect(await defaultGraphHierarchy()).toEqual([`${EX}Puppy ${EX}Dog`]);
-    for (const name of LIVE) {
-      expect(await ask(`ASK { <${ontologySyncNodeIri(name)}> ?p ?o }`)).toBe(false);
-    }
-    // Inference through the package graphs plus the hand-written axiom.
-    expect(await ask(`ASK { ?x a <${EX}Animal> }`)).toBe(true);
-    expect(await ask(`ASK { <${EX}bo> a <${EX}Animal> }`)).toBe(true);
-    expect(await animalNames()).toEqual(['Bo']);
-  });
-
-  test('a store without graph queries takes the default-graph path', async () => {
+  test('a store without graph queries is refused; nothing is written', async () => {
     await dropAll();
     liveData = dogIsAnimal;
     const legacy = new NoGraphStore(FUSEKI_BASE_URL, DATASET_NAME);
-    const result = await syncOntologies(legacy, {packages: ['ontology-sync-live-test']});
-    expect(result.written).toEqual(['ontology-sync-live-test']);
-    expect(await defaultGraphHierarchy()).toEqual([`${EX}Dog ${EX}Animal`]);
+    await expect(syncOntologies(legacy, {packages: ['ontology-sync-live-test']})).rejects.toThrow(/has no graph queries/);
+    expect(await defaultGraphHierarchy()).toEqual([]);
     expect(await records()).toEqual([]);
-    await dropAll();
   });
 
   test("measure: the first sync of schema.org's data, and the second", async () => {
@@ -323,7 +293,7 @@ function degradedStoreTests(baseUrl: () => string, dataset: string, expects: () 
     }
     const defaultAxiom = await queryOn(baseUrl(), dataset, `ASK { <${EX}Dog> <${SUB}> <${EX}Animal> }`);
     expect(defaultAxiom.boolean).toBe(false);
-    const node = await queryOn(baseUrl(), dataset, `ASK { <${ontologySyncNodeIri('ontology-sync-live-test')}> ?p ?o }`);
+    const node = await queryOn(baseUrl(), dataset, `ASK { ?s a <${OntologySync.targetClass.id}> }`);
     expect(node.boolean).toBe(false);
     // The ontology data is in the package graph on every store.
     const graph = OntologyGraph.iriFor('ontology-sync-live-test');

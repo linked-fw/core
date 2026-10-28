@@ -214,6 +214,9 @@ class StubDataset extends SparqlDataset {
     super();
   }
   protected async executeSparqlSelect(sparql: string): Promise<SparqlQueryResults> {
+    // The development check after an update by id (an ASK whether its subject is typed) is not
+    // what these tests count: the subject is there.
+    if (sparql.startsWith('ASK')) return {head: {}, boolean: true};
     this.selects.push(sparql);
     const bindings = Object.entries(this.types)
       .filter(([id]) => sparql.includes(`<${id}>`))
