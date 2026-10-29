@@ -25,18 +25,24 @@ half of SY is in `@_linked/server`'s
 Copied verbatim from plan 282; the rest are there. A step that changes one updates it here, in
 server plan 001 and in 282 in the same landing.
 
-- **K3 Hosted-app writer flag and Turtle endpoint** (provider SY in `@_linked/server`; consumer HS):
-  one env flag `LINKED_GRAPH_WRITER=host` (the app writes no shape or ontology graph, at boot or on
-  request); `GET /admin/graph-turtle?packages=<n1,n2>` on the admin channel returns, without
-  writing, per package `{name, shapes: {graph, turtle, hash}, ontology?: {graph, turtle, hash}}`
-  and the app's single-owner graph `{graph, turtle, hash}`; hashes as the existing sync computes
-  them. `/admin/sync-shapes` and `LINKED_SYNC_*_ON_BOOT` stay until HS (M5).
+- **K3 Hosted-app writer flag and graph-content endpoint** (provider SY in `@_linked/server`; consumer
+  HS; M9): `LINKED_GRAPH_WRITER=app|host` (under `host` the app writes no shape or ontology graph,
+  at boot or on request); `POST /admin/graph-content {packages?, reload?}` on the admin channel
+  returns, without writing, per package its shapes and ontology graphs and the app's single-owner
+  graph, each `{graph, mediaType, text, hash, sources}` (the exact bytes and hash the package-mode
+  sync writes); `appGraph` null when the app has none, absent without `DATA_ROOT`; 409 when a graph
+  target is not `package`. `/admin/sync-shapes` and `LINKED_SYNC_*_ON_BOOT` stay until HS (M5);
+  under `host`, `/admin/sync-shapes` reloads but answers `skipped: 'host-writer'`; `/admin/routes`
+  reports `graphWriter`. Exact text in core sub-plan 006 §Contracts.
 - **K4 Open-source sync targets** (provider SY in `@_linked/core`; consumer `@_linked/server`'s boot
-  sync): the datasets a package's graphs go to = every dataset any of its shapes route to ∪ the
-  dataset NodeShape/PropertyShape (and the ontology term shapes) are pinned to (G2); an
-  ontology-only package follows the shapes that target its classes; graphs left behind are pruned.
+  sync; M10–M12): `graphSyncTargets()`, `syncShapeGraphsRouted`, `syncOntologiesRouted` in core
+  `src/shapes/syncTargets.ts`. A package's graphs go to every dataset any of its shapes route to ∪
+  the dataset NodeShape/PropertyShape (and the ontology term shapes) are pinned to (G2); an ontology
+  graph also where shapes targeting its classes route; the single-owner graph to the datasets of
+  shapes declaring `contains` properties ∪ the NodeShape/PropertyShape dataset. Prune only in the
+  app's default dataset (M11). Per-dataset `syncShapeGraphs(ds)`/`syncOntologies(ds)` unchanged.
 
-### Proposed refinement of K3 (for the master to accept before SY starts)
+### K3 in full (accepted by the master, 282 M9)
 
 The code does not fit K3 as worded in two places (see [Pitfalls](#pitfalls), items 1 and 2):
 
@@ -49,7 +55,7 @@ The code does not fit K3 as worded in two places (see [Pitfalls](#pitfalls), ite
   reloads (`resyncShapes` → `reloadPackageFromDisk`), and HS removes it. A GET that reloads is not
   safe; a POST is.
 
-Proposed wording:
+The full wording (282's K3 summarises it):
 
 > **K3** (provider SY in `@_linked/server`; consumer HS): env `LINKED_GRAPH_WRITER` = `app`
 > (default) or `host`; any other value stops the boot, naming the variable. Under `host` the app
@@ -70,17 +76,15 @@ Proposed wording:
 > not `'package'`, it answers 409 naming it. `/admin/sync-shapes` and `LINKED_SYNC_*_ON_BOOT`
 > stay until HS (M5).
 
-If the master keeps the GET, `reload` must still live somewhere HS can call after HS removes
-sync-shapes; and `turtle` must become `{mediaType, text}` for the ontology either way.
 
-### Proposed detail of K4 (names; not a change of meaning)
+### K4 in detail (282 M10–M12)
 
 - Module `@_linked/core/shapes/syncTargets` (new): `SHAPE_SHAPE_CLASSES`, `ONTOLOGY_TERM_CLASSES`
   (moved from `@_linked/server/utils/graphTargets`), and `graphSyncTargets(): GraphSyncTargets` =
   `{shapes: Map<pkg, IDataset[]>, ontologies: Map<pkg, IDataset[]>, appShapes: IDataset[],
   datasets: IDataset[]}` (each list without duplicates, the default dataset first, then in pin
   order; `datasets` = `LinkedStorage.getDatasets()`).
-- `syncShapeGraphsRouted(options)` and `syncOntologiesRouted(options)` in the existing modules:
+- `syncShapeGraphsRouted(options)` and `syncOntologiesRouted(options)` in the same module:
   same options as today minus `ds`, plus `prune?: boolean` (default true); result
   `{targets: Array<{dataset: string; result: SyncShapeGraphsResult | SyncOntologiesResult}>,
   pruned: Array<{dataset: string; package: string; graph: string}>, failed: Array<{dataset:
