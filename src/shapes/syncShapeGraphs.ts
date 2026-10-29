@@ -54,7 +54,7 @@ export function shapeGraphHash(turtle: string): string {
 }
 
 /** The `dcterms:source` of a package's shape graph: the file `linked build` writes. */
-const SHAPES_SOURCE = 'data/shapes.ttl';
+export const SHAPES_SOURCE = 'data/shapes.ttl';
 
 /** A package's shape graph IRI (arch-02: `{baseUri}pkg/{slug}/graph/shapes`). */
 const PACKAGE_SHAPES_GRAPH = /\/pkg\/[^/]+\/graph\/shapes$/;
@@ -105,7 +105,7 @@ export interface SyncShapeGraphsResult {
   fallback?: true;
 }
 
-type ShapesRecord = {package?: string; contentHash?: string; packageHashes: string[]};
+export type ShapesRecord = {package?: string; contentHash?: string; packageHashes: string[]};
 
 /** What a shared shape graph's hash covers before its parts; a new prefix rebuilds it once. */
 export const SHARED_SHAPE_GRAPH_HASH_PREFIX = 'linked-shape-graph-shared/1\n';
@@ -169,7 +169,7 @@ async function syncDefaultGraph(ds: IDataset | undefined, options: SyncShapeGrap
 }
 
 /** Every `ShapesGraph` record of `ds`, by graph, in one read. */
-async function readShapesRecords(ds?: IDataset): Promise<Map<string, ShapesRecord>> {
+export async function readShapesRecords(ds?: IDataset): Promise<Map<string, ShapesRecord>> {
   const rows =
     ((await ShapesGraph.select((r) => [r.package, r.contentHash, r.packageHashes]).exec(ds)) as Array<{
       id: string;

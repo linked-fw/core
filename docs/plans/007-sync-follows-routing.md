@@ -3,7 +3,7 @@ summary: >
   Step SY of CN master plan 282 (seeded from core plan 006 §SY): the ontology and shape syncs
   follow the storage routing (K4) in core, the server's boot sync uses them, and a hosted app gets
   the writer flag `LINKED_GRAPH_WRITER` and `POST /admin/graph-content` (K3). Deleted before landing.
-status: Tasks
+status: Implementation
 ---
 
 # 007 — Sync follows routing (step SY)
@@ -30,7 +30,7 @@ Contracts K3 (full wording in 006 §Contracts) and K4 (282 M10–M12). Server ha
 
 ## Phases
 
-1. **Core targets and content** — `syncTargets.ts`: constants, `datasetLabel`,
+1. [x] **Core targets and content** — `syncTargets.ts`: constants, `datasetLabel`,
    `graphSyncTargets()`, `graphContent()`; refactor `syncOntologies` so a parsed set can be passed
    (signature unchanged); export the record readers the prune needs. Tests:
    `sync-targets.test.ts`, `graph-content.test.ts`. Validation: those plus the existing shape and
@@ -53,4 +53,8 @@ Contracts K3 (full wording in 006 §Contracts) and K4 (282 M10–M12). Server ha
 
 | # | Where | Problem | Choice | Alternative | Rationale |
 |---|---|---|---|---|---|
+| S2 | phase 1 | Which shapes "declare `contains`" for the app graph's targets | The shapes whose own node shape has `contains` properties (what `buildSingleOwnerConstraints` builds from); a sub-shape that inherits them does not count | Count inherited ones too | K4's words; the single-owner shapes are generated from the declaring shape only |
+| S3 | phase 1 | No shape targeting `sh:NodeShape`/`PropertyShape` (or no term shape) is registered | The description datasets are then `{default}` | No description dataset | An app without those shapes keeps today's behaviour (everything in the default dataset) |
+| S4 | phase 1 | `graphContent` asked for a valid name the process does not know | Answered `{name}` with neither graph | Leave it out, or an error | The host learns the package has nothing here without a second call; the server refuses invalid names (400) |
+| S5 | phase 1 | Commit granularity | `syncTargets.ts` lands whole in phase 1 (targets, content and the routed syncs); the routed syncs' tests, the Fuseki test and the README follow in phase 2 | Split the module across commits | One module, one review; nothing calls the routed syncs before phase 2 |
 | S1 | setup | The master's `_linked-cli` worktree had no `lib/`, so `npx linked` and the server's tests (which import `@_linked/cli/*`) could not run | Ran `linked build` with the main checkout's CLI binary (read only) in my worktrees, and built the master's `_linked-cli` once (lib only, gitignored; tsc emitted JS though it could not type against the master's unbuilt core) | Repoint my link farm to the main checkout's CLI | Tests run against the master's CLI code; nothing tracked changed; the master rebuilds core then cli after landings |

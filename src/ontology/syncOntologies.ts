@@ -137,10 +137,10 @@ async function readDefaultModeState(ds?: IDataset): Promise<{hash?: string} | un
 }
 
 /** An `OntologyGraph` record as the sync reads it. */
-type OntologyRecord = {package?: string; contentHash?: string; packageHashes: string[]};
+export type OntologyRecord = {package?: string; contentHash?: string; packageHashes: string[]};
 
 /** Every `OntologyGraph` record of `ds`, by graph, in one read. */
-async function readOntologyRecords(ds?: IDataset): Promise<Map<string, OntologyRecord>> {
+export async function readOntologyRecords(ds?: IDataset): Promise<Map<string, OntologyRecord>> {
   const rows =
     ((await OntologyGraph.select((r) => [r.package, r.contentHash, r.packageHashes]).exec(ds)) as Array<{
       id: string;
@@ -221,8 +221,8 @@ const datasetLabel = (ds?: IDataset): string => {
 /** A registration's data file as recorded in `dcterms:source`: leading `./` and `../` removed. */
 const sourceFile = (file: string): string => file.replace(/^(?:\.\.?\/)+/, '');
 
-/** The data files of a package's registrations, in registration order. */
-function packageSources(name: string): string[] {
+/** The data files of a package's registrations, in registration order: its graph record's `dcterms:source`. */
+export function packageSources(name: string): string[] {
   const files = (registrationsByPackage().get(name) ?? [])
     .filter((registration) => typeof registration.load === 'function')
     .flatMap((registration) => registration.files.map(sourceFile));
@@ -245,9 +245,25 @@ export async function syncOntologies(
   assertNoActiveCatalog();
   // Every registered package is read, also outside `packages`: the shared and default modes
   // rebuild from all of them, and the in-memory hierarchy needs every package.
-  const {packages: parsed, skipped: unreadable} = await readPackageOntologies();
+  const data = await readPackageOntologies();
   // The same parse fills the in-memory hierarchy (what `loadOntologyHierarchy` does).
-  setHierarchyFromPackages(parsed);
+  setHierarchyFromPackages(data.packages);
+  return syncParsedOntologies(ds, options, data);
+}
+
+/**
+ * The sync of {@link syncOntologies} on packages already read (`readPackageOntologies`): `parsed`
+ * and `unreadable` are the packages the run knows. The shared and default modes rebuild from
+ * exactly these, so a caller that passes a subset makes that subset the graph's members. Sets no
+ * hierarchy: the caller does, from every package. The routed sync (`shapes/syncTargets`) calls it
+ * once per target dataset with that dataset's packages.
+ */
+export async function syncParsedOntologies(
+  ds: IDataset | undefined,
+  options: SyncOntologiesOptions | undefined,
+  {packages: parsed, skipped: unreadable}: {packages: Map<string, PackageOntologyData>; skipped: string[]},
+): Promise<SyncOntologiesResult> {
+  assertNoActiveCatalog();
   const run: SyncRun = {
     ds,
     options,
