@@ -40,7 +40,7 @@ Contracts K3 (full wording in 006 §Contracts) and K4 (282 M10–M12). Server ha
    Tests: `sync-routed.test.ts`, `sync-routed-fuseki.test.ts`. README §Store requirements and
    §Ontology and shape graphs. Validation: `npm test`, `npm run test:fuseki` (own datasets),
    `npm run check:dts`, `linked build`.
-3. **Server boot on the routed syncs** — `syncShapeGraphsInto` and `runOntologyPhase` call the
+3. [x] **Server boot on the routed syncs** — `syncShapeGraphsInto` and `runOntologyPhase` call the
    routed syncs and report per target; both boot paths and `resyncShapes`; `syncPinWarning`
    replaced by a targets log line; constants imported from core. Tests: updated
    `boot-shape-sync`, `boot-ontology-sync`, `graph-targets`; a pinned-package case each.
@@ -60,4 +60,9 @@ Contracts K3 (full wording in 006 §Contracts) and K4 (282 M10–M12). Server ha
 | S6 | phase 2 | A dataset the router no longer knows (nothing pinned to it) can hold a leftover graph | Not read; the README says so | Remember past targets | Routing is the only source of datasets; no new state |
 | S7 | phase 2 | `'default'` ontology mode, a dataset without every package (M10) | One warning per dataset and process naming the packages routed elsewhere; fix homed in core backlog 068 | Per-run warning | Edge case; one line per boot |
 | S8 | phase 2 | Live Fuseki suites that need SHACL validation and data upload (7 tests) fail on CN's Fuseki (405, no `ENABLE_SHACL`/data write) | Reported as environment failures; every other live suite, mine included, passes | Start the test image on another port | Unrelated to the change (they load SHACL data over GSP); the owner's Fuseki is not reconfigured |
+| S9 | phase 3 | Keep the server's single-dataset sync paths (`syncShapeGraphsInto(ds)`, `runOntologyPhase(ds)` without `routed`)? | Kept: they sync one given dataset (the live suite syncs through a `RemoteDataset` client that is not the router's default); the boot and `resyncShapes` always run routed | Remove them | Same meaning as core's per-dataset `syncShapeGraphs(ds)`/`syncOntologies(ds)`, which stay (M12) |
+| S10 | phase 3 | A routed run where one dataset failed | Log the others, then throw naming each failed dataset (boot: the existing non-fatal warning; sync-shapes: 500) | Answer 200 with `failed` | Keeps today's contract: a failed sync is never answered as a success |
+| S11 | phase 3 | The boot's targets log line with no pins | Silent (the syncs' own lines say it all); logged only when some graph goes beyond the default dataset | Always log | No new noise for the common case |
+| S12 | phase 3 | `syncPinWarning` tests | Replaced by `syncTargetsLine` tests with the same four situations (pinned shape shapes, syncs that run, store named by its dataset, term shapes through a parent) plus the sub-shape case | Delete them | The premise ("writes into the default dataset only") is gone; the situations stay covered |
+| S13 | phase 3 | Core's own ontology follows core's own shapes (`NodeShape`, `PropertyShape`) when those are pinned | Kept, as K4 says (a package's ontology goes where its shapes route) | Special-case core | One rule |
 | S1 | setup | The master's `_linked-cli` worktree had no `lib/`, so `npx linked` and the server's tests (which import `@_linked/cli/*`) could not run | Ran `linked build` with the main checkout's CLI binary (read only) in my worktrees, and built the master's `_linked-cli` once (lib only, gitignored; tsc emitted JS though it could not type against the master's unbuilt core) | Repoint my link farm to the main checkout's CLI | Tests run against the master's CLI code; nothing tracked changed; the master rebuilds core then cli after landings |
