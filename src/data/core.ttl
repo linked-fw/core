@@ -103,6 +103,12 @@ core:ShapesGraph
     rdfs:label "shapes graph"@en ;
     rdfs:subClassOf sd:NamedGraph .
 
+core:commit
+    a owl:DatatypeProperty ;
+    rdfs:comment "The commit (40 hex) a named graph's content was built from, recorded in the graph registry; a components graph of a package branch carries it."@en ;
+    rdfs:label "commit"@en ;
+    rdfs:range xsd:string .
+
 core:contains
     a owl:DatatypeProperty ;
     rdfs:comment "Marks a property shape whose subject owns its values (composition), so the owned walk follows it and deleting the subject deletes them."@en ;

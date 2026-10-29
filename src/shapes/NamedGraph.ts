@@ -10,7 +10,7 @@
  * Every graph a dataset keeps on purpose (a package's ontology data, its shapes, ontology-editor
  * drafts) has a record in the graph registry (`graphs.registry`): its name, content hash, load
  * time, sources and whether it feeds the store's class hierarchy. The record's class is the
- * graph's kind: `OntologyGraph`, `ShapesGraph` and `DraftGraph` all extend `NamedGraph`
+ * graph's kind: `OntologyGraph`, `ShapesGraph`, `ComponentsGraph` and `DraftGraph` all extend `NamedGraph`
  * (`sd:NamedGraph`), so selecting `NamedGraph` returns every kind's records through the store's
  * inference.
  *
@@ -387,6 +387,44 @@ registerGraphRecordShape(
   ShapesGraph,
   'ShapesGraph',
   "The registry record of a package's shapes graph. (graph registry, shapes graph)",
+);
+
+/**
+ * A graph holding one package's component index (the `lib/esm/data/components.ttl` its build
+ * writes) at one key: a published version, or a package branch with the commit it was built from.
+ * A host keeps these next to its package records; the graph IRI is the host's to choose.
+ */
+export class ComponentsGraph extends NamedGraph {
+  static targetClass = coreOntology.ComponentsGraph;
+  declare static readonly recordFields?: {
+    package: string;
+    version?: string;
+    commit?: string;
+    sources?: string | string[];
+  };
+
+  /** The npm name of the package. */
+  @literalProperty({path: coreOntology.package, datatype: xsd.string, maxCount: 1})
+  get package(): string {
+    return null;
+  }
+
+  /** The published version whose component index the graph holds (unset for a branch build). */
+  @literalProperty({path: coreOntology.version, datatype: xsd.string, maxCount: 1})
+  get version(): string {
+    return null;
+  }
+
+  /** The commit (40 hex) the indexed build was made from. */
+  @literalProperty({path: coreOntology.commit, datatype: xsd.string, maxCount: 1})
+  get commit(): string {
+    return null;
+  }
+}
+registerGraphRecordShape(
+  ComponentsGraph,
+  'ComponentsGraph',
+  "The registry record of a package's component index graph. (graph registry, components graph)",
 );
 
 /**

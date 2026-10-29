@@ -4,6 +4,39 @@
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
+<https://linked.cm/shape/core/ComponentsGraph>
+  a sh:NodeShape ;
+  rdfs:comment "The registry record of a package's component index graph. (graph registry, components graph)" ;
+  sh:property <https://linked.cm/shape/core/ComponentsGraph/commit> ;
+  sh:property <https://linked.cm/shape/core/ComponentsGraph/package> ;
+  sh:property <https://linked.cm/shape/core/ComponentsGraph/version> ;
+  sh:targetClass core:ComponentsGraph ;
+  core:isExtending <https://linked.cm/shape/core/NamedGraph> .
+
+<https://linked.cm/shape/core/ComponentsGraph/commit>
+  a sh:PropertyShape ;
+  rdfs:label "commit" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:commit .
+
+<https://linked.cm/shape/core/ComponentsGraph/package>
+  a sh:PropertyShape ;
+  rdfs:label "package" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:package .
+
+<https://linked.cm/shape/core/ComponentsGraph/version>
+  a sh:PropertyShape ;
+  rdfs:label "version" ;
+  sh:datatype xsd:string ;
+  sh:maxCount "1"^^xsd:integer ;
+  sh:nodeKind sh:Literal ;
+  sh:path core:version .
+
 <https://linked.cm/shape/core/DraftGraph>
   a sh:NodeShape ;
   rdfs:comment "The registry record of a draft graph a dataset owns. (graph registry, draft graph)" ;

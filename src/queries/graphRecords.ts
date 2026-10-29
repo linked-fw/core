@@ -53,6 +53,12 @@ const packageGraphFields: Record<string, GraphRecordField> = {
   /** A shared graph's parts: `"{package} {hash}"` per package (see `utils/graphTargets.ts`). */
   packageHashes: {path: coreOntology.packageHash.id, datatype: xsd.string.id, many: true},
 };
+const componentsGraphFields: Record<string, GraphRecordField> = {
+  ...namedGraphFields,
+  package: {path: coreOntology.package.id, datatype: xsd.string.id},
+  version: {path: coreOntology.version.id, datatype: xsd.string.id},
+  commit: {path: coreOntology.commit.id, datatype: xsd.string.id},
+};
 // Only an ontology graph may opt out of feeding the hierarchy; every other kind never feeds it.
 const ontologyGraphFields: Record<string, GraphRecordField> = {
   ...packageGraphFields,
@@ -63,6 +69,7 @@ const recordClasses = new Map<string, GraphRecordClass>([
   [sd.NamedGraph.id, {feedsHierarchy: false, fields: namedGraphFields}],
   [coreOntology.OntologyGraph.id, {feedsHierarchy: true, fields: ontologyGraphFields}],
   [coreOntology.ShapesGraph.id, {feedsHierarchy: false, fields: packageGraphFields}],
+  [coreOntology.ComponentsGraph.id, {feedsHierarchy: false, fields: componentsGraphFields}],
   [coreOntology.DraftGraph.id, {feedsHierarchy: false, fields: namedGraphFields}],
 ]);
 

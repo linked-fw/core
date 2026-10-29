@@ -149,6 +149,7 @@ describe('ShapeCatalog', () => {
       'NamedGraph',
       'OntologyGraph',
       'ShapesGraph',
+      'ComponentsGraph',
       'DraftGraph',
     ]);
     for (const iri of builtInShapeIris()) expect(catalog.has(iri)).toBe(true);

@@ -62,6 +62,7 @@ const BUILT_IN_NAMES = [
   'NamedGraph',
   'OntologyGraph',
   'ShapesGraph',
+  'ComponentsGraph',
   'DraftGraph',
 ];
 

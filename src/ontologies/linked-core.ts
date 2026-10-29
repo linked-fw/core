@@ -117,6 +117,8 @@ const exportName = ns('exportName');
 const startShape = ns('startShape');
 const queryShape = ns('queryShape');
 const query = ns('query');
+// The commit a graph's content was built from (a `ComponentsGraph` of a package branch).
+const commit = ns('commit');
 
 export const coreOntology = {
   Package,
@@ -159,4 +161,5 @@ export const coreOntology = {
   startShape,
   queryShape,
   query,
+  commit,
 };

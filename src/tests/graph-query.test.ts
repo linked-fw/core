@@ -17,7 +17,7 @@ import {LinkedStorage} from '../utils/LinkedStorage';
 import {graphs} from '../ontologies/graphs';
 import type {IDataset} from '../interfaces/IDataset';
 import {graphCreateOutcomeAnswer, unusedDatasetMethods} from '../test-helpers/test-utils';
-import {DraftGraph, NamedGraph, OntologyGraph, ShapesGraph} from '../shapes/NamedGraph';
+import {ComponentsGraph, DraftGraph, NamedGraph, OntologyGraph, ShapesGraph} from '../shapes/NamedGraph';
 import {lower} from '../queries/lower';
 import {CountBuilder} from '../queries/CountBuilder';
 import {selectToSparql, countToSparql} from '../sparql/irToAlgebra';
@@ -181,6 +181,30 @@ describe('the graph API', () => {
     ]);
   });
 
+  test('a ComponentsGraph records its package, version and commit', async () => {
+    const commit = 'a'.repeat(40);
+    const queries = await sent(async (t) => {
+      await ComponentsGraph.create({id: G, package: '@_linked/example', version: '1.0.0'}).withContent(nt).exec(t);
+      await ComponentsGraph.update(G).set({commit}).replaceContent(nt).exec(t);
+    });
+    expect(queries).toEqual([
+      {
+        kind: 'graph_create',
+        graph: G,
+        recordClass: 'https://linked.cm/ont/core/ComponentsGraph',
+        record: {package: '@_linked/example', version: '1.0.0'},
+        content: nt,
+      },
+      {
+        kind: 'graph_replace',
+        graph: G,
+        recordClass: 'https://linked.cm/ont/core/ComponentsGraph',
+        record: {commit},
+        content: nt,
+      },
+    ]);
+  });
+
   test('create without content registers an empty graph', async () => {
     const queries = await sent((t) => DraftGraph.create({id: G}).exec(t));
     expect(queries).toEqual([{kind: 'graph_create', graph: G, recordClass: DRAFT_GRAPH, record: {}}]);
@@ -270,8 +294,8 @@ describe('the graph API', () => {
     expect(() => OntologyGraph.deleteWhere()).toThrow(/graph queries/);
   });
 
-  test('the four graph-record shapes are built-ins', () => {
-    for (const name of ['NamedGraph', 'OntologyGraph', 'ShapesGraph', 'DraftGraph']) {
+  test('the five graph-record shapes are built-ins', () => {
+    for (const name of ['NamedGraph', 'OntologyGraph', 'ShapesGraph', 'ComponentsGraph', 'DraftGraph']) {
       expect(builtInShapeIris()).toContain(getNodeShapeUri('@_linked/core', name));
     }
   });
@@ -571,6 +595,13 @@ describe('store-reserved names, feedsHierarchy, record classes', () => {
     }
     await ShapesGraph.create({id: G, package: 'p'}).exec(ds); // after the first create's write and claim removal
     expect(ds.updates[2]).toContain('feedsHierarchy> "false"');
+  });
+
+  test('a ComponentsGraph writes its commit as core:commit and never feeds the hierarchy', async () => {
+    const ds = new ScriptedSparql(false);
+    await ComponentsGraph.create({id: G, package: 'p', version: '1.0.0', commit: 'b'.repeat(40)}).exec(ds);
+    expect(ds.updates[0]).toContain(`<https://linked.cm/ont/core/commit> "${'b'.repeat(40)}"`);
+    expect(ds.updates[0]).toContain('feedsHierarchy> "false"');
   });
 
   test('replace and patch through a subclass ask for a record of that class; NamedGraph does not', async () => {
