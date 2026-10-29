@@ -46,7 +46,7 @@ Contracts K3 (full wording in 006 §Contracts) and K4 (282 M10–M12). Server ha
    `boot-shape-sync`, `boot-ontology-sync`, `graph-targets`; a pinned-package case each.
 4. [x] **Server `LINKED_GRAPH_WRITER`** — parse/check at boot, `appWritesGraphs`, gating, sync-shapes
    `skipped: 'host-writer'`, `/admin/routes` `graphWriter`. Tests: `graph-writer.test.ts`.
-5. **Server `POST /admin/graph-content`** — handler in the shape-sync queue and timeout, 400/409,
+5. [x] **Server `POST /admin/graph-content`** — handler in the shape-sync queue and timeout, 400/409,
    README, changesets (minor) in core and server. Tests: `graph-content.test.ts`.
 
 ## Autonomous decisions
@@ -67,4 +67,7 @@ Contracts K3 (full wording in 006 §Contracts) and K4 (282 M10–M12). Server ha
 | S13 | phase 3 | Core's own ontology follows core's own shapes (`NodeShape`, `PropertyShape`) when those are pinned | Kept, as K4 says (a package's ontology goes where its shapes route) | Special-case core | One rule |
 | S14 | phase 4 | What `sync-shapes` answers under `host` | `{written: 0, skipped: 'host-writer', reloaded, shapes, shapeCheck}` exactly (no `ontologies`); the ontology phase runs with its sync off, so registration, the hierarchy and the check still run | Include an empty `ontologies` | K3's wording |
 | S15 | phase 4 | Where the flag is checked | Parsed in `initStores` next to the graph targets (fatal on a bad value) and read through one predicate `appWritesGraphs(env)` at the shape sync, the boot ontology sync and `resyncShapes` | Store it on the server instance | Env stays the one source, as for the graph targets; one predicate for every write path |
+| S16 | phase 5 | Graph content for an installed package without `shapes.ttl` | No `shapes` part; listed in `withoutTurtle` (core would generate it, the sync leaves it out) | Answer the generated Turtle | The answer is what the sync writes |
+| S17 | phase 5 | After a `reload`, are ontologies registered again? | Yes: the ontology phase runs without its sync (register, hierarchy, check), as sync-shapes does | Reload only | A reloaded package may register a new ontology module; same rule as sync-shapes |
+| S18 | phase 5 | `appGraph: null` cannot occur with core's built-ins registered (they declare `contains`) | Tested with a stand-in core (server pass-through) and in core (`graphContent` without single-owner shapes) | — | The contract case still holds for a process without such shapes |
 | S1 | setup | The master's `_linked-cli` worktree had no `lib/`, so `npx linked` and the server's tests (which import `@_linked/cli/*`) could not run | Ran `linked build` with the main checkout's CLI binary (read only) in my worktrees, and built the master's `_linked-cli` once (lib only, gitignored; tsc emitted JS though it could not type against the master's unbuilt core) | Repoint my link farm to the main checkout's CLI | Tests run against the master's CLI code; nothing tracked changed; the master rebuilds core then cli after landings |
