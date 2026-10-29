@@ -35,7 +35,7 @@ Contracts K3 (full wording in 006 §Contracts) and K4 (282 M10–M12). Server ha
    (signature unchanged); export the record readers the prune needs. Tests:
    `sync-targets.test.ts`, `graph-content.test.ts`. Validation: those plus the existing shape and
    ontology sync suites green; `npm run typecheck`.
-2. **Core routed syncs** — `syncShapeGraphsRouted`, `syncOntologiesRouted`: per-target runs,
+2. [x] **Core routed syncs** — `syncShapeGraphsRouted`, `syncOntologiesRouted`: per-target runs,
    shared/default subsets, prune (M11), failure isolation, default-mode warning (M10).
    Tests: `sync-routed.test.ts`, `sync-routed-fuseki.test.ts`. README §Store requirements and
    §Ontology and shape graphs. Validation: `npm test`, `npm run test:fuseki` (own datasets),
@@ -57,4 +57,7 @@ Contracts K3 (full wording in 006 §Contracts) and K4 (282 M10–M12). Server ha
 | S3 | phase 1 | No shape targeting `sh:NodeShape`/`PropertyShape` (or no term shape) is registered | The description datasets are then `{default}` | No description dataset | An app without those shapes keeps today's behaviour (everything in the default dataset) |
 | S4 | phase 1 | `graphContent` asked for a valid name the process does not know | Answered `{name}` with neither graph | Leave it out, or an error | The host learns the package has nothing here without a second call; the server refuses invalid names (400) |
 | S5 | phase 1 | Commit granularity | `syncTargets.ts` lands whole in phase 1 (targets, content and the routed syncs); the routed syncs' tests, the Fuseki test and the README follow in phase 2 | Split the module across commits | One module, one review; nothing calls the routed syncs before phase 2 |
+| S6 | phase 2 | A dataset the router no longer knows (nothing pinned to it) can hold a leftover graph | Not read; the README says so | Remember past targets | Routing is the only source of datasets; no new state |
+| S7 | phase 2 | `'default'` ontology mode, a dataset without every package (M10) | One warning per dataset and process naming the packages routed elsewhere; fix homed in core backlog 068 | Per-run warning | Edge case; one line per boot |
+| S8 | phase 2 | Live Fuseki suites that need SHACL validation and data upload (7 tests) fail on CN's Fuseki (405, no `ENABLE_SHACL`/data write) | Reported as environment failures; every other live suite, mine included, passes | Start the test image on another port | Unrelated to the change (they load SHACL data over GSP); the owner's Fuseki is not reconfigured |
 | S1 | setup | The master's `_linked-cli` worktree had no `lib/`, so `npx linked` and the server's tests (which import `@_linked/cli/*`) could not run | Ran `linked build` with the main checkout's CLI binary (read only) in my worktrees, and built the master's `_linked-cli` once (lib only, gitignored; tsc emitted JS though it could not type against the master's unbuilt core) | Repoint my link farm to the main checkout's CLI | Tests run against the master's CLI code; nothing tracked changed; the master rebuilds core then cli after landings |

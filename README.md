@@ -44,6 +44,10 @@ product or version.
   `update().forAll()` / `.where()`), the owned-link class check, the owned walk's cycle hops and
   the single-owner SHACL constraint rely on it. Only classes are inferred: `rdfs:subPropertyOf`,
   `rdfs:domain` and `rdfs:range` are not needed.
+- **The hierarchy where the instances are.** A store infers from the ontology graphs it holds. The
+  routed ontology sync writes a package's ontology into every dataset the shapes using its classes
+  are pinned to (see [Ontology and shape graphs](#ontology-and-shape-graphs)), so a store holding
+  instances also holds their hierarchy.
 - **No graph-target setting.** A store takes no ontology or shape graph setting: where the syncs
   write is the process's one global setting (see [Ontology and shape graphs](#ontology-and-shape-graphs)),
   and every store's readers follow it.
@@ -162,6 +166,36 @@ store with graph queries; the ontology sync refuses one without them.
 
 **CN-managed apps must use `'package'` for both.** Create Now reads package graphs (catalogs, the
 gateway's graph rules) and reports another mode as an error.
+
+**Which datasets the syncs write to.** `syncShapeGraphs(ds)` and `syncOntologies(ds)` write into the
+one dataset they are given. The routed syncs (`syncShapeGraphsRouted`, `syncOntologiesRouted`,
+`@_linked/core/shapes/syncTargets`; what `@_linked/server`'s boot runs) follow the storage routing
+instead, and `graphSyncTargets()` tells where each graph goes:
+
+| Graph | Goes to |
+|---|---|
+| a package's shape graph | every dataset one of the package's shapes routes to, and the dataset(s) the shapes of `sh:NodeShape` / `sh:PropertyShape` route to |
+| a package's ontology graph | every dataset one of the package's shapes routes to, every dataset a shape targeting one of its classes (a class in its namespace) routes to, and the dataset(s) the ontology term shapes (`rdfs:Class`, `owl:Class`, `rdf:Property`, …) route to; so an ontology-only package follows the shapes that use it, and the hierarchy is where the instances are |
+| the app's shape graph | the datasets of the shapes that declare `contains` properties, and those of `sh:NodeShape` / `sh:PropertyShape` |
+
+A sub-shape follows its parent's pin; shapes the routing does not pin go to the default dataset,
+so an app without pins writes everything into the default dataset, exactly as before. Each package's
+text is read or generated once and every target gets the same bytes and hash. In the shared and
+`'default'` modes a dataset's graph holds the packages routed to it. A dataset that cannot be read
+or written fails alone: the routed sync reports it (`failed`) and syncs the others.
+
+When routing no longer sends a package's graph to a dataset (a pin moved), the routed sync drops
+it **only in the default dataset**. In another dataset it leaves the graph and reports it
+(`leftovers`, one warning): a store several apps share may hold another app's copy there. Drop
+those by hand once nothing reads them. The routed sync reads only the datasets the router knows, so
+a dataset nothing is pinned to any more is not looked at. In the `'default'` ontology mode the sync
+keeps one combined state per dataset and sweeps only the namespaces of the packages routed to it,
+so the terms of a package routed away stay in that dataset's default graph (it warns once).
+
+`graphContent()` (same module) answers what the `'package'`-mode syncs would write for each
+package (shape graph Turtle, ontology graph N-Triples, the hash each record gets, its sources) and
+for the app's graph, writing nothing. A host that writes an app's graphs itself reads them through
+`@_linked/server`'s `POST /admin/graph-content`.
 
 ## Repository setup (contributors)
 
