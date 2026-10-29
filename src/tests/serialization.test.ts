@@ -427,6 +427,11 @@ describe('QueryBuilder — nullSubject & pendingContextName serialization', () =
     // The restored builder should have _nullSubject set
     expect(restored.toJSON().nullSubject).toBe(true);
   });
+
+  test('round-trip — .for(null) reads back to the same wire format (no limit added)', () => {
+    const json = QueryBuilder.from(Person).select(['name']).for(null).toJSON();
+    expect(QueryBuilder.fromJSON(JSON.parse(JSON.stringify(json))).toJSON()).toEqual(json);
+  });
 });
 
 // =============================================================================

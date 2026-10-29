@@ -786,7 +786,10 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     if (json.subjects && json.subjects.length > 0) {
       builder = builder.forAll(json.subjects) as SelectBuilder<S>;
     }
-    if (json.one && !json.subject) {
+    if (json.nullSubject && !json.subject) {
+      // As `.for(null)` built it: one result, no subject, no limit.
+      builder = builder.for(null) as SelectBuilder<S>;
+    } else if (json.one && !json.subject) {
       builder = builder.one() as SelectBuilder<S>;
     }
 
