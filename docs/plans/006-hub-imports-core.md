@@ -85,11 +85,16 @@ The full wording (282's K3 summarises it):
   datasets: IDataset[]}` (each list without duplicates, the default dataset first, then in pin
   order; `datasets` = `LinkedStorage.getDatasets()`).
 - `syncShapeGraphsRouted(options)` and `syncOntologiesRouted(options)` in the same module:
-  same options as today minus `ds`, plus `prune?: boolean` (default true); result
-  `{targets: Array<{dataset: string; result: SyncShapeGraphsResult | SyncOntologiesResult}>,
-  pruned: Array<{dataset: string; package: string; graph: string}>, failed: Array<{dataset:
-  string; error: string}>}` (`dataset` is the label the server's logs use today: store class plus
-  `id` or Fuseki dataset name).
+  same options as today minus `ds`, plus `prune?: boolean` (default true) and `targets?` (default
+  `graphSyncTargets()`); result `{targets: Array<{dataset: string; result: SyncShapeGraphsResult |
+  SyncOntologiesResult}>, pruned: RoutedGraph[], leftovers: RoutedGraph[], failed:
+  Array<{dataset: string; error: string}>}` with `RoutedGraph = {dataset, package, graph}`:
+  `pruned` the graphs dropped from the default dataset, `leftovers` those left in another dataset
+  (M11; one warning) (`dataset` is `datasetLabel(ds)`, the label the server's logs use: store
+  class plus `id` or Fuseki dataset name). As built in SY.
+- `graphContent({packages?, turtleFor?, appShapes?})` (same module): `{packages: [{name, shapes?,
+  ontology?}], appGraph?, withoutTurtle, unreadable}`, each part K3's `GraphContent`; the server's
+  endpoint adds `graphTargets` and `reloaded`. As built in SY.
 - **The single-owner graph** (K4 is silent): goes to every dataset a shape that declares a
   `contains` property routes to, ∪ the NodeShape/PropertyShape datasets; one text everywhere
   (`singleOwnerShapesTurtle` of all registered shapes), so K3's one `appGraph` stays valid.
