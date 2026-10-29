@@ -44,7 +44,7 @@ Contracts K3 (full wording in 006 §Contracts) and K4 (282 M10–M12). Server ha
    routed syncs and report per target; both boot paths and `resyncShapes`; `syncPinWarning`
    replaced by a targets log line; constants imported from core. Tests: updated
    `boot-shape-sync`, `boot-ontology-sync`, `graph-targets`; a pinned-package case each.
-4. **Server `LINKED_GRAPH_WRITER`** — parse/check at boot, `appWritesGraphs`, gating, sync-shapes
+4. [x] **Server `LINKED_GRAPH_WRITER`** — parse/check at boot, `appWritesGraphs`, gating, sync-shapes
    `skipped: 'host-writer'`, `/admin/routes` `graphWriter`. Tests: `graph-writer.test.ts`.
 5. **Server `POST /admin/graph-content`** — handler in the shape-sync queue and timeout, 400/409,
    README, changesets (minor) in core and server. Tests: `graph-content.test.ts`.
@@ -65,4 +65,6 @@ Contracts K3 (full wording in 006 §Contracts) and K4 (282 M10–M12). Server ha
 | S11 | phase 3 | The boot's targets log line with no pins | Silent (the syncs' own lines say it all); logged only when some graph goes beyond the default dataset | Always log | No new noise for the common case |
 | S12 | phase 3 | `syncPinWarning` tests | Replaced by `syncTargetsLine` tests with the same four situations (pinned shape shapes, syncs that run, store named by its dataset, term shapes through a parent) plus the sub-shape case | Delete them | The premise ("writes into the default dataset only") is gone; the situations stay covered |
 | S13 | phase 3 | Core's own ontology follows core's own shapes (`NodeShape`, `PropertyShape`) when those are pinned | Kept, as K4 says (a package's ontology goes where its shapes route) | Special-case core | One rule |
+| S14 | phase 4 | What `sync-shapes` answers under `host` | `{written: 0, skipped: 'host-writer', reloaded, shapes, shapeCheck}` exactly (no `ontologies`); the ontology phase runs with its sync off, so registration, the hierarchy and the check still run | Include an empty `ontologies` | K3's wording |
+| S15 | phase 4 | Where the flag is checked | Parsed in `initStores` next to the graph targets (fatal on a bad value) and read through one predicate `appWritesGraphs(env)` at the shape sync, the boot ontology sync and `resyncShapes` | Store it on the server instance | Env stays the one source, as for the graph targets; one predicate for every write path |
 | S1 | setup | The master's `_linked-cli` worktree had no `lib/`, so `npx linked` and the server's tests (which import `@_linked/cli/*`) could not run | Ran `linked build` with the main checkout's CLI binary (read only) in my worktrees, and built the master's `_linked-cli` once (lib only, gitignored; tsc emitted JS though it could not type against the master's unbuilt core) | Repoint my link farm to the main checkout's CLI | Tests run against the master's CLI code; nothing tracked changed; the master rebuilds core then cli after landings |
