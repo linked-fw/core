@@ -51,8 +51,10 @@ class SrAlbum extends Shape {
   }
 }
 
+const {linkedShape: termsShape} = linkedPackage('sr-terms');
+
 /** A term shape (rdfs:Class), as @_linked/rdfs registers one. */
-@linkedPackage('sr-terms').linkedShape
+@termsShape
 class SrClassTerm extends Shape {
   static targetClass = {id: 'http://www.w3.org/2000/01/rdf-schema#Class'};
 }

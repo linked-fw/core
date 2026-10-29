@@ -132,3 +132,4 @@ nothing stored changes shape; no reset needed.
 - The 117 CN `typecheck:gate` errors of the first round come from two copies of core in a step
   worktree (the link farm loads the step's core and, for the main install's other `@_linked/*`
   packages, the main checkout's); homed in cli backlog 013.
+- Typecheck fix: `@linkedPackage('…').linkedShape` (TS1497) in `sync-routed.test.ts` and `sync-routed-fuseki.test.ts` replaced by a named `termsShape` decorator; full `npm test` (jest + typecheck) exit 0: `Test Suites: 17 skipped, 140 passed, 140 of 157 total`, `Tests: 535 skipped, 2579 passed, 3114 total`.
