@@ -312,5 +312,5 @@ Large; about 5 phases, one commit each:
 
 ## Progress
 
-- [ ] SY — K4 routed syncs in core; server boot follows routing; K3 writer flag and graph content
+- [x] SY — K4 routed syncs in core; server boot follows routing; K3 writer flag and graph content
   endpoint (reports core 084, server 023).
