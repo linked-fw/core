@@ -38,8 +38,9 @@ server plan 001 and in 282 in the same landing.
   sync; M10–M12): `graphSyncTargets()`, `syncShapeGraphsRouted`, `syncOntologiesRouted` in core
   `src/shapes/syncTargets.ts`. A package's graphs go to every dataset any of its shapes route to ∪
   the dataset NodeShape/PropertyShape (and the ontology term shapes) are pinned to (G2); an ontology
-  graph also where shapes targeting its classes route; the single-owner graph to the datasets of
-  shapes declaring `contains` properties ∪ the NodeShape/PropertyShape dataset. Prune only in the
+  graph also where shapes targeting its classes route; the single-owner graph to every dataset any
+  shape it constrains routes to (the shapes declaring `contains` properties and their sub-shapes) ∪
+  the NodeShape/PropertyShape dataset, the same text everywhere (M19). Prune only in the
   app's default dataset (M11). Per-dataset `syncShapeGraphs(ds)`/`syncOntologies(ds)` unchanged.
 
 ### K3 in full (accepted by the master, 282 M9)
@@ -95,8 +96,9 @@ The full wording (282's K3 summarises it):
 - `graphContent({packages?, turtleFor?, appShapes?})` (same module): `{packages: [{name, shapes?,
   ontology?}], appGraph?, withoutTurtle, unreadable}`, each part K3's `GraphContent`; the server's
   endpoint adds `graphTargets` and `reloaded`. As built in SY.
-- **The single-owner graph** (K4 is silent): goes to every dataset a shape that declares a
-  `contains` property routes to, ∪ the NodeShape/PropertyShape datasets; one text everywhere
+- **The single-owner graph** (M19): goes to every dataset a shape it constrains routes to (a shape
+  that declares a `contains` property, and each of its sub-shapes), ∪ the NodeShape/PropertyShape
+  datasets; one text everywhere
   (`singleOwnerShapesTurtle` of all registered shapes), so K3's one `appGraph` stays valid.
 - **Ontology graph of a package with shapes:** its shapes' datasets ∪ the datasets of any shape
   whose target class is in one of its namespaces ∪ the term shapes' datasets (inference needs the

@@ -107,7 +107,7 @@ describe('graphSyncTargets', () => {
     expect(ids(t.appShapes)).toEqual(['main']);
   });
 
-  test("a sub-shape follows its parent's pin; a shape declaring contains takes the app graph along", () => {
+  test("a sub-shape follows its parent's pin; a shape declaring contains, or its sub-shape, takes the app graph along", () => {
     pin(two, StOwner);
     const t = graphSyncTargets();
     expect(ids(t.shapes.get('st-a'))).toEqual(['main', 'two']);
@@ -118,8 +118,8 @@ describe('graphSyncTargets', () => {
       return graphSyncTargets();
     })();
     expect(ids(t2.shapes.get('st-a'))).toEqual(['main', 'three']);
-    // The app graph follows the shapes that declare the contains property, not their sub-shapes.
-    expect(ids(t2.appShapes)).toEqual(['main']);
+    // The app graph follows every shape it constrains: the declaring shape and its sub-shapes.
+    expect(ids(t2.appShapes)).toEqual(['main', 'three']);
   });
 
   test('NodeShape and PropertyShape pinned to two datasets: every shape graph goes to both, no refusal', () => {

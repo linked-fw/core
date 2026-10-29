@@ -176,7 +176,7 @@ instead, and `graphSyncTargets()` tells where each graph goes:
 |---|---|
 | a package's shape graph | every dataset one of the package's shapes routes to, and the dataset(s) the shapes of `sh:NodeShape` / `sh:PropertyShape` route to |
 | a package's ontology graph | every dataset one of the package's shapes routes to, every dataset a shape targeting one of its classes (a class in its namespace) routes to, and the dataset(s) the ontology term shapes (`rdfs:Class`, `owl:Class`, `rdf:Property`, …) route to; so an ontology-only package follows the shapes that use it, and the hierarchy is where the instances are |
-| the app's shape graph | the datasets of the shapes that declare `contains` properties, and those of `sh:NodeShape` / `sh:PropertyShape` |
+| the app's shape graph | every dataset a shape it constrains routes to (the shapes that declare `contains` properties and their sub-shapes), and those of `sh:NodeShape` / `sh:PropertyShape` |
 
 A sub-shape follows its parent's pin; shapes the routing does not pin go to the default dataset,
 so an app without pins writes everything into the default dataset, exactly as before. Each package's

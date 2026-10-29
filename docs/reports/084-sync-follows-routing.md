@@ -116,3 +116,19 @@ nothing stored changes shape; no reset needed.
 | S17 | phase 5 | After a `reload`, are ontologies registered again? | Yes: the ontology phase runs without its sync (register, hierarchy, check), as sync-shapes does | Reload only | A reloaded package may register a new ontology module; same rule as sync-shapes |
 | S18 | phase 5 | `appGraph: null` cannot occur with core's built-ins registered (they declare `contains`) | The server's pass-through tested with a stand-in core; core answers `null` exactly when `singleOwnerShapesTurtle` gives nothing | — | The contract case still holds for a process without such shapes |
 | S1 | setup | The master's `_linked-cli` worktree had no `lib/`, so `npx linked` and the server's tests (which import `@_linked/cli/*`) could not run | Ran `linked build` with the main checkout's CLI binary (read only) in my worktrees, and built the master's `_linked-cli` once (lib only, gitignored; tsc emitted JS though it could not type against the master's unbuilt core) | Repoint my link farm to the main checkout's CLI | Tests run against the master's CLI code; nothing tracked changed; the master rebuilds core then cli after landings |
+
+## Addendum: fix round (master decision M19)
+
+- **S2 resolved by M19**: the app's single-owner graph now goes to every dataset any shape it
+  constrains routes to (the shapes declaring `contains` properties and their sub-shapes) ∪ the
+  NodeShape/PropertyShape dataset, the same text everywhere. `graphSyncTargets` follows the
+  prototype chain; K4 updated in plan 006 and server plan 001; READMEs updated.
+  `sync-targets.test.ts` now expects a pinned sub-shape's dataset; server `graph-targets.test.ts`
+  expects a NodeShape sub-shape with its own class to take the app graph along (shape graphs stay).
+- Gate: core `linked build` `✔ Build successful`; `sync-targets sync-routed graph-content`
+  `Tests: 1 skipped, 21 passed, 22 total`; `sync-routed-fuseki` `[fuseki] live tests: 1 total — 1
+  passed`; `npm run typecheck` 0 errors. Server `graph-targets boot-shape-sync graph-content
+  graph-writer boot-ontology-sync`: `Tests: 76 passed, 76 total`.
+- The 117 CN `typecheck:gate` errors of the first round come from two copies of core in a step
+  worktree (the link farm loads the step's core and, for the main install's other `@_linked/*`
+  packages, the main checkout's); homed in cli backlog 013.

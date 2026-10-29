@@ -14,7 +14,8 @@
  *   to (`sh:NodeShape` / `sh:PropertyShape` for shape graphs, the ontology term shapes for
  *   ontology graphs). An ontology graph also goes wherever a shape targeting one of its classes
  *   routes, so an ontology-only package follows the shapes that use it. The app's graph goes to
- *   the datasets of the shapes declaring `contains` properties, plus the shape shapes' datasets.
+ *   every dataset a shape it constrains routes to (the shapes declaring `contains` properties and
+ *   their sub-shapes), plus the shape shapes' datasets.
  *   An app without pins gets the default dataset everywhere.
  * - {@link syncShapeGraphsRouted} / {@link syncOntologiesRouted}: the per-dataset syncs
  *   (`syncShapeGraphs(ds)`, `syncOntologies(ds)`) once per target dataset with that dataset's
@@ -177,11 +178,22 @@ export function graphSyncTargets(): GraphSyncTargets {
     ontologies.set(name, inOrder(union(ownDatasets.get(name) ?? [], using, termShapes)));
   }
 
-  const owners = new Set<IDataset>();
+  // Every shape the graph constrains: a shape declaring `contains` properties and each of its
+  // sub-shapes (their instances own through the inherited property), wherever they route.
+  const declaring = new Set<Function>();
   for (const name of packagesWithShapes()) {
     for (const shape of packageShapes(name)) {
       const shapeClass = classes.get(shape.id);
-      if (shapeClass && buildSingleOwnerConstraints(shape, shape.id).length) owners.add(datasetOf(shapeClass));
+      if (shapeClass && buildSingleOwnerConstraints(shape, shape.id).length) declaring.add(shapeClass);
+    }
+  }
+  const owners = new Set<IDataset>();
+  for (const shapeClass of classes.values()) {
+    for (let c: unknown = shapeClass; typeof c === 'function' && c !== Function.prototype; c = Object.getPrototypeOf(c)) {
+      if (declaring.has(c as Function)) {
+        owners.add(datasetOf(shapeClass));
+        break;
+      }
     }
   }
   return {shapes, ontologies, appShapes: inOrder(union(owners, shapeShapes)), datasets};
