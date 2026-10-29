@@ -255,8 +255,12 @@ export function graphQueryToSparql(
   const own = graphRecordFieldValues(query);
   const ops: string[] = [];
   const inRegistry = (triples: string) => `GRAPH ${registry} { ${triples} }`;
+  // A field set to an empty list has no triple to write (an update still deletes its old
+  // values); writing `<p> ;` would be a SPARQL parse error.
   const recordFields = (fields: Map<string, GraphRecordLiteral[]>) =>
-    [...fields].map(([p, values]) => `${iri(p)} ${values.map(literal).join(', ')}`);
+    [...fields]
+      .filter(([, values]) => values.length > 0)
+      .map(([p, values]) => `${iri(p)} ${values.map(literal).join(', ')}`);
 
   const hash = graphContentHash(query);
   const automatic = new Map<string, GraphRecordLiteral[]>();
@@ -329,9 +333,10 @@ export function graphQueryToSparql(
         const field = inRegistry(`${g} ${iri(predicate)} ?v${n++}`);
         ops.push(`DELETE { ${field} } WHERE { ${recorded} ${field} }`);
       }
-      if (changed.size) {
+      const changedTriples = recordFields(changed);
+      if (changedTriples.length) {
         ops.push(
-          `INSERT { ${inRegistry(`${g} ${recordFields(changed).join(' ; ')} .`)} } WHERE { ${onlyIfRecorded} }`,
+          `INSERT { ${inRegistry(`${g} ${changedTriples.join(' ; ')} .`)} } WHERE { ${onlyIfRecorded} }`,
         );
       }
       break;

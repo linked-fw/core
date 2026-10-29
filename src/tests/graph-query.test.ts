@@ -457,6 +457,21 @@ describe('SparqlDataset.graphQuery', () => {
     expect(result).toEqual({graph: G, changed: false});
   });
 
+  test('graph_create with an empty list field leaves the field out', async () => {
+    const ds = new RecordingSparql(false);
+    await OntologyGraph.create({id: G, package: 'p', sources: []}).withContent(ttl).exec(ds);
+    expect(ds.updates[0]).not.toContain('<http://purl.org/dc/terms/source>');
+    expect(ds.updates[0]).toContain('<https://linked.cm/ont/core/package> "p"');
+  });
+
+  test('graph_patch setting a list field to empty deletes its values and inserts nothing for it', async () => {
+    const ds = new RecordingSparql(true);
+    await OntologyGraph.update(G).set({sources: []}).exec(ds);
+    const rec = `GRAPH <${REG}> { <${G}> <http://www.w3.org/ns/sparql-service-description#name> <${G}> ; a <${ONTOLOGY_GRAPH}> }`;
+    const field = `GRAPH <${REG}> { <${G}> <http://purl.org/dc/terms/source> ?v0 }`;
+    expect(ds.updates).toEqual([`DELETE { ${field} } WHERE { ${rec} ${field} }`]);
+  });
+
   test('graph_drop: the graph and its record, no registry check', async () => {
     const ds = new RecordingSparql(false);
     await OntologyGraph.delete(G).exec(ds);
