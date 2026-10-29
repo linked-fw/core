@@ -19,6 +19,8 @@ const List = ns('List');
 const rest = ns('rest');
 const first = ns('first');
 const nil = ns('nil');
+// A literal holding JSON text (RDF 1.1 JSON datatype).
+const jsonDatatype = ns('JSON');
 
 export const rdf = {
   _ontologyResource,
@@ -29,4 +31,5 @@ export const rdf = {
   rest,
   first,
   nil,
+  JSON: jsonDatatype,
 };

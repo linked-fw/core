@@ -105,6 +105,19 @@ const version = ns('version');
 // each package's part as `"{npm name} {sha256 hex}"`.
 const packageHash = ns('packageHash');
 
+// The component index (`lib/esm/data/components.ttl`, written by `linked build` from a package's
+// `components/index`): each linked component the package exports, with its export name, its start
+// shape, its query's shape and its query in the wire format (`QueryBuilder.toJSON()`, an
+// `rdf:JSON` literal). `ComponentsGraph` is the registry class of the graph a host keeps it in.
+const Component = ns('Component');
+const SetComponent = ns('SetComponent');
+const ComponentsGraph = ns('ComponentsGraph');
+const definesComponent = ns('definesComponent');
+const exportName = ns('exportName');
+const startShape = ns('startShape');
+const queryShape = ns('queryShape');
+const query = ns('query');
+
 export const coreOntology = {
   Package,
   OntologyPackage,
@@ -138,4 +151,12 @@ export const coreOntology = {
   package: packageTerm,
   version,
   packageHash,
+  Component,
+  SetComponent,
+  ComponentsGraph,
+  definesComponent,
+  exportName,
+  startShape,
+  queryShape,
+  query,
 };

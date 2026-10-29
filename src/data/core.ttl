@@ -7,6 +7,7 @@
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 @prefix schema: <http://schema.org/> .
 @prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
 
 core:
     a owl:Ontology ;
@@ -19,6 +20,17 @@ core:AssetPackage
     rdfs:comment "A package that holds assets (files such as images, documents and data an app uses), with no ontology of its own."@en ;
     rdfs:label "asset package"@en ;
     rdfs:subClassOf core:Package .
+
+core:Component
+    a owl:Class ;
+    rdfs:comment "A linked component a package exports from its components index: a piece of UI code with a linked query, indexed by its export name, start shape and query."@en ;
+    rdfs:label "component"@en .
+
+core:ComponentsGraph
+    a owl:Class ;
+    rdfs:comment "A named graph holding one package's component index (the components.ttl its build writes) at one version or branch."@en ;
+    rdfs:label "components graph"@en ;
+    rdfs:subClassOf sd:NamedGraph .
 
 core:DraftGraph
     a owl:Class ;
@@ -74,6 +86,12 @@ core:ReadyForReview
     rdfs:comment "The status of an ontology its authors consider complete and ready to be reviewed."@en ;
     rdfs:label "ready for review"@en .
 
+core:SetComponent
+    a owl:Class ;
+    rdfs:comment "A linked component that renders a set of nodes (made by linkedSetComponent) rather than one."@en ;
+    rdfs:label "set component"@en ;
+    rdfs:subClassOf core:Component .
+
 core:ShapeClass
     a owl:Class ;
     rdfs:comment "The class of shape classes, from core's earlier package metadata model."@en ;
@@ -95,6 +113,13 @@ core:contentHash
     rdfs:comment "The SHA-256 (hex) of a named graph's content as last written, recorded in the graph registry."@en ;
     rdfs:label "content hash"@en ;
     rdfs:range xsd:string .
+
+core:definesComponent
+    a owl:ObjectProperty ;
+    rdfs:comment "Links a package to a linked component it exports from its components index."@en ;
+    rdfs:domain core:Package ;
+    rdfs:label "defines component"@en ;
+    rdfs:range core:Component .
 
 core:definesShape
     a owl:ObjectProperty ;
@@ -120,6 +145,13 @@ core:editInline
     a owl:DatatypeProperty ;
     rdfs:comment "Marks a property whose value is edited inline rather than on its own page."@en ;
     rdfs:label "edit inline"@en .
+
+core:exportName
+    a owl:DatatypeProperty ;
+    rdfs:comment "The name a package's components index exports a component under (the smallest, when it exports it under several)."@en ;
+    rdfs:domain core:Component ;
+    rdfs:label "export name"@en ;
+    rdfs:range xsd:string .
 
 core:feedsHierarchy
     a owl:DatatypeProperty ;
@@ -164,6 +196,20 @@ core:packageHash
     rdfs:label "package hash"@en ;
     rdfs:range xsd:string .
 
+core:query
+    a owl:DatatypeProperty ;
+    rdfs:comment "A component's linked query in the query wire format (QueryBuilder.toJSON), as canonical JSON."@en ;
+    rdfs:domain core:Component ;
+    rdfs:label "query"@en ;
+    rdfs:range rdf:JSON .
+
+core:queryShape
+    a owl:ObjectProperty ;
+    rdfs:comment "The node shape a component's linked query selects from."@en ;
+    rdfs:domain core:Component ;
+    rdfs:label "query shape"@en ;
+    rdfs:range sh:NodeShape .
+
 core:shapeHash
     a owl:DatatypeProperty ;
     rdfs:comment "The content hash of everything shape sync wrote for a node shape, so a later sync can skip an unchanged shape."@en ;
@@ -173,6 +219,13 @@ core:sharedTargetClass
     a owl:DatatypeProperty ;
     rdfs:comment "Marks a node shape that shares its target class on purpose, so the shape check does not report it as borrowing another shape's class."@en ;
     rdfs:label "shared target class"@en .
+
+core:startShape
+    a owl:ObjectProperty ;
+    rdfs:comment "The node shape of the node a component starts from (its source), which a builder matches when it offers the component."@en ;
+    rdfs:domain core:Component ;
+    rdfs:label "start shape"@en ;
+    rdfs:range sh:NodeShape .
 
 core:usesShapeClass
     a owl:ObjectProperty ;

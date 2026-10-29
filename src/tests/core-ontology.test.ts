@@ -8,6 +8,7 @@ import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {Parser} from 'n3';
 import {coreOntology} from '../ontologies/linked-core';
+import {rdf} from '../ontologies/rdf';
 import '../ontologies/linked-core.register';
 import {getRegisteredOntologies} from '../utils/Package';
 
@@ -62,4 +63,42 @@ describe('core: ontology status', () => {
       expect(objects(`${CORE}${name}`, 'http://www.w3.org/2000/01/rdf-schema#comment')).toHaveLength(1);
     },
   );
+});
+
+describe('core: component index terms', () => {
+  const OWL = 'http://www.w3.org/2002/07/owl#';
+  const RDFS = 'http://www.w3.org/2000/01/rdf-schema#';
+  const SH_NODE_SHAPE = 'http://www.w3.org/ns/shacl#NodeShape';
+  const XSD_STRING = 'http://www.w3.org/2001/XMLSchema#string';
+
+  test.each([
+    ['Component', `${OWL}Class`, undefined],
+    ['SetComponent', `${OWL}Class`, `${CORE}Component`],
+    ['ComponentsGraph', `${OWL}Class`, 'http://www.w3.org/ns/sparql-service-description#NamedGraph'],
+  ] as const)('%s is an exported, labelled and described class', (name, type, superClass) => {
+    expect(coreOntology[name].id).toBe(`${CORE}${name}`);
+    expect(objects(`${CORE}${name}`, RDF_TYPE)).toEqual([type]);
+    expect(objects(`${CORE}${name}`, SUBCLASS)).toEqual(superClass ? [superClass] : []);
+    expect(objects(`${CORE}${name}`, LABEL)).toHaveLength(1);
+    expect(objects(`${CORE}${name}`, `${RDFS}comment`)).toHaveLength(1);
+  });
+
+  test.each([
+    ['definesComponent', `${OWL}ObjectProperty`, `${CORE}Package`, `${CORE}Component`],
+    ['exportName', `${OWL}DatatypeProperty`, `${CORE}Component`, XSD_STRING],
+    ['startShape', `${OWL}ObjectProperty`, `${CORE}Component`, SH_NODE_SHAPE],
+    ['queryShape', `${OWL}ObjectProperty`, `${CORE}Component`, SH_NODE_SHAPE],
+    ['query', `${OWL}DatatypeProperty`, `${CORE}Component`, rdf.JSON.id],
+  ] as const)('%s is an exported property with its domain and range', (name, type, domain, range) => {
+    expect(coreOntology[name].id).toBe(`${CORE}${name}`);
+    expect(objects(`${CORE}${name}`, RDF_TYPE)).toEqual([type]);
+    expect(objects(`${CORE}${name}`, `${RDFS}domain`)).toEqual([domain]);
+    expect(objects(`${CORE}${name}`, `${RDFS}range`)).toEqual([range]);
+    expect(objects(`${CORE}${name}`, LABEL)).toHaveLength(1);
+    expect(objects(`${CORE}${name}`, `${RDFS}comment`)).toHaveLength(1);
+  });
+
+  test('rdf:JSON is in the rdf module', () => {
+    expect(rdf.JSON.id).toBe('http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON');
+  });
 });
