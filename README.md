@@ -1085,6 +1085,10 @@ const birthYear = await Person.select((p) => ({
 | **Type** | `str`, `iri`, `isIri`, `isLiteral`, `isBlank`, `isNumeric`, `lang`, `datatype` |
 | **Hash** | `md5`, `sha256`, `sha512` |
 
+Every single-valued literal on a query path has the methods of its type, in `select`, `where` and
+`update` callbacks alike. A relation (an object property) has `equals`, `oneOf`, `notOneOf`,
+`str`, `isDefined` and `isNotDefined`: `.where((k) => k.ofShape.isDefined())`.
+
 #### Expression-based WHERE filters
 
 Expressions can be used in `where()` clauses for computed filtering:

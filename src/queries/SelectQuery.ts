@@ -19,6 +19,12 @@ import {PropertyPath} from './PropertyPath.js';
 import type {QueryBuilder, QueryBuilderJSON} from './QueryBuilder.js';
 import {ExpressionNode, ExistsCondition, isExpressionNode, isExistsCondition, tracedPropertyExpression, tracedAliasExpression} from '../expressions/ExpressionNode.js';
 import {PendingQueryContext} from './QueryContext.js';
+import type {
+  BooleanExpressionMethods,
+  DateExpressionMethods,
+  NumericExpressionMethods,
+  StringExpressionMethods,
+} from '../expressions/ExpressionMethods.js';
 import {unresolvedValueShapeError} from '../utils/unresolvedShape.js';
 import {resolveRelationShape} from '../shapes/relationShape.js';
 import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
@@ -103,6 +109,15 @@ export type WhereClause<S extends Shape | AccessorReturnValue> =
   | ExpressionNode
   | ExistsCondition
   | ((s: ToQueryBuilderObject<S>) => ExpressionNode | ExistsCondition);
+
+/**
+ * The inline `.where()` of a primitive (`p.hobby.where(h => h.equals('Jogging'))`): its callback
+ * gets the value itself, which answers `equals` only (`InlineWhereProxy`).
+ */
+export type InlinePrimitiveWhere =
+  | ExpressionNode
+  | ExistsCondition
+  | ((value: {equals(otherValue: ComparisonValue): ExpressionNode}) => ExpressionNode | ExistsCondition);
 
 export type QueryBuildFn<T extends Shape, ResponseType> = (
   p: ToQueryBuilderObject<T>,
@@ -212,18 +227,24 @@ export type ToQueryBuilderObject<
             ? QShape<Shape, Source, Property>
             : QueryBuilderObject<T, Source, Property>;
 
+/**
+ * A single-valued literal on a query path, with the expression methods its value type has
+ * (`p.name.strlen().gt(3)`, `p.hobby.isDefined()`). The proxy `generatePathValue` wraps every
+ * single-valued literal in answers them (`wrapWithExpressionProxy`), so the type states what the
+ * runtime does.
+ */
 export type ToQueryPrimitive<
   T extends string | number | Date | boolean,
   Source,
   Property extends string | number | symbol = '',
 > = T extends string
-  ? QueryPrimitive<string, Source, Property>
+  ? QueryPrimitive<string, Source, Property> & StringExpressionMethods
   : T extends number
-    ? QueryPrimitive<number, Source, Property>
+    ? QueryPrimitive<number, Source, Property> & NumericExpressionMethods
     : T extends Date
-      ? QueryPrimitive<Date, Source, Property>
+      ? QueryPrimitive<Date, Source, Property> & DateExpressionMethods
       : T extends boolean
-        ? QueryPrimitive<boolean, Source, Property>
+        ? QueryPrimitive<boolean, Source, Property> & BooleanExpressionMethods
         : never & {__error: 'ToQueryPrimitive: no matching primitive type'};
 
 export type WhereExpressionPath = {
@@ -339,7 +360,7 @@ export type GetQueryObjectResultType<
             : QV extends QueryPrimitiveSet<
                   infer QPrim extends QueryPrimitive<any>
                 >
-              ? GetQueryObjectResultType<QPrim, null, null, true>
+              ? GetQueryObjectResultType<QPrim, {}, true, HasName>
               : QV extends Array<infer Type>
                 ? UnionToIntersection<QueryResponseToResultType<Type>>
                 : QV extends QueryPrimitive<boolean, any, any>
@@ -1288,6 +1309,16 @@ export class QueryShape<
     return toExpressionNode(this).str();
   }
 
+  /** The relation has a value (SPARQL `BOUND`): `.where((k) => k.ofShape.isDefined())`. */
+  isDefined(): ExpressionNode {
+    return toExpressionNode(this).isDefined();
+  }
+
+  /** The relation has no value (SPARQL `!BOUND`). */
+  isNotDefined(): ExpressionNode {
+    return toExpressionNode(this).isNotDefined();
+  }
+
   oneOf(values: (NodeReferenceValue | QShape<any>)[]): ExpressionNode {
     return toExpressionNode(this).oneOf(
       values.map((v) => (isLinkedInstance(v, QueryBuilderObject) ? toExpressionNode(v) : v)) as any,
@@ -1389,12 +1420,14 @@ export class QueryPrimitive<
     );
   }
 
-  where(validation: WhereClause<string>): this {
+  where(validation: InlinePrimitiveWhere): this {
     // For inline where on a primitive (p.hobby.where(h => h.equals(...))),
     // pass a clone that produces alias expressions (the bound value itself)
     // rather than property traversals
     const selfAsAlias = new InlineWhereProxy(this);
-    this.wherePath = processWhereClause(validation, selfAsAlias as any);
+    // The callback is typed by what `InlineWhereProxy` answers (`equals`), narrower than the
+    // shape-path callback `processWhereClause` takes; it is called with that proxy only.
+    this.wherePath = processWhereClause(validation as WhereClause<any>, selfAsAlias as any);
     //return this because after Shape.friends.where() we can call other methods of Shape.friends
     return this as any;
   }

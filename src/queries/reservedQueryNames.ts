@@ -32,6 +32,8 @@ export const RESERVED_QUERY_DSL_NAMES: ReadonlySet<string> = new Set([
   'getPropertyPath',
   'getPropertyStep',
   'id',
+  'isDefined',
+  'isNotDefined',
   'limit',
   'none',
   'notOneOf',

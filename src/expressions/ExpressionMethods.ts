@@ -16,6 +16,16 @@ export interface BaseExpressionMethods {
   isNotDefined(): ExpressionNode;
   defaultTo(fallback: ExpressionInput): ExpressionNode;
   str(): ExpressionNode;
+  lang(): ExpressionNode;
+  datatype(): ExpressionNode;
+  iri(): ExpressionNode;
+  isIri(): ExpressionNode;
+  isLiteral(): ExpressionNode;
+  isBlank(): ExpressionNode;
+  isNumeric(): ExpressionNode;
+  md5(): ExpressionNode;
+  sha256(): ExpressionNode;
+  sha512(): ExpressionNode;
 }
 
 export interface NumericExpressionMethods extends BaseExpressionMethods {
