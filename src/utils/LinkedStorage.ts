@@ -25,6 +25,7 @@ import {
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import {setShapeGraphs, unsetShapeGraph} from './graphRouting.js';
 import type {GraphRoute} from '../ontologies/graphs.js';
+import {noticeFanOut} from './fanOutNotice.js';
 
 // plan-011 — count physical evaluations of THIS module on the one shared
 // global object. With the single-loader fix there should be exactly one copy;
@@ -402,6 +403,10 @@ export abstract class LinkedStorage {
    * early `true` should not have already cost a query against every other store.
    * A failure from any dataset propagates — an unreachable store makes the answer
    * unknown, and "unknown" is not `false`.
+   *
+   * With more than one dataset it logs a notice once per call site (`noticeFanOut`): the
+   * caller can name the dataset it means. Logged before the first `await`, while the
+   * caller's frames are still on the stack.
    */
   private static async askAnyDataset(query: AskQuery): Promise<boolean> {
     const datasets = this.getDatasets();
@@ -410,6 +415,7 @@ export abstract class LinkedStorage {
         'No query dataset configured. Call LinkedStorage.setDefaultDataset().',
       );
     }
+    if (datasets.size > 1) noticeFanOut('ask', datasets.size);
     for (const dataset of datasets) {
       const exists = getActiveShapeCatalog() === undefined
         ? resolveExistence(dataset, query)
@@ -503,7 +509,9 @@ export abstract class LinkedStorage {
    * write. A subject read has no shape and so no routing key: like a shapeless ask it means
    * "anywhere I can reach", so it is sent to every dataset this router knows, in order, and the
    * answers are joined (up to the read's `limit`). A dataset that cannot answer it fails the read:
-   * a missing part is not an empty one.
+   * a missing part is not an empty one. With more than one dataset and no `.from()` graphs, that
+   * fan-out logs a notice once per call site (`noticeFanOut`), naming `.exec(dataset)` and
+   * `.from(graph)`; a read with graphs still reads every dataset, in those graphs only.
    */
   static async triplesQuery(query: TriplesQuery): Promise<Triple[]> {
     const run = (dataset: IDataset) =>
@@ -521,6 +529,8 @@ export abstract class LinkedStorage {
     if (datasets.size === 0) {
       throw new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().');
     }
+    // Before the first `await`, while the caller's frames are still on the stack.
+    if (datasets.size > 1 && !query.graphs?.length) noticeFanOut('triples', datasets.size);
     const triples: Triple[] = [];
     for (const dataset of datasets) {
       triples.push(...(await run(dataset)));

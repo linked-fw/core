@@ -1033,6 +1033,29 @@ without the method is refused. `LinkedStorage` sends a graph read where its reco
 queries go, and a subject read (no shape, no routing key) to every dataset it knows, joining the
 answers up to the limit, as it asks a shapeless ask. A router forwards it as a read.
 
+#### Shapeless reads across datasets
+
+A read with no shape has no routing key. `LinkedStorage` therefore sends a shapeless read that
+names no dataset to every dataset it knows: a subject read (`TriplesBuilder.forNode({id})`) is read
+in each and the answers joined, a shapeless ask (`Shape.exists(iri)` on the base class,
+`AskBuilder.forNode(iri)`) asks each in turn until one answers `true`. The answer is right, but it
+costs a query per dataset, so with more than one dataset configured it logs a notice
+(`console.warn`, `[linked] … sent it to all 2 datasets it knows …`) once per call site, naming the
+fix:
+
+```typescript
+await Shape.exists(iri, dataset);                          // ask one dataset
+await AskBuilder.forNode(iri).exec(dataset);
+await TriplesBuilder.forNode({id}).exec(dataset);          // read one dataset
+await TriplesBuilder.forNode({id}).from(importGraph);      // read only these graphs
+```
+
+There is no notice with one dataset, with an explicit dataset, for a shaped read (it routes by its
+shape), or for a subject read with `.from()` graphs, which still reads every dataset, in those
+graphs only. The call site is the first stack frame outside core. A builder awaited without
+`.exec()` (`await TriplesBuilder.forNode({id})`) runs from a microtask with its caller off the
+stack, so all such reads share one notice per kind of read.
+
 #### Custom result formats
 ```typescript
 /* Result: Array<{id: string; nameIsMoa: boolean; numFriends: number}> */
