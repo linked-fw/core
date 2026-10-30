@@ -1000,6 +1000,39 @@ A count resolves to a real number and **rejects on failure** — it never report
 as `0`. `.toCount()` gives you the count query itself, for a router that forwards
 (`builder.toCount().toJSON()`) rather than executes.
 
+#### Triples reads (no shape)
+
+Two reads answer triples rather than rows, for data no shape describes (a draft graph, an import's
+staging graph, a node of unknown type):
+
+```typescript
+import {DraftGraph, TriplesBuilder} from '@_linked/core';
+import {rdf} from '@_linked/core/ontologies/rdf';
+
+// Every triple of one graph, registered or not. Routed like DraftGraph's graph queries, so it
+// reads where DraftGraph.replaceContent(graph, body) writes.
+const draft = await DraftGraph.readContent(graph).limit(1001);
+
+// One subject's triples (as a subject), under any type or none: in these graphs, or where a
+// shapeless ask of it looks (the default graph, or every graph the store's routing knows).
+const staged = await TriplesBuilder.forNode({id: instanceId}).from(importGraph).exec(dataset);
+const types = staged.filter((t) => t.predicate.id === rdf.type.id).map((t) => t.object);
+```
+
+Each answer is a `Triple[]`: `{subject, predicate, object, graph?}`. An IRI is `{id}`, a blank node
+`{id: '_:label'}` (the label holds within that answer only), and a literal `{value, datatype,
+language?}` with its lexical form and its datatype as `{id}` (`xsd:string` for a plain literal,
+`rdf:langString` for a tagged one), so a read writes back unchanged. `graph` is the named graph
+the triple was read in, absent for the default graph. `.limit(n)` bounds a read; no order is
+implied. `.from()` takes what select's `.from()` takes, portable names included. A read with
+neither a subject nor a graph is refused.
+
+A triples read is plain data (`toTriplesQuery()`, `parseTriplesQuery()` at a wire boundary) sent to
+the optional `IDataset.triplesQuery`. `SparqlDataset` answers it with one `SELECT`; a dataset
+without the method is refused. `LinkedStorage` sends a graph read where its record class's graph
+queries go, and a subject read (no shape, no routing key) to every dataset it knows, joining the
+answers up to the limit, as it asks a shapeless ask. A router forwards it as a read.
+
 #### Custom result formats
 ```typescript
 /* Result: Array<{id: string; nameIsMoa: boolean; numFriends: number}> */

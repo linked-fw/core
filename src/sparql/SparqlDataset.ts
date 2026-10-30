@@ -40,6 +40,8 @@ import {
   graphRegisteredAsk,
 } from './graphQueryToSparql.js';
 import type {SparqlQueryResults} from './resultMapping.js';
+import {triplesQueryOf, type Triple, type TriplesQuery} from '../queries/triplesQuery.js';
+import {mapSparqlTriplesResult, triplesToAlgebra} from './triplesToSparql.js';
 import {
   selectToSparql,
   askToSparql,
@@ -398,6 +400,37 @@ export abstract class SparqlDataset implements IDataset {
     if (!ir) return false;
     const json = await this.sendRead(ir, this.readOptions(lowered));
     return mapSparqlAskResult(json);
+  }
+
+  /**
+   * Answer a triples read (`NamedGraph.readContent(g)`, `TriplesBuilder.forNode({id})`) with one
+   * SELECT (see `triplesToSparql.ts`). Its graphs are expanded like a `.from()` set (portable names,
+   * the registry kinds); a set that expands to no graph answers `[]` without querying. A subject
+   * read without graphs follows the store's routing like a shapeless ask. Errors reject.
+   */
+  async triplesQuery(query: TriplesQuery): Promise<Triple[]> {
+    const checked = triplesQueryOf(query);
+    let read = checked;
+    if (checked.graphs) {
+      const expanded = await expandReadGraphs(checked.graphs, {
+        registry: () => readGraphRegistry(this.graphRegistryKey(), () => this.loadGraphRegistry()),
+        mapGraphName: this.options?.mapGraphName,
+      });
+      const names = 'graphs' in expanded ? expanded.graphs : [graphs.default];
+      if (names.length === 0) return [];
+      read = {...checked, graphs: names};
+    }
+    const options = this.readOptions(checked);
+    const {plan, graph} = triplesToAlgebra(read, options);
+    const named = this.options?.namedGraphUriParameter ? plan.dataset?.fromNamed : undefined;
+    let json: SparqlQueryResults;
+    if (named && named.length > 0) {
+      const {dataset: _dataset, ...withoutDataset} = plan;
+      json = await this.executeSparqlSelectWithNamedGraphs(selectPlanToSparql(withoutDataset, options), named);
+    } else {
+      json = await this.executeSparqlSelect(selectPlanToSparql(plan, options));
+    }
+    return mapSparqlTriplesResult(json, read, graph, options);
   }
 
   /**

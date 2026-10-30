@@ -6,6 +6,7 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import type {AskQuery} from './AskQuery.js';
 import type {CountQuery} from './CountQuery.js';
 import type {GraphQuery, GraphResult} from './IntermediateRepresentation.js';
+import type {Triple, TriplesQuery} from './triplesQuery.js';
 import {unsupportedGraphQuery} from './graphQuery.js';
 import {catalogOf, withShapeCatalog} from '../utils/ShapeClass.js';
 
@@ -37,6 +38,11 @@ export interface QueryDispatch {
    * dataset without graph support.
    */
   graphQuery?(query: GraphQuery): Promise<GraphResult>;
+  /**
+   * Answer a triples read (`IDataset.triplesQuery`). Optional, as on `IDataset`;
+   * {@link resolveTriples} refuses a target without it.
+   */
+  triplesQuery?(query: TriplesQuery): Promise<Triple[]>;
 }
 
 /** A target that can answer an ask query, or a select (the fallback). */
@@ -133,6 +139,35 @@ export async function resolveGraphQuery(
     throw unsupportedGraphQuery(query, 'it has no graphQuery method');
   }
   return target.graphQuery(query);
+}
+
+/** A target that may answer a triples read. */
+type TriplesTarget = {triplesQuery?(query: TriplesQuery): Promise<Triple[]>};
+
+/**
+ * Answer a triples read against `target` — the entry point `TriplesBuilder.exec()` and
+ * `LinkedStorage.triplesQuery` go through. A target without `triplesQuery` is refused: there is no
+ * shape to answer it with a select instead, and "could not read" is never an empty answer. The
+ * answer must be an array; anything else rejects.
+ */
+export async function resolveTriples(
+  target: TriplesTarget | undefined,
+  query: TriplesQuery,
+): Promise<Triple[]> {
+  if (typeof target?.triplesQuery !== 'function') {
+    throw new Error(
+      'This dataset does not implement IDataset.triplesQuery, so a triples read (a graph read ' +
+        'or a subject read) cannot be answered. SparqlDataset implements it; a router forwards it ' +
+        'to the dataset that holds the data.',
+    );
+  }
+  const answer = await target.triplesQuery(query);
+  if (!Array.isArray(answer)) {
+    throw new Error(
+      `triplesQuery must resolve to an array of triples; got ${answer === null ? 'null' : typeof answer}.`,
+    );
+  }
+  return answer;
 }
 
 /**
@@ -233,6 +268,7 @@ export type QueryDispatchEvent = (
   | {kind: 'update'; query: UpdateQuery; result: Promise<unknown>}
   | {kind: 'delete'; query: DeleteQuery; result: Promise<DeleteResponse>}
   | {kind: 'graph'; query: GraphQuery; result: Promise<GraphResult>}
+  | {kind: 'triples'; query: TriplesQuery; result: Promise<Triple[]>}
 ) & {
   /** The explicit dataset of an `exec(target)` call; absent for the global dispatch. */
   target?: IDataset;
@@ -320,6 +356,11 @@ function instrumentDispatch(d: QueryDispatch, target?: IDataset): QueryDispatch 
       notifyDispatch({kind: 'graph', query, result, target});
       return result;
     },
+    triplesQuery(query: TriplesQuery): Promise<Triple[]> {
+      const result = resolveTriples(d, query);
+      notifyDispatch({kind: 'triples', query, result, target});
+      return result;
+    },
   };
   Object.defineProperty(wrapped, INSTRUMENTED, {value: true, enumerable: false});
   return wrapped;
@@ -335,6 +376,18 @@ export function dispatchGraphQuery(query: GraphQuery, target?: IDataset): Promis
     ? instrumentDispatch(target as unknown as QueryDispatch, target)
     : getQueryDispatch();
   return resolveGraphQuery(dispatch, query);
+}
+
+/**
+ * Send a triples read through the explicit `target` dataset (observed like the global path), or
+ * through the global dispatch. Either way a missing `triplesQuery` is refused (see
+ * {@link resolveTriples}).
+ */
+export function dispatchTriplesQuery(query: TriplesQuery, target?: IDataset): Promise<Triple[]> {
+  const dispatch = target
+    ? instrumentDispatch(target as unknown as QueryDispatch, target)
+    : getQueryDispatch();
+  return resolveTriples(dispatch, query);
 }
 
 export function setQueryDispatch(d: QueryDispatch): void {

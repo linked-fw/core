@@ -22,6 +22,7 @@
  * await OntologyGraph.create({id: g, package: '@_linked/schema', version: '1.7.0'}).withContent(c);
  * await OntologyGraph.update(g).set({version: '1.8.0'}).replaceContent(c2);
  * await NamedGraph.patchContent(g, {insert, delete: del});
+ * const triples = await OntologyGraph.readContent(g); // a read: every triple of the graph
  * await OntologyGraph.delete(g);
  * const records = await NamedGraph.select((r) => [r.name, r.contentHash]);
  * ```
@@ -41,6 +42,7 @@ import {graphs} from '../ontologies/graphs.js';
 import {dcterms} from '../queries/graphRecords.js';
 import {assertGraphWritable} from '../queries/graphQuery.js';
 import {dispatchGraphQuery} from '../queries/queryDispatch.js';
+import {TriplesBuilder} from '../queries/TriplesBuilder.js';
 import type {
   GraphContent,
   GraphQuery,
@@ -276,6 +278,15 @@ export class NamedGraph extends GraphRecordBase {
     return GraphQueryBuilder.of(
       withHash({kind: 'graph_patch', graph: iri, recordClass: recordClassOf(this), patch}, options),
     );
+  }
+
+  /**
+   * Read every triple of the graph (a triples read, `IDataset.triplesQuery`), registered or not.
+   * Routed like this class's graph queries, so `DraftGraph.readContent(g)` reads where
+   * `DraftGraph.replaceContent(g, c)` writes. `.limit(n)` bounds it.
+   */
+  static readContent(this: typeof NamedGraph, iri: string): TriplesBuilder {
+    return TriplesBuilder.of({kind: 'triples', graphs: [iri], recordClass: recordClassOf(this)});
   }
 
   /** Drop the graph and its record. */

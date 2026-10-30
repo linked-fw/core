@@ -68,6 +68,13 @@ export function fromJSON(
       'check it with parseGraphQuery() and pass it to IDataset.graphQuery().',
     );
   }
+  if (kind === 'triples') {
+    // A triples read is plain data too: it goes to `IDataset.triplesQuery`.
+    throw new Error(
+      '"triples" is a triples read, not a query builder envelope: ' +
+      'check it with parseTriplesQuery() and pass it to IDataset.triplesQuery().',
+    );
+  }
   if (json && typeof json === 'object' && 'op' in json) {
     switch (json.op) {
       case 'ask':

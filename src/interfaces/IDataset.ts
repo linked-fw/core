@@ -11,6 +11,7 @@ import type {
   GraphQuery,
   GraphResult,
 } from '../queries/IntermediateRepresentation.js';
+import type {Triple, TriplesQuery} from '../queries/triplesQuery.js';
 import type {ChangeEvent} from '../live/changes.js';
 import type {DefaultGraphTermsReplace} from '../queries/defaultGraphTerms.js';
 
@@ -64,7 +65,7 @@ export interface IDataset {
   /**
    * Answer an ask query — a boolean, not a result set.
    *
-   * **The one optional query method.** An {@link AskQuery} carries a pattern and nothing else:
+   * **Optional**, like {@link triplesQuery}. An {@link AskQuery} carries a pattern and nothing else:
    * no projection, no sorting, no pagination. A SPARQL-backed store emits `ASK WHERE { … }`;
    * another backend answers it however it can.
    *
@@ -111,6 +112,19 @@ export interface IDataset {
    * graph with no record), `graph-exists` (create of a registered graph).
    */
   graphQuery(query: GraphQuery): Promise<GraphResult>;
+
+  /**
+   * Answer a triples read (see {@link TriplesQuery}): every triple of a graph
+   * (`NamedGraph.readContent(g)`), or one subject's triples, shapeless
+   * (`TriplesBuilder.forNode({id})`, optionally `.from(graphs)`). Terms come back as core's values:
+   * IRIs as `{id}`, literals as `{value, datatype, language?}`.
+   *
+   * **Optional.** A dataset without it is refused by the dispatch (`resolveTriples`): there is no
+   * shape to answer it with a select instead. A router forwards it to the dataset that holds the
+   * data (a read: never to a writable fork it would have to create). `SparqlDataset` implements
+   * it. Must reject on failure: an unreachable store is never an empty answer.
+   */
+  triplesQuery?(query: TriplesQuery): Promise<Triple[]>;
 
   /**
    * Replace terms in the default graph in one update (see {@link DefaultGraphTermsReplace}): the

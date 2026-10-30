@@ -76,6 +76,9 @@ export type {
   GraphQueryKind,
   GraphResult,
 } from './queries/graphQuery.js';
+export {TriplesBuilder} from './queries/TriplesBuilder.js';
+export {isLiteralTerm, isTriplesQuery, parseTriplesQuery} from './queries/triplesQuery.js';
+export type {LiteralTerm, Triple, TripleObject, TriplesQuery} from './queries/triplesQuery.js';
 export {graphs, dataGraph, OWN_GRAPH} from './ontologies/graphs.js';
 export type {DataGraphRoute, GraphRoute} from './ontologies/graphs.js';
 export {

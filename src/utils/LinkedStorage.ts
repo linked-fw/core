@@ -7,7 +7,13 @@ import type {CreateQuery} from '../queries/CreateQuery.js';
 import type {UpdateQuery} from '../queries/UpdateQuery.js';
 import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
 import type {GraphQuery, GraphResult} from '../queries/IntermediateRepresentation.js';
-import {setQueryDispatch, resolveExistence, resolveGraphQuery} from '../queries/queryDispatch.js';
+import type {Triple, TriplesQuery} from '../queries/triplesQuery.js';
+import {
+  setQueryDispatch,
+  resolveExistence,
+  resolveGraphQuery,
+  resolveTriples,
+} from '../queries/queryDispatch.js';
 import {
   catalogOf,
   getActiveShapeCatalog,
@@ -107,6 +113,7 @@ export abstract class LinkedStorage {
       updateQuery: (q) => this.updateQuery(q),
       deleteQuery: (q) => this.deleteQuery(q),
       graphQuery: (q) => this.graphQuery(q),
+      triplesQuery: (q) => this.triplesQuery(q),
     });
     notifyRoutingChanged();
   }
@@ -477,7 +484,7 @@ export abstract class LinkedStorage {
    * `GraphQueryError('unsupported-query-kind')` (see `resolveGraphQuery`).
    */
   static graphQuery(query: GraphQuery): Promise<GraphResult> {
-    const dataset = this.resolveDatasetForGraphQuery(query);
+    const dataset = this.resolveDatasetForRecordClass(query?.recordClass);
     if (!dataset) {
       return Promise.reject(
         new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().'),
@@ -488,9 +495,45 @@ export abstract class LinkedStorage {
       : outsideShapeCatalog(() => resolveGraphQuery(dataset, query));
   }
 
-  private static resolveDatasetForGraphQuery(query: GraphQuery): IDataset | undefined {
-    const recordShape = query?.recordClass
-      ? getShapesForTargetClass(query.recordClass)[0]
+  /**
+   * Route a triples read.
+   *
+   * A graph read built on a graph-record class (`DraftGraph.readContent(g)`, which carries the
+   * class as `recordClass`) goes where that class's graph queries go, so it reads where they
+   * write. A subject read has no shape and so no routing key: like a shapeless ask it means
+   * "anywhere I can reach", so it is sent to every dataset this router knows, in order, and the
+   * answers are joined (up to the read's `limit`). A dataset that cannot answer it fails the read:
+   * a missing part is not an empty one.
+   */
+  static async triplesQuery(query: TriplesQuery): Promise<Triple[]> {
+    const run = (dataset: IDataset) =>
+      getActiveShapeCatalog() === undefined
+        ? resolveTriples(dataset, query)
+        : outsideShapeCatalog(() => resolveTriples(dataset, query));
+    if (query?.recordClass) {
+      const dataset = this.resolveDatasetForRecordClass(query.recordClass);
+      if (!dataset) {
+        throw new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().');
+      }
+      return run(dataset);
+    }
+    const datasets = this.getDatasets();
+    if (datasets.size === 0) {
+      throw new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().');
+    }
+    const triples: Triple[] = [];
+    for (const dataset of datasets) {
+      triples.push(...(await run(dataset)));
+      if (query.limit !== undefined && triples.length >= query.limit) {
+        return triples.slice(0, query.limit);
+      }
+    }
+    return triples;
+  }
+
+  private static resolveDatasetForRecordClass(recordClass: string | undefined): IDataset | undefined {
+    const recordShape = recordClass
+      ? getShapesForTargetClass(recordClass)[0]
       : undefined;
     const shapeClass = recordShape ? getShapeClass(recordShape.id) : undefined;
     return shapeClass ? this.getDatasetForShapeClass(shapeClass) : routingState.defaultDataset;
