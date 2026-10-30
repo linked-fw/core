@@ -4,7 +4,7 @@ summary: >
   A graph-registry record field given an empty list is left out of the SPARQL that
   `graphQueryToSparql` generates (it wrote `<p> ;`, a parse error); an update still deletes the
   field's old values. Patch. Closes backlog 085. Found by CN plan 282 (CN report 289, third
-  addendum); the whole plan: CN report 299.
+  addendum); the whole plan: report 088.
 ---
 
 # 087 — Graph record field with an empty list
@@ -31,7 +31,8 @@ clears the field, and when no field is left to insert the INSERT is omitted.
 
 - `jest src/tests/graph-query.test.ts`: without the fix `Tests: 2 failed, 62 passed, 64 total`;
   with it `Tests: 64 passed, 64 total`.
-- `npm test` (whole suite plus typecheck): see CN report 299 §Verification.
+- `npm test` (after `linked build`; whole suite plus typecheck): `Test Suites: 17 skipped, 140 passed, 140 of 157 total`,
+  `Tests:       535 skipped, 2583 passed, 3118 total`, exit 0 (11.5 s).
 
 ### Deviations
 

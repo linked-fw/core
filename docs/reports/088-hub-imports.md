@@ -82,7 +82,8 @@ The per-dataset `syncShapeGraphs(ds)` and `syncOntologies(ds)` keep their signat
   failed, 62 passed, 64 total`; with it `Tests: 64 passed, 64 total`.
 - Last full suite (report 086): `npm test` (jest + typecheck) → `Test Suites: 17 skipped, 140
   passed, 140 of 157 total` / `Tests: 535 skipped, 2581 passed, 3116 total`, exit 0 (1:05).
-  Report 087's full run is recorded in the hosting application's wrap-up report.
+  Report 087 (the last change): `Test Suites: 17 skipped, 140 passed, 140 of 157 total` /
+  `Tests: 535 skipped, 2583 passed, 3118 total`, exit 0.
 
 ### Deviations
 
