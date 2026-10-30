@@ -140,4 +140,4 @@ shared state, so both copies agree.
 
 - U1 reads `subClassesOf` for bulk access; K3 may read it for the owned-walk safety net
   (decision 22); V1's boot calls `loadOntologyHierarchy` (master §Control route).
-- `two-copies-built` not running: [backlog 060](../backlog/060-two-copies-built-jest-module-cache.md).
+- `two-copies-built` not running: [backlog 060](../reports/092-two-copies-built-jest-module-cache.md).

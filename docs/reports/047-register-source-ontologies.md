@@ -71,7 +71,7 @@ npm run typecheck            6.84s user 0.28s system 231% cpu 3.069 total   (cle
 npm run check:dts            3.61s user 0.16s system 241% cpu 1.562 total   (clean)
 ```
 
-`two-copies-built` fails as on `main` ([backlog 060](../backlog/060-two-copies-built-jest-module-cache.md)).
+`two-copies-built` fails as on `main` ([backlog 060](../reports/092-two-copies-built-jest-module-cache.md)).
 
 The end-to-end proof (a dev app with a source-only ontology package logging
 `ontology sync: written … v3check-ont`) is in server report 012.

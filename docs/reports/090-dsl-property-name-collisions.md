@@ -1,14 +1,16 @@
 ---
+date: 2026-09-10
 summary: >
   A shape property whose label collides with a `QueryShape` member — `equals`, `as`, `if`,
   `select`, `where`, `id`, `size`, `add`, `concat`, `oneOf`, `none`, `every`, `some` — is
   unreadable through the query DSL. The proxy returns the DSL method, and the field tracer
   fails with "Unknown trace result type: function". The meta-model's own `sh:equals`
   property hits this.
-status: Done
 ---
 
-# 041 — property names that collide with the query DSL
+# 090 — property names that collide with the query DSL
+
+Was backlog 041 (done; moved to reports on 2026-10-30).
 
 > **Done.** Two changes. The meta-model's `sh:equals` accessor is now labelled
 > `equalsConstraint` (matching the `PropertyShapeData` field; the predicate is unchanged),

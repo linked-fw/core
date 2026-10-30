@@ -1,4 +1,5 @@
 ---
+date: 2026-09-30
 summary: >
   `PropertyShape.in` (sh:in) names its value shape by string — `['@_linked/core', 'List']` — so
   loading the SHACL metamodel does not register `List`. Only the core entry, `syncShapes`,
@@ -6,10 +7,11 @@ summary: >
   it even then. Any query or create that touches `in` throws "Shape class not found" wherever
   `List` was not loaded. Create Now's production client bundle is one such place today.
 packages: [core]
-status: Done
 ---
 
-# 045 — `PropertyShape.in` names `List` without registering it
+# 091 — `PropertyShape.in` names `List` without registering it
+
+Was backlog 045 (done; moved to reports on 2026-10-30).
 
 > **Done** on branch `fix/shape-registration`, as proposed below. `List` is split into
 > `src/shapes/List.class.ts` (the class, which never imports `package.js`) and `List.ts` (the

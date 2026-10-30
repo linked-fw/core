@@ -77,7 +77,7 @@ npm test  140.90s user 70.25s system 166% cpu 2:07.03 total
 npm run check:dts            4.31s user 0.30s system 86% cpu 5.338 total   (clean)
 ```
 
-`two-copies-built` fails as on `main` ([backlog 060](../backlog/060-two-copies-built-jest-module-cache.md)).
+`two-copies-built` fails as on `main` ([backlog 060](../reports/092-two-copies-built-jest-module-cache.md)).
 
 The end-to-end proof (the app template's boot syncing `@_linked/schema` and no
 `extends-without-subclass` for `Person`) is in server report 011, which wires the call into the

@@ -687,7 +687,7 @@ Landed on `store-inference`; record: [report 042](../reports/042-store-inference
 Every K1 contract item exists under its export path with its signature (plus the registry entry's
 `terms` and `NodeShapeData.generated`, both additive). Full gate on the current test store:
 `npm test` 2404 passed / 120 skipped, the one failing suite `two-copies-built` failing identically
-on `main` ([backlog 060](../backlog/060-two-copies-built-jest-module-cache.md)); `test:fuseki` 304
+on `main` ([backlog 060](../reports/092-two-copies-built-jest-module-cache.md)); `test:fuseki` 304
 passed, none skipped; `typecheck` and `check:dts` clean; `n3` only in `lib/esm/ontology/hierarchy.js`,
 dynamically. Overrides whose SHACL changes across the localized packages: `@_linked/schema
 Event.image` gains `contains`. Changeset `core-042-ontology-sync-shape-check.md` (minor). Phase 5

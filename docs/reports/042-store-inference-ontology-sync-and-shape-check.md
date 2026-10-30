@@ -148,7 +148,7 @@ npm test  85.00s user 13.74s system 421% cpu 23.444 total
 
 The one failing suite, `two-copies-built.test.ts`, fails the same way in the main checkout at
 `main` (4afe035): `Error: Module cache already has entry …/lib/esm/shapes/SHACL.js. This is a bug
-in Jest` — recorded as [backlog 060](../backlog/060-two-copies-built-jest-module-cache.md).
+in Jest` — recorded as [backlog 060](../reports/092-two-copies-built-jest-module-cache.md).
 
 Quick gates (phase test files plus `shape-catalog`, `shacl-syncshapes`,
 `shape-sync-output-equivalence`, then `npm run typecheck`):
@@ -251,7 +251,7 @@ three consecutive `test:fuseki` runs were green (10.6 s, 14.9 s, 14.1 s).
   before core's release PR (master step R, fuseki first).
 - A Fuseki left on 3939 that does not infer now fails core's run (by design): a stock store
   started for older branches must be stopped, or `FUSEKI_BASE_URL` pointed elsewhere.
-- `two-copies-built` not running: [backlog 060](../backlog/060-two-copies-built-jest-module-cache.md).
+- `two-copies-built` not running: [backlog 060](../reports/092-two-copies-built-jest-module-cache.md).
 - Tighten-only errors, `autoLoadOntologyData` removal: K3.
 - CN: `src/utils/shapeCatalogQuery.ts` (the catalog projection) writes a property's `group` as a
   string; with `PropertyShapeData.group` a `NodeReferenceValue` it must write `{id}` once CN

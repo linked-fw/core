@@ -889,6 +889,14 @@ function memberShapeClass(set: QueryShapeSet<any>): ShapeConstructor | undefined
   return shapeId ? resolveShapeConstructor(shapeId) : undefined;
 }
 
+/**
+ * `memberShapeClass`, else the base Shape: a relation with no resolvable shape (`sh:class` only,
+ * no shape targeting the class) still allows `equals` and `id` on its members.
+ */
+function memberShapeClassOrBase(set: QueryShapeSet<any>): ShapeConstructor {
+  return memberShapeClass(set) ?? (Shape as unknown as ShapeConstructor);
+}
+
 export class QueryShapeSet<
   S extends Shape = Shape,
   Source = any,
@@ -1092,8 +1100,7 @@ export class QueryShapeSet<
         'You cannot call where() from within a where() clause. Consider using some() or every() instead',
       );
     }
-    let leastSpecificShape = this.getOriginalValue().getLeastSpecificShape();
-    this.wherePath = processWhereClause(validation, leastSpecificShape);
+    this.wherePath = processWhereClause(validation, memberShapeClassOrBase(this));
     //return this.proxy because after Shape.friends.where() we can call other methods of Shape.friends
     //and for that we need the proxy
     return this.proxy;
@@ -1102,10 +1109,9 @@ export class QueryShapeSet<
   select<QF = unknown>(
     subQueryFn: QueryBuildFn<S, QF>,
   ): FieldSet<QF, QueryShapeSet<S, Source, Property>> {
-    const leastSpecificShape = this.getOriginalValue().getLeastSpecificShape();
     const parentSegments = FieldSet.collectPropertySegments(this);
     const fs = FieldSet.forSubSelect<QF, QueryShapeSet<S, Source, Property>>(
-      leastSpecificShape,
+      memberShapeClassOrBase(this),
       subQueryFn as any,
       parentSegments,
       this,
@@ -1117,8 +1123,14 @@ export class QueryShapeSet<
     SelectAllQueryResponse<S>,
     QueryShapeSet<S, Source, Property>
   > {
-    let leastSpecificShape = this.getOriginalValue().getLeastSpecificShape();
-    const propertyLabels = getUniquePropertyShapes(leastSpecificShape.shape)
+    const memberClass = memberShapeClass(this);
+    if (!memberClass?.shape) {
+      throw new Error(
+        `selectAll() on '${this.property?.label}': its members have no shape to list properties from ` +
+          `(a sh:class no shape targets). Declare sh:node on the property, or select fields with select().`,
+      );
+    }
+    const propertyLabels = getUniquePropertyShapes(memberClass.shape)
       .map((propertyShape) => propertyShape.label);
     return this.select((shape) =>
       propertyLabels.map((label) => (shape as any)[label]),
@@ -1147,10 +1159,7 @@ export class QueryShapeSet<
 
   private buildPredicateExpression(validation: WhereClause<S>): ExpressionNode {
     if (validation instanceof Function) {
-      // A relation with no resolvable shape (`sh:class` only, no shape targeting the class)
-      // still allows `equals` and `id` on its members, through the base Shape.
-      const memberClass = memberShapeClass(this) ?? (Shape as unknown as ShapeConstructor);
-      const proxy = createProxiedPathBuilder(memberClass) as any;
+      const proxy = createProxiedPathBuilder(memberShapeClassOrBase(this)) as any;
       const result = validation(proxy);
       if (isExpressionNode(result)) {
         return result;
