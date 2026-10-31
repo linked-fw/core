@@ -52,8 +52,9 @@ its callbacks were already evaluated by `groupBy()`, and it always requires `gro
 - `npx linked build`: `✔ Build successful`. Full jest against an own Fuseki:
   `Tests: 122 skipped, 3106 passed, 3228 total`, `[fuseki] live tests: 437 total — 435 passed,
   0 failed, 2 skipped`. `npm run check:dts`: clean.
-- CN, after landing: `node_modules/.bin/vitest run src/data/CnDataManagerHost.catalog.test.tsx`
-  (result below in Details).
+- CN, after landing and building core in the main checkout:
+  `node_modules/.bin/vitest run src/data/CnDataManagerHost.catalog.test.tsx` →
+  `Test Files  1 passed (1)`, `Tests  3 passed (3)` (before: `Tests  1 failed | 2 passed (3)`).
 
 ### Deviations
 
