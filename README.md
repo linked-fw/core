@@ -868,6 +868,7 @@ The query DSL is schema-parameterized: you define your own SHACL shapes, and Lin
 - Set filtering with `some(...)` / `every(...)` (and implicit `some`)
 - Outer `where(...)` chaining
 - Counting: `.count()` for how many instances match, `.size()` for a property's value count
+- Grouping: `.groupBy('key')` with `Expr.count()`, `.countDistinct()`, `.min()`, `.max()`, `having`
 - Custom result formats (object mapping)
 - Computed values — derive new fields with arithmetic, string, date, and comparison methods
 - Expression-based WHERE filters (`p.name.strlen().gt(5)`)
@@ -999,6 +1000,54 @@ const perPerson = await Person.select((p) => p.knows.size());
 A count resolves to a real number and **rejects on failure** — it never reports an unreachable store
 as `0`. `.toCount()` gives you the count query itself, for a router that forwards
 (`builder.toCount().toJSON()`) rather than executes.
+
+A count is always of distinct values, so two counted paths in one select do not inflate each
+other (`{friends: p.friends.size(), nicks: p.nickNames.size()}`).
+
+#### Grouping and aggregates
+
+Select the keys and the aggregates, filter the members with `where`, then group by the key
+fields, named as in the select's object:
+
+```typescript
+import {Expr} from '@_linked/core';
+
+/* Result: Array<{hobby: string; n: number}> */
+const perHobby = await Person.select((p) => ({hobby: p.hobby, n: Expr.count()}))
+  .where((p) => p.name.isDefined())
+  .groupBy('hobby');
+
+/* Result: Array<{friend: {id: string}; last: Date}> */
+const latest = await Person.select((p) => ({friend: p.bestFriend, last: p.birthDate.max()}))
+  .groupBy('friend')
+  .having('last', (last) => last.gt(new Date('2000-01-01')))
+  .orderBy('last', 'DESC')
+  .limit(10);
+
+// Lowers to: SELECT ?a0_bestFriend (MAX(?a0_birthDate) AS ?a1) WHERE { … }
+//            GROUP BY ?a0_bestFriend HAVING(MAX(?a0_birthDate) > "2000-01-01…") ORDER BY DESC(MAX(?a0_birthDate))
+```
+
+- **Aggregates:** `Expr.count()` (the members of the group), `.countDistinct()` on a
+  single-valued path, `.size()` on a multi-valued one, `.min()` / `.max()` on literal paths. Each
+  is typed: a count is a `number`, `min`/`max` the value's type.
+- **Keys:** `groupBy('a', 'b')` names one or more fields; every field that is not an aggregate
+  must be a key (a type error and a runtime error otherwise). A key can be a nested path
+  (`p.bestFriend.hobby`), a relation (its value is `{id}`), the subject itself (`{person: p}`), or
+  a multi-valued path, where each value is its own group. Members without the key form a group
+  whose key is `null`.
+- **The grouped builder** has `having(field, condition)` (several calls must all hold),
+  `orderBy(field | fields, direction)`, `limit`, `offset`, `from` and `exec`. It has no `where`
+  (filter the members before grouping), no `.for`/`.one`, and its rows have no `id`.
+- `groupBy` needs the object form of select, and is refused after `.for(id)`, `.one()` or an
+  `orderBy` on the members. `orderBy` on a plain select sorts by paths and refuses an aggregate.
+- Outside a grouped select, an aggregate is per row, like `.size()`:
+  `Person.select((p) => ({first: p.nickNames.min()}))`.
+
+A grouped select is still a select: a dataset receives it through `selectQuery` and lowers it to
+an `IRSelectQuery` with `groupBy`. It needs the `'groupBy'` feature (`min`/`max` need theirs), and
+a dataset that does not list it in `supports` is refused before it is asked. `SparqlDataset`
+supports all of them.
 
 #### Triples reads (no shape)
 

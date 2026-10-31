@@ -4,7 +4,7 @@ summary: >
   over the result fields, returning a narrower GroupedSelectBuilder with having/orderBy/limit/
   offset/from/exec/JSON; Expr.count(), countDistinct/min/max on paths; rides IRSelectQuery with
   optional groupBy/having/requires; stores declare `supports`, so every store fails loudly.
-status: Implementation
+status: Review
 packages: [core]
 ---
 
@@ -245,11 +245,19 @@ SPARQL golden tests for U1/U3/U8 shapes; mapping unit tests; wire round trip; Fu
 tests (count per type, count + having, max per group sorted, nested-path key, null key group,
 `forAll`, `from`); full `npm test` against an own Fuseki; `npx linked build`.
 
-### Phase 4 — Docs
+### Phase 4 — Docs (done)
 
 Tasks: README grouping section + counting update; DSL-JSON doc; backlogs 012/006/020 updated.
 
 Validation: docs describe the built API only; links resolve.
+
+Done: README (grouping section, counting note, feature list), `documentation/dsl-json.md`
+(envelopes, grouped selects; the example is the real `toJSON()` output of such a query),
+`documentation/intermediate-representation.md` (aggregation, grouped select, `supports` in the
+implementer guide). Backlog 012 removed (consumed; README mapping updated), 006 narrowed to
+sum/avg, 020's countDistinct question answered, 079's orderBy half marked done; new follow-ups
+087 (features in routers, baseline tagging, computed orderBy) and 088 (relation field type in the
+object form of select).
 
 Phases 2 and 3 results (implemented and committed together: the aggregate typing was only
 testable through grouped selects):

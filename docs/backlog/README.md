@@ -33,7 +33,7 @@ following an old `docs/ideas/NNN` reference in a historical report:
 | 009 shape-remapping | backlog **027** |
 | 010 strict-null-checks | backlog **028** |
 | 011 query-type-system-refactor | backlog **029** |
-| 012 aggregate-group-filtering | backlog **012** |
+| 012 aggregate-group-filtering | backlog 012, **retired** → report 096 (implemented) |
 | 013 shacl-property-paths | **retired** → report 011 (implemented) |
 | 014 prefixed-uris-in-json | backlog **014** |
 | 015 shacl-rdf-serialization | **retired** → report 016 (write side); reader → backlog **030** |

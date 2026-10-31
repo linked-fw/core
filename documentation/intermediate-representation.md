@@ -223,6 +223,32 @@ DSL: `Person.select((p) => p.friends.size())`
 }
 ```
 
+A `count` always counts distinct values (`COUNT(DISTINCT …)` in SPARQL): a select that joins two
+multi-valued paths yields their cross product, and counting rows would multiply each count by
+the other path's size. `min` and `max` are aggregates too (`p.birthDate.max()`).
+
+### Grouped select (`groupBy`)
+
+DSL: `Person.select((p) => ({hobby: p.hobby, n: Expr.count()})).groupBy('hobby').having('n', (n) => n.gt(1))`
+
+```ts
+{
+  kind: 'select',
+  projection: [
+    {alias: 'a1', expression: {kind: 'property_expr', sourceAlias: 'a0', property: 'prop:hobby'}},
+    {alias: 'a2', expression: {kind: 'aggregate_expr', name: 'count', args: [{kind: 'alias_expr', alias: 'a0'}]}},
+  ],
+  groupBy: [{kind: 'property_expr', sourceAlias: 'a0', property: 'prop:hobby'}],
+  having: {kind: 'binary_expr', operator: '>', left: {kind: 'aggregate_expr', name: 'count', args: [/* a0 */]}, right: {kind: 'literal_expr', value: 1}},
+  requires: ['groupBy'],
+}
+```
+
+With `groupBy` the rows are groups: the root is not projected, each projection item is a key
+(its expression is in `groupBy`) or an aggregate, and a row has no `id`. `orderBy` items are the
+projection expressions of the fields they name. `requires` lists the features beyond the
+baseline the query uses (`'groupBy'`, `'min'`, `'max'`); see the implementer guide.
+
 ### Sub-select with custom result object
 
 DSL: `Person.select((p) => p.friends.select((f) => ({name: f.name, hobby: f.hobby})))`
@@ -417,6 +443,15 @@ class MyStore implements IDataset {
   }
 }
 ```
+
+**Features a dataset declares.** A select can need features beyond the baseline: grouping
+(`'groupBy'`) and `'min'`/`'max'`. A dataset lists the ones it answers in `supports`
+(`readonly supports?: readonly QueryFeature[]`); a select that needs one the dataset does not
+list is refused before it is sent (`assertQuerySupported`, which `exec` and `LinkedStorage`
+call), so a dataset written without them fails loudly instead of answering ungrouped rows.
+`SparqlDataset` lists all (`ALL_QUERY_FEATURES`). A store that reads the IR finds the same list
+in `IRSelectQuery.requires`. A router lists what it forwards and checks each target itself, as
+`LinkedStorage` does.
 
 `SelectQuery`/`CreateQuery`/`UpdateQuery`/`DeleteQuery` are the **closed query interfaces** (the live
 query). The corresponding lowered IR types are `IRSelectQuery`/`IRCreateMutation`/`IRUpdateMutation`/`IRUpsertMutation`/

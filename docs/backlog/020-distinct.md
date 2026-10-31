@@ -63,8 +63,10 @@ prisma.user.findMany({ distinct: ['name'] })  // field-level distinct
 
 - [ ] Should `.distinct()` be a query-level toggle, or should the auto-DISTINCT default be kept with an opt-out (`.noDistinct()`)?
 - [ ] Should we support field-level distinct (Prisma-style `distinct: ['name']`), or only query-level `SELECT DISTINCT`?
-- [ ] Should `.countDistinct()` be added as a separate method alongside `.size()`, or should `.size({ distinct: true })` be the API?
-- [ ] Should the IR get an explicit `distinct` field, or should it remain algebra-level only?
+- [x] `COUNT(DISTINCT)`: answered in report 096. Every count lowers to `COUNT(DISTINCT …)` (no IR
+  flag), `.countDistinct()` exists on single-valued paths, `.size()` on multi-valued ones.
+- [ ] Should the IR get an explicit `distinct` field for the select itself, or should it remain
+  algebra-level only?
 
 ## Decisions
 

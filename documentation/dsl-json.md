@@ -57,7 +57,10 @@ Every envelope carries a wire-format version under `v`:
 Two families, distinguished structurally:
 
 - **Mutations** carry an `op` discriminator: `"create"`, `"update"`, `"upsert"`, or `"delete"`.
-- **Selects** carry no `op`.
+- **Selects** carry no `op`, unless they need a feature beyond the baseline (grouping, `min`,
+  `max`): then `"op": "select"` and `"requires": ["groupBy", "max"]`. A reader that predates
+  those features has no `"select"` op and refuses the envelope instead of answering without
+  them; a reader refuses a `requires` entry it does not know.
 
 `fromJSON(json)` routes on `op` (and throws on an unrecognized `op` rather than silently
 treating it as a select). Only `v` and `shape` are always present; everything else is optional.
@@ -77,6 +80,31 @@ treating it as a select). Only `v` and `shape` are always present; everything el
   "nullSubject": true                               // .for(null) — resolves to no results
 }
 ```
+
+### Grouped selects
+
+A grouped select (`.groupBy(…)`, see the README) is a select envelope with `op`/`requires`, its
+fields in object form (every field named), and three more keys:
+
+```jsonc
+{
+  "v": "1.2", "op": "select", "requires": ["groupBy", "max"],
+  "shape": "https://linked.cm/shape/core/Person",
+  "fields": [
+    { "bestFriend": { "customKey": "friend" } },               // a key
+    { "customKey": "last", "value": ["max", { "@path": "birthDate" }] },  // an aggregate
+    { "customKey": "n", "value": ["count", { "@path": "" }] }  // Expr.count(): the members
+  ],
+  "where": { "hobby": "Reading" },                             // filters the members
+  "groupBy": ["friend"],                                       // key fields, by name
+  "having": [">", ["count", { "@path": "" }], 1],              // filters the groups
+  "groupOrderBy": [ { "field": "last", "direction": "DESC" } ]
+}
+```
+
+Aggregates are computed fields: `["count", x]` (a count always counts distinct values),
+`["min", x]`, `["max", x]`. `.size()` on a relation stays `{ "<path>": { "aggregation": "count" } }`;
+any other `aggregation` value is refused.
 
 ## Paths
 
