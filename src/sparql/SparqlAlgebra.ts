@@ -93,11 +93,18 @@ export type SparqlValues = {
  * wrapped in `{ SELECT <projection> WHERE { <inner> } ORDER BY … LIMIT … OFFSET … }`
  * so the related collection is bounded per parent. Only valid when the outer
  * query targets a single root subject (see irToAlgebra).
+ *
+ * Also emitted to page a select over its root subjects (`pageBySubject` in irToAlgebra):
+ * `{ SELECT ?a0 (MIN(…) AS ?k) WHERE { … } GROUP BY ?a0 ORDER BY ?k LIMIT … OFFSET … }`.
  */
 export type SparqlSubSelect = {
   type: 'subselect';
   projection: string[];
+  /** Computed projections after the variables, `(expr AS ?alias)`. */
+  expressions?: Array<{alias: string; expression: SparqlExpression}>;
   inner: SparqlAlgebraNode;
+  groupBy?: string[];
+  having?: SparqlExpression;
   orderBy?: SparqlOrderCondition[];
   limit?: number;
   offset?: number;

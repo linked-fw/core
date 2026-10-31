@@ -64,6 +64,12 @@ Two families, distinguished structurally:
   bypasses the `op` and would not notice); a current reader refuses a `requires` entry it does
   not know.
 
+`limit`/`offset` page over the root subjects, not over result rows: a page is `limit`
+subjects after the first `offset`, each with all its values. A `sortBy` on a multi-valued or
+nested path sorts each subject by its first value in that direction (lowest `ASC`, highest
+`DESC`). On a grouped select they count groups. A store that answers envelopes itself must page
+the same way.
+
 `fromJSON(json)` routes on `op` (and throws on an unrecognized `op` rather than silently
 treating it as a select). Only `v` and `shape` are always present; everything else is optional.
 

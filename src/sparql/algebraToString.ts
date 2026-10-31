@@ -303,11 +303,22 @@ export function serializeAlgebraNode(
 
     case 'subselect': {
       const innerBody = serializeAlgebraNode(node.inner, collector);
-      const projection = node.projection.map((v) => `?${sanitizeVarName(v)}`).join(' ');
+      const projection = [
+        ...node.projection.map((v) => `?${sanitizeVarName(v)}`),
+        ...(node.expressions ?? []).map(
+          (e) => `(${serializeExpression(e.expression, collector)} AS ?${sanitizeVarName(e.alias)})`,
+        ),
+      ].join(' ');
       const lines: string[] = [`SELECT ${projection} WHERE {`];
       lines.push(indent(innerBody));
       lines.push('}');
       const trailing: string[] = [];
+      if (node.groupBy && node.groupBy.length > 0) {
+        trailing.push(`GROUP BY ${node.groupBy.map((v) => `?${sanitizeVarName(v)}`).join(' ')}`);
+      }
+      if (node.having) {
+        trailing.push(`HAVING(${serializeExpression(node.having, collector)})`);
+      }
       if (node.orderBy && node.orderBy.length > 0) {
         const orderParts = node.orderBy.map((cond) => {
           const expr = serializeExpression(cond.expression, collector);

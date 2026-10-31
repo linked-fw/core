@@ -1240,7 +1240,23 @@ const noChess = await Person.select((p) => p.name).minus((p) => p.hobby.equals('
 const sorted = await Person.select((p) => p.name).orderBy((p) => p.name, 'ASC');
 const limited = await Person.select((p) => p.name).limit(1);
 const single = await Person.select((p) => p.name).one();
+const page3 = await Person.select((p) => [p.name, p.nickNames]).orderBy((p) => p).limit(20).offset(40);
 ```
+
+`limit(n)` and `offset(m)` page over the selected **instances** (the root subjects), not over
+the rows a store returns: a page holds `n` instances after the first `m`, and each has every
+value of every selected path, as without paging. An instance is never split across two pages,
+however many values its multi-valued paths have. `.one()` is the first instance, with all its
+values; `.for(id)` reads one instance and needs no limit.
+
+An `orderBy` on a multi-valued or nested path (`p.nickNames`, `p.friends.name`) gives each
+instance one sort value: its first value in that direction, the lowest ascending and the
+highest descending. Each `orderBy` key is taken this way on its own. An instance without the
+value sorts as SPARQL sorts an unbound value: first ascending, last descending. Without an
+`orderBy` the order of the instances, and so which ones a page holds, is the store's.
+
+A grouped select (`groupBy`, below) pages over its **groups**: `limit(10)` is ten groups.
+`count()` and `exists()` drop `limit` and `offset`.
 
 #### Query context
 Query context lets you inject request-scoped values (like the current user) into filters without threading them through every call.

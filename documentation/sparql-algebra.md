@@ -69,7 +69,7 @@ Structural building blocks for WHERE clauses, aligned with SPARQL 1.2 algebra:
 | `minus` | `left`, `right` | MINUS (set difference) |
 | `extend` | `inner`, `variable`, `expression` | BIND (expression AS ?var) |
 | `graph` | `iri`, `inner` | GRAPH (named graph) |
-| `subselect` | `projection[]`, `inner`, `orderBy?`, `limit?`, `offset?` | `{ SELECT … WHERE { … } ORDER BY … LIMIT … OFFSET … }` (a nested sub-SELECT used as a group graph pattern) |
+| `subselect` | `projection[]`, `expressions?`, `inner`, `groupBy?`, `having?`, `orderBy?`, `limit?`, `offset?` | `{ SELECT … WHERE { … } GROUP BY … HAVING … ORDER BY … LIMIT … OFFSET … }` (a nested sub-SELECT used as a group graph pattern) |
 
 ```ts
 type SparqlAlgebraNode =
@@ -87,7 +87,9 @@ type SparqlAlgebraNode =
 `subselect` is emitted for **nested-select inner pagination** (`p.friends.select(...).limit(n)`): the
 root→child traverse is wrapped in a sub-SELECT so a related collection can be bounded per parent. It is only
 produced when the outer query targets a single subject (a plain sub-SELECT `LIMIT` is uncorrelated and would
-bound globally otherwise); `irToAlgebra` throws if that precondition does not hold.
+bound globally otherwise); `irToAlgebra` throws if that precondition does not hold. It is also emitted to
+page a select over its root subjects (see ORDER BY / LIMIT / OFFSET below), with `expressions`, `groupBy` and
+`having`.
 
 ### Expressions
 
@@ -195,7 +197,7 @@ Converts an `IRSelectQuery` to a `SparqlSelectPlan`. The algorithm:
 7. **Projection** — root alias + property variables + aggregate/expression projections.
 8. **Traversal aliases** — traversal target variables (`?a1`, `?a2`, etc.) are auto-included in the SELECT for result grouping.
 9. **GROUP BY inference** — if any aggregate is present, all non-aggregate projected variables become GROUP BY targets.
-10. **ORDER BY / LIMIT / OFFSET** — passed through from the IR, with one exception: `.one()` lowers to `limit: 1` + `singleResult`, but a SPARQL `LIMIT` bounds *result rows*, not entities — an entity reached via a traversal or a plural property projection spans one row per related value. Emitting `LIMIT 1` there would truncate that entity's own nested/multi-valued data to a single row instead of picking one entity. So when `singleResult && limit === 1` and the query yields multiple rows per root entity, the `LIMIT` is omitted; the result mapper (which already groups bindings by root id) returns the single entity with its data intact. A flat single-valued `.one()` query keeps its `LIMIT 1`.
+10. **ORDER BY / LIMIT / OFFSET** — `limit`/`offset` page over root subjects, not rows. When one subject can span several rows (a traversal, or a multi-valued path in the projection or the order) and the select is not grouped, the page is a sub-SELECT joined to the select's own pattern: `{ SELECT ?a0 (MIN(?a0_x) AS ?page_order_0) WHERE { … } GROUP BY ?a0 [HAVING(…)] ORDER BY ASC(?page_order_0) LIMIT n OFFSET m }`. Its pattern is the select's, without the OPTIONAL blocks that bind nothing the page reads (the subject, the where, the sort values, HAVING), since an OPTIONAL never drops a subject. Each sort key becomes one value per subject: `MIN` ascending, `MAX` descending (a key that is the subject itself is used as is); the outer query orders its rows by the same keys and has no LIMIT. `.one()` is `limit: 1` and pages the same way; a select of one subject (`subjectId`) drops the LIMIT. A select with one row per subject, and a grouped select (one row per group), keep a plain `LIMIT`/`OFFSET`.
 
 #### Example: flat select
 

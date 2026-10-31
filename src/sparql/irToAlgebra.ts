@@ -1361,21 +1361,15 @@ export function selectToAlgebra(
     }));
   }
 
-  // `.one()` lowers to limit=1 + singleResult, but LIMIT bounds ROWS, not
-  // entities. When the query yields multiple rows per root entity (traversals
-  // or plural properties), a row-level LIMIT would truncate the entity's own
-  // nested data — omit it and let the result mapper pick the single entity.
-  const multiRowPerEntity =
-    query.patterns.some((p) => p.kind === 'traverse') ||
-    query.projection.some(
-      (item) =>
-        item.expression.kind === 'property_expr' &&
-        !(typeof item.expression.maxCount === 'number' && item.expression.maxCount <= 1),
-    );
-  const limit =
-    query.singleResult && query.limit === 1 && multiRowPerEntity
-      ? undefined
-      : query.limit;
+  // LIMIT/OFFSET page over root subjects, not solution rows. A subject reached through a
+  // traversal, or with a multi-valued path in the projection or the order, spans one row per
+  // value; such a select is paged by a sub-SELECT of subjects (`pageBySubject`, below). A select
+  // of one subject (`.for(id)`) needs no LIMIT at all: a row LIMIT would cut its values.
+  const multiRowPerSubject = !grouped && rowsPerSubjectMayExceedOne(query);
+  const oneSubjectRead =
+    multiRowPerSubject && !!query.subjectId && !query.offset && query.limit !== 0;
+  const pageSubjects =
+    multiRowPerSubject && !oneSubjectRead && (query.limit !== undefined || query.offset !== undefined);
 
   // `.from()` scopes the read to its graphs (expanded by the store); without it, a shape whose
   // instances live in one named graph (the graph-registry records, `NamedGraph.storedInGraph`)
@@ -1395,18 +1389,261 @@ export function selectToAlgebra(
     query.graphs ?? routed ?? (storedIn ? [storedIn] : undefined),
     _options,
   );
+  const paged = pageSubjects
+    ? pageBySubject(scoped.algebra, rootAlias, orderBy, havingExpr, query.limit, query.offset)
+    : undefined;
   return {
     type: 'select',
-    algebra: scoped.algebra,
+    algebra: paged ? paged.algebra : scoped.algebra,
     ...(scoped.dataset ? {dataset: scoped.dataset} : {}),
     projection,
     distinct: !hasAggregates ? true : undefined,
-    orderBy,
-    limit,
-    offset: query.offset,
-    groupBy,
+    orderBy: paged ? paged.orderBy : orderBy,
+    limit: pageSubjects || oneSubjectRead ? undefined : query.limit,
+    offset: pageSubjects ? undefined : query.offset,
+    // An ungrouped select with an aggregate groups its rows by subject and values; the page's
+    // sort keys are one per subject, so grouping by them too changes nothing and lets the outer
+    // ORDER BY read them.
+    groupBy: paged && groupBy ? [...groupBy, ...paged.keys] : groupBy,
     having: havingExpr,
     aggregates: aggregates.length > 0 ? aggregates : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Paging over subjects
+// ---------------------------------------------------------------------------
+
+/** Whether an expression reads a multi-valued path of the row (not inside an aggregate). */
+function readsMultiValuedPath(expr: IRExpression): boolean {
+  switch (expr.kind) {
+    case 'property_expr': {
+      // A projected path carries its maxCount; an order or where path is looked up.
+      const maxCount = expr.maxCount ?? findPropertyShapeById(expr.property)?.maxCount;
+      return !(typeof maxCount === 'number' && maxCount <= 1);
+    }
+    case 'binary_expr':
+      return readsMultiValuedPath(expr.left) || readsMultiValuedPath(expr.right);
+    case 'logical_expr':
+      return expr.expressions.some(readsMultiValuedPath);
+    case 'not_expr':
+      return readsMultiValuedPath(expr.expression);
+    case 'function_expr':
+      return expr.args.some(readsMultiValuedPath);
+    case 'in_expr':
+      return readsMultiValuedPath(expr.value);
+    // An aggregate collapses its values into one per subject; an exists binds nothing.
+    default:
+      return false;
+  }
+}
+
+/**
+ * Whether one subject of an ungrouped select can span several solution rows: a traversal (not
+ * inside an exists or minus), or a multi-valued path in the projection or the order.
+ */
+function rowsPerSubjectMayExceedOne(query: IRSelectQuery): boolean {
+  return (
+    collectTraversalAliases(query.patterns).length > 0 ||
+    query.projection.some((item) => readsMultiValuedPath(item.expression)) ||
+    (query.orderBy ?? []).some((item) => readsMultiValuedPath(item.expression))
+  );
+}
+
+/** The variables an expression reads, including those of an EXISTS pattern. */
+function expressionVariables(expr: SparqlExpression | undefined, out: Set<string> = new Set()): Set<string> {
+  if (!expr) return out;
+  switch (expr.kind) {
+    case 'variable_expr':
+      out.add(expr.name);
+      break;
+    case 'bound_expr':
+      out.add(expr.variable);
+      break;
+    case 'binary_expr':
+      expressionVariables(expr.left, out);
+      expressionVariables(expr.right, out);
+      break;
+    case 'logical_expr':
+      for (const e of expr.exprs) expressionVariables(e, out);
+      break;
+    case 'not_expr':
+      expressionVariables(expr.inner, out);
+      break;
+    case 'function_expr':
+    case 'aggregate_expr':
+      for (const e of expr.args) expressionVariables(e, out);
+      break;
+    case 'in_expr':
+      expressionVariables(expr.value, out);
+      for (const e of expr.list) expressionVariables(e, out);
+      break;
+    case 'exists_expr':
+      for (const v of nodeVariables(expr.pattern)) out.add(v);
+      break;
+    case 'iri_expr':
+    case 'literal_expr':
+      break;
+  }
+  return out;
+}
+
+function termVariable(term: SparqlTerm, out: Set<string>): void {
+  if (term.kind === 'variable') out.add(term.name);
+}
+
+/** Every variable a pattern mentions (an over-approximation of what it binds). */
+function nodeVariables(node: SparqlAlgebraNode, out: Set<string> = new Set()): Set<string> {
+  switch (node.type) {
+    case 'bgp':
+      for (const t of node.triples) {
+        termVariable(t.subject, out);
+        termVariable(t.predicate, out);
+        termVariable(t.object, out);
+      }
+      break;
+    case 'join':
+    case 'union':
+    case 'minus':
+      nodeVariables(node.left, out);
+      nodeVariables(node.right, out);
+      break;
+    case 'left_join':
+      nodeVariables(node.left, out);
+      nodeVariables(node.right, out);
+      expressionVariables(node.condition, out);
+      break;
+    case 'filter':
+      nodeVariables(node.inner, out);
+      expressionVariables(node.expression, out);
+      break;
+    case 'extend':
+      nodeVariables(node.inner, out);
+      expressionVariables(node.expression, out);
+      out.add(node.variable);
+      break;
+    case 'graph':
+      if (node.variable !== undefined) out.add(node.variable);
+      nodeVariables(node.inner, out);
+      break;
+    case 'values':
+      out.add(node.variable);
+      break;
+    case 'subselect':
+      for (const v of node.projection) out.add(v);
+      for (const e of node.expressions ?? []) out.add(e.alias);
+      break;
+  }
+  return out;
+}
+
+const union = (a: ReadonlySet<string>, b: Iterable<string>): Set<string> => {
+  const out = new Set(a);
+  for (const v of b) out.add(v);
+  return out;
+};
+
+/**
+ * The pattern that selects a page's subjects: `node` without the OPTIONAL blocks that only bind
+ * variables nothing in `needed` reads. An OPTIONAL never removes a row of its left side, so
+ * dropping it leaves the set of matching subjects as it was; it only drops the row fan-out of
+ * the values the outer query reads anyway. A kept block's variables become needed on its other
+ * side, since they are what joins the two.
+ */
+function prunePagePattern(node: SparqlAlgebraNode, needed: ReadonlySet<string>): SparqlAlgebraNode {
+  switch (node.type) {
+    case 'left_join': {
+      const leftVars = nodeVariables(node.left);
+      const rightVars = nodeVariables(node.right);
+      expressionVariables(node.condition, rightVars);
+      const rightOnly = [...rightVars].filter((v) => !leftVars.has(v));
+      if (!rightOnly.some((v) => needed.has(v))) return prunePagePattern(node.left, needed);
+      return {
+        ...node,
+        left: prunePagePattern(node.left, union(needed, rightVars)),
+        right: prunePagePattern(node.right, union(needed, leftVars)),
+      };
+    }
+    case 'join':
+      return {
+        ...node,
+        left: prunePagePattern(node.left, union(needed, nodeVariables(node.right))),
+        right: prunePagePattern(node.right, union(needed, nodeVariables(node.left))),
+      };
+    case 'union':
+      return {...node, left: prunePagePattern(node.left, needed), right: prunePagePattern(node.right, needed)};
+    case 'minus':
+      return {...node, left: prunePagePattern(node.left, union(needed, nodeVariables(node.right)))};
+    case 'filter':
+      return {...node, inner: prunePagePattern(node.inner, union(needed, expressionVariables(node.expression)))};
+    case 'extend':
+      return {
+        ...node,
+        inner: prunePagePattern(node.inner, union(needed, [...expressionVariables(node.expression), node.variable])),
+      };
+    case 'graph':
+      return {
+        ...node,
+        inner: prunePagePattern(node.inner, node.variable !== undefined ? union(needed, [node.variable]) : needed),
+      };
+    case 'bgp':
+    case 'values':
+    case 'subselect':
+      return node;
+  }
+}
+
+/**
+ * Page an ungrouped select over its root subjects. A sub-SELECT picks the page:
+ *
+ *   { SELECT ?a0 (MIN(?a0_x) AS ?page_order_0) WHERE { <where part> }
+ *     GROUP BY ?a0 [HAVING(…)] ORDER BY ASC(?page_order_0) LIMIT n OFFSET m }
+ *
+ * and is joined to the select's own pattern, which reads every value of those subjects. The
+ * outer query orders its rows by the same keys, so the result keeps the page's order.
+ *
+ * Each sort key is one value per subject: the subject's first value in that key's direction —
+ * the lowest ascending (`MIN`), the highest descending (`MAX`). A key that is the subject itself
+ * sorts as is. A subject without the value has an unbound key (first ascending, last
+ * descending, as SPARQL orders unbound values).
+ */
+function pageBySubject(
+  algebra: SparqlAlgebraNode,
+  rootAlias: string,
+  orderBy: SparqlOrderCondition[] | undefined,
+  having: SparqlExpression | undefined,
+  limit: number | undefined,
+  offset: number | undefined,
+): {algebra: SparqlAlgebraNode; orderBy: SparqlOrderCondition[] | undefined; keys: string[]} {
+  const expressions: Array<{alias: string; expression: SparqlExpression}> = [];
+  const keys: SparqlOrderCondition[] = (orderBy ?? []).map((condition, i) => {
+    const e = condition.expression;
+    if (e.kind === 'variable_expr' && e.name === rootAlias) return condition;
+    const alias = `page_order_${i}`;
+    expressions.push({
+      alias,
+      expression: {kind: 'aggregate_expr', name: condition.direction === 'DESC' ? 'max' : 'min', args: [e]},
+    });
+    return {expression: {kind: 'variable_expr', name: alias}, direction: condition.direction};
+  });
+  const needed = new Set<string>([rootAlias]);
+  for (const condition of orderBy ?? []) expressionVariables(condition.expression, needed);
+  expressionVariables(having, needed);
+  const page: SparqlAlgebraNode = {
+    type: 'subselect',
+    projection: [rootAlias],
+    ...(expressions.length > 0 ? {expressions} : {}),
+    inner: prunePagePattern(algebra, needed),
+    groupBy: [rootAlias],
+    ...(having ? {having} : {}),
+    ...(keys.length > 0 ? {orderBy: keys} : {}),
+    ...(limit !== undefined ? {limit} : {}),
+    ...(offset !== undefined ? {offset} : {}),
+  };
+  return {
+    algebra: {type: 'join', left: page, right: algebra},
+    orderBy: keys.length > 0 ? keys : undefined,
+    keys: expressions.map((e) => e.alias),
   };
 }
 
