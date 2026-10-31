@@ -18,6 +18,9 @@ import {lowerMutationJSON} from '../queries/lowerMutationJSON';
 import {fromJSON} from '../queries/fromJSON';
 import {WIRE_VERSION} from '../queries/wireVersion';
 import {mutationEffects} from '../queries/queryDependencies';
+import {LiveQueryStore} from '../live/LiveQueryStore';
+import {ShapeCatalog} from '../utils/ShapeCatalog';
+import {toWire} from '../shapes/nodeShapeWire';
 import {SparqlDataset} from '../sparql/SparqlDataset';
 import {deleteShapelessToSparql} from '../sparql/irToAlgebra';
 import type {SparqlOptions} from '../sparql/sparqlUtils';
@@ -235,5 +238,15 @@ describe('live effects', () => {
     expect(effects.shape).toBe('');
     expect([...(effects.ids ?? [])]).toEqual([A, B]);
     expect(effects.membership.has(Person.shape.id)).toBe(true);
+  });
+
+  test("effects sent as data reach each catalog with that catalog's shapes as membership", () => {
+    const store = new LiveQueryStore();
+    const catalog = ShapeCatalog.from([toWire(Person.shape)], {name: 'shapeless-live'});
+    (store as any)._catalogTemplates.set(catalog, 1);
+    const effects = {op: 'delete' as const, shape: '', props: new Set<string>(), ids: new Set([A]), membership: new Set<string>()};
+    const decoded: Array<[ShapeCatalog | undefined, any]> = (store as any)._decodePerCatalog({effects});
+    const inCatalog = decoded.find(([c]) => c === catalog);
+    expect(inCatalog?.[1].membership.has(Person.shape.id)).toBe(true);
   });
 });

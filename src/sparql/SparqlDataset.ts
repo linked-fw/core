@@ -673,15 +673,6 @@ export abstract class SparqlDataset implements IDataset {
     const named = (routing?.allGraphs() ?? []).filter(
       (graph) => graph !== graphs.default && graph !== graphs.union,
     );
-    for (const graph of named) {
-      if (this.isReservedGraphName(graph)) {
-        throw new GraphQueryError(
-          'graph-name-read-only',
-          `<${graph}> is routed to, but it is a name this store reserves for its own graphs.`,
-          graph,
-        );
-      }
-    }
     const allowed = ir.includeDefaultGraph ? [graphs.default, ...named] : named;
     let scope = allowed;
     if (ir.graphs) {
@@ -696,6 +687,15 @@ export abstract class SparqlDataset implements IDataset {
         }
       }
       scope = [...new Set(ir.graphs)];
+    }
+    for (const graph of scope) {
+      if (graph !== graphs.default && this.isReservedGraphName(graph)) {
+        throw new GraphQueryError(
+          'graph-name-read-only',
+          `<${graph}> is routed to, but it is a name this store reserves for its own graphs.`,
+          graph,
+        );
+      }
     }
     if (scope.length === 0) {
       throw new GraphQueryError(
