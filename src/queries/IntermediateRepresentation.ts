@@ -17,6 +17,7 @@ export type IRQuery =
   | IRDeleteMutation
   | IRDeleteAllMutation
   | IRDeleteWhereMutation
+  | IRDeleteShapelessMutation
   | IRUpdateWhereMutation;
 
 export type IRSelectQuery = {
@@ -411,6 +412,29 @@ export type IRDeleteMutation = {
    * `keepIncoming` field. A store that builds its own deletes from the IR must honour it or
    * refuse the delete.
    */
+  keepIncoming?: boolean;
+};
+
+/**
+ * A shapeless delete (`Shape.delete(ids)` on the base class): every triple whose subject is one of
+ * `ids`, and every triple that links to one of them, in the graphs the store routes (its graph
+ * routing's named graphs). Never the default graph or `graphs.union`, unless the server-side
+ * `includeDefaultGraph` says so. No shape, so no type guard, no blank-value or owned cascade.
+ */
+export type IRDeleteShapelessMutation = {
+  kind: 'delete_shapeless';
+  ids: NodeReferenceValue[];
+  /**
+   * Delete in exactly these graphs (each must be one the store routes, else it refuses). Set by
+   * server code (`_inGraphs`), never carried in DSL-JSON.
+   */
+  graphs?: string[];
+  /**
+   * Delete in the default graph too. Set by server code (`_includingDefaultGraph`), never carried
+   * in DSL-JSON.
+   */
+  includeDefaultGraph?: boolean;
+  /** Delete only the subjects' own triples, not the links into them; carried as `keepIncoming`. */
   keepIncoming?: boolean;
 };
 

@@ -403,11 +403,27 @@ export abstract class Shape {
     return builder as unknown as CreateBuilder<S, U>;
   }
 
+  /**
+   * Delete instances of this shape by id: each one's triples (behind its type guard), its blank
+   * values, its owned subtree and the links to it in every graph that may hold one.
+   *
+   * On the base class — `Shape.delete(ids)` — it is a **shapeless** delete: the nodes' types need
+   * not be known. Every triple whose subject is one of `ids`, and every triple that links to one
+   * of them, is deleted in the graphs the dataset routes (its graph routing's named graphs),
+   * never in the default graph or `graphs.union`. No type guard, no blank-value or owned cascade
+   * (there is no shape to read them from). A dataset without graph routing refuses it, and a
+   * dataset that does not declare `'shapelessDelete'` in `supports` is never sent one. Without a
+   * target it goes to every dataset `LinkedStorage` knows. `.where()`, `.all()` and `.into()`
+   * are refused on it.
+   */
   static delete<S extends Shape>(
-    this: ShapeConstructor<S>,
+    this: ShapeConstructor<S> | typeof Shape,
     id: DeleteId | DeleteId[] | NodeReferenceValue[],
   ): DeleteBuilder<S> {
-    return DeleteBuilder.from(this, id) as DeleteBuilder<S>;
+    if ((this as unknown) === Shape) {
+      return DeleteBuilder.forNodes(id) as unknown as DeleteBuilder<S>;
+    }
+    return DeleteBuilder.from(this as ShapeConstructor<S>, id) as DeleteBuilder<S>;
   }
 
   /** Delete all instances of this shape type. Returns void. */

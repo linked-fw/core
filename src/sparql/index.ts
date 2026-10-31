@@ -20,6 +20,7 @@ export {
   updateToAlgebra,
   upsertToAlgebra,
   deleteToAlgebra,
+  deleteShapelessToAlgebra,
   mintNestedIds,
 } from './irToAlgebra.js';
 
@@ -32,6 +33,7 @@ export {
   updateToSparql,
   upsertToSparql,
   deleteToSparql,
+  deleteShapelessToSparql,
 } from './irToAlgebra.js';
 
 // Algebra → SPARQL string serialization (layer 3)

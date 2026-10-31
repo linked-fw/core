@@ -14,7 +14,10 @@ import type {IRExpression} from './IntermediateRepresentation.js';
  * existed keeps answering everything it answered before.
  *
  * - `groupBy`: a grouped select (`.groupBy(…)`, with its `having` and group ordering);
- * - `min` / `max`: `.min()` / `.max()`.
+ * - `min` / `max`: `.min()` / `.max()`;
+ * - `shapelessDelete`: a delete by ids with no shape (`Shape.delete(ids)` on the base class,
+ *   IR kind `delete_shapeless`). A store that predates it would not know the IR kind; one that
+ *   lowered it as a typed delete would delete nothing or the wrong thing.
  *
  * Counting is baseline: every count (`.size()`, `.countDistinct()`, `Expr.count()`) is an
  * `aggregate_expr` named `count`, and a count always counts distinct values (see
@@ -24,13 +27,14 @@ import type {IRExpression} from './IntermediateRepresentation.js';
  * store that ignored the grouping would answer *something* — ungrouped rows — and nothing
  * downstream could tell. A store that does not declare a feature is refused before it is asked.
  */
-export type QueryFeature = 'groupBy' | 'min' | 'max';
+export type QueryFeature = 'groupBy' | 'min' | 'max' | 'shapelessDelete';
 
 /** Every feature this build of core can express (what a SPARQL store supports). */
 export const ALL_QUERY_FEATURES: readonly QueryFeature[] = Object.freeze([
   'groupBy',
   'min',
   'max',
+  'shapelessDelete',
 ] as QueryFeature[]);
 
 const KNOWN = new Set<string>(ALL_QUERY_FEATURES);

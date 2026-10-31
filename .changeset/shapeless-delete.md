@@ -1,0 +1,5 @@
+---
+'@_linked/core': minor
+---
+
+Shapeless delete: `Shape.delete(ids)` on the base class deletes nodes whose types the caller does not know. Every triple whose subject is one of the ids, and every triple that links to one, is deleted in the graphs the dataset routes (its graph routing's named graphs), never in the default graph or `graphs.union`; a dataset without routing refuses it (`graph-not-routed`). `_keepingIncoming()` keeps the links. IR kind `delete_shapeless`; DSL-JSON 1.3 `{op: 'delete', mode: 'shapeless', ids}` (no shape); SPARQL one update (`VALUES ?x`, `VALUES ?g`, `GRAPH ?g { {?x ?p ?o} UNION {?s ?p2 ?x} }`, `deleteShapelessToSparql`). A dataset is sent one only when it lists the new query feature `'shapelessDelete'` in `supports` (`SparqlDataset` does). `LinkedStorage` sends one without a target to every dataset, after checking all support it, with the fan-out notice. Server-side and never serialized: `_inGraphs(graphs)` and `_includingDefaultGraph()`. `DeleteQuery.shape` (and `DeleteBuilder.shape`) is now `NodeShapeData | undefined`; `DeleteBuilder.isShapeless` and `requiredFeatures()` are new.

@@ -135,6 +135,18 @@ export type DeleteMutationJSON =
        */
       keepIncoming?: boolean;
     }
+  | {
+      v?: string;
+      op: 'delete';
+      /**
+       * A shapeless delete (`Shape.delete(ids)`, DSL-JSON 1.3): no `shape`. Every triple of each
+       * id and every link to it, in the graphs the receiving store routes. `keepIncoming` keeps
+       * the links. A reader before 1.3 refuses it (it has no shape).
+       */
+      mode: 'shapeless';
+      ids: (string | ContextRefJSON)[];
+      keepIncoming?: boolean;
+    }
   | {v?: string; op: 'delete'; shape: string; mode: 'all'}
   | {v?: string; op: 'delete'; shape: string; mode: 'where'; where: WherePathJSON};
 

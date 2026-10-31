@@ -19,6 +19,7 @@ import type {
   IRDeleteMutation,
   IRDeleteAllMutation,
   IRDeleteWhereMutation,
+  IRDeleteShapelessMutation,
   IRUpdateWhereMutation,
   IRFieldValue,
   IRNodeData,
@@ -259,6 +260,16 @@ export const buildCanonicalDeleteMutationIR = (
   return attachCatalog({
     kind: 'delete',
     shape: query.shape.id,
+    ids: query.ids.map((id) => ({id: id.id})),
+  });
+};
+
+/** Builds an IRDeleteShapelessMutation — delete nodes of any type (or none) by id. */
+export const buildCanonicalDeleteShapelessMutationIR = (query: {
+  ids: NodeReferenceValue[];
+}): IRDeleteShapelessMutation => {
+  return attachCatalog({
+    kind: 'delete_shapeless',
     ids: query.ids.map((id) => ({id: id.id})),
   });
 };

@@ -27,6 +27,7 @@ import {
   buildCanonicalUpsertMutationIR,
   buildCanonicalUpdateWhereMutationIR,
   buildCanonicalDeleteMutationIR,
+  buildCanonicalDeleteShapelessMutationIR,
   buildCanonicalDeleteAllMutationIR,
   buildCanonicalDeleteWhereMutationIR,
 } from './IRMutation.js';
@@ -49,6 +50,7 @@ import type {RawCountInput} from './CountQuery.js';
 import type {IRCreateQuery} from './CreateQuery.js';
 import type {IRUpdateQuery} from './UpdateQuery.js';
 import type {IRDeleteQuery} from './DeleteQuery.js';
+import {isGraphIri} from './graphQuery.js';
 import type {
   CreateLowerSpec,
   UpdateLowerSpec,
@@ -152,6 +154,8 @@ function lowerUpdate(spec: UpdateLowerSpec): IRUpdateQuery {
 }
 
 function lowerDelete(spec: DeleteLowerSpec): IRDeleteQuery {
+  if (spec.mode === 'shapeless') return lowerShapelessDelete(spec);
+  if (!spec.shapeClass) throw new Error(`A delete in mode '${spec.mode}' needs a shape.`);
   const shape = spec.shapeClass.shape;
   if (spec.mode === 'all') {
     return buildCanonicalDeleteAllMutationIR({shape});
@@ -169,6 +173,28 @@ function lowerDelete(spec: DeleteLowerSpec): IRDeleteQuery {
   );
   const ids = new MutationQueryFactory().normalizeNodeRefs(resolvedIds);
   return buildCanonicalDeleteMutationIR({shape, ids});
+}
+
+/** A shapeless delete: its ids (context refs resolved) and its server-side scope. */
+function lowerShapelessDelete(spec: DeleteLowerSpec): IRDeleteQuery {
+  if (!spec.ids || spec.ids.length === 0) {
+    throw new Error('A shapeless delete (Shape.delete(ids)) needs at least one id.');
+  }
+  const resolvedIds = spec.ids.map((id) =>
+    isLinkedInstance(id, PendingQueryContext)
+      ? {id: resolveContextId(id.contextName, true)!}
+      : id,
+  );
+  const ids = new MutationQueryFactory().normalizeNodeRefs(resolvedIds);
+  for (const {id} of ids) {
+    if (!isGraphIri(id)) {
+      throw new Error(`A shapeless delete takes absolute IRIs; ${JSON.stringify(id)} is not one.`);
+    }
+  }
+  const ir = buildCanonicalDeleteShapelessMutationIR({ids});
+  if (spec.graphs) ir.graphs = [...spec.graphs];
+  if (spec.includeDefaultGraph) ir.includeDefaultGraph = true;
+  return ir;
 }
 
 /**
@@ -334,7 +360,12 @@ export function lower(
     }
     case 'delete': {
       const spec = query._lowerSpec();
-      const ir = withInto(lowerDelete(spec), spec.into);
+      const lowered = lowerDelete(spec);
+      if (lowered.kind === 'delete_shapeless') {
+        if (spec.keepIncoming) lowered.keepIncoming = true;
+        return lowered;
+      }
+      const ir = withInto(lowered, spec.into);
       if (spec.keepIncoming && ir.kind === 'delete') ir.keepIncoming = true;
       return ir;
     }

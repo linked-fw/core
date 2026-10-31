@@ -11,6 +11,7 @@ import type {
   IRAskQuery,
   IRCreateMutation,
   IRUpdateMutation,
+  IRDeleteShapelessMutation,
   IRUpdateWhereMutation,
   IRUpsertMutation,
   SelectResult,
@@ -52,6 +53,7 @@ import {
   upsertToSparql,
   updateWhereToSparql,
   deleteToSparql,
+  deleteShapelessToSparql,
   deleteAllToSparql,
   deleteWhereToSparql,
   mintNestedIds,
@@ -69,7 +71,7 @@ import {
   type SparqlCompileOptions,
   type SparqlOptions,
 } from './sparqlUtils.js';
-import {graphRoutingFor, type ShapeGraphRouting} from '../utils/graphRouting.js';
+import {graphRoutingFor, sortGraphSet, type ShapeGraphRouting} from '../utils/graphRouting.js';
 import {askToAlgebra, countToAlgebra, selectToAlgebra} from './irToAlgebra.js';
 import {askPlanToSparql, selectPlanToSparql} from './algebraToString.js';
 import type {SparqlAskPlan, SparqlSelectPlan} from './SparqlAlgebra.js';
@@ -627,7 +629,9 @@ export abstract class SparqlDataset implements IDataset {
 
 
   async deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
-    const ir = this.resolveWriteGraph(lower(query));
+    const lowered = lower(query);
+    if (lowered.kind === 'delete_shapeless') return this.deleteShapeless(lowered);
+    const ir = this.resolveWriteGraph(lowered);
     // Compiled with the routing (when there is one): a where clause reads a linked node in its own
     // shape's graphs, and a delete by id removes the links to its subject in every graph that may
     // hold one.
@@ -648,6 +652,63 @@ export abstract class SparqlDataset implements IDataset {
       deleted: ir.ids,
       count: ir.ids.length,
     };
+  }
+
+  /**
+   * A shapeless delete (`Shape.delete(ids)`): every triple of each id, and every link to one, in
+   * the graphs this store routes — its graph routing's named graphs, never the default graph or
+   * `graphs.union` (see `deleteShapelessToSparql`). One SPARQL update.
+   *
+   * - `graphs` on the IR (server code's `_inGraphs`) narrows it to exactly those graphs; each must
+   *   be a routed named graph (or the default graph when it is included), else
+   *   `GraphQueryError('graph-not-routed')`.
+   * - `includeDefaultGraph` (server code's `_includingDefaultGraph`) adds the default graph.
+   * - No graph to delete in (no routing, and the default graph not included) is refused: a
+   *   delete that silently deleted nothing would look like one that worked.
+   *
+   * Answers every id as deleted, as a delete by id does.
+   */
+  protected async deleteShapeless(ir: IRDeleteShapelessMutation): Promise<DeleteResponse> {
+    const routing = this.graphRouting();
+    const named = (routing?.allGraphs() ?? []).filter(
+      (graph) => graph !== graphs.default && graph !== graphs.union,
+    );
+    for (const graph of named) {
+      if (this.isReservedGraphName(graph)) {
+        throw new GraphQueryError(
+          'graph-name-read-only',
+          `<${graph}> is routed to, but it is a name this store reserves for its own graphs.`,
+          graph,
+        );
+      }
+    }
+    const allowed = ir.includeDefaultGraph ? [graphs.default, ...named] : named;
+    let scope = allowed;
+    if (ir.graphs) {
+      for (const graph of ir.graphs) {
+        if (!allowed.includes(graph)) {
+          throw new GraphQueryError(
+            'graph-not-routed',
+            `A shapeless delete may delete in the graphs this store routes${ir.includeDefaultGraph ? ' and the default graph' : ''}; ` +
+              `<${graph}> is not one of them.`,
+            graph,
+          );
+        }
+      }
+      scope = [...new Set(ir.graphs)];
+    }
+    if (scope.length === 0) {
+      throw new GraphQueryError(
+        'graph-not-routed',
+        'A shapeless delete (Shape.delete(ids)) deletes in the graphs a store routes, and this ' +
+          'store routes none: it never deletes in the default graph. Route the shapes, or delete ' +
+          'each node as an instance of its shape.',
+        graphs.default,
+      );
+    }
+    const sparql = deleteShapelessToSparql({...ir, graphs: sortGraphSet(scope)}, this.writeOptions());
+    await this.executeSparqlUpdate(sparql);
+    return {deleted: ir.ids, count: ir.ids.length};
   }
 
   /**

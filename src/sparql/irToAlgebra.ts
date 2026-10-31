@@ -8,6 +8,7 @@ import type {
   IRDeleteMutation,
   IRDeleteAllMutation,
   IRDeleteWhereMutation,
+  IRDeleteShapelessMutation,
   IRUpdateWhereMutation,
   IRGraphPattern,
   IRExpression,
@@ -4925,6 +4926,77 @@ export function deleteWhereToSparql(
   }
   const plan = deleteWhereToAlgebra(query, options);
   return deleteInsertPlanToSparql(plan, options);
+}
+
+/**
+ * Converts an IRDeleteShapelessMutation to a SparqlDeleteInsertPlan: in each of its `graphs`
+ * (required: the store resolves them from its routing), every triple of each id and, unless
+ * `keepIncoming`, every triple that links to one. One operation for all ids and graphs:
+ *
+ * ```sparql
+ * DELETE { GRAPH ?g_del { ?x_del ?p_del ?o_del . ?s_del ?p2_del ?x_del } }
+ * WHERE {
+ *   VALUES ?x_del { <a> <b> } VALUES ?g_del { <g1> <g2> }
+ *   GRAPH ?g_del { { ?x_del ?p_del ?o_del } UNION { ?s_del ?p2_del ?x_del } }
+ * }
+ * ```
+ *
+ * The two sides are a UNION, so their matches add up instead of multiplying; a DELETE template
+ * triple a solution leaves unbound is skipped. `graphs.default` in the set is the store's own
+ * name for the default graph (`SparqlOptions.mapGraphName`), or a refusal.
+ */
+export function deleteShapelessToAlgebra(
+  query: IRDeleteShapelessMutation,
+  options?: SparqlCompileOptions,
+): SparqlDeleteInsertPlan {
+  if (!query.ids?.length) throw new Error('deleteShapelessToAlgebra: a shapeless delete needs at least one id.');
+  if (!query.graphs?.length) {
+    throw new Error(
+      'deleteShapelessToAlgebra: a shapeless delete needs the graphs it deletes in; the store ' +
+        'sets them from its graph routing.',
+    );
+  }
+  const ids = query.ids.map(({id}) => {
+    assertSafeIri(id);
+    return id;
+  });
+  const graphNames = query.graphs.map((graph) => {
+    const name =
+      graph === graphs.default
+        ? defaultGraphStoreName(options, 'This shapeless delete includes the default graph')
+        : graph;
+    assertSafeIri(name);
+    return name;
+  });
+  const node = varTerm('x_del');
+  const own = tripleOf(node, varTerm('p_del'), varTerm('o_del'));
+  const incoming = tripleOf(varTerm('s_del'), varTerm('p2_del'), node);
+  const sides: SparqlAlgebraNode = query.keepIncoming
+    ? {type: 'bgp', triples: [own]}
+    : unionOf([{type: 'bgp', triples: [own]}, {type: 'bgp', triples: [incoming]}]);
+  return {
+    type: 'delete_insert',
+    deletePatterns: [],
+    deleteInGraphs: [{variable: 'g_del', triples: query.keepIncoming ? [own] : [own, incoming]}],
+    insertPatterns: [],
+    whereAlgebra: {
+      type: 'join',
+      left: {
+        type: 'join',
+        left: {type: 'values', variable: 'x_del', iris: ids},
+        right: {type: 'values', variable: 'g_del', iris: graphNames},
+      },
+      right: {type: 'graph', variable: 'g_del', inner: sides},
+    },
+  };
+}
+
+/** Converts an IRDeleteShapelessMutation to a SPARQL string (see {@link deleteShapelessToAlgebra}). */
+export function deleteShapelessToSparql(
+  query: IRDeleteShapelessMutation,
+  options?: SparqlCompileOptions,
+): string {
+  return deleteInsertPlanToSparql(deleteShapelessToAlgebra(query, options), options);
 }
 
 /**

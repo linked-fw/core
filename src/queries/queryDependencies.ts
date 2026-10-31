@@ -94,7 +94,7 @@ export type QueryDependencies = {
 
 export type MutationEffects = {
   op: 'create' | 'update' | 'upsert' | 'delete';
-  /** Routing shape IRI. */
+  /** Routing shape IRI; empty for a shapeless delete (`Shape.delete(ids)`), which names none. */
   shape: string;
   /** Predicates written (nested node descriptions and add/remove relations included); for delete: every predicate of the shape. */
   props: Set<string>;
@@ -654,6 +654,19 @@ export function mutationEffects(
         ids: undefined,
         membership: collector.membership,
         ...withGraph(ir),
+      };
+    }
+    case 'delete_shapeless': {
+      // No shape: any shape's instances, and any link to a deleted node, may be gone. Every shape
+      // is in the membership, so every live query refetches (a shapeless delete is rare).
+      for (const shape of getAllNodeShapes().keys()) collector.membership.add(shape);
+      for (const ref of ir.ids) if (ref?.id) collector.ids.add(ref.id);
+      return {
+        op: 'delete',
+        shape: '',
+        props: collector.props,
+        ids: collector.ids,
+        membership: collector.membership,
       };
     }
     case 'delete':

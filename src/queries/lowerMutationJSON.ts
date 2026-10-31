@@ -39,12 +39,14 @@ import {
   buildCanonicalDeleteMutationIR,
   buildCanonicalDeleteAllMutationIR,
   buildCanonicalDeleteWhereMutationIR,
+  buildCanonicalDeleteShapelessMutationIR,
 } from './IRMutation.js';
 import type {IRCreateQuery} from './CreateQuery.js';
 import type {IRUpdateQuery} from './UpdateQuery.js';
 import type {IRDeleteQuery} from './DeleteQuery.js';
 import {isContextRefJSON, resolveContextId} from './ContextRef.js';
 import {assertWireVersion} from './wireVersion.js';
+import {isGraphIri} from './graphQuery.js';
 import {
   decodeNodeDataToRaw,
   readKeepIncoming,
@@ -252,6 +254,25 @@ export function lowerMutationJSON(
       return buildCanonicalUpdateWhereMutationIR({shape, updates, where, wherePatterns});
     }
     case 'delete': {
+      if (json.mode === 'shapeless') {
+        if ((json as {shape?: unknown}).shape !== undefined) {
+          throw new Error('delete DSL-JSON: a shapeless delete names no shape.');
+        }
+        if (!Array.isArray(json.ids) || json.ids.length === 0) {
+          throw new Error('delete DSL-JSON: a shapeless delete needs a non-empty "ids" array.');
+        }
+        const ir = buildCanonicalDeleteShapelessMutationIR({
+          ids: json.ids.map((id) => {
+            const iri = isContextRefJSON(id) ? resolveContextId(id['@ctx'], true)! : id;
+            if (!isGraphIri(iri)) {
+              throw new Error(`delete DSL-JSON: a shapeless delete takes absolute IRIs; got ${JSON.stringify(iri)}.`);
+            }
+            return {id: iri};
+          }),
+        });
+        if (readKeepIncoming(json, options)) ir.keepIncoming = true;
+        return ir;
+      }
       const shape = requireShape(json.shape);
       const keepIncoming = readKeepIncoming(json, options);
       if (json.mode === 'ids') {

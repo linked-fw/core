@@ -16,8 +16,8 @@
  * without `Error.stack`.
  */
 
-/** The shapeless reads `LinkedStorage` sends to every dataset it knows. */
-export type FanOutKind = 'triples' | 'ask';
+/** The shapeless queries `LinkedStorage` sends to every dataset it knows. */
+export type FanOutKind = 'triples' | 'ask' | 'delete';
 
 /** The call sites (or, without one, the kinds) already noticed in this process. */
 const noticed = new Set<string>();
@@ -34,6 +34,11 @@ const advice: Record<FanOutKind, {what: string; how: string; fix: string}> = {
     what: 'A shapeless ask (Shape.exists(iri), AskBuilder.forNode(iri)) names no dataset',
     how: 'asked them in turn until one answered true',
     fix: 'To ask one dataset, pass it: Shape.exists(iri, dataset) or .exec(dataset).',
+  },
+  delete: {
+    what: 'A shapeless delete (Shape.delete(ids)) names no dataset',
+    how: 'deleted in each, in the graphs each routes',
+    fix: 'To delete in one dataset, pass it: Shape.delete(ids).exec(dataset).',
   },
 };
 

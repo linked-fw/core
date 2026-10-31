@@ -39,13 +39,18 @@ export interface UpdateLowerSpec<S extends Shape = Shape> {
 }
 
 export interface DeleteLowerSpec<S extends Shape = Shape> {
-  shapeClass: ShapeConstructor<S>;
+  /** The shape deleted from; absent for a shapeless delete (`mode: 'shapeless'`). */
+  shapeClass?: ShapeConstructor<S>;
   /** Ids to delete: concrete ids/`{id}` refs, or unresolved context refs (resolved at lower). */
   ids?: (NodeId | PendingQueryContext)[];
-  mode: 'ids' | 'all' | 'where';
+  mode: 'ids' | 'all' | 'where' | 'shapeless';
   wherePath?: WherePath;
   /** The graph `.into()` names (server-side only; never serialized). */
   into?: string;
   /** @internal Delete by ids that keeps the incoming links (see `IRDeleteMutation.keepIncoming`). */
   keepIncoming?: boolean;
+  /** Shapeless only (server-side, never serialized): delete in exactly these graphs. */
+  graphs?: string[];
+  /** Shapeless only (server-side, never serialized): delete in the default graph too. */
+  includeDefaultGraph?: boolean;
 }
