@@ -25,3 +25,7 @@ Source: report 096 (grouped selects).
 - **`orderBy` on a plain select with a computed expression** (`orderBy((p) => p.name.strlen())`)
   is ignored silently: `evaluateSortCallback` keeps property paths only. Aggregates now throw
   there; other expressions could too, or sort by the expression.
+- **Low typing gaps** (report 096 reviews): keys and `min`/`max` are typed non-null while the
+  group of members without a key, or an empty `MAX`, is `null`; `groupBy()` with no keys types as a
+  builder and throws; `Expr.count().str()` / `.defaultTo()` return a plain `ExpressionNode`, so the
+  grouped type rejects a field the runtime accepts.

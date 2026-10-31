@@ -179,9 +179,9 @@ function fieldExpression(entry: FieldSetEntry): ExpressionNode {
 export function assertGroupable(
   entries: readonly FieldSetEntry[],
   keys: readonly string[],
-  where?: IRExpression,
+  where: readonly IRExpression[] = [],
 ): void {
-  if (containsAggregate(where)) {
+  if (where.some((tree) => containsAggregate(tree))) {
     throw new Error(
       'groupBy: the where clause holds an aggregate (`.size()`, `.max()`, …). In a grouped select ' +
       "where filters the members before grouping; filter the groups with having: `.having('n', (n) => n.gt(1))`.",

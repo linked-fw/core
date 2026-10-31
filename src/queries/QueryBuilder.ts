@@ -22,6 +22,7 @@ import {
   type GroupedSelectJSON,
 } from './GroupedSelectBuilder.js';
 import type {IRExpression} from './IntermediateRepresentation.js';
+import {ExistsCondition, type ExpressionNode} from '../expressions/ExpressionNode.js';
 import {getQueryDispatch, assertQuerySupported} from './queryDispatch.js';
 import {AskBuilder} from './AskBuilder.js';
 import {CountBuilder} from './CountBuilder.js';
@@ -414,19 +415,33 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       }
     };
     collect(this._fieldsWithPreloads()?.entries as FieldSetEntry[] | undefined);
-    const where = this._whereFn ? processWhereClause(this._whereFn, this._shape) : this._where;
-    if (where && 'expressionNode' in where) trees.push(where.expressionNode.ir);
+    trees.push(...this.whereExpression());
     return trees;
   }
 
-  /** The where clause as an expression tree, when it is one (not a `some`/`every` quantifier). */
-  whereExpression(): IRExpression | undefined {
+  /**
+   * The where clause's expression trees: the expression, or for a quantifier (`some`/`every`)
+   * its predicate and every condition chained to it. For the checks that look for aggregates.
+   */
+  whereExpression(): IRExpression[] {
     const catalog = this._catalog;
     if (catalog !== getActiveShapeCatalog()) {
       return withShapeCatalog(catalog, () => this.whereExpression());
     }
     const where = this._whereFn ? processWhereClause(this._whereFn, this._shape) : this._where;
-    return where && 'expressionNode' in where ? where.expressionNode.ir : undefined;
+    if (!where) return [];
+    if ('expressionNode' in where) return [where.expressionNode.ir];
+    const trees: IRExpression[] = [];
+    const collect = (condition: ExpressionNode | ExistsCondition) => {
+      if (isLinkedInstance(condition, ExistsCondition)) {
+        trees.push(condition.predicate.ir);
+        for (const link of condition.chain) collect(link.condition);
+      } else {
+        trees.push(condition.ir);
+      }
+    };
+    collect(where.existsCondition);
+    return trees;
   }
 
   /**

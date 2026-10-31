@@ -12,6 +12,7 @@ import type {IRSelectQuery, ResultRow} from '../queries/IntermediateRepresentati
 import {createTestDataset, loadTestData, executeSparqlQuery, clearAllData} from '../test-helpers/fuseki-test-store';
 import {describeFuseki, fusekiLive} from '../test-helpers/fuseki-live';
 import {Expr} from '../expressions/Expr';
+import type {AggregateExpression} from '../expressions/ExpressionNode';
 import {GroupedSelectBuilder, type GroupByError} from '../queries/GroupedSelectBuilder';
 import {SelectBuilder} from '../queries/QueryBuilder';
 import {fromJSON} from '../queries/fromJSON';
@@ -132,6 +133,12 @@ describe('grouped select types (compile-time)', () => {
     assertType<Equals<Row['person'], {id: string}>>();
     type Plus = Awaited<ReturnType<typeof queries.countPlusOne>>[number];
     assertType<Equals<Plus['n'], number>>();
+  });
+
+  test('arithmetic is on numeric aggregates only, with numeric operands', () => {
+    type PlusThis = ThisParameterType<AggregateExpression<number>['plus']>;
+    assertType<Equals<PlusThis, AggregateExpression<number>>>();
+    assertType<AggregateExpression<Date> extends PlusThis ? false : true>();
   });
 
   test('the grouped builder has no where, for or one', () => {
@@ -257,9 +264,17 @@ describe('groupBy refusals (runtime)', () => {
     ).toThrow(/the where clause holds an aggregate/);
   });
 
+  test('an aggregate chained to a quantifier in the where clause', () => {
+    expect(() =>
+      (Person.select((p) => ({hobby: p.hobby, n: Expr.count()}))
+        .where((p) => p.friends.some((f) => f.hobby.equals('Chess')).and(p.nickNames.size().gt(1))) as any)
+        .groupBy('hobby'),
+    ).toThrow(/the where clause holds an aggregate/);
+  });
+
   test("a field that mixes an aggregate with a member's value", () => {
     expect(() =>
-      (Person.select((p) => ({hobby: p.hobby, r: Expr.count().plus(p.name.strlen())})) as any).groupBy('hobby'),
+      (Person.select((p) => ({hobby: p.hobby, r: (Expr.count() as any).plus(p.name.strlen())})) as any).groupBy('hobby'),
     ).toThrow(/combines an aggregate with a member's own value/);
     expect(() => queries.countPlusOne()).not.toThrow();
   });
