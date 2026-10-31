@@ -6,8 +6,9 @@
 
 /*
  * The shapeless delete on Fuseki: `Shape.delete(ids)` removes every triple of the ids and every
- * link to them in every graph of the dataset (routed or not, and the default graph), keeps other
- * nodes, and keeps the links with `_keepingIncoming()`.
+ * link to them in every data graph of the dataset (routed or not, and the default graph), keeps
+ * other nodes, the registry and the graphs it records as shapes or ontology graphs, and keeps the
+ * links with `_keepingIncoming()`.
  */
 import {afterAll, beforeAll, beforeEach, expect, test} from '@jest/globals';
 import {
@@ -24,11 +25,13 @@ import {TriplesBuilder} from '../queries/TriplesBuilder';
 import {Dog, Person} from '../test-helpers/query-fixtures';
 import {setShapeGraphs} from '../utils/graphRouting';
 import {graphs} from '../ontologies/graphs';
+import {coreOntology} from '../ontologies/linked-core';
 
 const EX = 'http://example.org/shapeless-delete/';
 const G_PEOPLE = `${EX}graph/people`;
 const G_PETS = `${EX}graph/pets`;
 const G_OTHER = `${EX}graph/unrouted`;
+const G_SHAPES = `${EX}graph/shapes`;
 const X = `${EX}x`;
 const Y = `${EX}y`;
 const FRIEND = `${EX}friend`;
@@ -66,6 +69,18 @@ describeFuseki('shapeless delete on Fuseki', () => {
       ${node(X)} ${link(X)}
     }`);
   });
+  test('leaves the registry and a graph it records as a shapes graph', async () => {
+    await executeSparqlUpdate(`INSERT DATA {
+      GRAPH <${G_SHAPES}> { <${X}> <${P}> "a shape" . <${FRIEND}> <${KNOWS}> <${X}> }
+      GRAPH <${graphs.registry}> { <${G_SHAPES}> a <${coreOntology.ShapesGraph.id}> . <${X}> <${P}> "in the registry" }
+    }`);
+    await Shape.delete(X).exec(store);
+    expect(await where(store, X)).toEqual([]);
+    expect(await TriplesBuilder.forNode({id: X}).from(G_SHAPES).exec(store)).toHaveLength(1);
+    expect(await TriplesBuilder.forNode({id: FRIEND}).from(G_SHAPES).exec(store)).toHaveLength(1);
+    expect(await TriplesBuilder.forNode({id: X}).from(graphs.registry).exec(store)).toHaveLength(1);
+  });
+
   afterAll(async () => {
     await deleteTestDataset();
   });

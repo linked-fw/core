@@ -656,8 +656,8 @@ export abstract class SparqlDataset implements IDataset {
 
   /**
    * A shapeless delete (`Shape.delete(ids)`): every triple of each id, and every link to one, in
-   * every graph of the dataset (each named graph and the default graph; see
-   * `deleteShapelessToSparql`). One SPARQL update. Answers every id as deleted, as a delete by id
+   * every data graph of the dataset (the default graph and each named graph but the registry and
+   * the shapes and ontology graphs it records; see `deleteShapelessToSparql`). One SPARQL update. Answers every id as deleted, as a delete by id
    * does.
    */
   protected async deleteShapeless(ir: IRDeleteShapelessMutation): Promise<DeleteResponse> {

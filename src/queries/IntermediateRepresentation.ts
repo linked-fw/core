@@ -417,8 +417,9 @@ export type IRDeleteMutation = {
 
 /**
  * A shapeless delete (`Shape.delete(ids)` on the base class): every triple whose subject is one of
- * `ids`, and every triple that links to one of them, in every graph of the dataset (each named
- * graph and the default graph; never by way of `graphs.union`). No shape, so no type guard, no
+ * `ids`, and every triple that links to one of them, in every data graph of the dataset: the
+ * default graph and each named graph (never by way of `graphs.union`), but never the graph
+ * registry or a graph it records as a shapes or ontology graph. No shape, so no type guard, no
  * blank-value or owned cascade.
  */
 export type IRDeleteShapelessMutation = {

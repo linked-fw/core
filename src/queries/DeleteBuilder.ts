@@ -117,10 +117,9 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
 
   /**
    * A shapeless delete (what `Shape.delete(ids)` on the base class builds): every triple whose
-   * subject is one of `ids`, and every link to one of them, in every graph of the dataset: each
-   * named graph and the default graph (never by way of `graphs.union`). The types of the nodes
-   * need not be known. Built
-   * in the active shape catalog (the one a receiver checks rights in). See `IRDeleteShapelessMutation`.
+   * subject is one of `ids`, and every link to one of them, in every data graph of the dataset
+   * (see `IRDeleteShapelessMutation`). The types of the nodes need not be known. Built in the
+   * active shape catalog (the one a receiver checks rights in).
    */
   static forNodes(ids: DeleteId | DeleteId[] | NodeReferenceValue[]): DeleteBuilder<Shape, DeleteResponse> {
     const list = (Array.isArray(ids) ? ids : [ids]) as DeleteId[];

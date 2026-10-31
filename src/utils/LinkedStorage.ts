@@ -474,7 +474,7 @@ export abstract class LinkedStorage {
 
   static deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
     if (query && (query as {isShapeless?: unknown}).isShapeless === true) {
-      return this.deleteInEveryDataset(query);
+      return this.deleteInTheOnlyDataset(query);
     }
     if (!query?.shape) {
       return Promise.reject(
@@ -495,30 +495,28 @@ export abstract class LinkedStorage {
   }
 
   /**
-   * A shapeless delete (`Shape.delete(ids)`) has no shape to route on, so it goes to every
-   * dataset, each deleting in the graphs it routes; the answers are joined (each id once).
-   * Every dataset must declare `'shapelessDelete'` in `supports`: that is checked for all of
-   * them before any is sent the delete. They run in turn, and the first refusal rejects (the
-   * datasets before it have deleted). With more than one dataset it logs a notice once per call
-   * site (`noticeFanOut`), before the first `await`.
+   * A shapeless delete (`Shape.delete(ids)`) has no shape to route on, and it deletes in every
+   * graph of a dataset, so it is never fanned out: it goes to the one dataset LinkedStorage knows.
+   * With several, it is refused before anything is sent; name the dataset
+   * (`Shape.delete(ids).exec(dataset)`). The dataset must declare `'shapelessDelete'` in
+   * `supports`.
    */
-  private static async deleteInEveryDataset(query: DeleteQuery): Promise<DeleteResponse> {
+  private static async deleteInTheOnlyDataset(query: DeleteQuery): Promise<DeleteResponse> {
     const datasets = [...this.getDatasets()];
     if (datasets.length === 0) {
       throw new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().');
     }
-    for (const dataset of datasets) {
-      if (!dataset.deleteQuery) throw new Error('No delete handler configured on a query dataset.');
-      assertQuerySupported(dataset, query);
+    if (datasets.length > 1) {
+      throw new Error(
+        `A shapeless delete (Shape.delete(ids)) deletes in every graph of one dataset; LinkedStorage knows ${datasets.length}, ` +
+          'so it sends it to none. Name the dataset: Shape.delete(ids).exec(dataset).',
+      );
     }
-    if (datasets.length > 1) noticeFanOut('delete', datasets.length);
-    const deleted = new Map<string, {id: string}>();
-    for (const dataset of datasets) {
-      const run = () => dataset.deleteQuery(query);
-      const answer = await (getActiveShapeCatalog() === undefined ? run() : outsideShapeCatalog(run));
-      for (const ref of answer?.deleted ?? []) if (ref?.id) deleted.set(ref.id, {id: ref.id});
-    }
-    return {deleted: [...deleted.values()], count: deleted.size};
+    const [dataset] = datasets;
+    if (!dataset.deleteQuery) throw new Error('No delete handler configured on the query dataset.');
+    assertQuerySupported(dataset, query);
+    const run = () => dataset.deleteQuery!(query);
+    return getActiveShapeCatalog() === undefined ? run() : outsideShapeCatalog(run);
   }
 
   /**

@@ -75,6 +75,7 @@ import {
   type ReadGraphScope,
 } from './graphScope.js';
 import {graphs} from '../ontologies/graphs.js';
+import {coreOntology} from '../ontologies/linked-core.js';
 import {GraphQueryError} from '../queries/graphQuery.js';
 
 // The `*ToAlgebra` / `*ToSparql` exports compile in the catalog the IR was lowered in (its
@@ -4952,6 +4953,10 @@ export function deleteWhereToSparql(
  * leaves the other's template triples unbound, and a DELETE template triple a solution leaves
  * unbound is skipped. The sides of each are a UNION, so their matches add up instead of
  * multiplying. `GRAPH ?g` never binds `graphs.union` or a store's own name for the default graph.
+ *
+ * Structure is never touched: the named-graph side skips the graph registry (`graphs.registry`)
+ * and every graph the registry records as a shapes or an ontology graph (`core:ShapesGraph`,
+ * `core:OntologyGraph`), which only graph queries write.
  */
 export function deleteShapelessToAlgebra(
   query: IRDeleteShapelessMutation,
@@ -4985,7 +4990,33 @@ export function deleteShapelessToAlgebra(
     whereAlgebra: {
       type: 'join',
       left: {type: 'values', variable: 'x_del', iris: ids},
-      right: unionOf([inDefault.where, {type: 'graph', variable: 'g_del', inner: inNamed.where}]),
+      right: unionOf([inDefault.where, dataGraphsOnly({type: 'graph', variable: 'g_del', inner: inNamed.where})]),
+    },
+  };
+}
+
+/**
+ * `inner` (a `GRAPH ?g_del` pattern) kept to data graphs: `?g_del` is not the registry, and the
+ * registry records it as no shapes or ontology graph.
+ */
+function dataGraphsOnly(inner: SparqlAlgebraNode): SparqlAlgebraNode {
+  const g = varTerm('g_del');
+  const structureRecord: SparqlAlgebraNode = {
+    type: 'join',
+    left: {type: 'values', variable: 'structure_del', iris: [coreOntology.ShapesGraph.id, coreOntology.OntologyGraph.id]},
+    right: {
+      type: 'graph',
+      iri: graphs.registry,
+      inner: {type: 'bgp', triples: [tripleOf(g, iriTerm(RDF_TYPE), varTerm('structure_del'))]},
+    },
+  };
+  return {
+    type: 'filter',
+    expression: {kind: 'exists_expr', negated: true, pattern: structureRecord},
+    inner: {
+      type: 'filter',
+      expression: {kind: 'in_expr', negated: true, value: {kind: 'variable_expr', name: 'g_del'}, list: [{kind: 'iri_expr', value: graphs.registry}]},
+      inner,
     },
   };
 }

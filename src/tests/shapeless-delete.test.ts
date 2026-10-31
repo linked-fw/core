@@ -120,11 +120,16 @@ describe('SPARQL', () => {
     expect(sparql).toContain('VALUES ?x_del {');
     expect(sparql).toContain(`<${A}> <${B}>`);
     // The default graph: no GRAPH around it, its own variables.
-    expect(sparql).toMatch(/^DELETE \{ \?x_del \?pd_del \?od_del \. \?sd_del \?p2d_del \?x_del \. GRAPH \?g_del \{ \?x_del \?p_del \?o_del \. \?s_del \?p2_del \?x_del \. \} \}/);
+    expect(sparql).toMatch(/DELETE \{ \?x_del \?pd_del \?od_del \. \?sd_del \?p2d_del \?x_del \. GRAPH \?g_del \{ \?x_del \?p_del \?o_del \. \?s_del \?p2_del \?x_del \. \} \}/);
     expect(sparql).toMatch(/\{ \?x_del \?pd_del \?od_del \. \} UNION \{ \?sd_del \?p2d_del \?x_del \. \}/);
     // Every named graph: GRAPH ?g_del is not bound by VALUES.
     expect(sparql).toMatch(/GRAPH \?g_del \{ \{ \?x_del \?p_del \?o_del \. \} UNION \{ \?s_del \?p2_del \?x_del \. \} \}/);
     expect(sparql).not.toContain('VALUES ?g_del');
+    // Structure stays: the registry and the graphs it records as shapes or ontology graphs.
+    expect(sparql).toContain(`FILTER(?g_del NOT IN (<${graphs.registry}>))`);
+    expect(sparql).toContain(
+      `FILTER(NOT EXISTS { VALUES ?structure_del { core:ShapesGraph core:OntologyGraph } GRAPH <${graphs.registry}> { ?g_del rdf:type ?structure_del . } })`,
+    );
     expect(sparql).not.toContain(G_PEOPLE);
     expect(sparql).not.toContain('urn:x-arq');
   });
@@ -178,28 +183,26 @@ describe('supports and LinkedStorage', () => {
     expect(typed.seen).toHaveLength(1);
   });
 
-  test('LinkedStorage sends it to every dataset, checks them all first, and notices the fan-out', async () => {
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  test('LinkedStorage sends it to its one dataset, and refuses it when it knows several', async () => {
     const one = stub(['shapelessDelete']);
-    const two = stub(['shapelessDelete']);
     LinkedStorage.setDefaultDataset(one.dataset);
+    expect(await Shape.delete(A)).toEqual({deleted: [{id: A}], count: 1});
+    expect(one.seen).toHaveLength(1);
+
+    const two = stub(['shapelessDelete']);
     LinkedStorage.setDatasetForShapes(two.dataset, [Person]);
     try {
-      const answer = await Shape.delete(A);
-      expect(answer).toEqual({deleted: [{id: A}], count: 1});
+      await expect(Shape.delete(A).exec()).rejects.toThrow(/Name the dataset/);
       expect(one.seen).toHaveLength(1);
-      expect(two.seen).toHaveLength(1);
-      expect(warn.mock.calls.some(([m]) => String(m).includes('A shapeless delete'))).toBe(true);
-
-      const old = stub();
-      LinkedStorage.setDatasetForShapes(old.dataset, [Person]);
-      const fresh = stub(['shapelessDelete']);
-      LinkedStorage.setDefaultDataset(fresh.dataset);
-      await expect(Shape.delete(A).exec()).rejects.toThrow(/shapelessDelete/);
-      expect(fresh.seen).toEqual([]);
+      expect(two.seen).toEqual([]);
     } finally {
       LinkedStorage.unsetDatasetForShape(Person);
     }
+
+    const old = stub();
+    LinkedStorage.setDefaultDataset(old.dataset);
+    await expect(Shape.delete(A).exec()).rejects.toThrow(/shapelessDelete/);
+    expect(old.seen).toEqual([]);
   });
 });
 

@@ -415,8 +415,9 @@ DSL: `Shape.delete([{id: 'node:1'}])` (on the base class: a shapeless delete)
 }
 ```
 
-No shape: every triple of each id, and every link to it, in every graph of the dataset (each
-named graph and the default graph). A store
+No shape: every triple of each id, and every link to it, in every data graph of the dataset (the
+default graph and each named graph but the registry and the graphs it records as shapes or
+ontology graphs). A store
 lists `'shapelessDelete'` in `supports` to be sent one.
 
 ## Store (dataset) implementer guide

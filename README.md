@@ -1401,20 +1401,22 @@ the links other nodes hold to it, in every graph that may hold one.
 
 **Shapeless delete.** On the base class, `Shape.delete(ids)` deletes nodes whose types the caller
 does not know: every triple whose subject is one of the ids, and every triple that links to one,
-in every graph of the dataset: each named graph, routed or not, and the default graph (never by
-way of `graphs.union`). One SPARQL update does it. There is no type guard and no cascade (no shape to read one from), and
+in every data graph of the dataset: the default graph and each named graph, routed or not (never by
+way of `graphs.union`). Structure stays: the graph registry and the graphs it records as shapes or
+ontology graphs (`core:ShapesGraph`, `core:OntologyGraph`), which only graph queries write. One
+SPARQL update does it. There is no type guard and no cascade (no shape to read one from), and
 `.where()`, `.all()` and `.into()` are refused on it.
 
 ```typescript
-await Shape.delete([{id: a}, {id: b}]);                    // every dataset LinkedStorage knows
-await Shape.delete([{id: a}]).exec(dataset);               // one dataset
+await Shape.delete([{id: a}, {id: b}]);                    // LinkedStorage's one dataset
+await Shape.delete([{id: a}]).exec(dataset);               // a named dataset
 ```
 
 A dataset is sent one only when it lists `'shapelessDelete'` in `supports` (`SparqlDataset`
-does); otherwise the delete is refused before it is sent. Without a target, `LinkedStorage` sends
-it to every dataset it knows, each deleting in all of its graphs, after checking that all of
-them support it, and logs the fan-out notice of the shapeless reads. It reaches every graph, so a
-receiver that runs it for a client decides who may send it.
+does); otherwise the delete is refused before it is sent. It is never fanned out: without a
+target, `LinkedStorage` sends it to the one dataset it knows, and refuses it when it knows several
+(name the dataset). It reaches every data graph, so a receiver that runs it for a client decides
+who may send it.
 
 
 ## Extending shapes
