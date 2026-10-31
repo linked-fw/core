@@ -1755,6 +1755,9 @@ function convertExpression(
         args: expr.args.map((a) =>
           convertExpression(a, registry, optionalPropertyTriples),
         ),
+        // A count counts distinct values (see IRAggregateExpression): a select that joins two
+        // multi-valued paths yields their cross product, and COUNT(?x) would count its rows.
+        ...(expr.name === 'count' ? {distinct: true} : {}),
       };
 
     case 'exists_expr': {

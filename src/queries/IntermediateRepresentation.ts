@@ -1,5 +1,6 @@
 import {NodeReferenceValue} from './QueryFactory.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
+import type {QueryFeature} from './queryFeatures.js';
 
 export type IRDirection = 'ASC' | 'DESC';
 export type IRAlias = string;
@@ -36,6 +37,21 @@ export type IRSelectQuery = {
    * included; the store expands them before compiling. Absent = the default graph.
    */
   graphs?: string[];
+  /**
+   * A grouped select (`.groupBy(…)`): the group keys, each the expression of one projection item.
+   * When present the rows are groups, not entities: the root is not projected, every projection
+   * item is a key or an aggregate, and a row has no `id`. Absent = rows are the root's entities
+   * (an aggregate in the projection then counts per entity, as `.size()` does).
+   */
+  groupBy?: IRExpression[];
+  /** The group filter of a grouped select (`.having(…)`), over keys and aggregates. */
+  having?: IRExpression;
+  /**
+   * The features beyond the baseline this query uses (`queries/queryFeatures.ts`). A store that
+   * reads the IR and does not support one of them must refuse the query rather than answer it
+   * without that part. Absent or empty = baseline only.
+   */
+  requires?: QueryFeature[];
 };
 
 /**
@@ -290,6 +306,12 @@ export type IRFunctionExpression = {
   args: IRExpression[];
 };
 
+/**
+ * An aggregate over the rows of a group (a grouped select's group, or each root entity's rows).
+ * A `count` always counts **distinct** values: the values of one subject and property are a set
+ * in RDF, and a select that joins two multi-valued paths yields their cross product, so counting
+ * rows would multiply each count by the other path's size.
+ */
 export type IRAggregateExpression = {
   kind: 'aggregate_expr';
   name: 'count' | 'sum' | 'avg' | 'min' | 'max';

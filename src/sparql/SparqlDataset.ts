@@ -81,6 +81,7 @@ import {graphs} from '../ontologies/graphs.js';
 import {sharedState} from '../utils/sharedState.js';
 import type {DefaultGraphTermsReplace} from '../queries/defaultGraphTerms.js';
 import {defaultGraphTermsToSparql} from './defaultGraphTerms.js';
+import {ALL_QUERY_FEATURES, type QueryFeature} from '../queries/queryFeatures.js';
 import {
   expandReadGraphs,
   invalidateGraphRegistry,
@@ -146,6 +147,9 @@ export abstract class SparqlDataset implements IDataset {
   constructor(options?: SparqlOptions) {
     this.options = options;
   }
+
+  /** SPARQL expresses every query feature: grouping (GROUP BY/HAVING), MIN and MAX. */
+  readonly supports: readonly QueryFeature[] = ALL_QUERY_FEATURES;
 
   /**
    * Replace terms in the default graph in one update (the ontology sync's `'default'` mode): see

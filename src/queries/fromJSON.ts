@@ -77,6 +77,11 @@ export function fromJSON(
   }
   if (json && typeof json === 'object' && 'op' in json) {
     switch (json.op) {
+      case 'select':
+        // A select that needs features beyond the baseline (grouping, min/max) carries
+        // `op: 'select'`: a build without this arm refuses it instead of answering it
+        // without those parts.
+        return SelectBuilder.fromJSON(json as QueryBuilderJSON);
       case 'ask':
         return AskBuilder.fromJSON(json as AskQueryJSON);
       case 'count':

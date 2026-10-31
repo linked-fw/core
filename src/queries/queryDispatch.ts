@@ -9,6 +9,7 @@ import type {GraphQuery, GraphResult} from './IntermediateRepresentation.js';
 import type {Triple, TriplesQuery} from './triplesQuery.js';
 import {unsupportedGraphQuery} from './graphQuery.js';
 import {catalogOf, withShapeCatalog} from '../utils/ShapeClass.js';
+import type {QueryFeature} from './queryFeatures.js';
 
 /**
  * Abstraction boundary between the DSL layer (Shape) and the storage layer
@@ -43,6 +44,43 @@ export interface QueryDispatch {
    * {@link resolveTriples} refuses a target without it.
    */
   triplesQuery?(query: TriplesQuery): Promise<Triple[]>;
+  /**
+   * The query features this dispatch answers (as `IDataset.supports`). A router that checks each
+   * routed dataset itself (`LinkedStorage`) lists every feature; absent = the baseline only.
+   */
+  readonly supports?: readonly QueryFeature[];
+}
+
+/** Something a select is sent to: a dataset, a router, or the global dispatch. */
+type FeatureTarget = {readonly supports?: readonly QueryFeature[]} | undefined | null;
+
+/** A query that may use features beyond the baseline (a select builder has `requiredFeatures`). */
+type FeatureQuery = object & {requiredFeatures?(): readonly QueryFeature[]};
+
+/**
+ * Refuse a select whose features `target` does not declare (`IDataset.supports`).
+ *
+ * The check runs where a query is handed to a store: the select builder's `exec` on its target
+ * (or the global dispatch), and `LinkedStorage` on the dataset it routed to. It is the reason a
+ * grouped select needs no query kind of its own: a store that does not know grouping is never
+ * asked, rather than asked and trusted to notice.
+ */
+export function assertQuerySupported(target: FeatureTarget, query: object): void {
+  const {requiredFeatures} = query as FeatureQuery;
+  const required = typeof requiredFeatures === 'function' ? requiredFeatures.call(query) : [];
+  if (required.length === 0) return;
+  const supported = new Set(target?.supports ?? []);
+  const missing = required.filter((feature) => !supported.has(feature));
+  if (missing.length === 0) return;
+  const name = (target as {constructor?: {name?: string}} | null)?.constructor?.name;
+  throw new Error(
+    `This query uses ${missing.map((f) => `'${f}'`).join(', ')}, which the dataset it was sent ` +
+    `to${name && name !== 'Object' ? ` (${name})` : ''} does not declare in \`supports\`. ` +
+    'It is refused rather than sent: a store that does not know the feature would answer ' +
+    'without it (ungrouped rows, no aggregate), and the answer would look real. Send it to a ' +
+    'dataset that supports it (SparqlDataset does), or declare `supports` on the dataset once ' +
+    'it implements the feature.',
+  );
 }
 
 /** A target that can answer an ask query, or a select (the fallback). */

@@ -4,6 +4,7 @@ import {
   setBuildSelectQueryHook,
 } from '../queries/IRPipeline';
 import {lower} from '../queries/lower';
+import {ALL_QUERY_FEATURES} from '../queries/queryFeatures';
 
 // Datasets now receive the live (closed) query; tests expect the lowered IR, so
 // lower() what we capture. Passing an already-IR object through is tolerated.
@@ -55,6 +56,8 @@ setQueryDispatch({
     _lastQuery = toIR(query);
     return {deleted: [], count: 0};
   },
+  // Captures every query, grouped ones included.
+  supports: ALL_QUERY_FEATURES,
 });
 
 /**

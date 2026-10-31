@@ -13,6 +13,7 @@ import {
 import {NodeReferenceValue,type Prettify,type ShapeReferenceValue} from './QueryFactory.js';
 import {xsd} from '../ontologies/xsd.js';
 import type {IRSelectQuery} from './IntermediateRepresentation.js';
+import type {QueryFeature} from './queryFeatures.js';
 import {createProxiedPathBuilder} from './ProxiedPathBuilder.js';
 import {FieldSet} from './FieldSet.js';
 import {PropertyPath} from './PropertyPath.js';
@@ -58,6 +59,11 @@ export interface SelectQuery {
   readonly shape: NodeShapeData;
   toJSON(): QueryBuilderJSON;
   toRawInput(): RawSelectInput;
+  /**
+   * The features beyond the baseline this select uses (grouping, min/max): what a dataset must
+   * declare in `IDataset.supports` to be sent it. Optional for selects built by an older core.
+   */
+  requiredFeatures?(): QueryFeature[];
 }
 
 /**

@@ -5,7 +5,7 @@
  */
 
 /** Current DSL-JSON wire-format version, stamped onto every `toJSON` envelope as `v`. */
-export const WIRE_VERSION = '1.1';
+export const WIRE_VERSION = '1.2';
 
 /**
  * Validate an incoming envelope's `v`. A missing `v` is tolerated (pre-versioned /

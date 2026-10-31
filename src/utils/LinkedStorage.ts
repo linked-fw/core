@@ -9,11 +9,13 @@ import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
 import type {GraphQuery, GraphResult} from '../queries/IntermediateRepresentation.js';
 import type {Triple, TriplesQuery} from '../queries/triplesQuery.js';
 import {
+  assertQuerySupported,
   setQueryDispatch,
   resolveExistence,
   resolveGraphQuery,
   resolveTriples,
 } from '../queries/queryDispatch.js';
+import {ALL_QUERY_FEATURES} from '../queries/queryFeatures.js';
 import {
   catalogOf,
   getActiveShapeCatalog,
@@ -115,6 +117,8 @@ export abstract class LinkedStorage {
       deleteQuery: (q) => this.deleteQuery(q),
       graphQuery: (q) => this.graphQuery(q),
       triplesQuery: (q) => this.triplesQuery(q),
+      // Every feature: `selectQuery` checks the dataset each select is routed to.
+      supports: ALL_QUERY_FEATURES,
     });
     notifyRoutingChanged();
   }
@@ -353,6 +357,11 @@ export abstract class LinkedStorage {
       return Promise.reject(
         new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().'),
       );
+    }
+    try {
+      assertQuerySupported(dataset, query);
+    } catch (err) {
+      return Promise.reject(err);
     }
     // Called outside any catalog: a router's own queries never run in the query's catalog.
     return (getActiveShapeCatalog() === undefined

@@ -14,6 +14,7 @@ import type {
 import type {Triple, TriplesQuery} from '../queries/triplesQuery.js';
 import type {ChangeEvent} from '../live/changes.js';
 import type {DefaultGraphTermsReplace} from '../queries/defaultGraphTerms.js';
+import type {QueryFeature} from '../queries/queryFeatures.js';
 
 /**
  * Universal dataset interface. Every dataset in the Linked framework accepts
@@ -62,6 +63,17 @@ export interface IDataset {
    * to remove.
    */
   selectQuery(query: SelectQuery | CountQuery): Promise<SelectResult | number>;
+  /**
+   * The query features beyond the baseline this dataset answers (`'groupBy'`, `'min'`, `'max'`;
+   * see `queries/queryFeatures.ts`). A select that uses a feature the dataset does not list is
+   * **refused before it is sent** (`assertQuerySupported`), because a store that ignored, say,
+   * the grouping would still answer rows, and they would look like a real answer.
+   *
+   * Optional. Absent = the baseline only: a dataset written before features existed keeps
+   * answering everything it answered before, and fails loudly on anything new. `SparqlDataset`
+   * lists every feature. A router lists what it forwards and checks each target itself.
+   */
+  readonly supports?: readonly QueryFeature[];
   /**
    * Answer an ask query — a boolean, not a result set.
    *

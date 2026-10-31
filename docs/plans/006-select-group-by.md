@@ -4,7 +4,7 @@ summary: >
   over the result fields, returning a narrower GroupedSelectBuilder with having/orderBy/limit/
   offset/from/exec/JSON; Expr.count(), countDistinct/min/max on paths; rides IRSelectQuery with
   optional groupBy/having/requires; stores declare `supports`, so every store fails loudly.
-status: Tasks
+status: Implementation
 packages: [core]
 ---
 
@@ -85,7 +85,8 @@ kind down its select path; `SelectBuilder.fromJSON` ignores unknown keys (an old
 3. **IR.** `IRSelectQuery` gains `groupBy?: IRExpression[]` (the key projections' expressions),
    `having?: IRExpression`, `requires?: QueryFeature[]`. `IRAggregateExpression` gains
    `distinct?: boolean`. No new kind.
-4. **Features.** `QueryFeature = 'groupBy' | 'countDistinct' | 'min' | 'max'` (new module
+4. **Features.** `QueryFeature = 'groupBy' | 'min' | 'max'` (counting is baseline: every count is
+   a distinct count, decision 10) (new module
    `queries/queryFeatures.ts`). One function computes a query's features from its expression
    trees, used by the builder (`requiredFeatures()`, before dispatch, IR-free) and by lowering
    (`IRSelectQuery.requires`). Baseline features (plain selects, `.size()`, aggregate-in-where)
@@ -186,6 +187,7 @@ kind down its select path; `SelectBuilder.fromJSON` ignores unknown keys (an old
 | 7 | Aggregates allowed in ungrouped selects (per subject) | Same semantics as `size()`; backlog 006's per-row reading for free |
 | 8 | Missing-key check is a type-level error type plus a runtime throw | A parameter-level constraint would break inference of the callback |
 | 9 | `size()` → `COUNT(DISTINCT)` | Confirmed fan-out; a one-line lowering change |
+| 10 | Every `count` aggregate lowers to `COUNT(DISTINCT …)`; no `countDistinct` feature and no `distinct` flag in the IR | A count in this DSL is always a count of values or members, which are sets; one rule instead of a flag. `Expr.count()`/`countDistinct()` stay baseline, so a store that counts already handles them |
 
 ## Phases
 
@@ -201,6 +203,19 @@ Tasks:
 Validation: `npx tsc -p tsconfig-tests.json` clean; fan-out test fails before the fix and passes
 after; existing golden tests updated for `COUNT(DISTINCT)`; dispatch unit tests (missing
 `supports` → throws naming the features; SparqlDataset passes).
+
+**Done.** Results:
+- Fan-out confirmed live before the fix: `size-fan-out.test.ts` on Fuseki gave
+  `"friends": 6, "nicks": 6` for a person with 2 friends and 3 nick names (expected 2 and 3).
+  After `convertExpression` emits `distinct: true` for every `count`: `Tests: 3 passed` (one live).
+- `sparql-select-golden.test.ts`: the five aggregate goldens now pin `COUNT(DISTINCT …)`:
+  `Tests: 90 passed, 90 total`.
+- `query-features.test.ts`: `Tests: 8 passed, 8 total`. `npx tsc -p tsconfig-tests.json`: clean.
+- Full jest on an own Fuseki (`FUSEKI_BASE_URL=http://localhost:3941`) before the golden update:
+  `[fuseki] live tests: 423 total — 421 passed, 0 failed, 2 skipped`; the unit failures were the
+  five goldens and the suites that need `lib/` (`two-copies-*`, `ontology-load-files`: "lib/esm/
+  index.js is missing: run `npx linked build`"), checked again after the build in phase 3.
+- Deviation: no `countDistinct` feature, no IR `distinct` flag (decision 10).
 
 ### Phase 2 — Aggregates on paths and `Expr.count()`
 

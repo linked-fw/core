@@ -14,6 +14,7 @@ import {
 import type {SortByPath, WherePath} from './SelectQuery.js';
 import type {PropertyPathSegment, RawMinusEntry, RawSelectInput} from './IRDesugar.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
+import {parseRequires, type QueryFeature} from './queryFeatures.js';
 import {getQueryDispatch} from './queryDispatch.js';
 import {AskBuilder} from './AskBuilder.js';
 import {CountBuilder} from './CountBuilder.js';
@@ -47,6 +48,14 @@ import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryS
 export type QueryBuilderJSON = {
   /** DSL-JSON wire-format version. */
   v?: string;
+  /**
+   * Present (`'select'`) when the select needs features beyond the baseline (`requires`). A
+   * build that predates them has no `'select'` op and refuses the envelope ("Unknown query op")
+   * rather than answering it without them; a plain select leaves it out.
+   */
+  op?: 'select';
+  /** The features beyond the baseline the select uses (`queries/queryFeatures.ts`). */
+  requires?: QueryFeature[];
   shape: string;
   fields?: FieldSetFieldJSON[];
   limit?: number;
@@ -759,6 +768,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
    */
   static fromJSON<S extends Shape = Shape>(json: QueryBuilderJSON): SelectBuilder<S> {
     assertWireVersion(json.v);
+    parseRequires(json.requires);
     let builder = SelectBuilder.from<S>(json.shape as any);
 
     if (json.fields && json.fields.length > 0) {
