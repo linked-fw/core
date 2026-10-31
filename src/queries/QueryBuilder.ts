@@ -320,7 +320,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   /**
    * At most `n` instances (root subjects), each with all its values: a multi-valued path does
    * not make a page smaller. An `orderBy` on a multi-valued path sorts an instance by its lowest
-   * value ascending, its highest descending. See the README, "Sorting, limiting, one".
+   * value ascending, its highest descending, ties by IRI. See the README, "Sorting, limiting, one".
    */
   limit(n: number): SelectBuilder<S, R, Result> {
     return this.clone({limit: n});

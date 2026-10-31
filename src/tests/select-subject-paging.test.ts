@@ -68,6 +68,12 @@ describe('subject paging (lowering)', () => {
     expect(inner).not.toContain('nickName');
   });
 
+  test('a single-valued traversal adds no rows: plain LIMIT', () => {
+    const sparql = sparqlOf(Person.select((p) => p.bestFriend.name).limit(2));
+    expect(sparql).not.toMatch(/\{\s*SELECT/);
+    expect(sparql).toMatch(/LIMIT 2\s*$/);
+  });
+
   test('a traversal pages by subject', () => {
     const sparql = sparqlOf(Person.select((p) => p.friends.name).limit(1));
     expect(sparql).toMatch(/SELECT \?a0 WHERE[\s\S]*LIMIT 1\s*\}/);
@@ -75,9 +81,9 @@ describe('subject paging (lowering)', () => {
 
   test('an order on a multi-valued path sorts each subject by MIN ascending and MAX descending', () => {
     const asc = sparqlOf(Person.select((p) => p.name).orderBy((p) => p.nickNames).limit(2));
-    expect(asc).toMatch(/\(MIN\(\?a0_nickNames\) AS \?(\w+)\)[\s\S]*ORDER BY ASC\(\?\1\) LIMIT 2/);
+    expect(asc).toMatch(/\(MIN\(\?a0_nickNames\) AS \?(\w+)\)[\s\S]*ORDER BY ASC\(\?\1\) ASC\(\?a0\) LIMIT 2/);
     const desc = sparqlOf(Person.select((p) => p.name).orderBy((p) => p.nickNames, 'DESC').limit(2));
-    expect(desc).toMatch(/\(MAX\(\?a0_nickNames\) AS \?(\w+)\)[\s\S]*ORDER BY DESC\(\?\1\) LIMIT 2/);
+    expect(desc).toMatch(/\(MAX\(\?a0_nickNames\) AS \?(\w+)\)[\s\S]*ORDER BY DESC\(\?\1\) ASC\(\?a0\) LIMIT 2/);
   });
 
   test('.one() limits subjects, not rows', () => {
@@ -170,6 +176,30 @@ describeFuseki('subject paging', () => {
       Person.select((p) => ({name: p.name, n: p.nickNames.size()})).orderBy((p) => p.name).limit(2).offset(1),
     )) as ResultRow[];
     expect(rows.map((r) => [r.name, r.n])).toEqual([['Bob', 3], ['Cyd', 1]]);
+  });
+
+  test('a where aggregate with a multi-valued projection: the page applies it per subject', async () => {
+    const q = Person.select((p) => [p.name, p.friends.name])
+      .where((p) => p.friends.size().equals(2))
+      .limit(5);
+    expect(sparqlOf(q)).not.toMatch(/\}\s*GROUP BY[\s\S]*HAVING[\s\S]*\n\s*GROUP BY/);
+    const rows = (await run(q)) as ResultRow[];
+    expect(ids(rows)).toEqual(['p1']);
+    expect((rows[0].friends as ResultRow[]).length).toBe(2);
+  });
+
+  test('ties are broken by the subject: pages neither repeat nor skip one', async () => {
+    // No one has a hobby: every subject ties on the sort key.
+    const tied = (offset: number) =>
+      run(Person.select((p) => [p.nickNames, p.hobby]).orderBy((p) => p.hobby).limit(1).offset(offset));
+    const seen = [];
+    for (let i = 0; i < 4; i++) seen.push(...ids(await tied(i)));
+    expect(seen).toEqual(['p1', 'p2', 'p3', 'p4']);
+  });
+
+  test('the values of a subject keep the select order', async () => {
+    const rows = (await run(Person.select((p) => p.nickNames).orderBy((p) => p.nickNames).offset(2).limit(1))) as ResultRow[];
+    expect(rows[0].nickNames).toEqual(['C', 'D', 'E']);
   });
 
   test('a grouped select: limit counts groups', async () => {

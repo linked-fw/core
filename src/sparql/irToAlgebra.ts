@@ -1392,20 +1392,34 @@ export function selectToAlgebra(
   const paged = pageSubjects
     ? pageBySubject(scoped.algebra, rootAlias, orderBy, havingExpr, query.limit, query.offset)
     : undefined;
+  // A paged select's where-aggregate (HAVING) is applied by the page, per subject; the outer
+  // query reads the page's subjects and does not repeat it (its groups are per subject and
+  // values, where the HAVING would count something else). It groups only for the aggregates
+  // it projects.
+  const outerGrouped = paged ? aggregates.length > 0 : hasAggregates;
   return {
     type: 'select',
     algebra: paged ? paged.algebra : scoped.algebra,
     ...(scoped.dataset ? {dataset: scoped.dataset} : {}),
     projection,
-    distinct: !hasAggregates ? true : undefined,
-    orderBy: paged ? paged.orderBy : orderBy,
+    distinct: !outerGrouped ? true : undefined,
+    // The outer rows follow the page's order; without grouping, the select's own order
+    // expressions then order each subject's values as before.
+    orderBy: paged
+      ? paged.orderBy && [
+        ...paged.orderBy,
+        ...(outerGrouped ? [] : orderBy ?? []).filter(
+          (o) => !paged.orderBy!.some((k) => JSON.stringify(k) === JSON.stringify(o)),
+        ),
+      ]
+      : orderBy,
     limit: pageSubjects || oneSubjectRead ? undefined : query.limit,
     offset: pageSubjects ? undefined : query.offset,
     // An ungrouped select with an aggregate groups its rows by subject and values; the page's
     // sort keys are one per subject, so grouping by them too changes nothing and lets the outer
     // ORDER BY read them.
-    groupBy: paged && groupBy ? [...groupBy, ...paged.keys] : groupBy,
-    having: havingExpr,
+    groupBy: paged ? (outerGrouped && groupBy ? [...groupBy, ...paged.keys] : undefined) : groupBy,
+    having: paged ? undefined : havingExpr,
     aggregates: aggregates.length > 0 ? aggregates : undefined,
   };
 }
@@ -1413,6 +1427,17 @@ export function selectToAlgebra(
 // ---------------------------------------------------------------------------
 // Paging over subjects
 // ---------------------------------------------------------------------------
+
+/** The traversals that bind values in the rows: not those inside an exists or a minus. */
+function collectRowTraversals(patterns: IRGraphPattern[], out: IRTraversePattern[] = []): IRTraversePattern[] {
+  for (const p of patterns) {
+    if (p.kind === 'traverse') out.push(p);
+    else if (p.kind === 'join') collectRowTraversals(p.patterns, out);
+    else if (p.kind === 'optional') collectRowTraversals([p.pattern], out);
+    else if (p.kind === 'union') collectRowTraversals(p.branches, out);
+  }
+  return out;
+}
 
 /** Whether an expression reads a multi-valued path of the row (not inside an aggregate). */
 function readsMultiValuedPath(expr: IRExpression): boolean {
@@ -1439,12 +1464,13 @@ function readsMultiValuedPath(expr: IRExpression): boolean {
 }
 
 /**
- * Whether one subject of an ungrouped select can span several solution rows: a traversal (not
- * inside an exists or minus), or a multi-valued path in the projection or the order.
+ * Whether one subject of an ungrouped select can span several solution rows: a multi-valued
+ * traversal (not inside an exists or minus), or a multi-valued path in the projection or the
+ * order. A single-valued traversal (`bestFriend`) adds no rows; what it reads is checked as a path.
  */
 function rowsPerSubjectMayExceedOne(query: IRSelectQuery): boolean {
   return (
-    collectTraversalAliases(query.patterns).length > 0 ||
+    collectRowTraversals(query.patterns).some((t) => !(typeof t.maxCount === 'number' && t.maxCount <= 1)) ||
     query.projection.some((item) => readsMultiValuedPath(item.expression)) ||
     (query.orderBy ?? []).some((item) => readsMultiValuedPath(item.expression))
   );
@@ -1605,7 +1631,7 @@ function prunePagePattern(node: SparqlAlgebraNode, needed: ReadonlySet<string>):
  * Each sort key is one value per subject: the subject's first value in that key's direction —
  * the lowest ascending (`MIN`), the highest descending (`MAX`). A key that is the subject itself
  * sorts as is. A subject without the value has an unbound key (first ascending, last
- * descending, as SPARQL orders unbound values).
+ * descending, as SPARQL orders unbound values). Ties are broken by the subject IRI, ascending.
  */
 function pageBySubject(
   algebra: SparqlAlgebraNode,
@@ -1626,6 +1652,10 @@ function pageBySubject(
     });
     return {expression: {kind: 'variable_expr', name: alias}, direction: condition.direction};
   });
+  // Ties are broken by the subject, so that consecutive pages neither repeat nor skip one.
+  if (keys.length > 0 && !keys.some((k) => k.expression.kind === 'variable_expr' && k.expression.name === rootAlias)) {
+    keys.push({expression: {kind: 'variable_expr', name: rootAlias}, direction: 'ASC'});
+  }
   const needed = new Set<string>([rootAlias]);
   for (const condition of orderBy ?? []) expressionVariables(condition.expression, needed);
   expressionVariables(having, needed);

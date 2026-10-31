@@ -1251,9 +1251,12 @@ values; `.for(id)` reads one instance and needs no limit.
 
 An `orderBy` on a multi-valued or nested path (`p.nickNames`, `p.friends.name`) gives each
 instance one sort value: its first value in that direction, the lowest ascending and the
-highest descending. Each `orderBy` key is taken this way on its own. An instance without the
-value sorts as SPARQL sorts an unbound value: first ascending, last descending. Without an
-`orderBy` the order of the instances, and so which ones a page holds, is the store's.
+highest descending. Each `orderBy` key is taken this way on its own, and ties are broken by the
+instance's IRI, so consecutive pages neither repeat nor skip an instance. An instance without a
+value of a direct path (`p.nickNames`) sorts as SPARQL sorts an unbound value: first ascending,
+last descending. Ordering by a nested path (`p.friends.name`, `p.bestFriend.name`) keeps only
+the instances that have that path. Without an `orderBy` the order of the instances, and so
+which ones a page holds, is the store's.
 
 A grouped select (`groupBy`, below) pages over its **groups**: `limit(10)` is ten groups.
 `count()` and `exists()` drop `limit` and `offset`.

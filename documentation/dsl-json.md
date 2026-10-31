@@ -67,7 +67,7 @@ Two families, distinguished structurally:
 `limit`/`offset` page over the root subjects, not over result rows: a page is `limit`
 subjects after the first `offset`, each with all its values. A `sortBy` on a multi-valued or
 nested path sorts each subject by its first value in that direction (lowest `ASC`, highest
-`DESC`). On a grouped select they count groups. A store that answers envelopes itself must page
+`DESC`), ties broken by the subject IRI; a nested sort path keeps only the subjects that have it. On a grouped select they count groups. A store that answers envelopes itself must page
 the same way.
 
 `fromJSON(json)` routes on `op` (and throws on an unrecognized `op` rather than silently
