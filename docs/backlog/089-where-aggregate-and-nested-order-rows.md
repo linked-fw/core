@@ -1,8 +1,9 @@
 ---
 summary: >
-  Two row-level effects left after subject paging (report 098): an unpaged select with a
+  Three row-level effects left after subject paging (report 098): an unpaged select with a
   where-aggregate and a multi-valued projection applies its HAVING per (subject, values) group;
-  ordering by a nested path makes the traversal required and drops instances without it.
+  ordering by a nested path makes the traversal required and drops instances without it; a
+  multi-valued leaf under a single-valued traversal maps to one value.
 packages: [core]
 ---
 
@@ -20,3 +21,6 @@ Source: report 098 (review of subject paging).
    required join, so an instance without friends (or a best friend) is not returned at all.
    Making the order traversal OPTIONAL would sort those instances as unbound instead, like a
    direct path. That changes which instances a select returns, so it needs the owner's call.
+3. Result mapping, older than paging: under a single-valued traversal a multi-valued leaf comes
+   back as one value. `Person.select((p) => p.bestFriend.nickNames)` returns rows C, D, E for
+   p2, and the result is `{bestFriend: {id: p2, nickNames: 'C'}}`.
