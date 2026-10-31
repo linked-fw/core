@@ -4929,64 +4929,63 @@ export function deleteWhereToSparql(
 }
 
 /**
- * Converts an IRDeleteShapelessMutation to a SparqlDeleteInsertPlan: in each of its `graphs`
- * (required: the store resolves them from its routing), every triple of each id and, unless
+ * Converts an IRDeleteShapelessMutation to a SparqlDeleteInsertPlan: in every graph of the
+ * dataset (each named graph and the default graph), every triple of each id and, unless
  * `keepIncoming`, every triple that links to one. One operation for all ids and graphs:
  *
  * ```sparql
- * DELETE { GRAPH ?g_del { ?x_del ?p_del ?o_del . ?s_del ?p2_del ?x_del } }
+ * DELETE {
+ *   ?x_del ?pd_del ?od_del . ?sd_del ?p2d_del ?x_del .
+ *   GRAPH ?g_del { ?x_del ?p_del ?o_del . ?s_del ?p2_del ?x_del }
+ * }
  * WHERE {
- *   VALUES ?x_del { <a> <b> } VALUES ?g_del { <g1> <g2> }
- *   GRAPH ?g_del { { ?x_del ?p_del ?o_del } UNION { ?s_del ?p2_del ?x_del } }
+ *   VALUES ?x_del { <a> <b> }
+ *   {
+ *     { { ?x_del ?pd_del ?od_del } UNION { ?sd_del ?p2d_del ?x_del } }
+ *   } UNION {
+ *     GRAPH ?g_del { { ?x_del ?p_del ?o_del } UNION { ?s_del ?p2_del ?x_del } }
+ *   }
  * }
  * ```
  *
- * The two sides are a UNION, so their matches add up instead of multiplying; a DELETE template
- * triple a solution leaves unbound is skipped. `graphs.default` in the set is the store's own
- * name for the default graph (`SparqlOptions.mapGraphName`), or a refusal.
+ * The default-graph side and the named-graph side bind their own variables, so a solution of one
+ * leaves the other's template triples unbound, and a DELETE template triple a solution leaves
+ * unbound is skipped. The sides of each are a UNION, so their matches add up instead of
+ * multiplying. `GRAPH ?g` never binds `graphs.union` or a store's own name for the default graph.
  */
 export function deleteShapelessToAlgebra(
   query: IRDeleteShapelessMutation,
-  options?: SparqlCompileOptions,
+  _options?: SparqlCompileOptions,
 ): SparqlDeleteInsertPlan {
   if (!query.ids?.length) throw new Error('deleteShapelessToAlgebra: a shapeless delete needs at least one id.');
-  if (!query.graphs?.length) {
-    throw new Error(
-      'deleteShapelessToAlgebra: a shapeless delete needs the graphs it deletes in; the store ' +
-        'sets them from its graph routing.',
-    );
-  }
   const ids = query.ids.map(({id}) => {
     assertSafeIri(id);
     return id;
   });
-  const graphNames = query.graphs.map((graph) => {
-    const name =
-      graph === graphs.default
-        ? defaultGraphStoreName(options, 'This shapeless delete includes the default graph')
-        : graph;
-    assertSafeIri(name);
-    return name;
-  });
   const node = varTerm('x_del');
-  const own = tripleOf(node, varTerm('p_del'), varTerm('o_del'));
-  const incoming = tripleOf(varTerm('s_del'), varTerm('p2_del'), node);
-  const sides: SparqlAlgebraNode = query.keepIncoming
-    ? {type: 'bgp', triples: [own]}
-    : unionOf([{type: 'bgp', triples: [own]}, {type: 'bgp', triples: [incoming]}]);
+  const sidesOf = (own: SparqlTriple, incoming: SparqlTriple): {triples: SparqlTriple[]; where: SparqlAlgebraNode} => ({
+    triples: query.keepIncoming ? [own] : [own, incoming],
+    where: query.keepIncoming
+      ? {type: 'bgp', triples: [own]}
+      : unionOf([{type: 'bgp', triples: [own]}, {type: 'bgp', triples: [incoming]}]),
+  });
+  const inDefault = sidesOf(
+    tripleOf(node, varTerm('pd_del'), varTerm('od_del')),
+    tripleOf(varTerm('sd_del'), varTerm('p2d_del'), node),
+  );
+  const inNamed = sidesOf(
+    tripleOf(node, varTerm('p_del'), varTerm('o_del')),
+    tripleOf(varTerm('s_del'), varTerm('p2_del'), node),
+  );
   return {
     type: 'delete_insert',
-    deletePatterns: [],
-    deleteInGraphs: [{variable: 'g_del', triples: query.keepIncoming ? [own] : [own, incoming]}],
+    deletePatterns: inDefault.triples,
+    deleteInGraphs: [{variable: 'g_del', triples: inNamed.triples}],
     insertPatterns: [],
     whereAlgebra: {
       type: 'join',
-      left: {
-        type: 'join',
-        left: {type: 'values', variable: 'x_del', iris: ids},
-        right: {type: 'values', variable: 'g_del', iris: graphNames},
-      },
-      right: {type: 'graph', variable: 'g_del', inner: sides},
+      left: {type: 'values', variable: 'x_del', iris: ids},
+      right: unionOf([inDefault.where, {type: 'graph', variable: 'g_del', inner: inNamed.where}]),
     },
   };
 }

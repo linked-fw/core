@@ -411,14 +411,12 @@ DSL: `Shape.delete([{id: 'node:1'}])` (on the base class: a shapeless delete)
 {
   kind: 'delete_shapeless',
   ids: [{id: 'node:1'}],
-  // set by server code only, never in DSL-JSON:
-  // graphs?: string[]            (delete in exactly these routed graphs)
-  // includeDefaultGraph?: true   (the default graph too)
   // keepIncoming?: true          (carried in DSL-JSON)
 }
 ```
 
-No shape: every triple of each id, and every link to it, in the graphs the store routes. A store
+No shape: every triple of each id, and every link to it, in every graph of the dataset (each
+named graph and the default graph). A store
 lists `'shapelessDelete'` in `supports` to be sent one.
 
 ## Store (dataset) implementer guide

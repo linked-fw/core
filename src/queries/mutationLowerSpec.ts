@@ -49,8 +49,4 @@ export interface DeleteLowerSpec<S extends Shape = Shape> {
   into?: string;
   /** @internal Delete by ids that keeps the incoming links (see `IRDeleteMutation.keepIncoming`). */
   keepIncoming?: boolean;
-  /** Shapeless only (server-side, never serialized): delete in exactly these graphs. */
-  graphs?: string[];
-  /** Shapeless only (server-side, never serialized): delete in the default graph too. */
-  includeDefaultGraph?: boolean;
 }

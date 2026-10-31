@@ -6,9 +6,8 @@
 
 /*
  * The shapeless delete on Fuseki: `Shape.delete(ids)` removes every triple of the ids and every
- * link to them in the store's routed named graphs, keeps the default graph and unrouted graphs,
- * keeps the links with `_keepingIncoming()`, and reaches the default graph only with
- * `_includingDefaultGraph()`.
+ * link to them in every graph of the dataset (routed or not, and the default graph), keeps other
+ * nodes, and keeps the links with `_keepingIncoming()`.
  */
 import {afterAll, beforeAll, beforeEach, expect, test} from '@jest/globals';
 import {
@@ -40,9 +39,10 @@ const KNOWS = `${EX}knows`;
 async function where(store: FusekiStore, id: string): Promise<string[]> {
   const own = await TriplesBuilder.forNode({id}).from([graphs.default, G_PEOPLE, G_PETS, G_OTHER]).exec(store);
   const rows = own.map((t) => `${t.graph?.id ?? 'default'} own ${t.predicate.id}`);
-  for (const graph of [G_PEOPLE, G_PETS, G_OTHER]) {
+  for (const graph of [graphs.default, G_PEOPLE, G_PETS, G_OTHER]) {
     const everything = await TriplesBuilder.forNode({id: FRIEND}).from(graph).exec(store);
-    for (const t of everything) if ('id' in t.object && t.object.id === id) rows.push(`${graph} incoming`);
+    const name = graph === graphs.default ? 'default' : graph;
+    for (const t of everything) if ('id' in t.object && t.object.id === id) rows.push(`${name} incoming`);
   }
   return rows.sort();
 }
@@ -70,43 +70,24 @@ describeFuseki('shapeless delete on Fuseki', () => {
     await deleteTestDataset();
   });
 
-  test('removes the subject and the links to it in every routed graph, nothing else', async () => {
+  test('removes the subject and the links to it in every graph, the default graph included, nothing else', async () => {
     const answer = await Shape.delete({id: X}).exec(store);
     expect(answer).toEqual({deleted: [{id: X}], count: 1});
-    expect(await where(store, X)).toEqual(
-      [
-        `default own ${P}`,
-        `default own http://www.w3.org/1999/02/22-rdf-syntax-ns#type`,
-        `${G_OTHER} own ${P}`,
-        `${G_OTHER} own http://www.w3.org/1999/02/22-rdf-syntax-ns#type`,
-        `${G_OTHER} incoming`,
-      ].sort(),
-    );
-    // Another node in the same graph is untouched.
+    expect(await where(store, X)).toEqual([]);
+    // Another node in the same graph, and the linking node's own type, are untouched.
     expect(await TriplesBuilder.forNode({id: Y}).from(G_PEOPLE).exec(store)).toHaveLength(2);
+  });
+
+  test('a store without routing deletes in every graph too', async () => {
+    const plain = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME);
+    await Shape.delete(X).exec(plain);
+    expect(await where(store, X)).toEqual([]);
   });
 
   test('keeps the links with _keepingIncoming()', async () => {
     await Shape.delete(X)._keepingIncoming().exec(store);
-    const rows = await where(store, X);
-    expect(rows).toContain(`${G_PEOPLE} incoming`);
-    expect(rows).toContain(`${G_PETS} incoming`);
-    expect(rows.filter((r) => r.startsWith(`${G_PEOPLE} own`) || r.startsWith(`${G_PETS} own`))).toEqual([]);
-  });
-
-  test('reaches the default graph only with _includingDefaultGraph(), and only the graphs of _inGraphs()', async () => {
-    await Shape.delete(X)._inGraphs([G_PETS]).exec(store);
-    const afterPets = await where(store, X);
-    expect(afterPets.some((r) => r.startsWith(G_PETS))).toBe(false);
-    expect(afterPets.some((r) => r.startsWith(G_PEOPLE))).toBe(true);
-
-    await Shape.delete(X)._includingDefaultGraph().exec(store);
     expect(await where(store, X)).toEqual(
-      [
-        `${G_OTHER} own ${P}`,
-        `${G_OTHER} own http://www.w3.org/1999/02/22-rdf-syntax-ns#type`,
-        `${G_OTHER} incoming`,
-      ].sort(),
+      ['default incoming', `${G_PEOPLE} incoming`, `${G_PETS} incoming`, `${G_OTHER} incoming`].sort(),
     );
   });
 });

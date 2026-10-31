@@ -452,7 +452,7 @@ is then refused; without the option the flag is accepted.
 
 A **shapeless delete** (`Shape.delete(ids)`, version 1.3) names no shape: `"mode": "shapeless"`
 and its ids (absolute IRIs, or `{@ctx}`). The receiving store deletes every triple of each id and
-every link to it in the graphs it routes, never in the default graph. `keepIncoming` keeps the
+every link to it in every graph of the dataset, the default graph included. `keepIncoming` keeps the
 links, under the same receiver rule as above. A `shape` on it is refused, and a reader before 1.3
 refuses the envelope (it has no shape). A receiver that executes it for a client decides who may
 send it; a store sent it must list `shapelessDelete` in `supports`.

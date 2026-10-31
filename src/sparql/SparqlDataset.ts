@@ -656,57 +656,12 @@ export abstract class SparqlDataset implements IDataset {
 
   /**
    * A shapeless delete (`Shape.delete(ids)`): every triple of each id, and every link to one, in
-   * the graphs this store routes — its graph routing's named graphs, never the default graph or
-   * `graphs.union` (see `deleteShapelessToSparql`). One SPARQL update.
-   *
-   * - `graphs` on the IR (server code's `_inGraphs`) narrows it to exactly those graphs; each must
-   *   be a routed named graph (or the default graph when it is included), else
-   *   `GraphQueryError('graph-not-routed')`.
-   * - `includeDefaultGraph` (server code's `_includingDefaultGraph`) adds the default graph.
-   * - No graph to delete in (no routing, and the default graph not included) is refused: a
-   *   delete that silently deleted nothing would look like one that worked.
-   *
-   * Answers every id as deleted, as a delete by id does.
+   * every graph of the dataset (each named graph and the default graph; see
+   * `deleteShapelessToSparql`). One SPARQL update. Answers every id as deleted, as a delete by id
+   * does.
    */
   protected async deleteShapeless(ir: IRDeleteShapelessMutation): Promise<DeleteResponse> {
-    const routing = this.graphRouting();
-    const named = (routing?.allGraphs() ?? []).filter(
-      (graph) => graph !== graphs.default && graph !== graphs.union,
-    );
-    const allowed = ir.includeDefaultGraph ? [graphs.default, ...named] : named;
-    let scope = allowed;
-    if (ir.graphs) {
-      for (const graph of ir.graphs) {
-        if (!allowed.includes(graph)) {
-          throw new GraphQueryError(
-            'graph-not-routed',
-            `A shapeless delete may delete in the graphs this store routes${ir.includeDefaultGraph ? ' and the default graph' : ''}; ` +
-              `<${graph}> is not one of them.`,
-            graph,
-          );
-        }
-      }
-      scope = [...new Set(ir.graphs)];
-    }
-    for (const graph of scope) {
-      if (graph !== graphs.default && this.isReservedGraphName(graph)) {
-        throw new GraphQueryError(
-          'graph-name-read-only',
-          `<${graph}> is routed to, but it is a name this store reserves for its own graphs.`,
-          graph,
-        );
-      }
-    }
-    if (scope.length === 0) {
-      throw new GraphQueryError(
-        'graph-not-routed',
-        'A shapeless delete (Shape.delete(ids)) deletes in the graphs a store routes, and this ' +
-          'store routes none: it never deletes in the default graph. Route the shapes, or delete ' +
-          'each node as an instance of its shape.',
-        graphs.default,
-      );
-    }
-    const sparql = deleteShapelessToSparql({...ir, graphs: sortGraphSet(scope)}, this.writeOptions());
+    const sparql = deleteShapelessToSparql(ir, this.writeOptions());
     await this.executeSparqlUpdate(sparql);
     return {deleted: ir.ids, count: ir.ids.length};
   }

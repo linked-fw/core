@@ -1401,9 +1401,8 @@ the links other nodes hold to it, in every graph that may hold one.
 
 **Shapeless delete.** On the base class, `Shape.delete(ids)` deletes nodes whose types the caller
 does not know: every triple whose subject is one of the ids, and every triple that links to one,
-in the graphs the dataset routes (its graph routing's named graphs). It never deletes in the
-default graph or `graphs.union`, and a dataset without graph routing refuses it
-(`graph-not-routed`). There is no type guard and no cascade (no shape to read one from), and
+in every graph of the dataset: each named graph, routed or not, and the default graph (never by
+way of `graphs.union`). One SPARQL update does it. There is no type guard and no cascade (no shape to read one from), and
 `.where()`, `.all()` and `.into()` are refused on it.
 
 ```typescript
@@ -1413,11 +1412,9 @@ await Shape.delete([{id: a}]).exec(dataset);               // one dataset
 
 A dataset is sent one only when it lists `'shapelessDelete'` in `supports` (`SparqlDataset`
 does); otherwise the delete is refused before it is sent. Without a target, `LinkedStorage` sends
-it to every dataset it knows, each deleting in the graphs it routes, after checking that all of
-them support it, and logs the fan-out notice of the shapeless reads. Two server-side narrowings
-exist, never serialized: `_inGraphs(graphs)` (exactly these routed graphs) and
-`_includingDefaultGraph()` (the default graph too, for server code that has checked every id is
-its own to delete).
+it to every dataset it knows, each deleting in all of its graphs, after checking that all of
+them support it, and logs the fan-out notice of the shapeless reads. It reaches every graph, so a
+receiver that runs it for a client decides who may send it.
 
 
 ## Extending shapes

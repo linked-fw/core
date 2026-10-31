@@ -175,7 +175,7 @@ function lowerDelete(spec: DeleteLowerSpec): IRDeleteQuery {
   return buildCanonicalDeleteMutationIR({shape, ids});
 }
 
-/** A shapeless delete: its ids (context refs resolved) and its server-side scope. */
+/** A shapeless delete: its ids (context refs resolved). */
 function lowerShapelessDelete(spec: DeleteLowerSpec): IRDeleteQuery {
   if (!spec.ids || spec.ids.length === 0) {
     throw new Error('A shapeless delete (Shape.delete(ids)) needs at least one id.');
@@ -191,10 +191,7 @@ function lowerShapelessDelete(spec: DeleteLowerSpec): IRDeleteQuery {
       throw new Error(`A shapeless delete takes absolute IRIs; ${JSON.stringify(id)} is not one.`);
     }
   }
-  const ir = buildCanonicalDeleteShapelessMutationIR({ids});
-  if (spec.graphs) ir.graphs = [...spec.graphs];
-  if (spec.includeDefaultGraph) ir.includeDefaultGraph = true;
-  return ir;
+  return buildCanonicalDeleteShapelessMutationIR({ids});
 }
 
 /**

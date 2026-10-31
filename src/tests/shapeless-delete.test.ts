@@ -6,8 +6,8 @@
 
 /**
  * The shapeless delete, `Shape.delete(ids)` on the base class: the builder and its refusals, the
- * IR, DSL-JSON 1.3, the SPARQL a routed store sends (its named graphs only, never the default
- * graph), the server-side narrowings, `supports`, `LinkedStorage`'s fan-out and the live effects.
+ * IR, DSL-JSON 1.3, the SPARQL a store sends (every named graph and the default graph),
+ * `supports`, `LinkedStorage`'s fan-out and the live effects.
  */
 import {afterEach, describe, expect, jest, test} from '@jest/globals';
 import {Person} from '../test-helpers/query-fixtures';
@@ -28,13 +28,11 @@ import type {SparqlQueryResults} from '../sparql/resultMapping';
 import {setShapeGraphs} from '../utils/graphRouting';
 import {LinkedStorage} from '../utils/LinkedStorage';
 import {resetFanOutNotices} from '../utils/fanOutNotice';
-import {isGraphQueryError} from '../queries/graphQuery';
 import {graphs} from '../ontologies/graphs';
 import type {IDataset} from '../interfaces/IDataset';
 import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery';
 
 const G_PEOPLE = 'https://acme.example/data/graph/people';
-const G_PETS = 'https://acme.example/data/graph/pets';
 const A = 'https://acme.example/data/a';
 const B = 'https://acme.example/data/b';
 
@@ -76,10 +74,9 @@ describe('the builder', () => {
     expect(typed.requiredFeatures()).toEqual([]);
   });
 
-  test('lowers to delete_shapeless with its ids; keepIncoming and the server-side scope ride along', () => {
-    expect(lower(Shape.delete([{id: A}, B]))).toMatchObject({kind: 'delete_shapeless', ids: [{id: A}, {id: B}]});
-    const ir = lower(Shape.delete(A)._keepingIncoming()._inGraphs([G_PEOPLE])._includingDefaultGraph());
-    expect(ir).toMatchObject({kind: 'delete_shapeless', keepIncoming: true, graphs: [G_PEOPLE], includeDefaultGraph: true});
+  test('lowers to delete_shapeless with its ids; keepIncoming rides along', () => {
+    expect(lower(Shape.delete([{id: A}, B]))).toEqual({kind: 'delete_shapeless', ids: [{id: A}, {id: B}]});
+    expect(lower(Shape.delete(A)._keepingIncoming())).toEqual({kind: 'delete_shapeless', ids: [{id: A}], keepIncoming: true});
   });
 
   test('refuses where, all, into, no ids and ids that are not absolute IRIs', () => {
@@ -89,8 +86,6 @@ describe('the builder', () => {
     expect(() => Shape.delete(A).into(G_PEOPLE)).toThrow(/shapeless/);
     expect(() => lower(Shape.delete({id: 'not an iri'}))).toThrow(/absolute IRIs/);
     expect(() => lower(Shape.delete({id: '_:b0'}))).toThrow(/absolute IRIs/);
-    expect(() => Person.delete(A)._inGraphs([G_PEOPLE])).toThrow(/shapeless delete only/);
-    expect(() => Person.delete(A)._includingDefaultGraph()).toThrow(/shapeless delete only/);
   });
 });
 
@@ -105,11 +100,6 @@ describe('DSL-JSON', () => {
     expect(lowerMutationJSON(json)).toEqual(lower(back));
   });
 
-  test('the server-side scope is never serialized', () => {
-    expect(() => Shape.delete(A)._inGraphs([G_PEOPLE]).toJSON()).toThrow(/server-side only/);
-    expect(() => Shape.delete(A)._includingDefaultGraph().toJSON()).toThrow(/server-side only/);
-  });
-
   test('a reader refuses a shape on it, no ids, a non-IRI, and keepIncoming when told to', () => {
     const base = {v: '1.3', op: 'delete', mode: 'shapeless'} as const;
     expect(() => DeleteBuilder.fromJSON({...base, ids: [A], shape: Person.shape.id} as any)).toThrow(/names no shape/);
@@ -120,8 +110,8 @@ describe('DSL-JSON', () => {
   });
 });
 
-describe('SPARQL on a routed store', () => {
-  test('one routed graph: own triples and incoming links, never the default graph', async () => {
+describe('SPARQL', () => {
+  test('every graph: own triples and incoming links in each named graph and in the default graph', async () => {
     const store = routedStore();
     const answer = await Shape.delete([A, B]).exec(store);
     expect(answer).toEqual({deleted: [{id: A}, {id: B}], count: 2});
@@ -129,49 +119,31 @@ describe('SPARQL on a routed store', () => {
     const sparql = oneLine(store.updates[0]);
     expect(sparql).toContain('VALUES ?x_del {');
     expect(sparql).toContain(`<${A}> <${B}>`);
-    expect(sparql).toContain(`VALUES ?g_del { <${G_PEOPLE}> }`);
-    expect(sparql).toContain('GRAPH ?g_del { ?x_del ?p_del ?o_del . ?s_del ?p2_del ?x_del . }');
-    expect(sparql).toMatch(/\{ \?x_del \?p_del \?o_del \. \} UNION \{ \?s_del \?p2_del \?x_del \. \}/);
-    expect(sparql).not.toContain('DefaultGraph');
+    // The default graph: no GRAPH around it, its own variables.
+    expect(sparql).toMatch(/^DELETE \{ \?x_del \?pd_del \?od_del \. \?sd_del \?p2d_del \?x_del \. GRAPH \?g_del \{ \?x_del \?p_del \?o_del \. \?s_del \?p2_del \?x_del \. \} \}/);
+    expect(sparql).toMatch(/\{ \?x_del \?pd_del \?od_del \. \} UNION \{ \?sd_del \?p2d_del \?x_del \. \}/);
+    // Every named graph: GRAPH ?g_del is not bound by VALUES.
+    expect(sparql).toMatch(/GRAPH \?g_del \{ \{ \?x_del \?p_del \?o_del \. \} UNION \{ \?s_del \?p2_del \?x_del \. \} \}/);
+    expect(sparql).not.toContain('VALUES ?g_del');
+    expect(sparql).not.toContain(G_PEOPLE);
+    expect(sparql).not.toContain('urn:x-arq');
   });
 
-  test('keepIncoming deletes only the subjects own triples', async () => {
+  test('keepIncoming deletes only the subjects own triples, in every graph', async () => {
     const store = routedStore();
     await Shape.delete(A)._keepingIncoming().exec(store);
     const sparql = oneLine(store.updates[0]);
     expect(sparql).not.toContain('?s_del');
-    expect(sparql).not.toContain('UNION');
+    expect(sparql).not.toContain('?sd_del');
+    expect(sparql).toContain('?x_del ?pd_del ?od_del');
+    expect(sparql).toContain('GRAPH ?g_del { ?x_del ?p_del ?o_del . }');
   });
 
-  test('_includingDefaultGraph adds the store name of the default graph', async () => {
-    const store = routedStore();
-    await Shape.delete(A)._includingDefaultGraph().exec(store);
-    expect(oneLine(store.updates[0])).toContain(`VALUES ?g_del { <urn:x-arq:DefaultGraph> <${G_PEOPLE}> }`);
-  });
-
-  test('_inGraphs narrows to routed graphs; any other graph is refused before anything is sent', async () => {
-    const store = routedStore();
-    await Shape.delete(A)._inGraphs([G_PEOPLE]).exec(store);
-    expect(oneLine(store.updates[0])).toContain(`VALUES ?g_del { <${G_PEOPLE}> }`);
-    for (const graph of [G_PETS, graphs.default, graphs.union]) {
-      const err = await Shape.delete(A)._inGraphs([graph]).exec(store).catch((e) => e);
-      expect(isGraphQueryError(err) && err.code).toBe('graph-not-routed');
+  test('a store without routing deletes the same way, and so does one with no name for the default graph', async () => {
+    for (const store of [new CaptureStore(), new CaptureStore({})]) {
+      await Shape.delete(A).exec(store);
+      expect(oneLine(store.updates[0])).toBe(oneLine(deleteShapelessToSparql({kind: 'delete_shapeless', ids: [{id: A}]})));
     }
-    expect(store.updates).toHaveLength(1);
-  });
-
-  test('a store without routing refuses: it would delete nowhere', async () => {
-    const store = new CaptureStore();
-    const err = await Shape.delete(A).exec(store).catch((e) => e);
-    expect(isGraphQueryError(err) && err.code).toBe('graph-not-routed');
-    expect(store.updates).toEqual([]);
-  });
-
-  test('the compiler refuses an IR without graphs, and the default graph on a store without a name for it', () => {
-    expect(() => deleteShapelessToSparql({kind: 'delete_shapeless', ids: [{id: A}]})).toThrow(/needs the graphs/);
-    expect(() =>
-      deleteShapelessToSparql({kind: 'delete_shapeless', ids: [{id: A}], graphs: [graphs.default]}),
-    ).toThrow(/mapGraphName/);
   });
 });
 

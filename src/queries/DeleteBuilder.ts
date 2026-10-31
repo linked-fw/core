@@ -42,10 +42,6 @@ interface DeleteBuilderInit<S extends Shape> {
   into?: string;
   /** Keep the incoming links of the deleted ids (internal; carried as `keepIncoming` in DSL-JSON). */
   keepIncoming?: boolean;
-  /** Shapeless only, server-side: delete in exactly these graphs (never serialized). */
-  graphs?: string[];
-  /** Shapeless only, server-side: delete in the default graph too (never serialized). */
-  includeDefaultGraph?: boolean;
 }
 
 /**
@@ -70,8 +66,6 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
   private readonly _where?: WherePath;
   private readonly _into?: string;
   private readonly _keepIncoming?: boolean;
-  private readonly _graphs?: string[];
-  private readonly _includeDefaultGraph?: boolean;
 
   private readonly _catalog: ShapeCatalog | undefined;
 
@@ -85,8 +79,6 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     this._where = init.where;
     this._into = init.into;
     this._keepIncoming = init.keepIncoming;
-    this._graphs = init.graphs;
-    this._includeDefaultGraph = init.includeDefaultGraph;
   }
 
   private clone(overrides: Partial<DeleteBuilderInit<S>> = {}): DeleteBuilder<S, any> {
@@ -98,8 +90,6 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
       where: this._where,
       into: this._into,
       keepIncoming: this._keepIncoming,
-      graphs: this._graphs,
-      includeDefaultGraph: this._includeDefaultGraph,
       catalog: this._catalog,
       ...overrides,
     });
@@ -127,8 +117,9 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
 
   /**
    * A shapeless delete (what `Shape.delete(ids)` on the base class builds): every triple whose
-   * subject is one of `ids`, and every link to one of them, in the graphs the dataset routes —
-   * never the default graph or `graphs.union`. The types of the nodes need not be known. Built
+   * subject is one of `ids`, and every link to one of them, in every graph of the dataset: each
+   * named graph and the default graph (never by way of `graphs.union`). The types of the nodes
+   * need not be known. Built
    * in the active shape catalog (the one a receiver checks rights in). See `IRDeleteShapelessMutation`.
    */
   static forNodes(ids: DeleteId | DeleteId[] | NodeReferenceValue[]): DeleteBuilder<Shape, DeleteResponse> {
@@ -255,30 +246,6 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     return this.clone({keepIncoming: true}) as unknown as DeleteBuilder<S, R>;
   }
 
-  /**
-   * @internal Shapeless only, server-side: delete in exactly these graphs (each must be one the
-   * store routes; it refuses any other with `graph-not-routed`). Never serialized: `toJSON`
-   * refuses a builder that has it. What a gateway uses to delete exactly where it checked.
-   */
-  _inGraphs(graphs: readonly string[]): DeleteBuilder<S, R> {
-    if (this._mode !== 'shapeless') throw new Error('_inGraphs() is for a shapeless delete only.');
-    if (!Array.isArray(graphs) || graphs.some((g) => typeof g !== 'string' || !g)) {
-      throw new Error('_inGraphs() takes a list of graph IRIs.');
-    }
-    return this.clone({graphs: [...graphs]}) as unknown as DeleteBuilder<S, R>;
-  }
-
-  /**
-   * @internal Shapeless only, server-side: delete in the default graph too. Never serialized:
-   * `toJSON` refuses a builder that has it. For server code that has checked, before it builds
-   * the delete, that every id is its own to delete (the default graph of a shared dataset holds
-   * other owners' nodes).
-   */
-  _includingDefaultGraph(): DeleteBuilder<S, R> {
-    if (this._mode !== 'shapeless') throw new Error('_includingDefaultGraph() is for a shapeless delete only.');
-    return this.clone({includeDefaultGraph: true}) as unknown as DeleteBuilder<S, R>;
-  }
-
   /** @internal The IR-free lowering spec consumed by `lower()`. Validates inputs. */
   _lowerSpec(): DeleteLowerSpec<S> {
     if (this._mode === 'shapeless') {
@@ -286,8 +253,6 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
         mode: 'shapeless',
         ids: this._ids,
         ...(this._keepIncoming ? {keepIncoming: true} : {}),
-        ...(this._graphs ? {graphs: this._graphs} : {}),
-        ...(this._includeDefaultGraph ? {includeDefaultGraph: true} : {}),
       };
     }
     let spec = this._lowerSpecWithoutGraph();
@@ -384,14 +349,8 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     };
   }
 
-  /** The DSL-JSON of a shapeless delete: its ids and `keepIncoming`, never its server-side scope. */
+  /** The DSL-JSON of a shapeless delete: its ids and `keepIncoming`. */
   private shapelessJSON(): DeleteMutationJSON {
-    if (this._graphs || this._includeDefaultGraph) {
-      throw new Error(
-        'DeleteBuilder: a shapeless delete scoped with _inGraphs() or _includingDefaultGraph() is ' +
-          'server-side only and is not serialized; a receiving process decides its own scope.',
-      );
-    }
     if (!this._ids || this._ids.length === 0) {
       throw new Error('DeleteBuilder: a shapeless delete needs at least one id before .toJSON().');
     }
