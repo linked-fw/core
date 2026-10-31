@@ -447,9 +447,21 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   /**
    * The features beyond the baseline this select uses (`min`/`max`): what a dataset must declare
    * in `IDataset.supports` to be sent it. Empty for a plain select.
+   *
+   * It evaluates the select and where callbacks through the proxy, as lowering does. When one of
+   * them throws (a method the path does not have, `instance[label].contains(…)` on a
+   * multi-valued label), the check cannot tell what the query uses and reports nothing: the
+   * error is the query's, and it surfaces where it always did — when the dataset lowers or
+   * serializes the query — instead of in a check before the dataset is asked.
    */
   requiredFeatures(): QueryFeature[] {
-    return featuresOfExpressions(this.expressionTrees());
+    let trees: IRExpression[];
+    try {
+      trees = this.expressionTrees();
+    } catch {
+      return [];
+    }
+    return featuresOfExpressions(trees);
   }
 
   /** Limit to one result. Unwraps array Result type to single element. */

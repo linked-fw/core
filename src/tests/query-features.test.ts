@@ -14,6 +14,9 @@ import {fromJSON} from '../queries/fromJSON';
 import {WIRE_VERSION} from '../queries/wireVersion';
 import type {IRExpression} from '../queries/IntermediateRepresentation';
 import {Person} from '../test-helpers/query-fixtures';
+import {SelectBuilder} from '../queries/QueryBuilder';
+import {lower} from '../queries/lower';
+import type {IDataset} from '../interfaces/IDataset';
 import '../ontologies/rdf';
 import '../ontologies/xsd';
 
@@ -79,6 +82,40 @@ describe('requires on the wire', () => {
     expect(fromJSON({...base, op: 'select', requires: []} as never).__queryKind).toBe('select');
     expect(() => fromJSON({...base, op: 'select', requires: ['pivot']} as never)).toThrow(
       /does not know/,
+    );
+  });
+});
+
+describe('the feature check evaluates callbacks as lowering does', () => {
+  // As @_linked/shape-ui's instance search builds it: the label property is picked at runtime
+  // and read by a computed key, through the shape's IRI.
+  const search = (label: string) =>
+    SelectBuilder.from(Person.shape.id)
+      .select((instance: any) => [instance[label]])
+      .where((instance: any) => instance[label].contains('a'));
+
+  const store = (onSelect: (query: unknown) => unknown): IDataset => ({
+    selectQuery: async (query: unknown) => onSelect(query) as never,
+    createQuery: async () => ({}) as never,
+    updateQuery: async () => ({}) as never,
+    deleteQuery: async () => ({deleted: [], count: 0}),
+    graphQuery: async () => ({}) as never,
+  });
+
+  test('a dynamic-key contains() on a single-valued label reaches a store without `supports`', async () => {
+    let received: unknown;
+    await expect(search('name').exec(store((q) => ((received = q), [])))).resolves.toEqual([]);
+    expect(received).toBeDefined();
+    expect(search('name').requiredFeatures()).toEqual([]);
+  });
+
+  test('a callback that throws is not thrown by the check; the store that lowers it reports it', async () => {
+    // `nickNames` is multi-valued: a set has no contains(). The check reports no features and
+    // leaves the error to lowering, where it surfaced before the check existed.
+    expect(search('nickNames').requiredFeatures()).toEqual([]);
+    await expect(search('nickNames').exec(store(() => []))).resolves.toEqual([]);
+    await expect(search('nickNames').exec(store((q) => lower(q as never)))).rejects.toThrow(
+      /contains is not a function/,
     );
   });
 });
