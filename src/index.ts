@@ -59,7 +59,9 @@ export {
   PendingQueryContext,
   UnresolvedContextError,
 } from './queries/QueryContext.js';
-export {subscribeQueryDispatch} from './queries/queryDispatch.js';
+export {subscribeQueryDispatch, assertQuerySupported} from './queries/queryDispatch.js';
+export {ALL_QUERY_FEATURES} from './queries/queryFeatures.js';
+export type {QueryFeature} from './queries/queryFeatures.js';
 export type {QueryDispatchEvent, QueryDispatchListener} from './queries/queryDispatch.js';
 export {
   GraphQueryError,
@@ -123,7 +125,7 @@ export {DeleteBuilder} from './queries/DeleteBuilder.js';
 export type {DeleteId} from './queries/DeleteBuilder.js';
 
 // Expressions — computed fields and functions
-export {ExpressionNode} from './expressions/ExpressionNode.js';
+export {ExpressionNode, AggregateExpression} from './expressions/ExpressionNode.js';
 export type {ExpressionInput, PropertyRefMap} from './expressions/ExpressionNode.js';
 export {Expr} from './expressions/Expr.js';
 export type {
@@ -134,6 +136,7 @@ export type {
   StringExpressionMethods,
   DateExpressionMethods,
   BooleanExpressionMethods,
+  AggregateMethods,
 } from './expressions/ExpressionMethods.js';
 
 // Phase 5 — Component query integration

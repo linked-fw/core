@@ -697,17 +697,25 @@ export class FieldSet<R = any, Source = any> {
     // Relation-keyed: the single non-option key is the relation path.
     const rel = raw as FieldSetRelationJSON;
     const pathKey = Object.keys(rel).find((k) => !RELATION_OPTION_KEYS.has(k));
-    if (!pathKey) {
+    if (pathKey === undefined) {
       throw new Error(`FieldSet field has no relation path: ${JSON.stringify(raw)}`);
     }
     const spec = rel[pathKey];
-    const path = FieldSet.walkPathWithCasts(shape, pathKey);
+    // `''` is the subject itself (`select((p) => ({person: p}))`, a grouped select's key).
+    const path = pathKey === '' ? new PropertyPath(shape, []) : FieldSet.walkPathWithCasts(shape, pathKey);
     const entry: FieldSetEntry = {path};
     const subFields = Array.isArray(spec) ? spec : spec.fields;
     const opts = Array.isArray(spec) ? ({} as FieldSetRelationOptionsJSON) : spec;
     if (opts.as) entry.alias = opts.as;
     if (opts.customKey) entry.customKey = opts.customKey;
-    if (opts.aggregation) entry.aggregation = opts.aggregation as 'count';
+    if (opts.aggregation) {
+      // `count` (`.size()`) is the only aggregation a relation field carries; min/max and the
+      // rest travel as computed fields. Anything else would be read as the bare path.
+      if (opts.aggregation !== 'count') {
+        throw new Error(`Unknown field aggregation ${JSON.stringify(opts.aggregation)}: only 'count' is a field aggregation.`);
+      }
+      entry.aggregation = 'count';
+    }
     if (opts.where) {
       const idx = opts.whereIndex ?? path.segments.length - 1;
       const seg = path.segments[idx] as PropertyShapeData | undefined;

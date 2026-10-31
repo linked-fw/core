@@ -18,9 +18,10 @@ import {createProxiedPathBuilder} from './ProxiedPathBuilder.js';
 import {FieldSet} from './FieldSet.js';
 import {PropertyPath} from './PropertyPath.js';
 import type {QueryBuilder, QueryBuilderJSON} from './QueryBuilder.js';
-import {ExpressionNode, ExistsCondition, isExpressionNode, isExistsCondition, tracedPropertyExpression, tracedAliasExpression} from '../expressions/ExpressionNode.js';
+import {AggregateExpression, ExpressionNode, ExistsCondition, isExpressionNode, isExistsCondition, tracedPropertyExpression, tracedAliasExpression} from '../expressions/ExpressionNode.js';
 import {PendingQueryContext} from './QueryContext.js';
 import type {
+  AggregateMethods,
   BooleanExpressionMethods,
   DateExpressionMethods,
   NumericExpressionMethods,
@@ -244,13 +245,13 @@ export type ToQueryPrimitive<
   Source,
   Property extends string | number | symbol = '',
 > = T extends string
-  ? QueryPrimitive<string, Source, Property> & StringExpressionMethods
+  ? QueryPrimitive<string, Source, Property> & StringExpressionMethods & AggregateMethods<string>
   : T extends number
-    ? QueryPrimitive<number, Source, Property> & NumericExpressionMethods
+    ? QueryPrimitive<number, Source, Property> & NumericExpressionMethods & AggregateMethods<number>
     : T extends Date
-      ? QueryPrimitive<Date, Source, Property> & DateExpressionMethods
+      ? QueryPrimitive<Date, Source, Property> & DateExpressionMethods & AggregateMethods<Date>
       : T extends boolean
-        ? QueryPrimitive<boolean, Source, Property> & BooleanExpressionMethods
+        ? QueryPrimitive<boolean, Source, Property> & BooleanExpressionMethods & Pick<AggregateMethods<boolean>, 'countDistinct'>
         : never & {__error: 'ToQueryPrimitive: no matching primitive type'};
 
 export type WhereExpressionPath = {
@@ -313,7 +314,9 @@ export type QueryResponseToResultType<
     ? GetNestedQueryResultType<Response, Source>
     : T extends Array<infer Type>
       ? UnionToIntersection<QueryResponseToResultType<Type>>
-      : T extends ExpressionNode
+      : T extends AggregateExpression<infer V>
+        ? V
+        : T extends ExpressionNode
         ? boolean
         : T extends Object
           ? QResult<QShapeType, Prettify<ObjectToPlainResult<T>>>
@@ -780,6 +783,7 @@ const EXPRESSION_METHODS = new Set([
   'isDefined', 'isNotDefined', 'defaultTo',
   'lang', 'datatype', 'str', 'iri', 'isIri', 'isLiteral', 'isBlank', 'isNumeric',
   'md5', 'sha256', 'sha512',
+  'countDistinct', 'min', 'max',
 ]);
 
 /**
@@ -886,6 +890,18 @@ export const evaluateSortCallback = <S extends Shape>(
   const response = sortFn(proxy);
   const nodeShape = shape.shape;
   const paths: PropertyPath[] = [];
+  for (const item of Array.isArray(response) ? response : [response]) {
+    if (isLinkedInstance(item, SetSize) || isLinkedInstance(item, AggregateExpression)) {
+      // A SetSize is a QueryPrimitive over the counted path, so it used to be read as that path:
+      // `orderBy(p => p.friends.size())` sorted by the friends' ids, not by how many there are.
+      throw new Error(
+        'orderBy() on a select sorts by property paths; it cannot sort by an aggregate ' +
+        '(`.size()`, `.max()`, `Expr.count()`, …), which it would read as the path itself. ' +
+        'Group the select and sort the groups: ' +
+        "`Shape.select((s) => ({node: s, n: s.items.size()})).groupBy('node').orderBy('n', 'DESC')`.",
+      );
+    }
+  }
   if (isLinkedInstance(response, QueryBuilderObject) || isLinkedInstance(response, QueryPrimitiveSet)) {
     paths.push(new PropertyPath(nodeShape, FieldSet.collectPropertySegments(response)));
   } else if (Array.isArray(response)) {
@@ -1325,6 +1341,15 @@ export class QueryShape<
     return toExpressionNode(this).isNotDefined();
   }
 
+  /**
+   * How many distinct nodes the relation points to, over a group of a grouped select
+   * (`.groupBy(…)`), else per row (SPARQL `COUNT(DISTINCT …)`). A multi-valued relation counts
+   * its values with `.size()`.
+   */
+  countDistinct(): AggregateExpression<number> {
+    return toExpressionNode(this).countDistinct();
+  }
+
   oneOf(values: (NodeReferenceValue | QShape<any>)[]): ExpressionNode {
     return toExpressionNode(this).oneOf(
       values.map((v) => (isLinkedInstance(v, QueryBuilderObject) ? toExpressionNode(v) : v)) as any,
@@ -1516,8 +1541,26 @@ export class QueryPrimitiveSet<
     return new SetSize(this as QueryPrimitiveSet);
     //countable, resultKey
   }
+
+  /** The smallest of the values (SPARQL `MIN`): per row, or over a group of a grouped select. */
+  min(): AggregateExpression<PrimitiveSetValue<QPrimitive>> {
+    return this.valuesExpression().min() as AggregateExpression<PrimitiveSetValue<QPrimitive>>;
+  }
+
+  /** The largest of the values (SPARQL `MAX`): per row, or over a group of a grouped select. */
+  max(): AggregateExpression<PrimitiveSetValue<QPrimitive>> {
+    return this.valuesExpression().max() as AggregateExpression<PrimitiveSetValue<QPrimitive>>;
+  }
+
+  /** The values as one traced expression (the property, reached through the path). */
+  private valuesExpression(): ExpressionNode {
+    return tracedPropertyExpression(FieldSet.collectPropertySegments(this).map((s) => s.id));
+  }
 }
 brandLinkedClass(QueryPrimitiveSet, '@_linked/core', 'QueryPrimitiveSet');
+
+/** The value type of a multi-valued literal path's members. */
+type PrimitiveSetValue<QPrimitive> = QPrimitive extends QueryPrimitive<infer V> ? V : unknown;
 
 
 export class SetSize<Source = null> extends QueryPrimitive<number, Source> {

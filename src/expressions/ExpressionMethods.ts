@@ -1,4 +1,4 @@
-import {type ExpressionInput, ExpressionNode} from './ExpressionNode.js';
+import {type ExpressionInput, ExpressionNode, type AggregateExpression} from './ExpressionNode.js';
 import {Shape} from '../shapes/Shape.js';
 import {ShapeSet} from '../collections/ShapeSet.js';
 
@@ -87,6 +87,19 @@ export interface BooleanExpressionMethods extends BaseExpressionMethods {
   and(expr: ExpressionInput): ExpressionNode;
   or(expr: ExpressionInput): ExpressionNode;
   not(): ExpressionNode;
+}
+
+/**
+ * Aggregates over a select path's values, typed by the value type: per group in a grouped
+ * select (`.groupBy(…)`), else per row. On select paths only, not in update expressions.
+ */
+export interface AggregateMethods<T> {
+  /** How many distinct values (SPARQL `COUNT(DISTINCT …)`). */
+  countDistinct(): AggregateExpression<number>;
+  /** The smallest value (SPARQL `MIN`). */
+  min(): AggregateExpression<T>;
+  /** The largest value (SPARQL `MAX`). */
+  max(): AggregateExpression<T>;
 }
 
 // Filter helper to remove Shape's internal keys

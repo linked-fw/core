@@ -372,8 +372,39 @@ export class ExpressionNode {
   md5(): ExpressionNode { return this._wrap(fnExpr('MD5', this.ir)); }
   sha256(): ExpressionNode { return this._wrap(fnExpr('SHA256', this.ir)); }
   sha512(): ExpressionNode { return this._wrap(fnExpr('SHA512', this.ir)); }
+
+  // ---------------------------------------------------------------------------
+  // Aggregates (a select's projection; per group in a grouped select, else per row)
+  // ---------------------------------------------------------------------------
+
+  /** How many distinct values (SPARQL `COUNT(DISTINCT …)`). */
+  countDistinct(): AggregateExpression<number> {
+    return new AggregateExpression<number>({kind: 'aggregate_expr', name: 'count', args: [this.ir]}, this._refs);
+  }
+
+  /** The smallest value (SPARQL `MIN`). */
+  min(): AggregateExpression<unknown> {
+    return new AggregateExpression({kind: 'aggregate_expr', name: 'min', args: [this.ir]}, this._refs);
+  }
+
+  /** The largest value (SPARQL `MAX`). */
+  max(): AggregateExpression<unknown> {
+    return new AggregateExpression({kind: 'aggregate_expr', name: 'max', args: [this.ir]}, this._refs);
+  }
 }
 brandLinkedClass(ExpressionNode, '@_linked/core', 'ExpressionNode');
+
+/**
+ * An aggregate in a select's projection: `Expr.count()`, `p.age.max()`, `p.tags.size()`'s
+ * siblings. `T` is the value the aggregate answers (`number` for a count, the value type for
+ * `min`/`max`), which is what a select's row type reads. Its comparison methods (`gt`, …) build
+ * a group filter (`.having((r) => r.n.gt(1))`).
+ */
+export class AggregateExpression<T = unknown> extends ExpressionNode {
+  /** Type-level only: the value this aggregate answers. Never set. */
+  declare readonly __aggregateValue: T;
+}
+brandLinkedClass(AggregateExpression, '@_linked/core', 'AggregateExpression');
 
 
 // ---------------------------------------------------------------------------

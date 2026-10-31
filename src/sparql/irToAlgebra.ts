@@ -900,6 +900,16 @@ export function selectToAlgebra(
     );
   }
 
+  if (query.having) {
+    processExpressionForProperties(
+      query.having,
+      registry,
+      optionalPropertyTriples,
+      requiredPropertyTriples,
+      requiredPropertyKeys,
+    );
+  }
+
   if (query.orderBy) {
     for (const orderItem of query.orderBy) {
       processExpressionForProperties(
@@ -1155,6 +1165,10 @@ export function selectToAlgebra(
     });
   }
 
+  // A grouped select (`groupBy`): its rows are groups. The root is not projected, GROUP BY is
+  // the key variables (not inferred), and HAVING is its group filter.
+  const grouped = !!query.groupBy && query.groupBy.length > 0;
+
   // 5. Where clause → Filter wrapping (or HAVING if aggregate-containing)
   let havingExpr: SparqlExpression | undefined;
   if (query.where) {
@@ -1214,8 +1228,9 @@ export function selectToAlgebra(
   const aggregates: SparqlAggregateBinding[] = [];
   let hasAggregates = false;
 
-  // Always include root alias as first projection variable
-  projection.push({kind: 'variable', name: rootAlias});
+  // Include the root alias as the first projection variable: each row is an entity. Not in a
+  // grouped select, whose rows are groups (the root would become a key of every group).
+  if (!grouped) projection.push({kind: 'variable', name: rootAlias});
 
   // Collect traversal aliases upfront to detect aggregate alias collisions
   const traversalAliasSet = new Set(collectTraversalAliases(query.patterns));
@@ -1251,7 +1266,7 @@ export function selectToAlgebra(
     } else {
       // For property_expr, the variable is the resolved name from registry
       const varName = resolveExpressionVariable(item.expression, registry);
-      if (varName && varName !== rootAlias) {
+      if (varName && (varName !== rootAlias || grouped)) {
         projection.push({kind: 'variable', name: varName});
       } else if (!varName) {
         // Non-variable expression (binary_expr, function_expr, etc.)
@@ -1282,19 +1297,34 @@ export function selectToAlgebra(
     if (p.kind === 'variable') projectedNames.add(p.name);
     else if (p.kind === 'aggregate' || p.kind === 'expression') projectedNames.add(p.alias);
   }
-  for (const alias of collectTraversalAliases(query.patterns)) {
+  for (const alias of grouped ? [] : collectTraversalAliases(query.patterns)) {
     if (!projectedNames.has(alias) && !aggregateRenamedAliases.has(alias)) {
       projection.push({kind: 'variable', name: alias});
       projectedNames.add(alias);
     }
   }
 
-  // 8. GROUP BY inference
+  // 8. GROUP BY: the keys of a grouped select, else inferred
   let groupBy: string[] | undefined;
-  if (havingExpr) {
+  if (grouped) {
+    hasAggregates = true;
+    groupBy = query.groupBy!.map((key) => {
+      const name = resolveExpressionVariable(key, registry);
+      if (!name) {
+        throw new Error('selectToAlgebra: a group key must be a path (a variable), not a computed expression.');
+      }
+      return name;
+    });
+    if (query.having) {
+      const groupFilter = convertExpression(query.having, registry, optionalPropertyTriples);
+      havingExpr = havingExpr
+        ? {kind: 'logical_expr', op: 'and', exprs: [havingExpr, groupFilter]}
+        : groupFilter;
+    }
+  } else if (havingExpr) {
     hasAggregates = true;
   }
-  if (hasAggregates) {
+  if (hasAggregates && !grouped) {
     // All non-aggregate projected variables become GROUP BY targets
     groupBy = projection
       .filter((p): p is {kind: 'variable'; name: string} => p.kind === 'variable')

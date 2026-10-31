@@ -1,4 +1,4 @@
-import {ExpressionNode, toIRExpression} from './ExpressionNode.js';
+import {AggregateExpression, ExpressionNode, toIRExpression, tracedAliasExpression} from './ExpressionNode.js';
 import type {ExpressionInput, PropertyRefMap} from './ExpressionNode.js';
 import {isLinkedInstance} from '../utils/linkedError.js';
 
@@ -37,6 +37,7 @@ function mergedRefs(inputs: readonly ExpressionInput[]): PropertyRefMap {
  * - `firstDefined(…)` — variadic COALESCE; no natural first operand.
  * - `concat(…)`    — variadic; also reads best literal-first (`Expr.concat('Hi ', p.name)`).
  * - `not(x)`       — prefix negation; `Expr.not(cond)` reads better than `cond.not()`.
+ * - `count()`      — nullary: the members of a group, not a property of them.
  */
 export const Expr = {
   /** SPARQL `NOW()` — the current dateTime. */
@@ -87,6 +88,19 @@ export const Expr = {
         args: [toIRExpression(cond), toIRExpression(thenVal), toIRExpression(elseVal)],
       },
       mergedRefs([cond, thenVal, elseVal]),
+    );
+  },
+
+  /**
+   * How many members a group has (SPARQL `COUNT(DISTINCT ?member)`), in a grouped select:
+   * `Feedback.select((f) => ({type: f.feedbackType, n: Expr.count()})).groupBy((r) => r.type)`.
+   * In a select that is not grouped, every row is its own group, so it is `1`.
+   */
+  count(): AggregateExpression<number> {
+    const member = tracedAliasExpression([]);
+    return new AggregateExpression<number>(
+      {kind: 'aggregate_expr', name: 'count', args: [member.ir]},
+      member._refs,
     );
   },
 

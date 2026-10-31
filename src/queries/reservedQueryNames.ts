@@ -26,6 +26,7 @@ export const RESERVED_QUERY_DSL_NAMES: ReadonlySet<string> = new Set([
   'callPropertyShapeAccessor',
   'concat',
   'constructor',
+  'countDistinct',
   'equals',
   'every',
   'getOriginalValue',

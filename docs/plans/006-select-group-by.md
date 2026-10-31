@@ -17,9 +17,9 @@ route B2 was approved with these owner decisions:
 
 - Natural order: select first, then group (as SQL). `.groupBy(...)` returns a narrower grouped
   builder; `.for`, `.one`, nested selects and live patching are absent from its type.
-- **Accessor keys over the result fields**, not strings: `.groupBy((r) => r.type)`,
-  `.orderBy((r) => r.last, 'DESC')`, `.having((r) => r.n.gt(1))` (Linked code style: accessors,
-  one explicit way).
+- **Keys by result field name** (owner's later decision, replacing accessor keys):
+  `.groupBy('type')`, several as `.groupBy('type', 'project')`; `.orderBy('n', 'DESC')`;
+  `.having('n', (n) => n.gt(1))`; typed as `keyof R` over the select's top-level fields.
 - No new IR kind and no new `IDataset` method. The query rides `IRSelectQuery` with optional
   `groupBy`/`having`/`requires`; stores declare `supports`; every store that does not support a
   feature fails loudly (dispatch check), and an older server fails loudly on the wire (`op`).
@@ -41,26 +41,27 @@ kind down its select path; `SelectBuilder.fromJSON` ignores unknown keys (an old
    ```ts
    const byType = await Feedback.select((f) => ({type: f.feedbackType, n: Expr.count()}))
      .where((f) => f.project.equals({id: projectId}))
-     .groupBy((r) => r.type);
+     .groupBy('type');
    // → Array<{type: string; n: number}>
 
    const lastRuns = await ProjectionRun.select((r) => ({instance: r.output, last: r.completedAt.max()}))
-     .groupBy((r) => r.instance)
-     .orderBy((r) => r.last, 'DESC');
+     .groupBy('instance')
+     .orderBy('last', 'DESC');
    // → Array<{instance: {id: string}; last: Date}>
 
    LinkedDocument.select((d) => ({root: d.lineageRoot, n: Expr.count()}))
-     .groupBy((r) => r.root)
-     .having((r) => r.n.gt(1));
+     .groupBy('root')
+     .having('n', (n) => n.gt(1));
    ```
-   - `groupBy(fn)` takes a callback over **result-field refs** (`r.type`), returning one ref or an
-     array of refs. Every non-aggregate field of the select must be a key (SQL's rule): a missing
+   - `groupBy(...keys)` takes result field names (`keyof R`). Every non-aggregate field of the select must be a key (SQL's rule): a missing
      one is a type error (the call returns a `GroupByError` type with no builder methods) and a
      runtime error.
    - The grouped select must use the **object form** (`select(f => ({…}))`): aggregates need names.
    - Members filter = `.where` **before** `groupBy`; group filter = `.having` after it. The grouped
      builder has no `where` (one explicit way; settles backlog 012's row-vs-group ambiguity).
-   - `orderBy` after `groupBy` takes field refs (keys or aggregates). An `orderBy` on the select
+   - `orderBy` after `groupBy` takes field names (keys or aggregates), one or an array.
+   - `having(field, condition)` takes a field name and a condition on its value; several calls
+     are ANDed. An `orderBy` on the select
      before `groupBy` is refused at `groupBy()` (it sorts members, which a grouped query cannot).
    - `limit`/`offset`/`from` set before `groupBy` carry over (they are query-level); the grouped
      builder has them too.
@@ -165,9 +166,9 @@ kind down its select path; `SelectBuilder.fromJSON` ignores unknown keys (an old
 
 ## Contracts
 
-- `SelectBuilder.groupBy(fn: (r: GroupFieldRefs<Row>) => GroupField | GroupField[])` →
+- `SelectBuilder.groupBy<K extends keyof R & string>(...keys: K[])` →
   `GroupedSelectBuilder<S, Row>` or `GroupByError<…>` (type) / throws (runtime).
-- `GroupedSelectBuilder`: `having(fn)`, `orderBy(fn, dir)`, `limit`, `offset`, `from`,
+- `GroupedSelectBuilder`: `having(field, condition)`, `orderBy(field | fields, dir)`, `limit`, `offset`, `from`,
   `exec(target?)`, `then/catch/finally`, `toJSON()`, `toRawInput()`, `requiredFeatures()`,
   `__queryKind = 'select'`, `shape`, `catalog`.
 - `IDataset.supports?: readonly QueryFeature[]`; absent = baseline only.
@@ -187,6 +188,11 @@ kind down its select path; `SelectBuilder.fromJSON` ignores unknown keys (an old
 | 7 | Aggregates allowed in ungrouped selects (per subject) | Same semantics as `size()`; backlog 006's per-row reading for free |
 | 8 | Missing-key check is a type-level error type plus a runtime throw | A parameter-level constraint would break inference of the callback |
 | 9 | `size()` → `COUNT(DISTINCT)` | Confirmed fan-out; a one-line lowering change |
+| 11 | Keys, `orderBy` and `having` name result fields by string (`groupBy('type')`, `orderBy('n', 'DESC')`, `having('n', (n) => n.gt(1))`); the accessor form was dropped | Owner's decision during implementation; `having` takes the field name plus a condition on its value so it stays name-based and typed by the field's value |
+| 12 | A node-valued key is typed `{id: string}` in the grouped row | The object form of a plain select types a relation field as the shape (`Person`) while the rows hold `{id}`; the grouped row states what the rows hold. The plain-select gap is a follow-up |
+| 13 | A key over a multi-valued path is one of its values (typed as the element) | SPARQL groups each value separately; `count per tag` is a common need |
+| 14 | The root can be a key (`{person: p}`), and `FieldSet` JSON now reads the empty path `''` | Count per subject (`perNode`) needs it; the wire form of a root field did not parse before |
+| 15 | Unknown field `aggregation` values in JSON throw | Only `count` exists; another value was read as the bare path |
 | 10 | Every `count` aggregate lowers to `COUNT(DISTINCT …)`; no `countDistinct` feature and no `distinct` flag in the IR | A count in this DSL is always a count of values or members, which are sets; one rule instead of a flag. `Expr.count()`/`countDistinct()` stay baseline, so a store that counts already handles them |
 
 ## Phases
@@ -217,7 +223,7 @@ after; existing golden tests updated for `COUNT(DISTINCT)`; dispatch unit tests 
   index.js is missing: run `npx linked build`"), checked again after the build in phase 3.
 - Deviation: no `countDistinct` feature, no IR `distinct` flag (decision 10).
 
-### Phase 2 — Aggregates on paths and `Expr.count()`
+### Phase 2 — Aggregates on paths and `Expr.count()` (done, committed with phase 3)
 
 Tasks: `AggregateExpression`; `countDistinct/min/max` on ExpressionNode, `QueryPrimitiveSet`,
 `QueryShape`; EXPRESSION_METHODS; typed methods in ExpressionMethods; result typing branch;
@@ -227,7 +233,7 @@ Tasks: `AggregateExpression`; `countDistinct/min/max` on ExpressionNode, `QueryP
 Validation: compile-time type tests (`n: number`, `last: Date`); SPARQL unit tests for per-subject
 `max()`/`countDistinct()`; JSON round trip; exec against a dataset without `supports` throws.
 
-### Phase 3 — `groupBy` and the grouped builder
+### Phase 3 — `groupBy` and the grouped builder (done)
 
 Tasks: `GroupedSelectBuilder` + field refs; `SelectBuilder.groupBy`; raw input → desugar → lower
 (`groupBy/having/orderBy/requires`); irToAlgebra grouped mode; result mapping; JSON
@@ -244,5 +250,18 @@ tests (count per type, count + having, max per group sorted, nested-path key, nu
 Tasks: README grouping section + counting update; DSL-JSON doc; backlogs 012/006/020 updated.
 
 Validation: docs describe the built API only; links resolve.
+
+Phases 2 and 3 results (implemented and committed together: the aggregate typing was only
+testable through grouped selects):
+- `select-group-by.test.ts`: `Tests: 38 passed, 38 total`, `[fuseki] live tests: 12 total —
+  12 passed` (count per key with a null group, having, max per group sorted, nested-path key,
+  multi-valued key, size()/countDistinct() per group, where-then-group with min, two keys, the
+  root as key with order and limit, min per row, exec on a SparqlDataset, through LinkedStorage
+  including the refusal of a dataset without `supports`).
+- `npx linked build`: `✔ Build successful`. Full jest on an own Fuseki:
+  `Tests: 122 skipped, 3091 passed, 3213 total`, `[fuseki] live tests: 435 total — 433 passed,
+  0 failed, 2 skipped`. `npx tsc -p tsconfig-tests.json` and `npm run check:dts`: clean.
+- Found on the way: the instrumented global dispatch dropped `supports` (fixed: it carries the
+  wrapped dispatch's `supports`).
 
 Dependencies: 1 → 2 → 3 → 4 (sequential; one agent).

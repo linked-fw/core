@@ -404,6 +404,11 @@ export function mapSparqlSelectResult(
 ): SelectResult {
   const bindings = json.results.bindings;
 
+  // A grouped select: one row per group, its keys and aggregates, no id.
+  if (query.groupBy && query.groupBy.length > 0) {
+    return mapGroupedRows(bindings, query);
+  }
+
   // If no resultMap, just return entity references
   if (!query.resultMap || query.resultMap.length === 0) {
     const rootVar = query.root.alias;
@@ -432,6 +437,31 @@ export function mapSparqlSelectResult(
 
   // Otherwise, group and nest
   return mapNestedRows(bindings, descriptor, query);
+}
+
+/**
+ * The rows of a grouped select: one per binding, each the select's fields by result key. A key
+ * that is a node is `{id}`; an unbound key (the group of members without that value) is `null`.
+ * Read through the result map, whose aliases `irToAlgebra` renames on collisions.
+ */
+function mapGroupedRows(bindings: SparqlBinding[], query: IRSelectQuery): ResultRow[] {
+  const traverseVars = collectTraverseVars(query.patterns);
+  const projectionByAlias = new Map(query.projection.map((p) => [p.alias, p]));
+  const fields = (query.resultMap ?? []).map((entry) => {
+    const item = projectionByAlias.get(entry.alias);
+    // No projection item under the alias: an aggregate or expression renamed to avoid a
+    // traversal variable, read under its new name.
+    const sparqlVar = item ? sparqlVarName(item.expression, entry.alias, traverseVars) : entry.alias;
+    return {key: localName(entry.key), sparqlVar};
+  });
+  return bindings.map((binding) => {
+    const row: Record<string, ResultFieldValue> = {};
+    for (const field of fields) {
+      const val = binding[field.sparqlVar];
+      row[field.key] = !val ? null : val.type === 'uri' ? ({id: val.value} as ResultRow) : coerceValue(val);
+    }
+    return row as ResultRow;
+  });
 }
 
 /**

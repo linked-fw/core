@@ -28,6 +28,7 @@ import {IRAliasScope} from './IRAliasScope.js';
 import {attachCatalog} from '../utils/ShapeClass.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
 import {isLinkedInstance} from '../utils/linkedError.js';
+import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
 
 /**
  * Creates a memoized traversal resolver that deduplicates (fromAlias, propertyShapeId)
@@ -470,12 +471,26 @@ export const lowerSelectQuery = (
 
   const where = canonical.where ? lowerWhere(canonical.where, ctx, pathOptions) : undefined;
 
-  const orderBy: IROrderByItem[] | undefined = canonical.sortBy
-    ? canonical.sortBy.paths.map((path, i) => ({
-        expression: lowerPath(path, pathOptions),
-        direction: canonical.sortBy!.directions[i],
-      }))
-    : undefined;
+  // A grouped select: its keys, group filter and order name result fields; each resolves to
+  // the expression that field projects, so GROUP BY, HAVING and ORDER BY bind the same variables.
+  const group = canonical.group;
+  const projectionOfKey = (key: string, use: string): IRExpression => {
+    const entry = resultMapEntries.find((e) => e.key === key);
+    const item = entry && projection.find((p) => p.alias === entry.alias);
+    if (!item) throw new Error(`${use}: "${key}" is not a field of the select.`);
+    return item.expression;
+  };
+  const groupBy = group ? group.keys.map((key) => projectionOfKey(key, 'groupBy')) : undefined;
+  const having = group?.having ? lowerWhere(group.having, ctx, pathOptions) : undefined;
+
+  const orderBy: IROrderByItem[] | undefined = group
+    ? group.orderBy?.map((o) => ({expression: projectionOfKey(o.key, 'orderBy'), direction: o.direction}))
+    : canonical.sortBy
+      ? canonical.sortBy.paths.map((path, i) => ({
+          expression: lowerPath(path, pathOptions),
+          direction: canonical.sortBy!.directions[i],
+        }))
+      : undefined;
 
   // Lower MINUS entries → IRMinusPattern objects
   const minusPatterns: IRGraphPattern[] = [];
@@ -542,7 +557,19 @@ export const lowerSelectQuery = (
     subjectIds: canonical.subjectIds,
     singleResult: canonical.singleResult,
     resultMap: resultMapEntries,
+    ...(groupBy ? {groupBy} : {}),
+    ...(having ? {having} : {}),
+    ...requiresOf([...projection.map((p) => p.expression), where, having], !!groupBy),
   });
+};
+
+/** `requires` for a lowered select: present only when it needs a feature beyond the baseline. */
+const requiresOf = (
+  expressions: (IRExpression | undefined)[],
+  grouped: boolean,
+): {requires?: QueryFeature[]} => {
+  const requires = featuresOfExpressions(expressions, grouped);
+  return requires.length > 0 ? {requires} : {};
 };
 
 /**

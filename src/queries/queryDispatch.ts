@@ -399,6 +399,8 @@ function instrumentDispatch(d: QueryDispatch, target?: IDataset): QueryDispatch 
       notifyDispatch({kind: 'triples', query, result, target});
       return result;
     },
+    // The wrapped dispatch answers what it forwards to, no more and no less.
+    ...(d.supports ? {supports: d.supports} : {}),
   };
   Object.defineProperty(wrapped, INSTRUMENTED, {value: true, enumerable: false});
   return wrapped;
