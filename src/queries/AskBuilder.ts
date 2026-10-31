@@ -23,6 +23,7 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import {PendingQueryContext} from './QueryContext.js';
 import {encodeContextRef, isContextRefJSON} from './ContextRef.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
+import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
 import {getQueryDispatch, resolveExistence} from './queryDispatch.js';
 import {resolveUriOrThrow} from '../utils/NodeReference.js';
 import {
@@ -102,6 +103,15 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
 
   /** Discriminator for the free `lower()` function and dataset routing. */
   readonly __queryKind = 'ask' as const;
+
+  /**
+   * The features beyond the baseline its where clause uses (`min`/`max`): checked against the
+   * dataset before it is sent, as for a select.
+   */
+  requiredFeatures(): QueryFeature[] {
+    const where = this._spec.where;
+    return featuresOfExpressions(where && 'expressionNode' in where ? [where.expressionNode.ir] : []);
+  }
 
   /** The shape asked about — `undefined` for a shapeless ask. */
   get shape(): NodeShapeData | undefined {

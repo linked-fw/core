@@ -59,8 +59,10 @@ Two families, distinguished structurally:
 - **Mutations** carry an `op` discriminator: `"create"`, `"update"`, `"upsert"`, or `"delete"`.
 - **Selects** carry no `op`, unless they need a feature beyond the baseline (grouping, `min`,
   `max`): then `"op": "select"` and `"requires": ["groupBy", "max"]`. A reader that predates
-  those features has no `"select"` op and refuses the envelope instead of answering without
-  them; a reader refuses a `requires` entry it does not know.
+  those features and reads envelopes through `fromJSON` has no `"select"` op and refuses the
+  envelope instead of answering without them (one that calls `SelectBuilder.fromJSON` directly
+  bypasses the `op` and would not notice); a current reader refuses a `requires` entry it does
+  not know.
 
 `fromJSON(json)` routes on `op` (and throws on an unrecognized `op` rather than silently
 treating it as a select). Only `v` and `shape` are always present; everything else is optional.
@@ -102,6 +104,7 @@ fields in object form (every field named), and three more keys:
 }
 ```
 
+A grouped envelope cannot also carry `sortBy`, `subject`, `one` or `nullSubject`.
 Aggregates are computed fields: `["count", x]` (a count always counts distinct values),
 `["min", x]`, `["max", x]`. `.size()` on a relation stays `{ "<path>": { "aggregation": "count" } }`;
 any other `aggregation` value is refused.

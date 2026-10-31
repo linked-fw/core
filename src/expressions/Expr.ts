@@ -93,7 +93,7 @@ export const Expr = {
 
   /**
    * How many members a group has (SPARQL `COUNT(DISTINCT ?member)`), in a grouped select:
-   * `Feedback.select((f) => ({type: f.feedbackType, n: Expr.count()})).groupBy((r) => r.type)`.
+   * `Feedback.select((f) => ({type: f.feedbackType, n: Expr.count()})).groupBy('type')`.
    * In a select that is not grouped, every row is its own group, so it is `1`.
    */
   count(): AggregateExpression<number> {

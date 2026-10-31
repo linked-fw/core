@@ -393,7 +393,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       throw new Error('groupBy: a select with preloads cannot be grouped; a grouped row holds keys and aggregates only.');
     }
     const fs = this.fields();
-    assertGroupable(fs ? fs.entries : [], keys);
+    assertGroupable(fs ? fs.entries : [], keys, this.whereExpression());
     return new GroupedSelectBuilder<S, any>({base: this, keys: [...keys]}) as unknown as GroupByResult<S, R, Result, K>;
   }
 
@@ -417,6 +417,16 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     const where = this._whereFn ? processWhereClause(this._whereFn, this._shape) : this._where;
     if (where && 'expressionNode' in where) trees.push(where.expressionNode.ir);
     return trees;
+  }
+
+  /** The where clause as an expression tree, when it is one (not a `some`/`every` quantifier). */
+  whereExpression(): IRExpression | undefined {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.whereExpression());
+    }
+    const where = this._whereFn ? processWhereClause(this._whereFn, this._shape) : this._where;
+    return where && 'expressionNode' in where ? where.expressionNode.ir : undefined;
   }
 
   /**
@@ -857,6 +867,12 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   ): SelectBuilder<S> | GroupedSelectBuilder<S> {
     const select = SelectBuilder.selectFromJSON<S>(json);
     if (json.groupBy === undefined) return select;
+    // What `groupBy` refuses on a builder, refused on an envelope too, rather than dropped.
+    for (const key of ['sortBy', 'subject', 'one', 'nullSubject'] as const) {
+      if (json[key] !== undefined) {
+        throw new Error(`DSL-JSON: a grouped select cannot carry "${key}" (groupBy refuses it: sort groups with "groupOrderBy").`);
+      }
+    }
     return withShapeCatalog(select.catalog, () =>
       GroupedSelectBuilder.fromJSON(select, json as GroupedSelectJSON),
     );

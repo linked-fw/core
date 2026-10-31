@@ -482,6 +482,7 @@ function markAliasAndAncestors(
 function collectRequiredTraversalAliases(
   query: IRSelectQuery,
   traversePatternMap: ReadonlyMap<string, IRTraversePattern>,
+  grouped = false,
 ): Set<string> {
   const directAliases = new Set<string>();
 
@@ -489,7 +490,7 @@ function collectRequiredTraversalAliases(
     collectExpressionAliases(query.where, directAliases);
   }
 
-  if (query.orderBy) {
+  if (query.orderBy && !grouped) {
     for (const item of query.orderBy) {
       collectExpressionAliases(item.expression, directAliases);
     }
@@ -772,6 +773,10 @@ export function selectToAlgebra(
   }
   const registry = new VariableRegistry();
 
+  // A grouped select (`groupBy`): its rows are groups. The root is not projected, GROUP BY is
+  // the key variables (not inferred), and HAVING is its group filter.
+  const grouped = !!query.groupBy && query.groupBy.length > 0;
+
   // Promote bindings only when the top-level WHERE would reject rows without
   // them. This keeps human-like SPARQL for null-rejecting filters without
   // over-constraining OR cases that can still match through other branches.
@@ -924,6 +929,16 @@ export function selectToAlgebra(
 
   const projectedTraversalAliases = new Set<string>();
   const directProjectionAliases = collectDirectProjectionAliases(query, rootAlias);
+  if (grouped) {
+    // The paths an aggregate reads (`p.bestFriend.birthDate.max()`) are optional too: a member
+    // without them is still a member of its group, and is still counted by `Expr.count()`.
+    for (const item of query.projection) {
+      if (item.expression.kind === 'property_expr' || item.expression.kind === 'alias_expr') continue;
+      const aliases = new Set<string>();
+      collectExpressionAliases(item.expression, aliases);
+      for (const alias of aliases) if (alias !== rootAlias) directProjectionAliases.add(alias);
+    }
+  }
   for (const alias of directProjectionAliases) {
     markAliasAndAncestors(alias, traversePatternMap, projectedTraversalAliases);
   }
@@ -931,6 +946,9 @@ export function selectToAlgebra(
   const requiredTraversalAliases = collectRequiredTraversalAliases(
     query,
     traversePatternMap,
+    // A grouped select's ORDER BY sorts groups by projected values: it must not make a key's
+    // path required (that would drop the group of members without it).
+    grouped,
   );
 
   const optionalTraversalAliases = new Set(
@@ -1165,10 +1183,6 @@ export function selectToAlgebra(
     });
   }
 
-  // A grouped select (`groupBy`): its rows are groups. The root is not projected, GROUP BY is
-  // the key variables (not inferred), and HAVING is its group filter.
-  const grouped = !!query.groupBy && query.groupBy.length > 0;
-
   // 5. Where clause → Filter wrapping (or HAVING if aggregate-containing)
   let havingExpr: SparqlExpression | undefined;
   if (query.where) {
@@ -1267,6 +1281,8 @@ export function selectToAlgebra(
       // For property_expr, the variable is the resolved name from registry
       const varName = resolveExpressionVariable(item.expression, registry);
       if (varName && (varName !== rootAlias || grouped)) {
+        // Two fields over one path (`{a: p.hobby, b: p.hobby}`) read one variable: project it once.
+        if (grouped && projection.some((p) => p.kind === 'variable' && p.name === varName)) continue;
         projection.push({kind: 'variable', name: varName});
       } else if (!varName) {
         // Non-variable expression (binary_expr, function_expr, etc.)
@@ -1314,12 +1330,17 @@ export function selectToAlgebra(
         throw new Error('selectToAlgebra: a group key must be a path (a variable), not a computed expression.');
       }
       return name;
-    });
+    }).filter((name, i, all) => all.indexOf(name) === i);
+    if (havingExpr) {
+      // An aggregate in the where clause of a grouped select would filter the groups, not the
+      // members (`where` filters members). The builder refuses it; an IR built elsewhere too.
+      throw new Error(
+        'A grouped select cannot have an aggregate in its where clause: where filters the members ' +
+        "before grouping. Filter the groups with having (`.having('n', (n) => n.gt(1))`).",
+      );
+    }
     if (query.having) {
-      const groupFilter = convertExpression(query.having, registry, optionalPropertyTriples);
-      havingExpr = havingExpr
-        ? {kind: 'logical_expr', op: 'and', exprs: [havingExpr, groupFilter]}
-        : groupFilter;
+      havingExpr = convertExpression(query.having, registry, optionalPropertyTriples);
     }
   } else if (havingExpr) {
     hasAggregates = true;

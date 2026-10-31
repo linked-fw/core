@@ -81,6 +81,13 @@ const queries = {
       .orderBy('n', 'DESC')
       .limit(2),
   minPerRow: () => Person.select((p) => ({first: p.nickNames.min()})),
+  nestedAggregate: () =>
+    Person.select((p) => ({hobby: p.hobby, n: Expr.count(), last: p.bestFriend.birthDate.max()})).groupBy('hobby'),
+  nestedKeyOrdered: () =>
+    Person.select((p) => ({friendHobby: p.bestFriend.hobby, n: Expr.count()}))
+      .groupBy('friendHobby')
+      .orderBy('friendHobby'),
+  countPlusOne: () => Person.select((p) => ({hobby: p.hobby, n: Expr.count().plus(1)})).groupBy('hobby'),
 };
 
 describe('grouped select types (compile-time)', () => {
@@ -120,6 +127,13 @@ describe('grouped select types (compile-time)', () => {
     assertType<ReturnType<typeof single> extends GroupByError<string> ? true : false>();
   });
 
+  test('the subject as a key is a node reference; arithmetic on an aggregate stays one', () => {
+    type Row = Awaited<ReturnType<typeof queries.perNode>>[number];
+    assertType<Equals<Row['person'], {id: string}>>();
+    type Plus = Awaited<ReturnType<typeof queries.countPlusOne>>[number];
+    assertType<Equals<Plus['n'], number>>();
+  });
+
   test('the grouped builder has no where, for or one', () => {
     type G = ReturnType<typeof queries.countPerHobby>;
     assertType<Equals<'where' extends keyof G ? true : false, false>>();
@@ -154,6 +168,25 @@ describe('grouped select SPARQL (unit)', () => {
     const sparql = await sparqlOf(queries.nestedKey);
     expect(sparql).toMatch(/GROUP BY \?a1_hobby\s*$/);
     expect(sparql).not.toMatch(/SELECT[^\n]*\?a1 /);
+  });
+
+  test('an aggregate over a nested path keeps that path optional', async () => {
+    const sparql = await sparqlOf(queries.nestedAggregate);
+    expect(sparql).toMatch(/OPTIONAL \{\s*\?a0 <[^>]+bestFriend> \?a1 \./);
+  });
+
+  test('ordering by a nested key keeps its path optional', async () => {
+    const sparql = await sparqlOf(queries.nestedKeyOrdered);
+    expect(sparql).toMatch(/OPTIONAL \{\s*\?a0 <[^>]+bestFriend> \?a1 \./);
+    expect(sparql).toContain('ORDER BY ASC(?a1_hobby)');
+  });
+
+  test('two fields over one path are one variable and one key', async () => {
+    const sparql = await sparqlOf(() =>
+      Person.select((p) => ({a: p.hobby, b: p.hobby, n: Expr.count()})).groupBy('a', 'b'),
+    );
+    expect(sparql).toMatch(/GROUP BY \?a0_hobby\s*$/);
+    expect(sparql).toMatch(/SELECT \?a0_hobby \(COUNT/);
   });
 
   test('the IR carries groupBy and requires', async () => {
@@ -218,6 +251,25 @@ describe('groupBy refusals (runtime)', () => {
     ).toThrow(/is a nested select/);
   });
 
+  test('an aggregate in the where clause (it would filter groups, not members)', () => {
+    expect(() =>
+      (Person.select((p) => ({hobby: p.hobby, n: Expr.count()})).where((p) => p.friends.size().gt(1)) as any).groupBy('hobby'),
+    ).toThrow(/the where clause holds an aggregate/);
+  });
+
+  test("a field that mixes an aggregate with a member's value", () => {
+    expect(() =>
+      (Person.select((p) => ({hobby: p.hobby, r: Expr.count().plus(p.name.strlen())})) as any).groupBy('hobby'),
+    ).toThrow(/combines an aggregate with a member's own value/);
+    expect(() => queries.countPlusOne()).not.toThrow();
+  });
+
+  test('an aggregate as an update value', async () => {
+    await expect(
+      Person.update((p) => ({name: (p.name as any).max()}) as never).for({id: `${ENT}p1`}),
+    ).rejects.toThrow(/cannot be an aggregate/);
+  });
+
   test('orderBy and having over a name that is not a field', () => {
     const grouped = queries.countPerHobby() as any;
     expect(() => grouped.orderBy('nope')).toThrow(/"nope" is not a field of the select/);
@@ -261,6 +313,12 @@ describe('grouped select on the wire', () => {
     }
   });
 
+  test('a grouped envelope that also sorts members or names a subject is refused', () => {
+    const json = queries.countPerHobby().toJSON();
+    expect(() => SelectBuilder.fromJSON({...json, sortBy: [{hobby: 'ASC'}]} as never)).toThrow(/cannot carry "sortBy"/);
+    expect(() => SelectBuilder.fromJSON({...json, subject: `${ENT}p1`} as never)).toThrow(/cannot carry "subject"/);
+  });
+
   test('a received envelope with a stray field is refused', () => {
     const json = {...queries.countPerHobby().toJSON(), groupBy: ['hobby', 'n']};
     expect(() => SelectBuilder.fromJSON(json as never)).toThrow(/aggregate and cannot be a group key/);
@@ -286,6 +344,12 @@ describe('stores that do not declare the features', () => {
   test('a select with max is refused; a plain select is not', async () => {
     await expect(queries.minPerRow().exec(legacy)).rejects.toThrow(/uses 'min'/);
     await expect(Person.select((p) => p.name).exec(legacy)).resolves.toEqual([]);
+  });
+
+  test('a count or an ask whose where uses max is refused too', async () => {
+    const withMax = () => Person.select((p) => p.name).where((p) => p.nickNames.max().equals('B'));
+    await expect(withMax().count(legacy)).rejects.toThrow(/uses 'max'/);
+    await expect(withMax().exists(legacy)).rejects.toThrow(/uses 'max'/);
   });
 
   test('a store that declares them is sent the query', async () => {
@@ -388,6 +452,18 @@ describeFuseki('grouped selects', () => {
       {person: {id: `${ENT}p1`}, n: 2},
       {person: {id: `${ENT}p2`}, n: 1},
     ]);
+  });
+
+  test('a member without the aggregated path still counts in its group', async () => {
+    expect(byKey(await runLive(queries.nestedAggregate), 'hobby')).toEqual([
+      {hobby: 'Chess', n: 1, last: null},
+      {hobby: 'Reading', n: 2, last: new Date('2000-01-01T00:00:00Z')},
+      {hobby: null, n: 1, last: new Date('2000-01-01T00:00:00Z')},
+    ]);
+  });
+
+  test('ordering by a nested key keeps the null group', async () => {
+    expect(await runLive(queries.nestedKeyOrdered)).toHaveLength(3);
   });
 
   test('an ungrouped select: min per row', async () => {

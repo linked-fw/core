@@ -1024,8 +1024,9 @@ const latest = await Person.select((p) => ({friend: p.bestFriend, last: p.birthD
   .orderBy('last', 'DESC')
   .limit(10);
 
-// Lowers to: SELECT ?a0_bestFriend (MAX(?a0_birthDate) AS ?a1) WHERE { … }
-//            GROUP BY ?a0_bestFriend HAVING(MAX(?a0_birthDate) > "2000-01-01…") ORDER BY DESC(MAX(?a0_birthDate))
+// Lowers to: SELECT ?a0_bestFriend (MAX(?a0_birthDate) AS ?a2) WHERE { … }
+//            GROUP BY ?a0_bestFriend HAVING(MAX(?a0_birthDate) > "2000-01-01T00:00:00.000Z"^^xsd:dateTime)
+//            ORDER BY DESC(MAX(?a0_birthDate)) LIMIT 10
 ```
 
 - **Aggregates:** `Expr.count()` (the members of the group), `.countDistinct()` on a
@@ -1039,8 +1040,11 @@ const latest = await Person.select((p) => ({friend: p.bestFriend, last: p.birthD
 - **The grouped builder** has `having(field, condition)` (several calls must all hold),
   `orderBy(field | fields, direction)`, `limit`, `offset`, `from` and `exec`. It has no `where`
   (filter the members before grouping), no `.for`/`.one`, and its rows have no `id`.
-- `groupBy` needs the object form of select, and is refused after `.for(id)`, `.one()` or an
-  `orderBy` on the members. `orderBy` on a plain select sorts by paths and refuses an aggregate.
+- `groupBy` needs the object form of select, and is refused after `.for(id)`, `.one()`, an
+  `orderBy` on the members, or a `where` that holds an aggregate (filter groups with `having`).
+  A field is a key or an aggregate: arithmetic on aggregates (`Expr.count().plus(1)`) is one,
+  an aggregate mixed with a member's own value is refused. `orderBy` on a plain select sorts by
+  paths and refuses an aggregate. Aggregates are refused as update values.
 - Outside a grouped select, an aggregate is per row, like `.size()`:
   `Person.select((p) => ({first: p.nickNames.min()}))`.
 

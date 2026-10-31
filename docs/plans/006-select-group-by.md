@@ -273,3 +273,60 @@ testable through grouped selects):
   wrapped dispatch's `supports`).
 
 Dependencies: 1 → 2 → 3 → 4 (sequential; one agent).
+
+## Review
+
+Independent review (a separate agent, given the diff and the plan, not this agent's conclusions).
+Findings, by severity:
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| R1 | high | An aggregate in `where` became part of the group HAVING (filters groups, not members) silently | Fixed: refused at `groupBy`, at `fromJSON`, and in grouped lowering |
+| R2 | high | An aggregate over a nested path made its traversal required, dropping members from their group (`n` undercounted) | Fixed: in grouped mode the paths an aggregate reads are OPTIONAL |
+| R3 | high | `countDistinct/min/max` on any `ExpressionNode` reached update expressions (invalid SPARQL) | Fixed: an aggregate update value throws in mutation lowering |
+| R4 | medium | A field mixing an aggregate and a member's value (`count() + strlen(name)`) passed as an aggregate (invalid SPARQL) | Fixed: refused by `assertGroupable` |
+| R5 | medium | The subject as a key was typed `QResult<…>`, runtime `{id}` | Fixed: a node key (relation or subject) types as `{id: string}` from the select's own field type |
+| R6 | medium | `Expr.count().plus(1)` accepted at runtime, a type error ("missing: n") | Fixed: arithmetic on `AggregateExpression` returns `AggregateExpression<number>` |
+| R7 | medium | `orderBy` on a nested key made its path required, dropping the null group | Fixed: a grouped ORDER BY does not make paths required |
+| R8 | medium | A grouped envelope with `sortBy`/`subject`/`one` was accepted (dropped or mis-shaped); dsl-json.md over-claimed that every older reader refuses | Fixed: refused in `fromJSON`; doc states that only readers going through `fromJSON` refuse |
+| R9 | medium | `count()`, `exists()` and the ask-by-select fallback skipped the feature check | Fixed: `CountBuilder`/`AskBuilder` have `requiredFeatures`; `resolveCount`, `resolveExistence` and `existenceBySelect` check |
+| R10 | low | A pre-1.2 envelope with `["max", …]` is now refused by custom datasets without `supports`; `sum`/`avg` heads are untagged | Recorded in the report (deviation / follow-up 006) |
+| R11 | low | `groupBy()` with no keys types as a builder (throws at runtime); keys and min/max are typed non-null | Recorded (follow-up) |
+| R12 | low | Two fields over one path emitted a duplicate variable | Fixed: projected and grouped once |
+| R13 | low | `resultMap` mutated in place for alias renames (pre-existing) | No change; grouped mapping reads the renamed aliases |
+| R14 | low | Stale examples in `Expr.ts`/`ExpressionNode.ts` (accessor form), README alias `?a1` | Fixed |
+
+## Iteration 1 — Ideation
+
+Gap 1 of 9 (R1): refuse vs lower as a member subquery. Refuse: a member filter on a per-member
+aggregate needs a sub-select per member; rare, and refusing is loud. Chosen: refuse.
+Gap 2 of 9 (R2) and 7 of 9 (R7): make the traversals OPTIONAL in grouped mode only (plain
+selects keep their behaviour). Chosen.
+Gap 3 of 9 (R3): remove the methods from ExpressionNode (would break `p.age.max()` through the
+proxy, which builds on ExpressionNode) vs refuse in mutation lowering. Chosen: refuse.
+Gap 4 of 9 (R4): an aggregate field may read member values only inside aggregates. Chosen.
+Gap 5 of 9 (R5): key value typed from the select's field type (`QueryShape`/`QueryShapeSet` →
+`{id}`). Chosen.
+Gap 6 of 9 (R6): arithmetic overrides on AggregateExpression. Chosen.
+Gap 8 of 9 (R8): refuse the four keys on a grouped envelope; correct the doc. Chosen.
+Gap 9 of 9 (R9): `requiredFeatures` on count and ask builders, checked in the resolvers.
+Chosen.
+
+## Iteration 1 — Plan and phases
+
+### Phase 5 — Review fixes
+
+Files: `sparql/irToAlgebra.ts` (optional aggregate paths, grouped ORDER BY not required,
+aggregate where refused, keys deduplicated), `queries/GroupedSelectBuilder.ts` (where and mixed
+field checks, key typing), `queries/QueryBuilder.ts` (`whereExpression`, envelope checks),
+`expressions/ExpressionNode.ts` (aggregate arithmetic), `queries/IRMutation.ts` (aggregate update
+value), `queries/CountBuilder.ts`, `queries/AskBuilder.ts`, `queries/queryDispatch.ts` (feature
+checks), docs.
+
+Validation: new tests for each fixed finding in `select-group-by.test.ts` (unit and live); full
+jest on an own Fuseki; typecheck; build.
+
+Phase 5 done: `select-group-by.test.ts` `Tests: 49 passed, 49 total`, `[fuseki] live tests: 14
+total — 14 passed`. `npx linked build`: `✔ Build successful`. Full jest on an own Fuseki:
+`Tests: 122 skipped, 3102 passed, 3224 total`, `[fuseki] live tests: 437 total — 435 passed, 0
+failed, 2 skipped`. Typecheck and `check:dts` clean.

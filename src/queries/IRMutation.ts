@@ -8,6 +8,12 @@ import {
   isSetModificationValue,
 } from './QueryFactory.js';
 import {isExpressionNode, resolveExpressionRefs} from '../expressions/ExpressionNode.js';
+
+/** Whether an expression holds an aggregate (`min`, `max`, a count). */
+const containsAggregate = (ir: unknown): boolean =>
+  !!ir && typeof ir === 'object' &&
+  (((ir as {kind?: string}).kind === 'aggregate_expr') ||
+    Object.values(ir as Record<string, unknown>).some(containsAggregate));
 import type {
   IRCreateMutation,
   IRDeleteMutation,
@@ -115,6 +121,14 @@ const toSingleFieldValue = (
 
   // ExpressionNode → resolve refs and extract IRExpression
   if (isExpressionNode(value)) {
+    if (containsAggregate(value.ir)) {
+      // `min`/`max`/`countDistinct` exist on every expression, but aggregate a select's rows; a
+      // write computes one node's value, and SPARQL refuses an aggregate in its BIND.
+      throw new Error(
+        'An update value cannot be an aggregate (`.min()`, `.max()`, `.countDistinct()`, ' +
+        '`Expr.count()`): aggregates are for selects. Compute the value with a select first.',
+      );
+    }
     return resolveExpressionRefs(
       value.ir,
       value._refs,

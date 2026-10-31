@@ -398,11 +398,26 @@ brandLinkedClass(ExpressionNode, '@_linked/core', 'ExpressionNode');
  * An aggregate in a select's projection: `Expr.count()`, `p.age.max()`, `p.tags.size()`'s
  * siblings. `T` is the value the aggregate answers (`number` for a count, the value type for
  * `min`/`max`), which is what a select's row type reads. Its comparison methods (`gt`, …) build
- * a group filter (`.having((r) => r.n.gt(1))`).
+ * a group filter (`.having('n', (n) => n.gt(1))`).
  */
 export class AggregateExpression<T = unknown> extends ExpressionNode {
   /** Type-level only: the value this aggregate answers. Never set. */
   declare readonly __aggregateValue: T;
+
+  // Arithmetic on an aggregate is still an aggregate (`Expr.count().plus(1)`), so a grouped
+  // select reads it as one. Its operand must be a constant or another aggregate.
+  plus(n: ExpressionInput): AggregateExpression<number> { return this.asAggregate(super.plus(n)); }
+  minus(n: ExpressionInput): AggregateExpression<number> { return this.asAggregate(super.minus(n)); }
+  times(n: ExpressionInput): AggregateExpression<number> { return this.asAggregate(super.times(n)); }
+  divide(n: ExpressionInput): AggregateExpression<number> { return this.asAggregate(super.divide(n)); }
+  abs(): AggregateExpression<number> { return this.asAggregate(super.abs()); }
+  round(): AggregateExpression<number> { return this.asAggregate(super.round()); }
+  ceil(): AggregateExpression<number> { return this.asAggregate(super.ceil()); }
+  floor(): AggregateExpression<number> { return this.asAggregate(super.floor()); }
+
+  private asAggregate(node: ExpressionNode): AggregateExpression<number> {
+    return new AggregateExpression<number>(node.ir, node._refs);
+  }
 }
 brandLinkedClass(AggregateExpression, '@_linked/core', 'AggregateExpression');
 

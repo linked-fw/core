@@ -21,6 +21,8 @@ import type {QueryBuilderJSON, SelectBuilder} from './QueryBuilder.js';
 import type {RawSelectInput} from './IRDesugar.js';
 import type {
   ObjectToPlainResult,
+  QueryShape,
+  QueryShapeSet,
   SetSize,
   WherePath,
 } from './SelectQuery.js';
@@ -82,13 +84,18 @@ export type PlainFieldNames<R> = Exclude<keyof R & string, AggregateFieldNames<R
  * over a multi-valued path is one of its values (each value is its own group).
  */
 export type GroupedRow<R, Keys extends string> = {
-  [P in keyof ObjectToPlainResult<R>]: P extends Keys
-    ? GroupKeyValue<ObjectToPlainResult<R>[P] extends readonly (infer E)[] ? E : ObjectToPlainResult<R>[P]>
+  [P in keyof ObjectToPlainResult<R>]: P extends Keys & keyof R
+    ? GroupKeyValue<R[P], ObjectToPlainResult<R>[P]>
     : ObjectToPlainResult<R>[P];
 };
 
-/** A key's value in a row: a node is its `{id}` (the object form of select types it as the shape). */
-type GroupKeyValue<V> = V extends Shape ? {id: string} : V;
+/**
+ * A key's value in a row. A node (a relation, or the subject itself) is its `{id}`: the object
+ * form of select types a relation field as the shape. A multi-valued path's key is one value.
+ */
+type GroupKeyValue<Q, V> = Q extends QueryShape<any, any, any> | QueryShapeSet<any, any, any>
+  ? {id: string}
+  : V extends readonly (infer E)[] ? E : V;
 
 /**
  * What `groupBy` returns when the grouping cannot be built: no builder methods, so the next
@@ -137,6 +144,18 @@ function containsAggregate(ir: IRExpression | undefined): boolean {
   );
 }
 
+/** Whether an expression reads a member's value outside every aggregate (`count() + p.age`). */
+function readsOutsideAggregates(ir: IRExpression | undefined): boolean {
+  if (!ir || typeof ir !== 'object') return false;
+  if (ir.kind === 'aggregate_expr') return false;
+  if (ir.kind === 'property_expr' || ir.kind === 'alias_expr' || ir.kind === 'exists_expr') return true;
+  return Object.values(ir).some((v) =>
+    Array.isArray(v)
+      ? v.some((x) => readsOutsideAggregates(x as IRExpression))
+      : v && typeof v === 'object' && 'kind' in v && readsOutsideAggregates(v as IRExpression),
+  );
+}
+
 /** Whether a select field is an aggregate (`.size()`, or an expression holding an aggregate). */
 export function isAggregateEntry(entry: FieldSetEntry): boolean {
   return entry.aggregation === 'count' || containsAggregate(entry.expressionNode?.ir);
@@ -157,7 +176,17 @@ function fieldExpression(entry: FieldSetEntry): ExpressionNode {
  * The type of `groupBy` refuses the same cases at compile time; this guards a select built
  * from JSON, a `FieldSet`, or code that sidesteps the types.
  */
-export function assertGroupable(entries: readonly FieldSetEntry[], keys: readonly string[]): void {
+export function assertGroupable(
+  entries: readonly FieldSetEntry[],
+  keys: readonly string[],
+  where?: IRExpression,
+): void {
+  if (containsAggregate(where)) {
+    throw new Error(
+      'groupBy: the where clause holds an aggregate (`.size()`, `.max()`, …). In a grouped select ' +
+      "where filters the members before grouping; filter the groups with having: `.having('n', (n) => n.gt(1))`.",
+    );
+  }
   if (entries.length === 0 || !entries.every((e) => e.customKey)) {
     throw new Error(
       'groupBy needs the object form of select, so that every field has a name: ' +
@@ -183,6 +212,11 @@ export function assertGroupable(entries: readonly FieldSetEntry[], keys: readonl
       if (entry.expressionNode) {
         throw new Error(`groupBy: the field "${name}" is a computed expression; group keys are paths.`);
       }
+    } else if (aggregate && readsOutsideAggregates(entry.expressionNode?.ir)) {
+      throw new Error(
+        `groupBy: the field "${name}" combines an aggregate with a member's own value; a group has ` +
+        'one value per field. Aggregate every path it reads (`n: Expr.count().plus(1)` is fine).',
+      );
     } else if (!aggregate) {
       throw new Error(
         `groupBy: the field "${name}" is neither a group key nor an aggregate. Every field of a ` +
@@ -383,7 +417,7 @@ export class GroupedSelectBuilder<S extends Shape = Shape, Row = any>
       throw new Error('DSL-JSON "groupBy" must be an array of result field names.');
     }
     const entries = (base.fields() as FieldSet | undefined)?.entries ?? [];
-    assertGroupable(entries, json.groupBy);
+    assertGroupable(entries, json.groupBy, base.whereExpression());
     const names = new Set(entries.map((e) => e.customKey));
     const orderBy = json.groupOrderBy?.map(({field, direction}) => {
       if (!names.has(field)) throw new Error(`DSL-JSON "groupOrderBy": "${field}" is not a field of the select.`);

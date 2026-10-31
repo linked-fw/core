@@ -27,6 +27,7 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import {PendingQueryContext} from './QueryContext.js';
 import {encodeContextRef, isContextRefJSON} from './ContextRef.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
+import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
 import {getQueryDispatch, resolveCount} from './queryDispatch.js';
 import {
   serializeWherePath,
@@ -91,6 +92,15 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
 
   /** Discriminator for the free `lower()` function and dataset routing. */
   readonly __queryKind = 'count' as const;
+
+  /**
+   * The features beyond the baseline its where clause uses (`min`/`max`): checked against the
+   * dataset before it is sent, as for a select.
+   */
+  requiredFeatures(): QueryFeature[] {
+    const where = this._spec.where;
+    return featuresOfExpressions(where && 'expressionNode' in where ? [where.expressionNode.ir] : []);
+  }
 
   /** The shape whose matching instances are counted — also the routing key. */
   get shape(): NodeShapeData {

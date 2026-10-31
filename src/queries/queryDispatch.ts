@@ -109,6 +109,7 @@ export async function resolveExistence(
   target: ExistenceTarget,
   query: AskQuery,
 ): Promise<boolean> {
+  assertQuerySupported(target as FeatureTarget, query);
   if (typeof target?.askQuery !== 'function') {
     return existenceBySelect(target, query);
   }
@@ -150,6 +151,7 @@ async function existenceBySelect(target: ExistenceTarget, query: AskQuery): Prom
   const select = withShapeCatalog(catalogOf(query), () =>
     SelectBuilder.fromJSON({...pattern, shape: pattern.shape as string, limit: 1}),
   );
+  assertQuerySupported(target as FeatureTarget, select);
   const answer = await target.selectQuery(select);
   // A select with one subject is a single-result query: a row or null. Otherwise rows.
   if (answer === null || answer === undefined) return false;
@@ -256,6 +258,7 @@ export async function resolveCount(
       'form of its own.',
     );
   }
+  assertQuerySupported(target as FeatureTarget, query);
   const answer = await target.selectQuery(query);
   if (typeof answer !== 'number' || !Number.isInteger(answer) || answer < 0) {
     throw new Error(
