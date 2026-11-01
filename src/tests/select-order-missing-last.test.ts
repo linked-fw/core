@@ -6,6 +6,7 @@
  * Also here: a where-aggregate next to multi-valued rows filters per subject without paging,
  * and a multi-valued field of a nested entity keeps all its values.
  */
+import {graphs} from '../ontologies/graphs.js';
 import {describe, expect, test, beforeAll, afterAll} from '@jest/globals';
 import {Person, tmpEntityBase, personClass, propBase} from '../test-helpers/query-fixtures';
 import {Expr} from '../expressions/Expr';
@@ -134,7 +135,7 @@ describe('a nested entity keeps every value of a multi-valued field (mapping)', 
 
 describe('the shape metamodel reads single-valued fields as one value (mapping)', () => {
   test('a property shape\'s sh:path under NodeShape.properties is one node, not a list', () => {
-    const ir = irOf((NodeShape as any).select((ns: any) => [ns.properties.select((ps: any) => [ps.path, ps.name])]));
+    const ir = irOf((NodeShape as any).select((ns: any) => [ns.properties.select((ps: any) => [ps.path, ps.name])]).from(graphs.default));
     const sparql = selectToSparql(ir);
     const pathVar = sparql.match(/\?(a1_path\w*)/)![1];
     const nameVar = sparql.match(/\?(a1_name\w*)/)![1];

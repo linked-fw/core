@@ -18,6 +18,7 @@ import {CountBuilder} from '../queries/CountBuilder.js';
 import {resolveShape} from '../queries/resolveShape.js';
 import type {PendingQueryContext} from '../queries/QueryContext.js';
 import type {IDataset} from '../interfaces/IDataset.js';
+import type {ReadGraphsInput} from '../queries/readGraphs.js';
 import {CreateBuilder} from '../queries/CreateBuilder.js';
 import {UpdateBuilder} from '../queries/UpdateBuilder.js';
 import {DeleteBuilder, type DeleteId} from '../queries/DeleteBuilder.js';
@@ -85,6 +86,15 @@ export function createShapeTarget<S extends Shape>(
 export abstract class Shape {
   static targetClass: NodeReferenceValue = null;
   static shape: NodeShapeData;
+  /**
+   * The graphs a select, count or ask of this shape reads when it has no `.from()`, inherited by
+   * subclasses: a graph IRI or a list, portable names included. Unset (the default), a read uses
+   * the default graph, or the shape's routed graphs. Core's shape shapes (`NodeShape`,
+   * `PropertyShape`) declare `graphs.allShapes`, and the ontology term shapes of `@_linked/rdfs`
+   * and `@_linked/owl` `graphs.allOntologies`. An explicit `.from()` wins; writes are not
+   * affected. See the README, "Named graphs".
+   */
+  static defaultReadGraphs?: ReadGraphsInput;
   static get typesToShapes(): Map<string, Set<typeof Shape>> {
     return shapeTypeState.typesToShapes;
   }

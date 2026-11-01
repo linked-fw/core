@@ -11,6 +11,7 @@
  * The live block runs on the inferring store: Erik is stored as an Employee only, and
  * `Employee ⊑ Person` gives him Person too, so `$type()` answers both.
  */
+import {graphs} from '../ontologies/graphs.js';
 import {describe, expect, jest, test, beforeAll, afterAll} from '@jest/globals';
 import {
   Employee,
@@ -84,7 +85,7 @@ describe('$type() lowering', () => {
     // NodeShape declares `type` itself (maxCount 1): `n.type` is that property, `n.$type()` the
     // node's types, with their own variables and result keys.
     // (`type` is registered on NodeShape as data, without an accessor, so it is selected by label.)
-    const ir = irOf(SelectBuilder.from(NodeShape).select(FieldSet.for(NodeShape.shape, ['type', '$type'])));
+    const ir = irOf(SelectBuilder.from(NodeShape).select(FieldSet.for(NodeShape.shape, ['type', '$type'])).from(graphs.default));
     const sparql = selectToSparql(ir);
     expect(sparql).toContain('?a0_type');
     expect(sparql).toContain('?a0__type');

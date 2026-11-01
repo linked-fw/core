@@ -6,6 +6,8 @@
 import {type NodeReferenceValue, toNodeReference} from '../utils/NodeReference.js';
 import {Shape, type ShapeConstructor} from './Shape.js';
 import {shacl} from '../ontologies/shacl.js';
+import {graphs} from '../ontologies/graphs.js';
+import type {ReadGraphsInput} from '../queries/readGraphs.js';
 import {DSL_JSON_COMBINATOR_NAMES, warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
 import {getShapeClass, getSuperShapes} from '../utils/ShapeClass.js';
 import {sharedState} from '../utils/sharedState.js';
@@ -357,6 +359,8 @@ export interface ParameterConfig {
  */
 export class NodeShape extends Shape {
   static targetClass = shacl.NodeShape;
+  /** Shape graphs hold the shape shapes: a read without `.from()` reads every one of them. */
+  static defaultReadGraphs: ReadGraphsInput = graphs.allShapes;
 
   // Typed accessors for the metamodel's property shapes (registered in `utils/Package.ts`), so a
   // select or a subclass reads them typed. Never called: a NodeShape is never instantiated.
@@ -490,6 +494,8 @@ export class NodeShape extends Shape {
  */
 export class PropertyShape extends Shape {
   static targetClass = shacl.PropertyShape;
+  /** Shape graphs hold the shape shapes: a read without `.from()` reads every one of them. */
+  static defaultReadGraphs: ReadGraphsInput = graphs.allShapes;
 
   // Typed accessors for the metamodel's property shapes (registered in `utils/Package.ts`).
   // Never called: a PropertyShape is never instantiated.

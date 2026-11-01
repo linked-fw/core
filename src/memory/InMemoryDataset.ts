@@ -242,7 +242,7 @@ export class InMemoryDataset implements IDataset {
     const ir = lower(query);
     return this.within(query, false, (data) => {
       if (!ir.root) {
-        this.refuseGraphs(ir.graphs);
+        this.refuseReadGraphs(ir.graphs);
         if (ir.patterns.length || ir.where) throw new InMemoryQueryRefusal('a shapeless ask with a pattern');
         const ids = ir.subjectIds ?? (ir.subjectId ? [ir.subjectId] : []);
         return ids.some((id) => data.has(id));
@@ -261,7 +261,7 @@ export class InMemoryDataset implements IDataset {
     data: Data,
     ir: Pick<IRSelectQuery, 'root' | 'patterns' | 'where' | 'subjectId' | 'subjectIds' | 'graphs'>,
   ): string[] {
-    this.refuseGraphs(ir.graphs);
+    this.refuseReadGraphs(ir.graphs);
     if (ir.patterns.length) throw new InMemoryQueryRefusal('nested paths or sub-selections');
     const classes = this.classesOf(ir.root.shape);
     const candidates = ir.subjectIds ?? (ir.subjectId ? [ir.subjectId] : [...data.keys()]);
@@ -509,6 +509,17 @@ export class InMemoryDataset implements IDataset {
 
   private refuseGraphs(names: readonly string[] | undefined): void {
     for (const name of names ?? []) this.refuseGraph(name);
+  }
+
+  /**
+   * A read's graphs. Its one graph is the default graph, and it holds every ontology and shape
+   * too, so a read of `graphs.allOntologies` / `graphs.allShapes` (the default read set of the
+   * term and shape shapes) reads it, as under the `'default'` graph target.
+   */
+  private refuseReadGraphs(names: readonly string[] | undefined): void {
+    for (const name of names ?? []) {
+      if (name !== graphs.allOntologies && name !== graphs.allShapes) this.refuseGraph(name);
+    }
   }
 }
 

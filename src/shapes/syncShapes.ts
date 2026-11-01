@@ -17,6 +17,7 @@ import {rdfList} from './List.js';
 import {serializePathToNodeData} from './serializePathToNodeData.js';
 import {buildSingleOwnerConstraints} from './singleOwnerConstraint.js';
 import {QueryBuilder} from '../queries/QueryBuilder.js';
+import {graphs} from '../ontologies/graphs.js';
 import {sha256Hex} from '../utils/sha256.js';
 import {builtInShapeIris} from '../utils/ShapeCatalog.js';
 
@@ -234,7 +235,8 @@ function buildSyncData(
 export async function readStoredHashes(iris: string[], ds?: IDataset): Promise<Map<string, string>> {
   const stored = new Map<string, string>();
   if (iris.length === 0) return stored;
-  const rows = (await (QueryBuilder.from(NodeShape).select(['shapeHash']).forAll(iris) as unknown as {
+  // This sync writes the default graph, so it reads there, not NodeShape's default read set.
+  const rows = (await (QueryBuilder.from(NodeShape).select(['shapeHash']).forAll(iris).from(graphs.default) as unknown as {
     exec: (target?: IDataset) => Promise<Array<{id: string; shapeHash?: unknown}> | null>;
   }).exec(ds)) ?? [];
   for (const row of rows) {
@@ -431,9 +433,10 @@ export async function syncShapes(
   // 3. Orphan sweep (unless disabled). Identity-read existing NodeShape IRIs (ids only). Must hit
   //    the same `ds` the thunks target, or orphans get computed against the wrong store.
   if (orphanScope !== 'none') {
+    // The default graph, which this sync writes (NodeShape's default read set is the shape graphs).
     const existingRows = (await (NodeShape as unknown as {
-      select: () => {exec: (target?: IDataset) => Promise<Array<{id: string}>>};
-    }).select().exec(ds)) as Array<{id: string}>;
+      select: () => {from: (g: string) => {exec: (target?: IDataset) => Promise<Array<{id: string}>>}};
+    }).select().from(graphs.default).exec(ds)) as Array<{id: string}>;
 
     // Orphan shapes (in store, not in code) → delete (cascade cleans their owned subtree). In
     // `'ownedNamespaces'` mode, only shapes within a namespace this process writes are eligible —

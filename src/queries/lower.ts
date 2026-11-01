@@ -51,6 +51,7 @@ import type {IRCreateQuery} from './CreateQuery.js';
 import type {IRUpdateQuery} from './UpdateQuery.js';
 import type {IRDeleteQuery} from './DeleteQuery.js';
 import {isGraphIri} from './graphQuery.js';
+import {defaultReadGraphsOf} from './readGraphs.js';
 import type {
   CreateLowerSpec,
   UpdateLowerSpec,
@@ -242,7 +243,7 @@ function lowerAsk(input: RawAskInput): IRAskQuery {
     where: selected.where,
     subjectId: selected.subjectId,
     subjectIds: selected.subjectIds,
-    ...(input.graphs ? {graphs: input.graphs} : {}),
+    ...readGraphsOf(input.graphs, selected.root.shape),
   });
 }
 
@@ -309,8 +310,19 @@ function lowerCount(input: RawCountInput): IRCountQuery {
     subjectId: selected.subjectId,
     subjectIds: selected.subjectIds,
     alias: COUNT_ALIAS,
-    ...(input.graphs ? {graphs: input.graphs} : {}),
+    ...readGraphsOf(input.graphs, selected.root.shape),
   });
+}
+
+/**
+ * The `graphs` of a shaped read's IR: its `.from()` set, else the default read set its root shape
+ * declares (`static defaultReadGraphs`, see `readGraphs.ts`), else none (the default graph, or the
+ * shape's routed graphs). The default is put on the IR, not only compiled in, so that every check
+ * of a read's graphs (a store's access rules, a gateway) sees the graphs the read covers.
+ */
+function readGraphsOf(explicit: string[] | undefined, rootShape: string): {graphs?: string[]} {
+  const graphs = explicit ?? defaultReadGraphsOf(rootShape);
+  return graphs ? {graphs} : {};
 }
 
 export function lower(query: LowerableSelect): IRSelectQuery;
@@ -338,8 +350,10 @@ export function lower(
     case 'select': {
       const input = query.toRawInput();
       const ir = buildSelectQuery(input);
-      // `.from()` is not part of the pattern pipeline: it rides on the IR untouched.
-      if (input.graphs) ir.graphs = input.graphs;
+      // `.from()` is not part of the pattern pipeline: it rides on the IR untouched. Without it, a
+      // shape that declares a default read set (`static defaultReadGraphs`) reads that.
+      const graphs = readGraphsOf(input.graphs, ir.root.shape).graphs;
+      if (graphs) ir.graphs = graphs;
       return ir;
     }
     case 'ask':

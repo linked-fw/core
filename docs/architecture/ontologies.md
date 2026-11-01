@@ -345,7 +345,8 @@ query on another graph. A store also refuses its own reserved names (`SparqlData
 ### Reading graphs
 
 A read names its graphs with `.from(graph | graph[])` on a select, count or ask (`.count()` and
-`.exists()` keep it); without it a read uses the default graph, as before. The names travel as
+`.exists()` keep it); without it a read uses the shape's default read set when it declares one
+(below), else the default graph, as before. The names travel as
 written, in the DSL-JSON field `graphs` and the IR field `graphs`, and the store expands them:
 
 | Name | Read as |
@@ -386,6 +387,36 @@ WHERE {
   OPTIONAL { GRAPH ?g_a0 { ?a0 schema:name ?a0_name . } }
 }
 ```
+
+**A shape's default read set.** A shape class may declare the graphs a read of it covers without
+`.from()`: `static defaultReadGraphs` (a graph IRI or a list, portable names included, inherited
+by subclasses). The term and shape shapes declare it, so a read of them finds the ontology and
+shape graphs without naming them:
+
+| Shapes | `defaultReadGraphs` |
+|---|---|
+| `NodeShape`, `PropertyShape` (core) | `graphs.allShapes` |
+| `Class`, `Property` of `@_linked/rdfs`, and through them OWL's `Class`, `Restriction`, `ObjectProperty`, `DatatypeProperty`, `AnnotationProperty` | `graphs.allOntologies` |
+
+```ts
+const classes = await OwlClass.select((c) => [c.label, c.subClassOf]); // reads graphs.allOntologies
+const drafts = await OwlClass.select((c) => c.label).from(draftGraph); // .from() wins
+```
+
+- **On the IR, not only in the compiled query.** Lowering puts the set on the IR's `graphs`, as if
+  the caller had written `.from()`, so every check of a read's graphs (a store's access rule, a
+  gateway) sees what the read covers. The DSL-JSON carries only what the caller wrote: the
+  receiver lowers it and applies its own copy of the shape's declaration.
+- **`.from()` wins**, and a set replaces the shape's graph routing for reads, as `.from()` does.
+  A subclass opts out with `static defaultReadGraphs = graphs.default`.
+- **Reads only.** Writes are untouched: a mutation of these shapes writes where it did (the default
+  graph, or its route), and a package's ontology or shape graph is still written only by its sync
+  (`graph-name-read-only`). Code that writes them into the default graph reads them back with
+  `.from(graphs.default)` (the default-graph shape sync, `syncShapes`, does).
+- **The graph targets apply.** Under `'default'` the set reads the default graph, under a shared
+  IRI that graph. `InMemoryDataset`, which keeps one graph, reads it for `graphs.allOntologies`
+  and `graphs.allShapes`.
+- A triples read has no shape, so it has no default read set: it names its graphs.
 
 **`isolateLinkedTypeChecks`** (a `SparqlOptions` flag, set per store, never per query): a subject
 reached through a link that carries an inferred type check gets that check in a second block on

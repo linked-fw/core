@@ -319,7 +319,9 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
    * Read only these graphs: a graph IRI or a list of them, portable names included
    * (`graphs.allOntologies`, `graphs.default`, `graphs.union`, `graphs.registry`, from
    * `@_linked/core/ontologies/graphs`). The store expands the portable names. Without `.from()`
-   * a read uses the default graph. `.count()` and `.exists()` keep it.
+   * a read uses the shape's default read set (`static defaultReadGraphs`: `graphs.allShapes` for
+   * the shape shapes, `graphs.allOntologies` for the ontology term shapes), else the default
+   * graph. `.count()` and `.exists()` keep it.
    */
   from(graphs: ReadGraphsInput): SelectBuilder<S, R, Result> {
     return this.clone({graphs: normalizeReadGraphs(graphs)});

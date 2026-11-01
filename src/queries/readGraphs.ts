@@ -13,6 +13,7 @@
  * knows its registry and its own names for the default and union graphs.
  */
 import {isGraphIri} from './graphQuery.js';
+import {getShapeClass} from '../utils/ShapeClass.js';
 
 /** What `.from()` accepts: one graph name or several. */
 export type ReadGraphsInput = string | readonly string[];
@@ -45,4 +46,18 @@ export function parseReadGraphsJSON(value: unknown, envelope: string): string[] 
     throw new Error(`${source} must be an array of graph IRIs; got ${JSON.stringify(value)}.`);
   }
   return normalizeReadGraphs(value, source);
+}
+
+/**
+ * The graphs a read of `shapeId` covers without `.from()`, when its class declares them
+ * (`static defaultReadGraphs`, inherited by subclasses): the ontology term shapes read
+ * `graphs.allOntologies`, the shape shapes (`NodeShape`, `PropertyShape`) `graphs.allShapes`.
+ * `undefined` for every other shape (it reads the default graph, or its routed graphs). The
+ * declaration is checked like a `.from()` argument.
+ */
+export function defaultReadGraphsOf(shapeId: string | undefined): string[] | undefined {
+  if (!shapeId) return undefined;
+  const declared = (getShapeClass(shapeId) as {defaultReadGraphs?: unknown} | undefined)?.defaultReadGraphs;
+  if (declared === undefined || declared === null) return undefined;
+  return normalizeReadGraphs(declared, `The defaultReadGraphs of <${shapeId}>`);
 }

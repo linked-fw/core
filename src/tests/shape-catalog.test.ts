@@ -7,6 +7,7 @@
  * Shape catalogs: queries built, serialized, lowered, compiled and live-tracked against
  * a catalog that is never registered (docs/architecture/runtime-instances.md).
  */
+import {graphs} from '../ontologies/graphs.js';
 import {afterEach, describe, expect, test} from '@jest/globals';
 import '../utils/Package';
 import {
@@ -512,8 +513,8 @@ describe('review round 1', () => {
     LinkedStorage.setDefaultDataset(fallback as unknown as IDataset);
     LinkedStorage.setDatasetForShapes(pinned as unknown as IDataset, NodeShape);
     try {
-      await NodeShape.select((n: any) => [n.targetClass]);
-      await withShapeCatalog(catalog, () => NodeShape.select((n: any) => [n.targetClass]));
+      await NodeShape.select((n: any) => [n.targetClass]).from(graphs.default);
+      await withShapeCatalog(catalog, () => NodeShape.select((n: any) => [n.targetClass]).from(graphs.default));
       expect(pinned.selects).toHaveLength(2);
       expect(fallback.selects).toHaveLength(0);
       expect(pinned.selects[1]).toBe(pinned.selects[0]);
@@ -655,7 +656,7 @@ async function readCatalog(store: IDataset): Promise<ShapeCatalog> {
     .select((n: any) => [
       n.targetClass,
       n.properties.select((p: any) => [p.label, p.path, p.valueShape, p.nodeKind, p.maxCount, p.minCount]),
-    ]) as any).exec(store)) as any[];
+    ]).from(graphs.default) as any).exec(store)) as any[];
   const wires: NodeShapeWire[] = rows.map((row) => ({
     id: row.id,
     label: row.id.slice(row.id.lastIndexOf('/') + 1),
@@ -684,7 +685,8 @@ describeFuseki('core built-ins are synced; a catalog read back resolves them fro
   test('a sync into an empty store writes the built-ins; a second sync writes nothing; a catalog from the store resolves them from code', async () => {
     const first = await syncShapes(store as unknown as IDataset);
     for (const run of first) await run();
-    const stored = await (SelectBuilder.from(NodeShape).select([]) as any).exec(store);
+    // The default-graph sync (`syncShapes`): its shapes are read there, not from the shape graphs.
+    const stored = await (SelectBuilder.from(NodeShape).select([]).from(graphs.default) as any).exec(store);
     const storedIris = (stored as Array<{id: string}>).map((r) => r.id);
     for (const iri of builtInShapeIris()) expect(storedIris).toContain(iri);
 
@@ -695,7 +697,8 @@ describeFuseki('core built-ins are synced; a catalog read back resolves them fro
     // The rows are in the store, but inside the catalog the built-ins resolve from core's code.
     const read = (await (SelectBuilder.from(NodeShape)
       .select((n: any) => [n.properties.select((p: any) => [p.label])])
-      .for(SHAPE_IRI) as any).exec(store)) as {properties: Array<{label: string}>};
+      .for(SHAPE_IRI)
+      .from(graphs.default) as any).exec(store)) as {properties: Array<{label: string}>};
     expect(read.properties.map((p) => p.label).sort()).toEqual(['label', 'type']);
     withShapeCatalog(catalog, () => {
       expect(getAllShapeClasses().size).toBe(builtInShapeIris().length);

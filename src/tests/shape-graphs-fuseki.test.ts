@@ -176,6 +176,11 @@ describeFuseki('shape graphs on the inferring store', () => {
       }).exec(store)) ?? [];
       const ids = rows.map((r) => r.id);
       expect(ids).toEqual(expect.arrayContaining([SgPerson.shape.id, SgEmployee.shape.id, NodeShape.shape.id]));
+      // Without .from(), NodeShape reads the same graphs: its default read set is graphs.allShapes.
+      const byDefault = (await (QueryBuilder.from(NodeShape).select(['extends']) as unknown as {
+        exec: (ds: unknown) => Promise<Array<{id: string}>>;
+      }).exec(store)) ?? [];
+      expect(byDefault.map((r) => r.id).sort()).toEqual([...ids].sort());
 
       store.updates = 0;
       const second = await syncShapeGraphs(store, options);
