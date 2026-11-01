@@ -82,7 +82,11 @@ paging, IRI tie-break.
   failed, 2 skipped`; typecheck clean. An earlier run while another agent loaded the machine had
   six live suites time out (5 s); they pass alone (`38 passed`) and in this run.
 - `npx linked build`: `✔ Build successful`.
-CN_PLACEHOLDER
+- CN main checkout, core landed and built there: `npm run typecheck:gate`: `No new type errors.
+  0 pre-existing errors still in the baseline.` `CN_TEST_PORT=4597 npm run test:feature --
+  data,apps,ontologies --tier smoke`: typecheck:gate PASS, `unit (vitest, 137 files) PASS`
+  (`1433 passed | 2 skipped`), gateway package PASS (`66 passed`), `playwright (11 specs, smoke)
+  PASS` (`12 passed`), total PASS.
 
 ### Deviations
 
