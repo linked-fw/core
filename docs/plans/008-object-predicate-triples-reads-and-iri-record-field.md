@@ -4,7 +4,7 @@ summary: >
   and by predicate (`TriplesBuilder.withPredicate`, `.exists()` as the ask), and an IRI-valued
   graph-record field, `attributedTo` (`prov:wasAttributedTo`) on `NamedGraph`.
 packages: [core]
-status: Implementation
+status: Review
 ---
 
 # 008 — Object and predicate triples reads; an IRI-valued graph-record field
@@ -268,3 +268,47 @@ sequential.
   `Test Suites: 4 skipped, 163 passed, 163 of 167 total`, `Tests: 122 skipped, 3159 passed, 3281
   total`, then `tsc -p tsconfig-tests.json` clean. CN's `typecheck:gate` runs from CN's main
   checkout once the work is in core `dev` there.
+
+## Review
+
+An independent review of `759d1bf..HEAD` (type check clean, unit suites passing) found:
+
+1. **High.** The builders checked parts only when present, so `forNode({id: undefined}).from(g)`,
+   `toNode(undefined).from(g)` and `.withPredicate({id: undefined})` became a read of every triple
+   of `g` (the last also dropped the earlier predicate): a loosened scope.
+2. **Medium.** `attributedTo` could not be cleared once set (`null` and `[]` refused).
+3. Low: the feature check ran before the method check in `resolveTriples` (a target with neither
+   got the feature message); docs said "a predicate is not read across a whole store" though
+   `.from(graphs.union)` does exactly that (as `readContent(graphs.union)` does); stale comments
+   naming only subject and graph reads (`queryDispatch.ts`, `sparql/index.ts`, README); dead
+   `checkTriplesSubject`; inline `{id: string}` types (kept: `NamedGraph.name` uses the same form).
+4. Low, `LinkedStorage` (`core-tx`'s area): whether a dataset without `triplesPattern` is refused
+   depends on dataset order, since the join stops at the limit. A follow-up for that area.
+
+## Iteration 1 — Ideation
+
+### Gap 1 of 3: a missing term widens the read
+Check each term eagerly in the builders (`checkTriplesTerm` on every static and on
+`.withPredicate`), so an absent id throws at build time as `forNode` did before. Chosen: it keeps
+the parts check for what is genuinely optional (graphs before `.from()`).
+
+### Gap 2 of 3: clearing a record field
+A. `null` clears any field (an update deletes its values and writes none; a create skips it).
+B. Only node fields take `null`. Chosen: A, one rule for every field and no new code path (the
+update already deletes per predicate); typed `| null` on `attributedTo`, the field a host clears.
+
+### Gap 3 of 3: stale docs and the low items
+Reword the predicate-read rule to "a predicate read names the graphs it reads"; method check
+first; drop `checkTriplesSubject`; update the stale comments.
+
+## Iteration 1 — Plan
+
+`TriplesBuilder.ts` (eager checks), `graphRecords.ts` (`null`), `NamedGraph.ts` (typing, doc),
+`queryDispatch.ts` (order, message), `triplesQuery.ts` (dead export, wording), `sparql/index.ts`,
+README, `ontologies.md`, changeset; tests for the three widened reads and for `null`.
+
+## Iteration 1 — Phases
+
+### Phase 5: review fixes
+Validation: the unit suites (`Tests: 21 skipped, 103 passed, 124 total` for triples-read,
+graph-query, fan-out without Fuseki), the whole suite with the live suites, type check.

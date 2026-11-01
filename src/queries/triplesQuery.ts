@@ -36,8 +36,8 @@ import {normalizeReadGraphs, parseReadGraphsJSON} from './readGraphs.js';
  *   read) or as the `object` (the triples that point at it): in `graphs` when given, else where a
  *   shapeless ask of it would look (the default graph, or every graph the store's routing knows).
  * - Without a node the read needs `graphs`: every triple of them (a graph read), or those with the
- *   `predicate` (a predicate read). A read of every triple of a store, or of one predicate across a
- *   whole store, is not a query this API sends.
+ *   `predicate` (a predicate read). A read that names no node and no graphs (every triple of a
+ *   store, or one predicate wherever it is) is not a query this API sends.
  *
  * A read that fixes the `predicate` or the `object` needs the `triplesPattern` query feature
  * ({@link triplesQueryFeatures}): a dataset built before them would drop the fields and answer a
@@ -108,11 +108,6 @@ export function checkTriplesTerm(position: 'subject' | 'predicate' | 'object', v
   return value;
 }
 
-/** The subject of a subject read (see {@link checkTriplesTerm}). */
-export function checkTriplesSubject(value: unknown): string {
-  return checkTriplesTerm('subject', value);
-}
-
 /**
  * The query features a triples read needs (`IDataset.supports`): `triplesPattern` when it fixes the
  * predicate or the object. A subject read and a graph read are the baseline.
@@ -148,7 +143,7 @@ export function triplesQueryOf(parts: TriplesQueryParts): TriplesQuery {
   if (query.subject === undefined && query.object === undefined && query.graphs === undefined) {
     fail(
       query.predicate !== undefined
-        ? 'a predicate read needs graphs (.from(graphs)); a predicate is not read across a whole store.'
+        ? 'a predicate read needs graphs (.from(graphs)): it names the graphs it reads.'
         : 'it needs a node (a subject or an object), graphs or both; a read of every triple of a store is not sent.',
     );
   }

@@ -596,6 +596,18 @@ describe('SparqlDataset.graphQuery', () => {
       expect(ds.updates).toEqual([]);
     });
 
+    test('null clears it: the update deletes the value and writes none; a create leaves it out', async () => {
+      const ds = new RecordingSparql(true);
+      await ShapesGraph.update(SHAPES).set({attributedTo: null}).exec(ds);
+      const field = `GRAPH <${REG}> { <${SHAPES}> <${PROV}> ?v0 }`;
+      expect(ds.updates).toHaveLength(1);
+      expect(ds.updates[0]).toContain(`DELETE { ${field} }`);
+      expect(ds.updates[0]).not.toContain('INSERT');
+      const created = new RecordingSparql(false);
+      await ShapesGraph.create({id: SHAPES, package: 'p', attributedTo: null}).exec(created);
+      expect(created.updates[0]).not.toContain(PROV);
+    });
+
     test('the shape reads it as {id}: a select of attributedTo', () => {
       const sparql = selectToSparql(lower(ShapesGraph.select((g) => [g.package, g.contentHash, g.attributedTo]) as any) as any);
       expect(sparql).toContain('PREFIX prov: <http://www.w3.org/ns/prov#>');

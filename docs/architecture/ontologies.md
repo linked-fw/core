@@ -330,6 +330,7 @@ caller passes; for a patch, of its delete text, a newline and its insert text) a
 who the content is attributed to, e.g. a host's system actor), a node: the caller passes `{id}`
 and the record holds the IRI, so a mark rides in the same query as the content
 (`ShapesGraph.update(g).set({attributedTo: {id}}).replaceContent(c)`) and reads back as `{id}`.
+A field set to `null` in an update is cleared.
 The calls are server-only (a browser call throws; the import does not), and a
 store parses each body before it enters a request. A receiving process checks a graph query that
 arrived as JSON with `parseGraphQuery`.

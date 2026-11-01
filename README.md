@@ -1076,7 +1076,7 @@ const types = staged.filter((t) => t.predicate.id === rdf.type.id).map((t) => t.
 // The triples that point at a node (as their object), in the same graphs or the same fallback.
 const refs = await TriplesBuilder.toNode({id: term}).from(graphs.allOntologies).exec(dataset);
 
-// The triples of one predicate: it needs .from(), a predicate is not read across a whole store.
+// The triples of one predicate: it needs .from(), a predicate read names the graphs it reads.
 // .withPredicate(p) also narrows a node read; .exists() asks whether the read finds any triple.
 const used = await TriplesBuilder.withPredicate({id: property}).from(dataGraphs).exists(dataset);
 ```
@@ -1094,16 +1094,16 @@ A triples read is plain data (`toTriplesQuery()`, `parseTriplesQuery()` at a wir
 the optional `IDataset.triplesQuery`. `SparqlDataset` answers it with one `SELECT`; a dataset
 without the method is refused. A read that fixes the predicate or the object (`toNode`,
 `withPredicate`) needs the `'triplesPattern'` feature in the dataset's `supports`: a dataset that
-predates it is refused rather than sent fields it would drop. `LinkedStorage` sends a graph read where its record class's graph
-queries go, and a subject read (no shape, no routing key) to every dataset it knows, joining the
-answers up to the limit, as it asks a shapeless ask (an object read too). A router forwards it as
-a read.
+predates it is refused rather than sent fields it would drop. `LinkedStorage` sends a graph read
+where its record class's graph queries go, and any other read (no shape, no routing key) to every
+dataset it knows, joining the answers up to the limit, as it asks a shapeless ask; `.exists()`
+stops at the first dataset that answers a triple. A router forwards it as a read.
 
 #### Shapeless reads across datasets
 
 A read with no shape has no routing key. `LinkedStorage` therefore sends a shapeless read that
-names no dataset to every dataset it knows: a subject read (`TriplesBuilder.forNode({id})`) is read
-in each and the answers joined, a shapeless ask (`Shape.exists(iri)` on the base class,
+names no dataset to every dataset it knows: a node read (`TriplesBuilder.forNode({id})`,
+`toNode({id})`) or a predicate read is read in each and the answers joined, a shapeless ask (`Shape.exists(iri)` on the base class,
 `AskBuilder.forNode(iri)`) asks each in turn until one answers `true`. The answer is right, but it
 costs a query per dataset, so with more than one dataset configured it logs a notice
 (`console.warn`, `[linked] … sent it to all 2 datasets it knows …`) once per call site, naming the
@@ -1117,7 +1117,7 @@ await TriplesBuilder.forNode({id}).from(importGraph);      // read only these gr
 ```
 
 There is no notice with one dataset, with an explicit dataset, for a shaped read (it routes by its
-shape), or for a subject read with `.from()` graphs, which still reads every dataset, in those
+shape), or for a triples read with `.from()` graphs, which still reads every dataset, in those
 graphs only. The call site is the first stack frame outside core. A builder awaited without
 `.exec()` (`await TriplesBuilder.forNode({id})`) runs from a microtask with its caller off the
 stack, so all such reads share one notice per kind of read.

@@ -185,7 +185,7 @@ export class NamedGraph extends GraphRecordBase {
   /** Records live in the graph registry; reads of this shape and its subclasses go there. */
   static storedInGraph: string = graphs.registry;
   /** The own record fields of this class, for typing the statics only. */
-  declare static readonly recordFields?: {sources?: string | string[]; attributedTo?: {id: string}};
+  declare static readonly recordFields?: {sources?: string | string[]; attributedTo?: {id: string} | null};
 
   /** The graph's name (its IRI; the record's subject repeats it). */
   @objectProperty({path: sd.name, maxCount: 1, nodeKind: shacl.IRI})
@@ -220,7 +220,8 @@ export class NamedGraph extends GraphRecordBase {
   /**
    * Who the graph's content is attributed to (`prov:wasAttributedTo`, an agent IRI), for instance a
    * host's system actor marking the graphs it writes. Set it with the content, in the same query:
-   * `ShapesGraph.update(g).set({attributedTo: {id}}).replaceContent(c)`.
+   * `ShapesGraph.update(g).set({attributedTo: {id}}).replaceContent(c)`; `set({attributedTo: null})`
+   * clears it.
    */
   @objectProperty({path: prov.wasAttributedTo, maxCount: 1, nodeKind: shacl.IRI})
   get attributedTo(): {id: string} {
@@ -333,7 +334,7 @@ export class OntologyGraph extends NamedGraph {
     package: string;
     version?: string;
     sources?: string | string[];
-    attributedTo?: {id: string};
+    attributedTo?: {id: string} | null;
     feedsHierarchy?: boolean;
     packageHashes?: string | string[];
   };
@@ -377,7 +378,7 @@ export class ShapesGraph extends NamedGraph {
     package: string;
     version?: string;
     sources?: string | string[];
-    attributedTo?: {id: string};
+    attributedTo?: {id: string} | null;
     packageHashes?: string | string[];
   };
 
@@ -425,7 +426,7 @@ export class ComponentsGraph extends NamedGraph {
     version?: string;
     commit?: string;
     sources?: string | string[];
-    attributedTo?: {id: string};
+    attributedTo?: {id: string} | null;
   };
 
   /** The npm name of the package. */

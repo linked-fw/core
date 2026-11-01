@@ -203,14 +203,14 @@ export async function resolveTriples(
   target: TriplesTarget | undefined,
   query: TriplesQuery,
 ): Promise<Triple[]> {
-  assertFeaturesSupported(target as FeatureTarget, triplesQueryFeatures(query));
   if (typeof target?.triplesQuery !== 'function') {
     throw new Error(
-      'This dataset does not implement IDataset.triplesQuery, so a triples read (a graph read ' +
-        'or a subject read) cannot be answered. SparqlDataset implements it; a router forwards it ' +
+      'This dataset does not implement IDataset.triplesQuery, so a triples read (a graph, node or ' +
+        'predicate read) cannot be answered. SparqlDataset implements it; a router forwards it ' +
         'to the dataset that holds the data.',
     );
   }
+  assertFeaturesSupported(target as FeatureTarget, triplesQueryFeatures(query));
   const answer = await target.triplesQuery(query);
   if (!Array.isArray(answer)) {
     throw new Error(

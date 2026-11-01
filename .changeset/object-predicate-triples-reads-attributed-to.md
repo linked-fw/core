@@ -14,6 +14,7 @@ Triples reads by object and by predicate, and an IRI-valued graph-record field.
   refused before they are asked. DSL-JSON wire version 1.4.
 - `NamedGraph.attributedTo` (`prov:wasAttributedTo`, an IRI, maxCount 1), on every graph-record
   class: `ShapesGraph.update(g).set({attributedTo: {id}}).replaceContent(c)` writes the mark in the
-  same graph query as the content, and `select(g => [g.attributedTo])` reads it as `{id}`. A record
+  same graph query as the content, `set({attributedTo: null})` clears it, and
+  `select(g => [g.attributedTo])` reads it as `{id}`. A record field set to `null` is cleared. A record
   field can now be a node (`GraphRecordField` with `nodeKind: 'iri'`, values `{id}`); new terms
   module `@_linked/core/ontologies/prov`.

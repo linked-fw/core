@@ -348,6 +348,12 @@ describe('object reads, predicate reads and exists()', () => {
     expect(() => TriplesBuilder.toNode({id: '_:b0'})).toThrow(/object must be an absolute IRI/);
     expect(() => TriplesBuilder.toNode({id: 'nope'})).toThrow(/object must be an absolute IRI/);
     expect(() => TriplesBuilder.withPredicate({id: 'nope'})).toThrow(/predicate must be an absolute IRI/);
+    // A missing node or predicate is refused at build time, never read as a whole graph.
+    expect(() => TriplesBuilder.forNode({id: undefined as any}).from(G1)).toThrow(/subject must be an absolute IRI/);
+    expect(() => TriplesBuilder.toNode(undefined as any)).toThrow(/object must be an absolute IRI/);
+    expect(() => TriplesBuilder.withPredicate({id: P}).from(G1).withPredicate({id: undefined as any})).toThrow(
+      /predicate must be an absolute IRI/,
+    );
     const store = new StubStore();
     await expect(TriplesBuilder.withPredicate({id: P}).exec(store)).rejects.toThrow(/a predicate read needs graphs/);
     await expect(TriplesBuilder.withPredicate({id: P}).exists(store)).rejects.toThrow(/a predicate read needs graphs/);

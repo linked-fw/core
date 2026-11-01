@@ -24,7 +24,13 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import type {NodeReferenceValue} from './QueryFactory.js';
 import {dispatchTriplesQuery} from './queryDispatch.js';
 import type {ReadGraphsInput} from './readGraphs.js';
-import {triplesQueryOf, triplesQueryPartsOf, type Triple, type TriplesQuery} from './triplesQuery.js';
+import {
+  checkTriplesTerm,
+  triplesQueryOf,
+  triplesQueryPartsOf,
+  type Triple,
+  type TriplesQuery,
+} from './triplesQuery.js';
 import {brandLinkedClass} from '../utils/linkedError.js';
 
 export class TriplesBuilder implements PromiseLike<Triple[]> {
@@ -38,7 +44,7 @@ export class TriplesBuilder implements PromiseLike<Triple[]> {
    * every dataset it knows (as it asks a shapeless ask) and joins the answers.
    */
   static forNode(node: NodeReferenceValue): TriplesBuilder {
-    return new TriplesBuilder(triplesQueryPartsOf({subject: node?.id}));
+    return new TriplesBuilder(triplesQueryPartsOf({subject: checkTriplesTerm('subject', node?.id)}));
   }
 
   /**
@@ -47,15 +53,15 @@ export class TriplesBuilder implements PromiseLike<Triple[]> {
    * {@link forNode} does. A node only: a literal object is not read this way.
    */
   static toNode(node: NodeReferenceValue): TriplesBuilder {
-    return new TriplesBuilder(triplesQueryPartsOf({object: node?.id}));
+    return new TriplesBuilder(triplesQueryPartsOf({object: checkTriplesTerm('object', node?.id)}));
   }
 
   /**
    * Read the triples with this predicate, in the graphs of `.from()`. It needs them: a predicate
-   * is not read across a whole store, so a read sent without `.from()` is refused.
+   * read names the graphs it reads, so a read sent without `.from()` is refused.
    */
   static withPredicate(predicate: NodeReferenceValue): TriplesBuilder {
-    return new TriplesBuilder(triplesQueryPartsOf({predicate: predicate?.id}));
+    return new TriplesBuilder(triplesQueryPartsOf({predicate: checkTriplesTerm('predicate', predicate?.id)}));
   }
 
   /** @internal The builder of a checked query (`NamedGraph.readContent`). */
@@ -76,7 +82,7 @@ export class TriplesBuilder implements PromiseLike<Triple[]> {
 
   /** Narrow this read to the triples with this predicate; returns a new builder. */
   withPredicate(predicate: NodeReferenceValue): TriplesBuilder {
-    return new TriplesBuilder(triplesQueryPartsOf({...this.query, predicate: predicate?.id}));
+    return new TriplesBuilder(triplesQueryPartsOf({...this.query, predicate: checkTriplesTerm('predicate', predicate?.id)}));
   }
 
   /** At most `n` triples (no order is implied); returns a new builder. */

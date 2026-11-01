@@ -48,7 +48,7 @@ export {
   deleteWherePlanToSparql,
 } from './algebraToString.js';
 
-// Triples reads (graph and subject reads)
+// Triples reads (graph, node and predicate reads)
 export {triplesToAlgebra, triplesToSparql, mapSparqlTriplesResult} from './triplesToSparql.js';
 export type {TriplesGraph, TriplesPlan} from './triplesToSparql.js';
 

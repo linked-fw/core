@@ -143,6 +143,11 @@ export function graphRecordFieldValues(
         ).join(', ')}.`,
       );
     }
+    // `null` clears the field: an update deletes its values and writes none; a create skips it.
+    if (raw === null) {
+      values.set(field.path, []);
+      continue;
+    }
     const list = Array.isArray(raw) ? raw : [raw];
     if (Array.isArray(raw) && !field.many) {
       throw new Error(`The record field "${name}" takes one value, not a list.`);
