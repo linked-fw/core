@@ -1,5 +1,5 @@
 import {Shape, createShapeTarget, type ShapeConstructor} from '../shapes/Shape.js';
-import {getPropertyShapes, getUniquePropertyShapes, nodeShapeEquals} from '../shapes/nodeShapeData.js';
+import {getPropertyShapes, getUniquePropertyShapes, nodeShapeEquals, nodeTypePropertyShape} from '../shapes/nodeShapeData.js';
 import type {NodeShapeData, PropertyShapeData} from '../shapes/SHACL.js';
 import type {RawSelectInput} from './IRDesugar.js';
 import {ShapeSet} from '../collections/ShapeSet.js';
@@ -819,6 +819,27 @@ function toExpressionNode(qbo: QueryBuilderObject): ExpressionNode {
   return tracedPropertyExpression(segmentIds);
 }
 
+/** `node = value` for a relation (single- or multi-valued) or the subject itself. */
+function nodeEquals(
+  qbo: QueryBuilderObject,
+  otherValue: NodeReferenceValue | QShape<any> | PendingQueryContext,
+): ExpressionNode {
+  const self = toExpressionNode(qbo);
+  // An unresolved query-context reference (`getQueryContext('user')` before it
+  // is set) carries no `.id` yet — keep it as a `{@ctx}` ref, resolved at lower.
+  if (isLinkedInstance(otherValue, PendingQueryContext)) {
+    return self.eq(otherValue as any);
+  }
+  //validate the value is formed correctly
+  if (!otherValue?.id) {
+    throw Error(`Invalid value for .equals(). ${JSON.stringify(otherValue)}`);
+  }
+  const arg = isLinkedInstance(otherValue, QueryBuilderObject)
+    ? toExpressionNode(otherValue)
+    : otherValue;
+  return self.eq(arg as any);
+}
+
 /** Walk up the QueryBuilderObject chain to find a query context *name* (for `{@ctx}`). */
 function findContextName(qbo: QueryBuilderObject): string | undefined {
   let current: QueryBuilderObject | undefined = qbo;
@@ -1128,6 +1149,29 @@ export class QueryShapeSet<
     return result;
   }
 
+  /**
+   * The types of the set's members (`p.friends.$type()`): see {@link QueryShape.$type}.
+   */
+  $type<Self>(this: Self): QShapeSet<Shape, Self, '$type'> {
+    return QueryShapeSet.create(
+      new ShapeSet([createShapeTarget(Shape)]),
+      nodeTypePropertyShape(),
+      this as unknown as QueryShapeSet<any>,
+    ) as unknown as QShapeSet<Shape, Self, '$type'>;
+  }
+
+  /**
+   * Some member of the set is `value`: `t.$type().equals({id: C})`, `p.friends.equals({id})`. An
+   * expression on the multi-valued path, as `p.nickNames.equals('x')` is: in a where it holds when
+   * some value matches (DSL-JSON's plural path, `{"friends": {"@id": …}}`), and it also works
+   * inside another set's `some`/`every`/`none` callback. For "no member is `value`" use
+   * `none((m) => m.equals(value))`, not `.equals(value).not()` (which holds when some member is
+   * another node).
+   */
+  equals(value: NodeReferenceValue | QShape<any> | PendingQueryContext): ExpressionNode {
+    return nodeEquals(this, value);
+  }
+
   //countable?, resultKey?: string
   size(): SetSize<this> {
     //when count() is called we want to count the number of items in the entire query path
@@ -1308,20 +1352,28 @@ export class QueryShape<
   }
 
   equals(otherValue: NodeReferenceValue | QShape<any> | PendingQueryContext): ExpressionNode {
-    const self = toExpressionNode(this);
-    // An unresolved query-context reference (`getQueryContext('user')` before it
-    // is set) carries no `.id` yet — keep it as a `{@ctx}` ref, resolved at lower.
-    if (isLinkedInstance(otherValue, PendingQueryContext)) {
-      return self.eq(otherValue as any);
-    }
-    //validate the value is formed correctly
-    if(!otherValue.id) {
-      throw Error(`Invalid value for .equals(). ${JSON.stringify(otherValue)}`);
-    }
-    const arg = isLinkedInstance(otherValue, QueryBuilderObject)
-      ? toExpressionNode(otherValue)
-      : otherValue;
-    return self.eq(arg as any);
+    return nodeEquals(this, otherValue);
+  }
+
+  /**
+   * The node's types: its `rdf:type` values, IRI nodes (`{id}`), multi-valued. `$`-prefixed members
+   * are facts about the node, not shape fields, so no property of the shape can shadow them.
+   *
+   * - a field: `Thing.select((t) => [t.name, t.$type()])` gives `{id, name, $type: [{id}, …]}`;
+   * - a group key: `.select((t) => ({kind: t.$type(), n: Expr.count()})).groupBy('kind')` makes one
+   *   group per type, so a node with two types is in two groups (the counts add up to more than
+   *   the number of nodes);
+   * - a filter: `.where((t) => t.$type().equals({id: C}))` (some type is C), `.some(…)`, `.none(…)`;
+   * - a sort key, and on nested paths (`p.bestFriend.$type()`).
+   *
+   * The types are what the store answers for `rdf:type`: on a store that infers classes (CN's
+   * Fuseki, through `rdfs:subClassOf`) the stored and the inferred types.
+   */
+  $type<Self>(this: Self): QShapeSet<Shape, Self, '$type'> {
+    return QueryBuilderObject.generatePathValue(
+      nodeTypePropertyShape(),
+      this as unknown as QueryShape<any>,
+    ) as unknown as QShapeSet<Shape, Self, '$type'>;
   }
 
   /**

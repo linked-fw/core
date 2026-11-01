@@ -269,6 +269,7 @@ const propertyShapeCache = new RegistryCache<string, PropertyShapeData>();
  * still resolve correctly afterwards.
  */
 export function findPropertyShapeById(propertyId: string): PropertyShapeData | undefined {
+  if (propertyId === NODE_TYPE_PROPERTY_ID) return nodeTypePropertyShape();
   const cache = propertyShapeCache.get();
   const cached = cache.get(propertyId);
   if (cached) return cached;
@@ -324,6 +325,57 @@ export function getPropertyShape(
     if (inherited) return inherited;
   }
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Node metadata in the select DSL (`$type()`)
+// ---------------------------------------------------------------------------
+
+/** The label `$type()` answers to on every shape: `$`-prefixed members are facts about the node. */
+export const NODE_TYPE_LABEL = '$type';
+
+/** The IRI of the property shape behind `$type()`, under core's root `Shape`. */
+export const NODE_TYPE_PROPERTY_ID = `${ROOT_SHAPE_IRI}/${NODE_TYPE_LABEL}`;
+
+// Derived from the root `Shape`'s registration, so cached on the same terms as every
+// registry-derived lookup (a re-registered root, or a reset registry, gets a fresh copy).
+const nodeTypePropertyCache = new RegistryCache<'nodeType', PropertyShapeData>();
+
+/**
+ * The property shape behind `$type()`: a node's `rdf:type` values, IRI nodes on the root `Shape`,
+ * multi-valued. A copy of the root `Shape`'s own `type` property under its own IRI and label, so
+ * no shape can shadow it (`NodeShape.type`, or a domain shape's `type` meaning something else) and
+ * DSL-JSON writes it as `$type` on every shape.
+ *
+ * Deliberately attached to no node shape: it is not one of a shape's properties (`selectAll`, the
+ * shape's property list and shape sync never see it). `findPropertyShapeById` and
+ * `getQueryPropertyShape` find it.
+ */
+export function nodeTypePropertyShape(): PropertyShapeData {
+  const cache = nodeTypePropertyCache.get();
+  const cached = cache.get('nodeType');
+  if (cached) return cached;
+  const root = getAllNodeShapes().get(ROOT_SHAPE_IRI);
+  const rootType = root ? ownPropertyShapes(root).find((ps) => ps.label === 'type') : undefined;
+  if (!rootType) {
+    throw new Error(`$type(): core's root Shape (${ROOT_SHAPE_IRI}) and its rdf:type property are not registered.`);
+  }
+  const {id: _id, label: _label, parentNodeShape: _parent, ...rest} = rootType;
+  const nodeType: PropertyShapeData = {...rest, id: NODE_TYPE_PROPERTY_ID, label: NODE_TYPE_LABEL};
+  cache.set('nodeType', nodeType);
+  return nodeType;
+}
+
+/**
+ * {@link getPropertyShape} for a query path: `$type` is the node's types on every shape, never a
+ * property of the shape. Query-side only (paths, fields, sort keys, where); a mutation never
+ * resolves `$type`.
+ */
+export function getQueryPropertyShape(
+  nodeShape: NodeShapeData,
+  label: string,
+): PropertyShapeData | undefined {
+  return label === NODE_TYPE_LABEL ? nodeTypePropertyShape() : getPropertyShape(nodeShape, label);
 }
 
 /** Two node shapes are equal when they share the same IRI. */

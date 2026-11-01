@@ -728,10 +728,24 @@ const connectValueShape = <
  */
 const RESERVED_PROPERTY_LABELS = new Set(['and', 'or', 'not']);
 
+/**
+ * The node-metadata names (`$type()`, `$graph()`): in the DSL, a label select and a DSL-JSON path
+ * they always mean the node's own types or graphs, so a property with one of these labels has no
+ * way in at all.
+ */
+const NODE_METADATA_LABELS = new Set(['$type', '$graph']);
+
 export function registerPropertyShape(
   shape: NodeShapeData,
   propertyShape: PropertyShapeData,
 ) {
+  if (NODE_METADATA_LABELS.has(propertyShape.label)) {
+    throw new Error(
+      `Property label '${propertyShape.label}' is reserved: \`${propertyShape.label}\` is node metadata ` +
+        `in queries (\`$\`-prefixed names are facts about the node, not shape fields). Rename the ` +
+        `property; its RDF predicate can stay the same.`,
+    );
+  }
   if (RESERVED_PROPERTY_LABELS.has(propertyShape.label)) {
     throw new Error(
       `Property label '${propertyShape.label}' is reserved (a DSL-JSON boolean combinator) ` +

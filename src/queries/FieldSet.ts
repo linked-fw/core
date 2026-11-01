@@ -1,5 +1,5 @@
 import type {NodeShapeData, PropertyShapeData} from '../shapes/SHACL.js';
-import {getUniquePropertyShapes, getPropertyShape} from '../shapes/nodeShapeData.js';
+import {getUniquePropertyShapes, getQueryPropertyShape} from '../shapes/nodeShapeData.js';
 import type {Shape, ShapeConstructor} from '../shapes/Shape.js';
 import {PropertyPath, walkPropertyPath} from './PropertyPath.js';
 import {
@@ -731,7 +731,7 @@ export class FieldSet<R = any, Source = any> {
       const nested = FieldSet.nestedShapeOf(path) ?? shape;
       entry.innerOrderBy = opts.orderBy.map((e) => {
         const label = Object.keys(e)[0];
-        const ps = getPropertyShape(nested, label);
+        const ps = getQueryPropertyShape(nested, label);
         return {propertyShapeId: ps?.id ?? label, direction: Object.values(e)[0]};
       });
     }
@@ -1071,7 +1071,7 @@ export class FieldSet<R = any, Source = any> {
     let current: NodeShapeData | undefined = rootShape;
     for (const seg of segments) {
       const label = FieldSet.labelOfId(seg.id);
-      const natural = current ? getPropertyShape(current, label) : undefined;
+      const natural = current ? getQueryPropertyShape(current, label) : undefined;
       if (!natural || natural.id !== seg.id) {
         // A cast narrowed the context to the segment's owner shape.
         const ownerId = seg.id.slice(0, seg.id.lastIndexOf('/'));
@@ -1097,7 +1097,7 @@ export class FieldSet<R = any, Source = any> {
         current = FieldSet.shapeByLabel(cast[1]) ?? current;
         continue;
       }
-      const ps = current ? getPropertyShape(current, token) : undefined;
+      const ps = current ? getQueryPropertyShape(current, token) : undefined;
       if (!ps) {
         throw new Error(
           `Property '${token}' not found on shape '${current?.label || current?.id}' while resolving path '${path}'`,

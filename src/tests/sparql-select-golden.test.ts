@@ -17,6 +17,7 @@ import {captureQuery} from '../test-helpers/query-capture-store';
 import {selectToSparql} from '../sparql/irToAlgebra';
 import {setQueryContext} from '../queries/QueryContext';
 import {Person} from '../test-helpers/query-fixtures';
+import {Expr} from '../expressions/Expr';
 
 import '../ontologies/rdf';
 import '../ontologies/xsd';
@@ -1591,5 +1592,56 @@ describe('SPARQL golden — expression WHERE filters', () => {
     // Expression projection may be inlined in SELECT or use BIND
     expect(sparql).toContain('STRLEN');
     expect(sparql).toContain('FILTER');
+  });
+});
+
+describe('SPARQL golden — $type(), the node\'s rdf:type values', () => {
+  test('as a field next to a literal', async () => {
+    const sparql = await goldenSelect(() => Person.select((p) => [p.name, p.$type()]) as never);
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name ?a0__type
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  OPTIONAL {
+    ?a0 rdf:type ?a0__type .
+  }
+}`);
+  });
+
+  test('as a group key, counting the members of each type', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => ({kind: p.$type(), n: Expr.count()})).groupBy('kind') as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT ?a0__type (COUNT(DISTINCT ?a0) AS ?a2)
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 rdf:type ?a0__type .
+  }
+}
+GROUP BY ?a0__type`);
+  });
+
+  test('in a where: equals holds when some type matches', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.name).where((p) => p.$type().equals({id: ET})) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  ?a0 rdf:type ?a0__type .
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  FILTER(?a0__type = <${ET}>)
+}`);
   });
 });

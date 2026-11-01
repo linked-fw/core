@@ -170,7 +170,12 @@ export type {
 // Live-query dependency helpers — what a query reads and a mutation writes, as predicates
 export {queryDependencies, mutationEffects} from './queries/queryDependencies.js';
 export type {QueryDependencies, MutationEffects} from './queries/queryDependencies.js';
-export {findPropertyShapeById} from './shapes/nodeShapeData.js';
+export {
+  findPropertyShapeById,
+  nodeTypePropertyShape,
+  NODE_TYPE_LABEL,
+  NODE_TYPE_PROPERTY_ID,
+} from './shapes/nodeShapeData.js';
 
 // Live queries — see documentation/live-queries.md
 export {LiveQueryStore, getLiveQueryStore, resetLiveQueryStore, publishChange, invalidate} from './live/LiveQueryStore.js';

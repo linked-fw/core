@@ -19,6 +19,10 @@
  * so a DSL method added later cannot drift out of it unnoticed.
  */
 export const RESERVED_QUERY_DSL_NAMES: ReadonlySet<string> = new Set([
+  // node metadata (`$`-prefixed: facts about the node, not shape fields); `$graph` is reserved
+  // ahead of its method
+  '$graph',
+  '$type',
   // prototype surface of QueryShape / QueryShapeSet (and their base)
   'add',
   'as',

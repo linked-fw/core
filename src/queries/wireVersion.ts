@@ -9,8 +9,9 @@
  *
  * 1.5: `txId` on every query envelope, the store transaction it runs in (see
  * `queries/transactionQuery.ts`).
+ * 1.6: the `$type` path segment, a node's `rdf:type` values (`$type()` in the select DSL).
  */
-export const WIRE_VERSION = '1.5';
+export const WIRE_VERSION = '1.6';
 
 /**
  * Validate an incoming envelope's `v`. A missing `v` is tolerated (pre-versioned /

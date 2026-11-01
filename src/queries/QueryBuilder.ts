@@ -1,5 +1,5 @@
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
-import {getUniquePropertyShapes} from '../shapes/nodeShapeData.js';
+import {getUniquePropertyShapes, NODE_TYPE_LABEL} from '../shapes/nodeShapeData.js';
 import {resolveShape} from './resolveShape.js';
 import {
   type QueryBuildFn,
@@ -244,13 +244,14 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     if (isLinkedInstance(fnOrLabelsOrFieldSet, FieldSet)) {
       const labels = fnOrLabelsOrFieldSet.labels();
       const selectFn = ((p: any) =>
-        labels.map((label) => p[label])) as unknown as QueryBuildFn<S, any>;
+        labels.map((label) => (label === NODE_TYPE_LABEL ? p.$type() : p[label]))) as unknown as QueryBuildFn<S, any>;
       return this.clone<NewR, any>({selectFn, selectAllLabels: undefined, fieldSet: fnOrLabelsOrFieldSet});
     }
     if (Array.isArray(fnOrLabelsOrFieldSet)) {
       const labels = fnOrLabelsOrFieldSet;
+      // `$type` is a method on the proxy (the node's types), not a property label.
       const selectFn = ((p: any) =>
-        labels.map((label) => p[label])) as unknown as QueryBuildFn<S, any>;
+        labels.map((label) => (label === NODE_TYPE_LABEL ? p.$type() : p[label]))) as unknown as QueryBuildFn<S, any>;
       return this.clone<NewR, any>({selectFn, selectAllLabels: undefined, fieldSet: undefined});
     }
     return this.clone<NewR, any>({selectFn: fnOrLabelsOrFieldSet as any, selectAllLabels: undefined, fieldSet: undefined});

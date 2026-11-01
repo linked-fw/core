@@ -31,7 +31,41 @@ export type SpecFixture = {
   sparqlIncludes: string[];
 };
 
+const ROBOT = 'https://ex.org/Robot';
+
 export const specFixtures: SpecFixture[] = [
+  {
+    doc: 'Paths — $type as a field and on a nested path',
+    json: () => ({v: '1.6', shape: Person.shape.id, fields: ['name', '$type', 'bestFriend.$type']}),
+    sparqlIncludes: ['?a0 rdf:type ?a0__type', '?a1 rdf:type ?a1__type'],
+  },
+  {
+    doc: 'Paths — $type as a group key',
+    json: () => ({
+      v: '1.6',
+      op: 'select',
+      requires: ['groupBy'],
+      shape: Person.shape.id,
+      fields: [{$type: {customKey: 'kind'}}, {customKey: 'n', value: ['count', {'@path': ''}]}],
+      groupBy: ['kind'],
+    }),
+    sparqlIncludes: ['GROUP BY ?a0__type'],
+  },
+  {
+    doc: 'Paths — $type in a where (implicit some)',
+    json: () => ({v: '1.6', shape: Person.shape.id, where: {$type: {'@id': ROBOT}}}),
+    sparqlIncludes: [`FILTER(?a0__type = <${ROBOT}>)`],
+  },
+  {
+    doc: 'Paths — $type.none',
+    json: () => ({v: '1.6', shape: Person.shape.id, where: {'$type.none': {'': {'@id': ROBOT}}}}),
+    sparqlIncludes: ['FILTER(!(EXISTS {'],
+  },
+  {
+    doc: 'Paths — $type as a sort key',
+    json: () => ({v: '1.6', shape: Person.shape.id, fields: ['name'], sortBy: [{$type: 'ASC'}]}),
+    sparqlIncludes: ['ASC(?a0__type)'],
+  },
   {
     doc: 'Projection — leaf paths serialize as bare strings',
     json: () => ({v: '1.0', shape: Person.shape.id, fields: ['name', 'hobby']}),
