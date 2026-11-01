@@ -51,8 +51,9 @@ Every envelope carries a wire-format version under `v`:
 
 `fromJSON` checks it with `assertWireVersion`: a mismatched **major** is rejected; a missing
 `v` is tolerated (treated as the current major). Bump the major only for breaking wire changes.
-The current version is 1.9 (a triples read lists `objects` or `predicates`, a terms read; see
-[Triples reads](#triples-reads)); 1.8 carried a quantifier key's relation cast, `pets.as(Dog).some`,
+The current version is 1.10 (a terms read is `kind: "triples_terms"`, and every read goes to
+`readQuery`; see [Triples reads](#triples-reads)); 1.9 let a triples read list `objects` or
+`predicates` (the terms read, now its own kind); 1.8 carried a quantifier key's relation cast, `pets.as(Dog).some`,
 `as(X)` casts in condition and `sortBy` paths as fields carry them, and a `sortBy` filter on any
 relation segment; 1.7 added `sortBy` entries for a computed expression and a filtered path, and a quantifier
 as the condition of another; 1.6 added the `$type` path segment (see Paths), 1.5 `txId` (see [Transactions](#transactions-txid)), 1.4 triples reads by object and predicate.
@@ -523,7 +524,7 @@ send it; a store sent it must list `shapelessDelete` in `supports`.
 
 A triples read (`TriplesBuilder`, `NamedGraph.readContent`) is plain data, not a builder envelope:
 its wire form is the read itself, checked with `parseTriplesQuery` and sent to
-`IDataset.triplesQuery` (`fromJSON` refuses it and names `parseTriplesQuery`).
+`IDataset.readQuery` (`fromJSON` refuses it and names `parseTriplesQuery`).
 
 ```json
 { "v": "1.4", "kind": "triples", "object": "https://ex.org/ont/Term", "graphs": ["https://ex.org/graph/ontology"] }
@@ -533,7 +534,6 @@ its wire form is the read itself, checked with `parseTriplesQuery` and sent to
 | Field | Meaning |
 |---|---|
 | `subject`, `predicate`, `object` | The pattern's fixed positions, absolute IRIs (the object is a node, never a literal). Absent = open. |
-| `objects`, `predicates` | A terms read (1.9): a list of absolute IRIs in place of `object` or `predicate`, one list per read. |
 | `graphs` | The graphs read, as `.from()` takes them (portable names included). |
 | `limit` | At most this many triples; no order. |
 | `recordClass` | A graph read's routing key (`DraftGraph.readContent(g)`). |
@@ -543,15 +543,18 @@ A read needs a node (`subject` or `object`) or `graphs`; a `predicate` without a
 that uses one needs the `triplesPattern` feature on the dataset it is sent to, because a reader
 before 1.4 keeps only the fields it knows and would answer a wider read.
 
-A **terms read** (1.9, `TriplesBuilder.toNode([…])` or `withPredicate([…])`, then `.whichExist()`)
-lists the terms of one position and asks which of them occur. It goes to `IDataset.triplesTermsQuery`,
-never to `triplesQuery`, and its answer is a JSON array of the listed IRIs some triple of the read
-has. A list of `objects` is a node read (graphs optional); a list of `predicates` needs `graphs`.
-It has no `limit` or `recordClass`, and needs `triplesPattern` as a one-term read does.
+A **terms read** (`TriplesBuilder.toNode([…])` or `withPredicate([…])`, then `.whichExist()`) is
+its own kind, `"triples_terms"` (1.10), checked with `parseTriplesTermsQuery`. It lists the terms
+of one position (`objects` or `predicates`, a list of absolute IRIs, one list per read, in place of
+`object` or `predicate`) and asks which of them occur; its answer is a JSON array of the listed
+IRIs some triple of the read has. A list of `objects` is a node read (graphs optional); a list of
+`predicates` needs `graphs` unless the subject is fixed. It has no `limit` or `recordClass`, and
+needs the `triplesTerms` and `triplesPattern` features on the dataset it is sent to. A
+`"triples"` read with `objects` or `predicates` (the 1.9 form) is refused.
 
 ```json
-{ "v": "1.9", "kind": "triples", "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "objects": ["https://ex.org/ont/A", "https://ex.org/ont/B"], "graphs": ["https://ex.org/graph/data"] }
-{ "v": "1.9", "kind": "triples", "predicates": ["https://ex.org/ont/p", "https://ex.org/ont/q"], "graphs": ["https://ex.org/graph/data"] }
+{ "v": "1.10", "kind": "triples_terms", "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "objects": ["https://ex.org/ont/A", "https://ex.org/ont/B"], "graphs": ["https://ex.org/graph/data"] }
+{ "v": "1.10", "kind": "triples_terms", "predicates": ["https://ex.org/ont/p", "https://ex.org/ont/q"], "graphs": ["https://ex.org/graph/data"] }
 ```
 
 ## Transactions (`txId`)

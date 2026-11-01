@@ -1050,7 +1050,7 @@ const latest = await Person.select((p) => ({friend: p.bestFriend, last: p.birthD
 - Outside a grouped select, an aggregate is per row, like `.size()`:
   `Person.select((p) => ({first: p.nickNames.min()}))`.
 
-A grouped select is still a select: a dataset receives it through `selectQuery` and lowers it to
+A grouped select is still a select: a dataset receives it through `readQuery` and lowers it to
 an `IRSelectQuery` with `groupBy`. It needs the `'groupBy'` feature (`min`/`max` need theirs), and
 a dataset that does not list it in `supports` is refused before it is asked. `SparqlDataset`
 supports all of them.
@@ -1141,14 +1141,16 @@ graphs. `.exists()` sends the read with `limit: 1` (a SPARQL store stops at the 
 
 `toNode` and `withPredicate` take a list of terms too (`[{id}, …]`, one list per read): a terms
 read. `.whichExist()` answers the `Set` of the listed IRIs that some triple of the read has in
-that position, sent to the optional `IDataset.triplesTermsQuery`; `SparqlDataset` answers it with
+that position, sent to `IDataset.readQuery` as a terms read (`kind: 'triples_terms'`,
+`toTriplesTermsQuery()`, `parseTriplesTermsQuery()` at a wire boundary) to a dataset that lists
+`'triplesTerms'` and `'triplesPattern'` in `supports`; `SparqlDataset` answers it with
 `SELECT DISTINCT ?t WHERE { VALUES ?t { … } FILTER EXISTS { … } }`, one query per 400 terms, each
 term stopping at its first match. It has no `exec()` (it answers terms, not triples);
 `.exists()` asks whether any term occurs.
 
 A triples read is plain data (`toTriplesQuery()`, `parseTriplesQuery()` at a wire boundary) sent to
-the optional `IDataset.triplesQuery`. `SparqlDataset` answers it with one `SELECT`; a dataset
-without the method is refused. A read that fixes the predicate or the object (`toNode`,
+`IDataset.readQuery`, only to a dataset that lists `'triples'` in `supports`. `SparqlDataset`
+answers it with one `SELECT`; a dataset that does not list it is refused. A read that fixes the predicate or the object (`toNode`,
 `withPredicate`) needs the `'triplesPattern'` feature in the dataset's `supports`: a dataset that
 predates it is refused rather than sent fields it would drop. `LinkedStorage` sends a graph read
 where its record class's graph queries go, and any other read (no shape, no routing key) to every
@@ -1959,6 +1961,17 @@ routes each query to a dataset by its target shape. A dataset can:
 - **execute it directly** against an in-memory graph,
 - **forward it** as [DSL-JSON](./documentation/dsl-json.md) (`query.toJSON()`) to another service, or
 - **lower it to an algebra** for a query engine, via the free `lower(query)` function.
+
+Every read reaches a dataset through one method, `readQuery(query)`, told apart by the query's
+kind (`readKindOf(query)`, `@_linked/core/queries/readQuery`): a select (`SelectResult`), a count
+(a `number`), an ask (a `boolean`), a triples read (`Triple[]`) or a terms read (`string[]`); the
+answer type follows the kind (`ReadResult<Q>`). Selects and counts are the baseline. A dataset
+declares the other reads it answers in `supports` (`'ask'`, `'triples'`, `'triplesTerms'`, next to
+`'groupBy'`, `'min'`, `'max'`, `'triplesPattern'`, …), and a read it does not declare is refused
+before it is sent; an ask to a dataset without `'ask'` is sent as a select `LIMIT 1` instead.
+Writes have their own methods (`createQuery`, `updateQuery`, `deleteQuery`, and `graphQuery` for
+a whole named graph). A router sends each read on with `resolveRead(dataset, query)`
+(`@_linked/core/queries/queryDispatch`), which makes those checks and checks the answer.
 
 **SPARQL is built in.** This package ships a `SparqlStore` base class (`@_linked/core/sparql`) — extend
 it for any SPARQL endpoint. Internally it calls `lower(query)` to obtain a normalized

@@ -95,7 +95,7 @@ describe('the feature check evaluates callbacks as lowering does', () => {
       .where((instance: any) => instance[label].contains('a'));
 
   const store = (onSelect: (query: unknown) => unknown): IDataset => ({
-    selectQuery: async (query: unknown) => onSelect(query) as never,
+    readQuery: async (query: unknown) => onSelect(query) as never,
     createQuery: async () => ({}) as never,
     updateQuery: async () => ({}) as never,
     deleteQuery: async () => ({deleted: [], count: 0}),

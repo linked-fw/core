@@ -19,6 +19,8 @@ import {
 import {Person, Team, ids} from '../test-helpers/live-fixtures';
 import {mutationEffects} from '../queries/queryDependencies';
 import {unusedDatasetMethods} from '../test-helpers/test-utils';
+import {readQueryOf} from '../test-helpers/read-double';
+import type {QueryFeature} from '../queries/queryFeatures';
 
 class FeedDataset implements IDataset {
   selects = 0;
@@ -26,13 +28,15 @@ class FeedDataset implements IDataset {
   constructor(readonly authoritativeChanges?: boolean) {}
 
   graphQuery = unusedDatasetMethods.graphQuery;
-  async selectQuery(query: any): Promise<any> {
+  readonly supports: readonly QueryFeature[] = ['ask'];
+  readQuery = readQueryOf({select: (q) => this.select(q), ask: (q) => this.ask(q)});
+  async select(query: any): Promise<any> {
     this.selects++;
     const json = query.toJSON();
     if (json.subject) return {id: json.subject, name: 'Core', members: [{id: ids.P1}]};
     return [];
   }
-  async askQuery(): Promise<boolean> {
+  async ask(_query?: unknown): Promise<boolean> {
     return true;
   }
   async updateQuery(query: any): Promise<any> {
@@ -276,7 +280,7 @@ describe('change sources', () => {
     const slow = new FeedDataset();
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    slow.selectQuery = async function (this: FeedDataset, query: any) {
+    slow.select = async function (this: FeedDataset, query: any) {
       this.selects++;
       await gate;
       return {id: query.toJSON().subject, name: 'Core', members: [{id: ids.P1}]};

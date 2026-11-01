@@ -11,8 +11,8 @@ import {LinkedStorage} from '../utils/LinkedStorage';
 
 const dataset = (name: string): any => ({
   name,
-  selectQuery: async () => [],
-  askQuery: async () => false,
+  readQuery: async (q: any) => (q.__queryKind === 'ask' ? false : []),
+  supports: ['ask'],
   updateQuery: async () => undefined,
   createQuery: async () => undefined,
   deleteQuery: async () => undefined,

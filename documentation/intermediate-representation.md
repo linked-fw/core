@@ -437,27 +437,35 @@ wants:
 
 ```ts
 import type {IDataset} from '@_linked/core/interfaces/IDataset';
-import type {SelectQuery} from '@_linked/core/queries/SelectQuery';
 import type {CreateQuery} from '@_linked/core/queries/CreateQuery';
 import type {UpdateQuery} from '@_linked/core/queries/UpdateQuery';
 import type {DeleteQuery, DeleteResponse} from '@_linked/core/queries/DeleteQuery';
+import {readKindOf, type ReadQuery, type ReadResult} from '@_linked/core/queries/readQuery';
 import {lower} from '@_linked/core';
 
 interface IDataset {
   init?(): Promise<any>;
-  selectQuery(query: SelectQuery): Promise<SelectResult>;
-  updateQuery?(query: UpdateQuery): Promise<UpdateResult>;
-  createQuery?(query: CreateQuery): Promise<CreateResult>;
-  deleteQuery?(query: DeleteQuery): Promise<DeleteResponse>;
+  // Every read: a select, a count, an ask, a triples or a terms read (by its kind).
+  readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>>;
+  updateQuery(query: UpdateQuery): Promise<UpdateResult>;
+  createQuery(query: CreateQuery): Promise<CreateResult>;
+  deleteQuery(query: DeleteQuery): Promise<DeleteResponse>;
+  graphQuery(query: GraphQuery): Promise<GraphResult>;
+  readonly supports?: readonly QueryFeature[];
 }
 
 class MyStore implements IDataset {
-  async selectQuery(query: SelectQuery) {
-    const ir = lower(query);       // opt into the IR only if you want it
-    return this.runMyEngine(ir);
+  async readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    if (readKindOf(query) !== 'select') throw new Error('MyStore answers selects only');
+    const ir = lower(query as SelectQuery);   // opt into the IR only if you want it
+    return this.runMyEngine(ir) as ReadResult<Q>;
   }
 }
 ```
+
+A select and a count are the baseline every dataset answers; an ask, a triples read and a terms
+read are sent only to a dataset that lists `'ask'`, `'triples'` or `'triplesTerms'` in
+`supports` (an ask to one without `'ask'` is sent as a select `LIMIT 1` instead).
 
 **Features a dataset declares.** A select can need features beyond the baseline: grouping
 (`'groupBy'`) and `'min'`/`'max'`. A dataset lists the ones it answers in `supports`
@@ -647,11 +655,13 @@ import type {CreateQuery} from '@_linked/core/queries/CreateQuery';
 import type {UpdateQuery} from '@_linked/core/queries/UpdateQuery';
 import type {DeleteQuery, DeleteResponse} from '@_linked/core/queries/DeleteQuery';
 import type {SelectResult, CreateResult, UpdateResult} from '@_linked/core/queries/IntermediateRepresentation';
+import {readKindOf, type ReadQuery, type ReadResult} from '@_linked/core/queries/readQuery';
 import {lower} from '@_linked/core';
 
 export class MyStore implements IDataset {
-  async selectQuery(query: SelectQuery): Promise<SelectResult> {
-    const ir = lower(query);  // opt into the IR
+  async readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    if (readKindOf(query) !== 'select') throw new Error('MyStore answers selects only');
+    const ir = lower(query as SelectQuery);  // opt into the IR
     // 1. Read ir.root.shape to identify the target shape
     // 2. Walk ir.patterns to build joins/traversals
     // 3. Compile ir.where into a filter

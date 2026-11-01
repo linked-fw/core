@@ -14,6 +14,7 @@ import {resetLiveQueryStore, type LiveQuery, type LiveQueryStore} from '../live/
 import {templateKey} from '../live/keys';
 import {Employee, Person, Team, ids} from '../test-helpers/live-fixtures';
 import {unusedDatasetMethods} from '../test-helpers/test-utils';
+import {readQueryOf} from '../test-helpers/read-double';
 
 const {linkedShape} = linkedPackage('live-matching-test');
 
@@ -39,16 +40,17 @@ class ScriptedDataset implements IDataset {
   }
 
   graphQuery = unusedDatasetMethods.graphQuery;
-  async selectQuery(query: any): Promise<any> {
-    const key = templateKey(query);
-    this.fetches.set(key, (this.fetches.get(key) ?? 0) + 1);
-    const fn = this.answers.get(key);
-    if (!fn) throw new Error('no scripted answer for ' + JSON.stringify(query.toJSON()));
-    return fn(query.toJSON());
-  }
-  async askQuery(): Promise<boolean> {
-    return true;
-  }
+  readonly supports = ['ask'] as const;
+  readQuery = readQueryOf({
+    select: async (query: any) => {
+      const key = templateKey(query);
+      this.fetches.set(key, (this.fetches.get(key) ?? 0) + 1);
+      const fn = this.answers.get(key);
+      if (!fn) throw new Error('no scripted answer for ' + JSON.stringify(query.toJSON()));
+      return fn(query.toJSON());
+    },
+    ask: async () => true,
+  });
   async updateQuery(query: any): Promise<any> {
     return this.mutationResults.shift() ?? {id: query.toJSON().targetId};
   }

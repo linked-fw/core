@@ -162,7 +162,7 @@ describe('supports and LinkedStorage', () => {
     const seen: DeleteQuery[] = [];
     const dataset = {
       ...(supports ? {supports} : {}),
-      selectQuery: async () => [],
+      readQuery: async () => [] as never,
       createQuery: async () => ({}),
       updateQuery: async () => ({}),
       deleteQuery: async (q: DeleteQuery): Promise<DeleteResponse> => {

@@ -20,6 +20,7 @@ import type {IDataset} from '../interfaces/IDataset';
 import '../shapes/List';
 import '../shapes/PathNode';
 import {unusedDatasetMethods} from '../test-helpers/test-utils';
+import {readQueryOf} from '../test-helpers/read-double';
 
 const {linkedShape} = linkedPackage('shapehash-test');
 const ex = (n: string) => ({id: `https://example.org/h#${n}`});
@@ -75,13 +76,16 @@ function makeStore(seed: Record<string, string | undefined> = {}) {
   const calls: Call[] = [];
   const store: IDataset = {
     ...unusedDatasetMethods,
-    askQuery: async () => false,
-    selectQuery: async () => {
-      calls.push({kind: 'select'});
-      return [...shapes].map(([id, shapeHash]) =>
-        shapeHash === undefined ? {id} : {id, shapeHash},
-      ) as any;
-    },
+    supports: ['ask'],
+    readQuery: readQueryOf({
+      ask: async () => false,
+      select: async () => {
+        calls.push({kind: 'select'});
+        return [...shapes].map(([id, shapeHash]) =>
+          shapeHash === undefined ? {id} : {id, shapeHash},
+        );
+      },
+    }),
     createQuery: async (q: any) => {
       const ir = lower(q) as any;
       const id = ir?.data?.id;

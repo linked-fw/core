@@ -17,6 +17,8 @@ import {LinkedStorage} from '../utils/LinkedStorage';
 import {resetFanOutNotices} from '../utils/fanOutNotice';
 import {Person} from '../test-helpers/query-fixtures';
 import type {IDataset} from '../interfaces/IDataset';
+import {readQueryOf} from '../test-helpers/read-double';
+import type {QueryFeature} from '../queries/queryFeatures';
 
 const S = 'https://example.org/data/s1';
 const P = 'https://example.org/ont/p';
@@ -28,19 +30,22 @@ const stub = (answer: Triple[], exists = false): IDataset & {reads: TriplesQuery
   const ds = {
     reads: [] as TriplesQuery[],
     asks: 0,
-    selectQuery: async () => [],
-    askQuery: async () => {
-      ds.asks++;
-      return exists;
-    },
+    supports: ['ask', 'triples'] as QueryFeature[],
+    readQuery: readQueryOf({
+      select: async () => [],
+      ask: async () => {
+        ds.asks++;
+        return exists;
+      },
+      triples: async (q: TriplesQuery) => {
+        ds.reads.push(q);
+        return answer;
+      },
+    }),
     createQuery: async () => ({}) as any,
     updateQuery: async () => ({}) as any,
     deleteQuery: async () => ({deleted: [], count: 0}),
     graphQuery: async () => ({graph: '', changed: false}),
-    triplesQuery: async (q: TriplesQuery) => {
-      ds.reads.push(q);
-      return answer;
-    },
   };
   return ds;
 };

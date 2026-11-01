@@ -37,6 +37,7 @@ import type {CreateQuery} from '../queries/CreateQuery';
 import type {DeleteQuery} from '../queries/DeleteQuery';
 import type {GraphQuery} from '../queries/IntermediateRepresentation';
 import '../shapes/index';
+import type {ReadQuery, ReadResult} from '../queries/readQuery';
 
 const PKG = 'shape-graphs-live';
 const {linkedShape} = linkedPackage(PKG);
@@ -102,11 +103,9 @@ class ForwardingStore implements IDataset {
   dataRoot(): string | undefined {
     return this.inner.dataRoot?.();
   }
-  selectQuery(query: SelectQuery | CountQuery) {
-    return this.inner.selectQuery(this.decode(query));
-  }
-  askQuery(query: AskQuery) {
-    return this.inner.askQuery(this.decode(query));
+  readonly supports = ['ask'] as const;
+  readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    return this.inner.readQuery(this.decode(query as SelectQuery | CountQuery | AskQuery));
   }
   updateQuery(query: UpdateQuery) {
     return this.inner.updateQuery(this.decode(query));

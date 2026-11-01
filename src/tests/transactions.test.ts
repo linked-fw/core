@@ -30,6 +30,7 @@ import {WIRE_VERSION} from '../queries/wireVersion';
 import {isLinkedError} from '../utils/linkedError';
 import '../ontologies/rdf';
 import '../ontologies/xsd';
+import type {ReadQuery, ReadResult} from '../queries/readQuery';
 
 const {linkedShape} = linkedPackage('transactions-test');
 const P = 'https://tx.example/';
@@ -80,7 +81,7 @@ class PlainStore extends SparqlDataset {
  * it. Begin, commit and rollback are forwarded too.
  */
 class WireDataset implements IDataset {
-  readonly supports: readonly QueryFeature[] = ['transactions'];
+  readonly supports: readonly QueryFeature[] = ['transactions', 'ask'];
   sent: unknown[] = [];
   constructor(private readonly far: InMemoryDataset) {}
   private cross(query: {toJSON(): unknown}): any {
@@ -88,11 +89,8 @@ class WireDataset implements IDataset {
     this.sent.push(wire);
     return fromJSON(wire as QueryJSON);
   }
-  selectQuery(q: any) {
-    return this.far.selectQuery(this.cross(q));
-  }
-  askQuery(q: any) {
-    return this.far.askQuery(this.cross(q));
+  readQuery<Q extends ReadQuery>(q: Q): Promise<ReadResult<Q>> {
+    return this.far.readQuery(this.cross(q as {toJSON(): unknown})) as Promise<ReadResult<Q>>;
   }
   createQuery(q: any) {
     return this.far.createQuery(this.cross(q));
@@ -416,7 +414,12 @@ describe('settled behaviours', () => {
   test('a graph query or a triples read does not run in a transaction', async () => {
     const tx = LinkedStorage.begin();
     await expect(tx.graphQuery({} as any)).rejects.toThrow(/does not run in a transaction/);
-    await expect(tx.triplesQuery({} as any)).rejects.toThrow(/does not run in a transaction/);
+    await expect(tx.readQuery({kind: 'triples', subject: 'https://example.org/s'})).rejects.toThrow(
+      /does not run in a transaction/,
+    );
+    await expect(
+      tx.readQuery({kind: 'triples_terms', objects: ['https://example.org/o']}),
+    ).rejects.toThrow(/does not run in a transaction/);
   });
 
   test('queries in flight settle before the commit', async () => {

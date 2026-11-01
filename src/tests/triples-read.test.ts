@@ -11,7 +11,14 @@
  */
 import {afterEach, describe, expect, test} from '@jest/globals';
 import {TriplesBuilder} from '../queries/TriplesBuilder';
-import {isLiteralTerm, parseTriplesQuery, type Triple, type TriplesQuery} from '../queries/triplesQuery';
+import {
+  isLiteralTerm,
+  parseTriplesQuery,
+  parseTriplesTermsQuery,
+  type Triple,
+  type TriplesQuery,
+  type TriplesTermsQuery,
+} from '../queries/triplesQuery';
 import {fromJSON} from '../queries/fromJSON';
 import {subscribeQueryDispatch, type QueryDispatchEvent} from '../queries/queryDispatch';
 import {DraftGraph, NamedGraph, OntologyGraph} from '../shapes/NamedGraph';
@@ -27,6 +34,8 @@ import {setShapeGraphs} from '../utils/graphRouting';
 import {invalidateGraphRegistry} from '../utils/graphRegistryCache';
 import {Person} from '../test-helpers/query-fixtures';
 import type {IDataset} from '../interfaces/IDataset';
+import {readQueryOf} from '../test-helpers/read-double';
+import type {QueryFeature} from '../queries/queryFeatures';
 
 const G1 = 'https://example.org/graph/one';
 const G2 = 'https://example.org/graph/two';
@@ -135,7 +144,7 @@ describe('the wire form', () => {
     expect(() => parseTriplesQuery([])).toThrow(/expected an object/);
   });
 
-  test('fromJSON points a triples read to IDataset.triplesQuery', () => {
+  test('fromJSON points a triples read to IDataset.readQuery', () => {
     expect(() => fromJSON({kind: 'triples', subject: S} as any)).toThrow(/parseTriplesQuery/);
   });
 });
@@ -170,7 +179,7 @@ describe('the SPARQL', () => {
   });
 });
 
-describe('SparqlDataset.triplesQuery', () => {
+describe('SparqlDataset: triples reads', () => {
   test('answers terms as core values: IRIs and blank nodes as {id}, literals with datatype and language', async () => {
     const store = new StubStore();
     store.rows = [
@@ -262,20 +271,23 @@ describe('the dispatch and the routing', () => {
     const reads: TriplesQuery[] = [];
     return {
       reads,
-      selectQuery: async () => [],
+      supports: ['triples'] as QueryFeature[],
+      readQuery: readQueryOf({
+        select: async () => [],
+        triples: async (q: TriplesQuery) => {
+          reads.push(q);
+          return answer;
+        },
+      }),
       createQuery: async () => ({}) as any,
       updateQuery: async () => ({}) as any,
       deleteQuery: async () => ({deleted: [], count: 0}),
       graphQuery: async () => ({graph: '', changed: false}),
-      triplesQuery: async (q: TriplesQuery) => {
-        reads.push(q);
-        return answer;
-      },
     };
   };
   const t = (o: string): Triple => ({subject: {id: S}, predicate: {id: P}, object: {id: o}});
 
-  test('exec(target) is observed; a target without triplesQuery, or a non-array answer, is refused', async () => {
+  test("exec(target) is observed; a target without 'triples', or a non-array answer, is refused", async () => {
     const events: QueryDispatchEvent[] = [];
     const off = subscribeQueryDispatch((e) => events.push(e));
     const target = fake([t(G1)]);
@@ -283,10 +295,10 @@ describe('the dispatch and the routing', () => {
     off();
     expect(events.map((e) => [e.kind, e.target === target])).toEqual([['triples', true]]);
 
-    const {triplesQuery: _none, ...without} = fake([]);
-    await expect(TriplesBuilder.forNode({id: S}).exec(without)).rejects.toThrow(/does not implement IDataset.triplesQuery/);
-    const odd = {...fake([]), triplesQuery: async () => null as any};
-    await expect(TriplesBuilder.forNode({id: S}).exec(odd)).rejects.toThrow(/must resolve to an array/);
+    const without = {...fake([]), supports: []};
+    await expect(TriplesBuilder.forNode({id: S}).exec(without)).rejects.toThrow(/does not declare 'triples'/);
+    const odd = {...fake([]), readQuery: readQueryOf({triples: async () => null})};
+    await expect(TriplesBuilder.forNode({id: S}).exec(odd)).rejects.toThrow(/must be answered with an array of triples/);
   });
 
   test('a graph read goes where its record class graph queries go', async () => {
@@ -308,9 +320,9 @@ describe('the dispatch and the routing', () => {
     expect(await TriplesBuilder.forNode({id: S})).toEqual([t(G1), t(G2), t(S)]);
     expect(await TriplesBuilder.forNode({id: S}).limit(2)).toEqual([t(G1), t(G2)]);
 
-    const {triplesQuery: _none, ...without} = fake([]);
+    const without = {...fake([]), supports: []};
     LinkedStorage.setDatasetForShapes(without, Person);
-    await expect(TriplesBuilder.forNode({id: S})).rejects.toThrow(/does not implement IDataset.triplesQuery/);
+    await expect(TriplesBuilder.forNode({id: S})).rejects.toThrow(/does not declare 'triples'/);
   });
 });
 
@@ -427,23 +439,26 @@ describe('object reads, predicate reads and exists()', () => {
   test("a dataset that does not declare 'triplesPattern' is refused before it is asked", async () => {
     const reads: TriplesQuery[] = [];
     const old: IDataset = {
-      selectQuery: async () => [],
+      supports: ['triples'],
+      readQuery: readQueryOf({
+        select: async () => [],
+        triples: async (q: TriplesQuery) => {
+          reads.push(q);
+          return [];
+        },
+      }),
       createQuery: async () => ({}) as any,
       updateQuery: async () => ({}) as any,
       deleteQuery: async () => ({deleted: [], count: 0}),
       graphQuery: async () => ({graph: '', changed: false}),
-      triplesQuery: async (q: TriplesQuery) => {
-        reads.push(q);
-        return [];
-      },
     };
     await expect(TriplesBuilder.toNode({id: O}).from(G1).exec(old)).rejects.toThrow(/'triplesPattern'/);
     await expect(TriplesBuilder.withPredicate({id: P}).from(G1).exists(old)).rejects.toThrow(/'triplesPattern'/);
-    // A subject read and a graph read are the baseline.
+    // A subject read and a graph read need only 'triples'.
     await TriplesBuilder.forNode({id: S}).from(G1).exec(old);
     await NamedGraph.readContent(G1).exec(old);
     expect(reads).toHaveLength(2);
-    expect(await TriplesBuilder.toNode({id: O}).from(G1).exec({...old, supports: ['triplesPattern']})).toEqual([]);
+    expect(await TriplesBuilder.toNode({id: O}).from(G1).exec({...old, supports: ['triples', 'triplesPattern']})).toEqual([]);
   });
 
   test('through LinkedStorage: every dataset is checked, and exists() stops at the first that answers', async () => {
@@ -451,16 +466,18 @@ describe('object reads, predicate reads and exists()', () => {
       const reads: TriplesQuery[] = [];
       const ds: IDataset & {reads: TriplesQuery[]} = {
         reads,
-        supports: ['triplesPattern'],
-        selectQuery: async () => [],
+        supports: ['triples', 'triplesPattern'],
+        readQuery: readQueryOf({
+          select: async () => [],
+          triples: async (q: TriplesQuery) => {
+            reads.push(q);
+            return answer;
+          },
+        }),
         createQuery: async () => ({}) as any,
         updateQuery: async () => ({}) as any,
         deleteQuery: async () => ({deleted: [], count: 0}),
         graphQuery: async () => ({graph: '', changed: false}),
-        triplesQuery: async (q: TriplesQuery) => {
-          reads.push(q);
-          return answer;
-        },
       };
       return ds;
     };
@@ -472,7 +489,7 @@ describe('object reads, predicate reads and exists()', () => {
     expect(await TriplesBuilder.withPredicate({id: P}).from(G1).exists()).toBe(true);
     expect(main.reads).toEqual([{kind: 'triples', predicate: P, graphs: [G1], limit: 1}]);
     expect(other.reads).toEqual([]);
-    const {supports: _s, ...plain} = answering([]);
+    const plain = {...answering([]), supports: ['triples'] as QueryFeature[]};
     LinkedStorage.setDatasetForShapes(plain, Person);
     main.reads.length = 0;
     const lone = answering([]);
@@ -485,7 +502,7 @@ describe('object reads, predicate reads and exists()', () => {
     const hit: Triple = {subject: {id: S}, predicate: {id: P}, object: {id: O}};
     const reads: TriplesQuery[] = [];
     const base = {
-      selectQuery: async () => [],
+      readQuery: async () => [] as never,
       createQuery: async () => ({}) as any,
       updateQuery: async () => ({}) as any,
       deleteQuery: async () => ({deleted: [], count: 0}),
@@ -493,19 +510,21 @@ describe('object reads, predicate reads and exists()', () => {
     };
     const answering: IDataset = {
       ...base,
-      supports: ['triplesPattern'],
-      triplesQuery: async (q: TriplesQuery) => {
-        reads.push(q);
-        return [hit];
-      },
+      supports: ['triples', 'triplesPattern'],
+      readQuery: readQueryOf({
+        triples: async (q: TriplesQuery) => {
+          reads.push(q);
+          return [hit];
+        },
+      }),
     };
     // The first dataset answers enough for the limit, so the read never reaches the second.
     LinkedStorage.setDefaultDataset(answering);
-    LinkedStorage.setDatasetForShapes({...answering, supports: []}, Person);
+    LinkedStorage.setDatasetForShapes({...answering, supports: ['triples']}, Person);
     await expect(TriplesBuilder.withPredicate({id: P}).from(G1).exists()).rejects.toThrow(/'triplesPattern'/);
     LinkedStorage.setDatasetForShapes(base as IDataset, Person);
     await expect(TriplesBuilder.forNode({id: S}).from(G1).limit(1).exec()).rejects.toThrow(
-      /does not implement IDataset.triplesQuery/,
+      /does not declare 'triples'/,
     );
     expect(reads).toEqual([]);
     LinkedStorage.getShapeToDatasetMap().clear();
@@ -520,14 +539,14 @@ describe('terms reads: toNode([…]), withPredicate([…]) and whichExist()', ()
   afterEach(() => LinkedStorage.getShapeToDatasetMap().clear());
 
   test('the builders: a list in one position, each term once; one list per read', () => {
-    expect(TriplesBuilder.toNode([{id: A}, {id: B}, {id: A}]).withPredicate(rdf.type).from(G1).toTriplesQuery()).toEqual({
-      kind: 'triples',
+    expect(TriplesBuilder.toNode([{id: A}, {id: B}, {id: A}]).withPredicate(rdf.type).from(G1).toTriplesTermsQuery()).toEqual({
+      kind: 'triples_terms',
       objects: [A, B],
       predicate: rdf.type.id,
       graphs: [G1],
     });
-    expect(TriplesBuilder.withPredicate([{id: P}, {id: Q}]).from(G1).toTriplesQuery()).toEqual({
-      kind: 'triples',
+    expect(TriplesBuilder.withPredicate([{id: P}, {id: Q}]).from(G1).toTriplesTermsQuery()).toEqual({
+      kind: 'triples_terms',
       predicates: [P, Q],
       graphs: [G1],
     });
@@ -540,28 +559,34 @@ describe('terms reads: toNode([…]), withPredicate([…]) and whichExist()', ()
     expect(() => TriplesBuilder.toNode([{id: A}]).withPredicate([{id: P}])).toThrow(/one position/);
     expect(() => TriplesBuilder.toNode([{id: A}, {id: '_:b0'}])).toThrow(/object must be an absolute IRI/);
     expect(() => TriplesBuilder.withPredicate([{id: 'p'}])).toThrow(/predicate must be an absolute IRI/);
-    expect(() => TriplesBuilder.withPredicate([{id: P}]).toTriplesQuery()).toThrow(/predicate read needs graphs/);
-    expect(() => TriplesBuilder.forNode({id: S}).withPredicate([{id: P}]).toTriplesQuery()).not.toThrow();
+    expect(() => TriplesBuilder.withPredicate([{id: P}]).toTriplesTermsQuery()).toThrow(/predicate read needs graphs/);
+    expect(() => TriplesBuilder.forNode({id: S}).withPredicate([{id: P}]).toTriplesTermsQuery()).not.toThrow();
+    // A terms read is not a triples read, and the reverse.
+    expect(() => TriplesBuilder.toNode([{id: A}]).from(G1).toTriplesQuery()).toThrow(/whichExist/);
+    expect(() => TriplesBuilder.toNode({id: A}).from(G1).toTriplesTermsQuery()).toThrow(/build the read with a list/);
   });
 
-  test('the wire: parseTriplesQuery keeps the lists and checks them', () => {
-    const json = {v: '1.9', kind: 'triples', objects: [A, B], predicate: rdf.type.id, graphs: [G1]};
-    expect(parseTriplesQuery(JSON.parse(JSON.stringify(json)))).toEqual({
-      kind: 'triples',
+  test('the wire: parseTriplesTermsQuery keeps the lists and checks them; a triples read has none', () => {
+    const json = {v: '1.10', kind: 'triples_terms', objects: [A, B], predicate: rdf.type.id, graphs: [G1], limit: 3};
+    expect(parseTriplesTermsQuery(JSON.parse(JSON.stringify(json)))).toEqual({
+      kind: 'triples_terms',
       objects: [A, B],
       predicate: rdf.type.id,
       graphs: [G1],
     });
-    expect(() => parseTriplesQuery({kind: 'triples', objects: A, graphs: [G1]})).toThrow(/objects must be an array/);
-    expect(() => parseTriplesQuery({kind: 'triples', objects: [A], object: B})).toThrow(/object and objects/);
-    expect(() => parseTriplesQuery({kind: 'triples', predicates: [P], predicate: Q, graphs: [G1]})).toThrow(
-      /predicate and predicates/,
-    );
-    expect(() => parseTriplesQuery({kind: 'triples', predicates: [P]})).toThrow(/needs graphs/);
-    expect(() => parseTriplesQuery({kind: 'triples', subject: S, predicates: [P], object: A})).toThrow(/all fixed/);
-    expect(() => parseTriplesQuery({kind: 'triples', objects: [A], graphs: [G1], recordClass: `${CORE}DraftGraph`})).toThrow(
-      /no recordClass/,
-    );
+    const parse = (fields: Record<string, unknown>) => () => parseTriplesTermsQuery({kind: 'triples_terms', ...fields});
+    expect(parse({objects: A, graphs: [G1]})).toThrow(/objects must be an array/);
+    expect(parse({objects: [A], object: B})).toThrow(/object and objects/);
+    expect(parse({predicates: [P], predicate: Q, graphs: [G1]})).toThrow(/predicate and predicates/);
+    expect(parse({predicates: [P]})).toThrow(/needs graphs/);
+    expect(parse({subject: S, predicates: [P], object: A})).toThrow(/all fixed/);
+    expect(parse({objects: [A], graphs: [G1], recordClass: `${CORE}DraftGraph`})).toThrow(/no recordClass/);
+    expect(parse({object: A, graphs: [G1]})).toThrow(/lists none/);
+    expect(() => parseTriplesTermsQuery({kind: 'triples', objects: [A]})).toThrow(/kind must be "triples_terms"/);
+    // A terms read sent as a triples read (DSL-JSON 1.9) is refused.
+    expect(() => parseTriplesQuery({kind: 'triples', objects: [A], graphs: [G1]})).toThrow(/kind "triples_terms"/);
+    expect(() => parseTriplesQuery({kind: 'triples', predicates: [P], graphs: [G1]})).toThrow(/kind "triples_terms"/);
+    expect(() => fromJSON({kind: 'triples_terms', objects: [A]} as any)).toThrow(/parseTriplesTermsQuery/);
   });
 
   test('the SPARQL: VALUES ?t over the list, the pattern under FILTER EXISTS, SELECT DISTINCT ?t', async () => {
@@ -602,8 +627,8 @@ describe('terms reads: toNode([…]), withPredicate([…]) and whichExist()', ()
   test('a terms read answers terms: exec() is refused, exists() asks whether any term occurs', async () => {
     const store = new StubStore();
     await expect(TriplesBuilder.toNode([{id: A}]).from(G1).exec(store)).rejects.toThrow(/whichExist/);
-    await expect(store.triplesQuery({kind: 'triples', objects: [A], graphs: [G1]})).rejects.toThrow(/triplesTermsQuery/);
-    await expect(store.triplesTermsQuery({kind: 'triples', object: A, graphs: [G1]})).rejects.toThrow(/triplesQuery/);
+    await expect(store.readQuery({kind: 'triples', objects: [A], graphs: [G1]} as never)).rejects.toThrow(/terms read/);
+    await expect(store.readQuery({kind: 'triples_terms', object: A, graphs: [G1]})).rejects.toThrow(/lists none/);
     await expect(TriplesBuilder.toNode({id: A}).from(G1).whichExist(store)).rejects.toThrow(/build the read with a list/);
     store.rows = [];
     expect(await TriplesBuilder.toNode([{id: A}]).from(G1).exists(store)).toBe(false);
@@ -611,10 +636,10 @@ describe('terms reads: toNode([…]), withPredicate([…]) and whichExist()', ()
     expect(await TriplesBuilder.toNode([{id: A}]).from(G1).exists(store)).toBe(true);
   });
 
-  test('the dispatch: observed, refused without the method or triplesPattern, before it is asked', async () => {
-    const asked: TriplesQuery[] = [];
+  test("the dispatch: observed, refused without 'triplesTerms' or 'triplesPattern', before it is asked", async () => {
+    const asked: TriplesTermsQuery[] = [];
     const base: IDataset = {
-      selectQuery: async () => [],
+      readQuery: async () => [] as never,
       createQuery: async () => ({}) as any,
       updateQuery: async () => ({}) as any,
       deleteQuery: async () => ({deleted: [], count: 0}),
@@ -622,11 +647,13 @@ describe('terms reads: toNode([…]), withPredicate([…]) and whichExist()', ()
     };
     const answering = (answer: unknown): IDataset => ({
       ...base,
-      supports: ['triplesPattern'],
-      triplesTermsQuery: async (q: TriplesQuery) => {
-        asked.push(q);
-        return answer as string[];
-      },
+      supports: ['triplesTerms', 'triplesPattern'],
+      readQuery: readQueryOf({
+        terms: async (q: TriplesTermsQuery) => {
+          asked.push(q);
+          return answer;
+        },
+      }),
     });
     const events: QueryDispatchEvent[] = [];
     const off = subscribeQueryDispatch((e) => events.push(e));
@@ -636,15 +663,15 @@ describe('terms reads: toNode([…]), withPredicate([…]) and whichExist()', ()
     off();
     expect(events.map((e) => [e.kind, e.target === target])).toEqual([['triplesTerms', true]]);
     await expect(TriplesBuilder.toNode([{id: A}]).from(G1).whichExist(base)).rejects.toThrow(
-      /does not implement IDataset.triplesTermsQuery/,
+      /does not declare 'triplesTerms'/,
     );
-    await expect(TriplesBuilder.toNode([{id: A}]).from(G1).whichExist({...answering([]), supports: []})).rejects.toThrow(
-      /'triplesPattern'/,
-    );
+    await expect(
+      TriplesBuilder.toNode([{id: A}]).from(G1).whichExist({...answering([]), supports: ['triplesTerms']}),
+    ).rejects.toThrow(/'triplesPattern'/);
     await expect(TriplesBuilder.toNode([{id: A}]).from(G1).whichExist(answering(null))).rejects.toThrow(/array of IRIs/);
     // An empty list is checked like any other, then answered without asking.
     asked.length = 0;
-    await expect(TriplesBuilder.toNode([]).from(G1).whichExist(base)).rejects.toThrow(/triplesTermsQuery/);
+    await expect(TriplesBuilder.toNode([]).from(G1).whichExist(base)).rejects.toThrow(/'triplesTerms'/);
     expect(await TriplesBuilder.toNode([]).from(G1).whichExist(answering([A]))).toEqual(new Set());
     expect(asked).toEqual([]);
   });
@@ -652,7 +679,7 @@ describe('terms reads: toNode([…]), withPredicate([…]) and whichExist()', ()
   test('through LinkedStorage: every dataset checked first, the answers joined', async () => {
     const asked: string[] = [];
     const base = {
-      selectQuery: async () => [],
+      readQuery: async () => [] as never,
       createQuery: async () => ({}) as any,
       updateQuery: async () => ({}) as any,
       deleteQuery: async () => ({deleted: [], count: 0}),
@@ -660,11 +687,13 @@ describe('terms reads: toNode([…]), withPredicate([…]) and whichExist()', ()
     };
     const answering = (name: string, answer: string[]): IDataset => ({
       ...base,
-      supports: ['triplesPattern'],
-      triplesTermsQuery: async () => {
-        asked.push(name);
-        return answer;
-      },
+      supports: ['triplesTerms', 'triplesPattern'],
+      readQuery: readQueryOf({
+        terms: async () => {
+          asked.push(name);
+          return answer;
+        },
+      }),
     });
     LinkedStorage.setDefaultDataset(answering('main', [B]));
     LinkedStorage.setDatasetForShapes(answering('other', [A]), Person);
@@ -677,7 +706,7 @@ describe('terms reads: toNode([…]), withPredicate([…]) and whichExist()', ()
     // A dataset that cannot answer fails the read wherever it is in the order.
     asked.length = 0;
     LinkedStorage.setDatasetForShapes(base as IDataset, Person);
-    await expect(TriplesBuilder.toNode([{id: B}]).from(G1).whichExist()).rejects.toThrow(/triplesTermsQuery/);
+    await expect(TriplesBuilder.toNode([{id: B}]).from(G1).whichExist()).rejects.toThrow(/'triplesTerms'/);
     expect(asked).toEqual([]);
   });
 });

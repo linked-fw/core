@@ -25,6 +25,7 @@ import {builtInShapeIris} from '../utils/ShapeCatalog';
 import {getNodeShapeUri} from '../shapes/SHACL';
 import {SparqlDataset} from '../sparql/SparqlDataset';
 import {sha256Hex} from '../utils/sha256';
+import {ALL_QUERY_FEATURES} from '../queries/queryFeatures';
 
 const G = 'https://linked.cm/pkg/example/graph/ontology';
 const ONTOLOGY_GRAPH = 'https://linked.cm/ont/core/OntologyGraph';
@@ -34,7 +35,7 @@ function graphStore() {
   const received: GraphQuery[] = [];
   const store: IDataset = {
     ...unusedDatasetMethods,
-    selectQuery: async () => [] as any,
+    readQuery: async () => [] as never,
     graphQuery: async (q: GraphQuery): Promise<GraphResult> => {
       received.push(q);
       return {graph: q.graph, changed: true};
@@ -128,7 +129,7 @@ describe('the runtime guard and routing', () => {
   const q: GraphQuery = {kind: 'graph_drop', graph: G, recordClass: ONTOLOGY_GRAPH};
 
   test('a dataset without graphQuery is refused with unsupported-query-kind', async () => {
-    const old = {selectQuery: async () => []};
+    const old = {readQuery: async () => []};
     const err = await resolveGraphQuery(old as any, q).catch((e) => e);
     expect(err).toBeInstanceOf(GraphQueryError);
     expect(isGraphQueryError(err, 'unsupported-query-kind')).toBe(true);
@@ -136,7 +137,7 @@ describe('the runtime guard and routing', () => {
   });
 
   test('LinkedStorage applies the same guard to the routed dataset', async () => {
-    LinkedStorage.setDefaultDataset({selectQuery: async () => []} as any);
+    LinkedStorage.setDefaultDataset({readQuery: async () => []} as any);
     const err = await LinkedStorage.graphQuery(q).catch((e) => e);
     expect(isGraphQueryError(err, 'unsupported-query-kind')).toBe(true);
   });
@@ -696,8 +697,9 @@ describe('store-reserved names, feedsHierarchy, record classes', () => {
 });
 
 describe('review fixes', () => {
-  /** A SPARQL dataset without askQuery: asks go through its selectQuery and core's result mapping. */
+  /** A SPARQL dataset without 'ask': asks go through its selects and core's result mapping. */
   class NoAskSparql extends SparqlDataset {
+    override readonly supports = ALL_QUERY_FEATURES.filter((feature) => feature !== 'ask');
     selects: string[] = [];
     constructor(private ids: string[]) {
       super();
@@ -708,13 +710,9 @@ describe('review fixes', () => {
     }
     protected async executeSparqlUpdate(): Promise<void> {}
   }
-  const noAsk = (ids: string[]) => {
-    const ds = new NoAskSparql(ids);
-    (ds as {askQuery?: unknown}).askQuery = undefined;
-    return ds;
-  };
+  const noAsk = (ids: string[]) => new NoAskSparql(ids);
 
-  test('a subject ask on a store without askQuery answers through the single-result select', async () => {
+  test('a subject ask on a store without ask support answers through the single-result select', async () => {
     await expect(OntologyGraph.exists(G, noAsk([G]))).resolves.toBe(true);
     await expect(OntologyGraph.exists(G, noAsk([]))).resolves.toBe(false);
     const ds = noAsk([G]);
@@ -724,9 +722,12 @@ describe('review fixes', () => {
 
   test('an ask without a subject (nullSubject) is false without a select', async () => {
     const ds = noAsk([G]);
-    const {resolveExistence} = await import('../queries/queryDispatch');
-    const ask = {toJSON: () => ({op: 'ask', shape: OntologyGraph.shape.id, nullSubject: true})} as any;
-    await expect(resolveExistence(ds, ask)).resolves.toBe(false);
+    const {resolveRead} = await import('../queries/queryDispatch');
+    const ask = {
+      __queryKind: 'ask',
+      toJSON: () => ({op: 'ask', shape: OntologyGraph.shape.id, nullSubject: true}),
+    } as any;
+    await expect(resolveRead(ds, ask)).resolves.toBe(false);
     expect(ds.selects).toEqual([]);
   });
 

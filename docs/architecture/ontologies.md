@@ -302,6 +302,9 @@ Package graphs are `{package IRI}/graph/{kind}` (`OntologyGraph.iriFor('@_linked
 
 **Graph queries.** A graph and its record change together, through `IDataset.graphQuery`
 (required; a store without graph support throws `GraphQueryError('unsupported-query-kind')`).
+A graph query is a write, so it is not one of the reads of `IDataset.readQuery` (select, count,
+ask, triples and terms reads): routers fork for it and report it as a write, and a transaction
+refuses it. Reading a graph's triples (`NamedGraph.readContent(g)`) is a triples read.
 The statics build one graph query per call, and a SPARQL store runs it as one update (one
 transaction):
 

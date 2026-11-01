@@ -25,6 +25,7 @@ import {NodeShape} from '../shapes/SHACL';
 import {PathList} from '../shapes/PathList';
 import '../shapes/List';
 import '../shapes/PathNode';
+import {readQueryOf} from '../test-helpers/read-double';
 
 const {linkedShape} = linkedPackage('single-owner-test');
 const EX = 'http://example.org/';
@@ -126,8 +127,11 @@ let calls: Call[];
 function installMock(existingIds: string[]) {
   calls = [];
   setQueryDispatch({
-    selectQuery: async () => existingIds.map((id) => ({id})) as any,
-    askQuery: async () => existingIds.length > 0,
+    readQuery: readQueryOf({
+      select: async () => existingIds.map((id) => ({id})),
+      ask: async () => existingIds.length > 0,
+    }),
+    supports: ['ask'],
     createQuery: async (q: any) => {
       calls.push({kind: 'create', id: (lower(q) as any)?.data?.id});
       return {} as any;

@@ -343,7 +343,7 @@ describe('grouped select on the wire', () => {
 
 describe('stores that do not declare the features', () => {
   const legacy: IDataset = {
-    selectQuery: async () => [],
+    readQuery: async () => [] as never,
     createQuery: async () => ({}) as never,
     updateQuery: async () => ({}) as never,
     deleteQuery: async () => ({deleted: [], count: 0}),
@@ -352,7 +352,7 @@ describe('stores that do not declare the features', () => {
 
   test('a grouped select is refused before it is sent', async () => {
     let sent = false;
-    const store = {...legacy, selectQuery: async () => ((sent = true), [])};
+    const store = {...legacy, readQuery: async () => ((sent = true), []) as never};
     await expect(queries.countPerHobby().exec(store)).rejects.toThrow(/uses 'groupBy', which the dataset/);
     expect(sent).toBe(false);
   });
@@ -509,7 +509,7 @@ describeFuseki('grouped selects through a store', () => {
       {friend: {id: `${ENT}p3`}, last: new Date('2005-01-01T00:00:00Z')},
     ]);
     const legacy = {
-      selectQuery: async () => [],
+      readQuery: async () => [] as never,
       createQuery: async () => ({}) as never,
       updateQuery: async () => ({}) as never,
       deleteQuery: async () => ({deleted: [], count: 0}),

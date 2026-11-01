@@ -4,7 +4,7 @@ summary: >
   triplesTermsQuery) become one readQuery dispatched by the query's kind; ask/triples/terms
   support as query features; resolveRead/dispatchRead; LinkedStorage.readQuery; Transaction;
   the terms read gets kind 'triples_terms' (DSL-JSON 1.10). graphQuery stays (owner decision 1).
-status: Implementation
+status: Review
 ---
 
 # 112 One read method in core (step C1)
@@ -47,6 +47,9 @@ Contracts: master plan [111](111-one-read-method.md) C-1 to C-8 (after the owner
 | 9 | phase 3 | `LinkedStorage` used to call `dataset.selectQuery` directly for a select/count (the builder validated the count) | Every routed dataset is sent its read through `resolveRead` (a count is checked there too) | Call `dataset.readQuery` directly for select/count | C-3: a router listing `ALL_QUERY_FEATURES` forwards through `resolveRead` |
 | 10 | phase 4 | `SparqlDataset`'s per-kind methods: private or protected | Private (`selectRead`, `askRead`, `triplesRead`, `termsRead`); a subclass overrides `readQuery` and calls `super.readQuery` | Protected, so subclasses can override one kind | The plan says private; one override point |
 | 11 | phase 4 | `InMemoryDataset.readQuery` handed a triples or terms read (it declares neither) | Rejects with `InMemoryQueryRefusal` ("a triples read" / "a terms read") | A generic Error | Its existing refusal type for everything it does not answer |
+| 12 | phase 5 | Test doubles: one `readQuery` per double, written out per file | A test helper `readQueryOf({select, ask, triples, terms})` (`src/test-helpers/read-double.ts`, no side effects) and `isSelectRead` | A `switch` in every double | Fewest moving parts across 40 files; a kind without a handler is refused |
+| 13 | phase 5 | Current docs outside the Verify grep (`documentation/dsl-json.md`, `intermediate-representation.md`, `sparql-algebra.md`) name the old methods | Updated too (1.10, `triples_terms`, the `readQuery` skeletons) | Leave them | Current docs describe the current state |
+| 14 | phase 5, Verify | The Verify grep hits the module path `queries/triplesQuery` (the file keeps its name) | Keep the module name; the remaining hits are import paths only | Rename the module | The plan keeps `triplesQuery.ts` (C-4 names it); a rename would break every importer for nothing |
 | 4 | phase 1, C-2 | `readKindOf` on a plain object with neither `__queryKind` nor a read `kind` | Throw, naming what it got | Treat it as a select | Discriminate on the kind, never structurally (C-2) |
 
 ## Progress
@@ -56,5 +59,6 @@ Contracts: master plan [111](111-one-read-method.md) C-1 to C-8 (after the owner
 | 1 types, features, terms kind | done | 9607362 | `tsc --pretty false`: no error in `readQuery.ts`, `triplesQuery.ts`, `queryFeatures.ts`, `wireVersion.ts`, `fromJSON.ts`, `index.ts` (the others are the callers of phases 2-4) |
 | 2 dispatch and builders | done | a9a3c95 | `tsc --pretty false`: no error in `queryDispatch.ts`, `IDataset.ts`, the five builders |
 | 3 LinkedStorage and Transaction | done | 22cb9e9 | `tsc --pretty false`: no error in `LinkedStorage.ts`, `Transaction.ts` |
-| 4 stores and helpers | done | (next commit) | `npx tsc --noEmit -p tsconfig.json`: no errors; `tsconfig-tests.json`: errors only in `src/tests/` (phase 5) |
+| 4 stores and helpers | done | 480c4df | `npx tsc --noEmit -p tsconfig.json`: no errors; `tsconfig-tests.json`: errors only in `src/tests/` (phase 5) |
+| 5 tests, docs, changesets | done | (next commit) | `npm test` with own Fuseki on :3962: 170 suites passed (4 skipped), 3345 tests passed (122 skipped); `[fuseki] live tests: 493 total — 491 passed, 0 failed, 2 skipped`; typecheck 0 errors |
 

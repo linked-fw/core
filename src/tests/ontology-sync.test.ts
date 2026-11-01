@@ -23,6 +23,8 @@ import {builtInShapeIris} from '../utils/ShapeCatalog';
 import {setOntologyHierarchy, superClassesOf} from '../ontology/classHierarchy';
 import {inferenceProbeAnswer, isInferenceProbeGraph} from '../test-helpers/test-utils';
 import {setGraphTargets} from '../utils/graphTargets';
+import {isSelectRead, readQueryOf} from '../test-helpers/read-double';
+import type {ReadQuery, ReadResult} from '../queries/readQuery';
 
 const NS = 'http://example.org/sync/';
 const SUB = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
@@ -42,9 +44,10 @@ class Recording extends SparqlDataset {
   updates: string[] = [];
   selects = 0;
   graphQueries = 0;
-  override async selectQuery(): Promise<any> {
+  override async readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    if (!isSelectRead(query)) return super.readQuery(query);
     this.selects++;
-    return [];
+    return [] as unknown as ReadResult<Q>;
   }
   override async graphQuery(query: GraphQuery): Promise<GraphResult> {
     this.graphQueries++;
@@ -122,16 +125,18 @@ class GraphRecording extends SparqlDataset {
   records: GraphRow[] = [];
   /** What the store answers the inference probe. */
   inference: 'named-graphs' | 'default-graph' | 'none' = 'named-graphs';
-  override async askQuery(query: any): Promise<boolean> {
-    const answer = inferenceProbeAnswer(query, this.inference);
-    if (answer === undefined) throw new Error('unexpected ask');
-    return answer;
-  }
-  override async selectQuery(query: any): Promise<any> {
-    if (shapeOf(query) === OntologyGraph.shape.id) return this.records.map((r) => ({...r}));
-    if (shapeOf(query) === OntologySync.shape.id) return [];
-    throw new Error(`unexpected select of ${shapeOf(query)}`);
-  }
+  override readQuery = readQueryOf({
+    ask: async (query: any) => {
+      const answer = inferenceProbeAnswer(query, this.inference);
+      if (answer === undefined) throw new Error('unexpected ask');
+      return answer;
+    },
+    select: async (query: any) => {
+      if (shapeOf(query) === OntologyGraph.shape.id) return this.records.map((r) => ({...r}));
+      if (shapeOf(query) === OntologySync.shape.id) return [];
+      throw new Error(`unexpected select of ${shapeOf(query)}`);
+    },
+  });
   override async graphQuery(query: GraphQuery): Promise<GraphResult> {
     (isInferenceProbeGraph(query.graph) ? this.probeQueries : this.graphQueries).push(query);
     return {graph: query.graph, contentHash: query.contentHash, changed: query.kind !== 'graph_patch'};

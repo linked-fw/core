@@ -21,6 +21,7 @@ import {OntologyGraph} from '../shapes/NamedGraph';
 import {OntologySync} from '../shapes/OntologySync';
 import type {GraphQuery, GraphResult} from '../queries/IntermediateRepresentation';
 import {inferenceProbeAnswer, isInferenceProbeGraph} from '../test-helpers/test-utils';
+import {readQueryOf} from '../test-helpers/read-double';
 
 const NS = 'http://example.org/probe-sync/';
 const SUB = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
@@ -50,18 +51,20 @@ class StubStore extends SparqlDataset {
   constructor(public inference: HierarchyInference) {
     super();
   }
-  override async askQuery(query: any): Promise<boolean> {
-    this.asks++;
-    if (this.failAsk) throw new Error('ask failed');
-    const answer = inferenceProbeAnswer(query, this.inference);
-    if (answer === undefined) throw new Error('unexpected ask');
-    return answer;
-  }
-  override async selectQuery(query: any): Promise<any> {
-    if (shapeOf(query) === OntologyGraph.shape.id) return this.records.map((r) => ({...r}));
-    if (shapeOf(query) === OntologySync.shape.id) return [];
-    throw new Error(`unexpected select of ${shapeOf(query)}`);
-  }
+  override readQuery = readQueryOf({
+    ask: async (query: any) => {
+      this.asks++;
+      if (this.failAsk) throw new Error('ask failed');
+      const answer = inferenceProbeAnswer(query, this.inference);
+      if (answer === undefined) throw new Error('unexpected ask');
+      return answer;
+    },
+    select: async (query: any) => {
+      if (shapeOf(query) === OntologyGraph.shape.id) return this.records.map((r) => ({...r}));
+      if (shapeOf(query) === OntologySync.shape.id) return [];
+      throw new Error(`unexpected select of ${shapeOf(query)}`);
+    },
+  });
   override async graphQuery(query: GraphQuery): Promise<GraphResult> {
     (isInferenceProbeGraph(query.graph) ? this.probeQueries : this.graphQueries).push(query);
     return {graph: query.graph, changed: true};

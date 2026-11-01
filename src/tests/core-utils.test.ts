@@ -166,8 +166,8 @@ describe('LinkedStorage extra behaviors', () => {
   });
 
   test('getStores returns default and shape-specific stores', () => {
-    const defaultStore = {selectQuery: jest.fn()} as any;
-    const shapeStore = {selectQuery: jest.fn()} as any;
+    const defaultStore = {readQuery: jest.fn()} as any;
+    const shapeStore = {readQuery: jest.fn()} as any;
     LinkedStorage.setDefaultDataset(defaultStore);
     LinkedStorage.setDatasetForShapes(shapeStore, BaseShape);
     const stores = LinkedStorage.getDatasets();
@@ -176,24 +176,24 @@ describe('LinkedStorage extra behaviors', () => {
   });
 
   test('getDatasetForShapeClass falls back to superclass mapping', () => {
-    const baseStore = {selectQuery: jest.fn()} as any;
+    const baseStore = {readQuery: jest.fn()} as any;
     LinkedStorage.setDatasetForShapes(baseStore, BaseShape);
     expect(LinkedStorage.getDatasetForShapeClass(SubShape)).toBe(baseStore);
   });
 
-  test('selectQuery rejects invalid query payloads before store resolution', async () => {
+  test('readQuery rejects invalid select payloads before store resolution', async () => {
     await expect(
-      LinkedStorage.selectQuery({shape: null} as any),
-    ).rejects.toThrow('Invalid select query passed to LinkedStorage.selectQuery(): missing shape');
+      LinkedStorage.readQuery({__queryKind: 'select', shape: null} as any),
+    ).rejects.toThrow('Invalid select query passed to LinkedStorage.readQuery(): missing shape');
   });
 
-  test('selectQuery still reports missing store for valid query shapes', async () => {
+  test('readQuery still reports missing store for valid query shapes', async () => {
     await expect(
-      LinkedStorage.selectQuery({shape: {id: BaseShape.shape.id}} as any),
+      LinkedStorage.readQuery({__queryKind: 'select', shape: {id: BaseShape.shape.id}} as any),
     ).rejects.toThrow('No query dataset configured');
   });
 
-  test('mutation queries reject a missing shape (parity with selectQuery)', async () => {
+  test('mutation queries reject a missing shape (parity with readQuery)', async () => {
     await expect(
       LinkedStorage.updateQuery({shape: null} as any),
     ).rejects.toThrow('Invalid update query passed to LinkedStorage.updateQuery(): missing shape');
@@ -239,24 +239,24 @@ describe('LinkedFileStorage asset helper', () => {
 describe('Query dispatch delegation', () => {
   beforeEach(() => resetLinkedStorage());
 
-  test('selectQuery dispatches through to store', async () => {
+  test('readQuery dispatches through to store', async () => {
     const store = {
-      selectQuery: jest.fn(async () => [{id: 'r1'}]),
+      readQuery: jest.fn(async () => [{id: 'r1'}]),
     } as any;
     LinkedStorage.setDefaultDataset(store);
 
     const dispatch = getQueryDispatch();
     const query = ContextPerson.select((p) => p.name);
-    const result = await dispatch.selectQuery(query as any);
+    const result = await dispatch.readQuery(query as any);
 
-    expect(store.selectQuery).toHaveBeenCalledTimes(1);
-    expect(store.selectQuery.mock.calls[0][0]?.__queryKind).toBe('select');
+    expect(store.readQuery).toHaveBeenCalledTimes(1);
+    expect(store.readQuery.mock.calls[0][0]?.__queryKind).toBe('select');
     expect(result).toEqual([{id: 'r1'}]);
   });
 
   test('update/create/delete dispatch through to store', async () => {
     const store = {
-      selectQuery: jest.fn(async () => []),
+      readQuery: jest.fn(async () => []),
       updateQuery: jest.fn(async () => ({id: 'u1'})),
       createQuery: jest.fn(async () => ({id: 'c1'})),
       deleteQuery: jest.fn(async () => ({deleted: [], count: 0})),
@@ -264,8 +264,8 @@ describe('Query dispatch delegation', () => {
     LinkedStorage.setDefaultDataset(store);
 
     await ContextPerson.select((p) => p.name);
-    expect(store.selectQuery).toHaveBeenCalledTimes(1);
-    expect(store.selectQuery.mock.calls[0][0]?.__queryKind).toBe('select');
+    expect(store.readQuery).toHaveBeenCalledTimes(1);
+    expect(store.readQuery.mock.calls[0][0]?.__queryKind).toBe('select');
   });
 });
 

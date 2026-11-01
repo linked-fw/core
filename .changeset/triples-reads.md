@@ -10,7 +10,7 @@ Triples reads: a graph read and a subject read, without a shape.
   graphs it looks where a shapeless ask looks. Both take `.limit(n)`.
 - The answer is `Triple[]` (`{subject, predicate, object, graph?}`): IRIs as `{id}`, blank nodes as
   `{id: '_:label'}`, literals as `{value, datatype, language?}`.
-- New optional `IDataset.triplesQuery(query)`; `SparqlDataset` implements it with one SELECT
+- A triples read (`TriplesQuery`, `kind: 'triples'`) goes to `IDataset.readQuery`, only to a
+  dataset that declares the `'triples'` query feature; `SparqlDataset` answers it with one SELECT
   (`triplesToSparql`, `mapSparqlTriplesResult` in `@_linked/core/sparql`). `LinkedStorage` routes
-  it; the dispatch refuses a dataset without it. `TriplesQuery` is plain data, checked at a wire
-  boundary with `parseTriplesQuery`.
+  it. `TriplesQuery` is plain data, checked at a wire boundary with `parseTriplesQuery`.

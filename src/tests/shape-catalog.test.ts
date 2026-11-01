@@ -58,6 +58,7 @@ import {syncShapes} from '../shapes/syncShapes';
 import {beforeAll} from '@jest/globals';
 import {rdf} from '../ontologies/rdf';
 import {shacl} from '../ontologies/shacl';
+import {readKindOf, type ReadQuery, type ReadResult} from '../queries/readQuery';
 
 const EX = 'https://example.org/catalog/';
 const PERSON = `${EX}shape/Person`;
@@ -129,9 +130,10 @@ class RecordingDataset extends SparqlDataset {
   protected async executeSparqlUpdate(sparql: string): Promise<void> {
     this.updates.push(sparql);
   }
-  override selectQuery(query: any): any {
-    this.calledIn.push(getActiveShapeCatalog());
-    return super.selectQuery(query);
+  override readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    const kind = readKindOf(query);
+    if (kind === 'select' || kind === 'count') this.calledIn.push(getActiveShapeCatalog());
+    return super.readQuery(query);
   }
 }
 

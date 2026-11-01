@@ -2056,7 +2056,7 @@ describeFuseki('Fuseki COUNT — root-level', () => {
       FUSEKI_BASE_URL,
       DATASET_NAME,
     );
-    await expect(store.selectQuery(rehydrated)).rejects.toThrow(/context/i);
+    await expect(store.readQuery(rehydrated)).rejects.toThrow(/context/i);
   });
 
   test('a count answers end to end, over the select channel', async () => {
@@ -2064,11 +2064,11 @@ describeFuseki('Fuseki COUNT — root-level', () => {
       FUSEKI_BASE_URL,
       DATASET_NAME,
     );
-    // `selectQuery`, not a method of its own: a count is a select with an aggregate
+    // `readQuery`, as a select is: a count is a select with an aggregate
     // projection, and the store branches on the lowered IR to emit it.
-    await expect(store.selectQuery(Person.select().toCount())).resolves.toBe(4);
+    await expect(store.readQuery(Person.select().toCount())).resolves.toBe(4);
     await expect(
-      store.selectQuery(Person.select().where((p) => p.name.equals('Moa')).toCount()),
+      store.readQuery(Person.select().where((p) => p.name.equals('Moa')).toCount()),
     ).resolves.toBe(1);
     // And through the public entry point, with the store as an explicit target.
     await expect(
@@ -2087,9 +2087,9 @@ const FUSEKI_DATASET = DATASET_NAME;
 describeFuseki('SparqlDataset (via FusekiStore)', () => {
   const store = new FusekiStore(FUSEKI_BASE_URL, FUSEKI_DATASET);
 
-  test('selectQuery — returns mapped result rows', async () => {
+  test('readQuery — a select returns mapped result rows', async () => {
 
-    const result = await store.selectQuery(queryFactories.selectName());
+    const result = await store.readQuery(queryFactories.selectName());
 
     expect(Array.isArray(result)).toBe(true);
     const rows = result as ResultRow[];
@@ -2100,9 +2100,9 @@ describeFuseki('SparqlDataset (via FusekiStore)', () => {
     expect(names).toContain('Moa');
   });
 
-  test('selectQuery — nested traversals', async () => {
+  test('readQuery — a select with nested traversals', async () => {
 
-    const result = await store.selectQuery(queryFactories.selectFriendsName());
+    const result = await store.readQuery(queryFactories.selectFriendsName());
 
     expect(Array.isArray(result)).toBe(true);
     const rows = result as ResultRow[];

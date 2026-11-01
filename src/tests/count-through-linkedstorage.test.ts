@@ -8,7 +8,7 @@
  * A count through `LinkedStorage` — the path an application actually takes.
  *
  * This is the regression this file exists for. The root COUNT shipped with its own
- * `IDataset.countQuery`, modelled on `askQuery`, and every test of it held a
+ * `IDataset.countQuery`, modelled on the ask method, and every test of it held a
  * `SparqlDataset` directly — where that method exists. `LinkedStorage` never grew a
  * matching arm: its `setQueryDispatch({…})` registered select/ask/create/update/
  * delete and nothing else, so `.count()` rejected with "does not implement
@@ -43,7 +43,7 @@ const entity = (s: string) => ({id: `${tmpEntityBase}${s}`});
  * A `SparqlDataset` whose transport answers from a script instead of a network.
  *
  * Deliberately a subclass rather than an `IDataset` literal: the point under test is
- * that a count reaches the base class's `selectQuery` and is recognised there, which
+ * that a count reaches the base class's `readQuery` and is recognised there, which
  * a hand-written literal would fake.
  */
 class ScriptedSparqlDataset extends SparqlDataset {
@@ -128,7 +128,7 @@ describe('a count reaches a store through LinkedStorage', () => {
   });
 
   test('a select through the same channel still answers with rows', async () => {
-    // The branch added to `selectQuery` must not disturb the channel it shares. A
+    // The count branch of `readQuery` must not disturb the select it shares it with. A
     // select is still a select: no COUNT emitted, rows (here, none) returned.
     await expect(Person.select().exec()).resolves.toEqual([]);
     expect(store.sent.at(-1)).not.toMatch(/COUNT/i);
