@@ -4,7 +4,7 @@ summary: >
   and by predicate (`TriplesBuilder.withPredicate`, `.exists()` as the ask), and an IRI-valued
   graph-record field, `attributedTo` (`prov:wasAttributedTo`) on `NamedGraph`.
 packages: [core]
-status: Ideation
+status: Plan
 ---
 
 # 008 — Object and predicate triples reads; an IRI-valued graph-record field
@@ -116,3 +116,86 @@ typing adds `attributedTo?: {id: string}` on each class. A new terms module
 Decisions 1–6 as chosen: `object`/`predicate` on `TriplesQuery`, `toNode`, `withPredicate`,
 `.exists()`, the `triplesPattern` feature, wire 1.4, and `attributedTo` with node-valued record
 fields.
+
+## Plan
+
+### Contracts
+
+```ts
+// queries/triplesQuery.ts
+interface TriplesQuery {
+  kind: 'triples';
+  subject?: string;    // as before
+  predicate?: string;  // new: the predicate IRI
+  object?: string;     // new: the object node IRI (a node, never a literal)
+  graphs?: string[]; limit?: number; recordClass?: string;
+}
+// Refused: no node (subject or object) and no graphs. A predicate alone needs graphs.
+triplesQueryFeatures(query): QueryFeature[]   // ['triplesPattern'] when predicate or object is set
+
+// queries/TriplesBuilder.ts
+TriplesBuilder.toNode({id}): TriplesBuilder
+TriplesBuilder.withPredicate({id}): TriplesBuilder      // static; needs .from() before it is sent
+builder.withPredicate({id}): TriplesBuilder             // narrows a node or graph read
+builder.exists(target?): Promise<boolean>               // the read with limit 1, true when a triple comes back
+
+// queries/queryFeatures.ts
+type QueryFeature = 'groupBy' | 'min' | 'max' | 'shapelessDelete' | 'triplesPattern';
+
+// queries/graphRecords.ts
+type GraphRecordField =
+  | {path: string; datatype: string; many?: boolean}
+  | {path: string; nodeKind: 'iri'; many?: boolean};
+type GraphRecordValue = GraphRecordLiteral | {id: string};
+graphRecordFieldValues(query): Map<string, GraphRecordValue[]>
+
+// shapes/NamedGraph.ts
+NamedGraph.attributedTo: {id: string}   // prov:wasAttributedTo, nodeKind IRI, maxCount 1
+recordFields: {…, attributedTo?: {id: string}} on NamedGraph, OntologyGraph, ShapesGraph, ComponentsGraph
+```
+
+SPARQL (fixed positions are terms, the others projected variables):
+
+```sparql
+SELECT ?s ?p WHERE { GRAPH <g> { ?s ?p <o> } }                 # toNode({id: o}).from(g)
+SELECT ?s ?o WHERE { GRAPH <g> { ?s <p> ?o } } LIMIT 1         # withPredicate({id: p}).from(g).exists()
+SELECT ?s ?o ?g_s0 FROM NAMED <g1> FROM NAMED <g2>
+  WHERE { GRAPH ?g_s0 { ?s <p> ?o } }                         # withPredicate(p).from([g1, g2])
+```
+
+A record write: `<g> prov:wasAttributedTo <https://…/system>` in the registry, in the same update
+as the content.
+
+### Expected file changes
+
+- `src/queries/triplesQuery.ts`: fields, checks, the rule, `triplesQueryFeatures`.
+- `src/queries/TriplesBuilder.ts`: `toNode`, `withPredicate` (static and instance), `exists`.
+- `src/queries/queryFeatures.ts`: `triplesPattern`.
+- `src/queries/queryDispatch.ts`: `resolveTriples` checks the features (via a shared
+  `assertFeaturesSupported` behind `assertQuerySupported`).
+- `src/queries/wireVersion.ts`: 1.4.
+- `src/sparql/triplesToSparql.ts`: fixed positions, projection, answer mapping.
+- `src/sparql/SparqlDataset.ts`: only the doc comment (it forwards the checked query already).
+- `src/utils/fanOutNotice.ts`: the notice names node reads, not only subject reads.
+- `src/queries/graphRecords.ts`, `src/sparql/graphQueryToSparql.ts`: node-valued fields.
+- `src/ontologies/prov.ts` (new), `src/shapes/NamedGraph.ts`: `attributedTo`.
+- `src/index.ts`: nothing new beyond existing exports (the builder is exported already).
+- Tests: `src/tests/triples-read.test.ts`, `src/tests/triples-read-fuseki.test.ts`,
+  `src/tests/graph-query.test.ts`, `src/tests/graph-query-fuseki.test.ts`,
+  `src/tests/shapeless-delete.test.ts` (the version assertion).
+- Docs: README (triples reads), `documentation/dsl-json.md` (triples reads on the wire, 1.4),
+  `docs/architecture/ontologies.md` (record fields), `IDataset.triplesQuery` doc line.
+- Changeset (minor).
+
+### Pitfalls
+
+- `LinkedStorage` and `IDataset` are `core-tx`'s area: only the doc line in `IDataset`, no change
+  in `LinkedStorage` (its per-dataset `resolveTriples` already gets the feature check).
+- The answer mapping took the subject from the query or from `?s`; it must do the same for the
+  predicate and the object, and never read a binding for a fixed position.
+- `.exists()` must not change the builder's own limit for a later `exec()` (builders are
+  immutable already).
+- A node field must never accept a blank label or a relative IRI (`assertSafeIri` guards the
+  SPARQL text, the field check gives the clear error first).
+- Core's own shapes data includes `NamedGraph`'s property shapes: a new property changes the
+  generated `shapes.ttl` and any test that pins it.
