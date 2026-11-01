@@ -38,7 +38,7 @@ import {scopeAlgebraToGraphs, type ReadGraphScope} from './graphScope.js';
 import {selectPlanToSparql} from './algebraToString.js';
 import type {SparqlCompileOptions} from './sparqlUtils.js';
 import {isSparqlSelectResults, type SparqlBinding, type SparqlQueryResults} from './resultMapping.js';
-import type {LiteralTerm, Triple, TripleObject, TriplesQuery} from '../queries/triplesQuery.js';
+import type {LiteralTerm, Triple, TripleObject, TriplesQuery, TriplesTermsQuery} from '../queries/triplesQuery.js';
 import type {NodeReferenceValue} from '../queries/QueryFactory.js';
 import {graphs} from '../ontologies/graphs.js';
 import {rdf} from '../ontologies/rdf.js';
@@ -119,14 +119,13 @@ const TERM = 't';
  * Compile a terms read (a list of `objects` or `predicates`) whose `graphs` the store has expanded
  * already, as {@link triplesToAlgebra} takes them: `VALUES ?t { … }` over the list, kept where
  * `FILTER EXISTS` finds the read's pattern with `?t` in the list's position, `SELECT DISTINCT ?t`.
- * The pattern is scoped to the graphs exactly as the one-term read's is. A read without a list,
- * or with an empty one (the store answers it without querying), is refused. Its `limit` is not
- * part of it.
+ * The pattern is scoped to the graphs exactly as the one-term read's is. A read with an empty list
+ * (the store answers it without querying) is refused.
  */
-export function triplesTermsToAlgebra(query: TriplesQuery, options?: SparqlCompileOptions): SparqlSelectPlan {
+export function triplesTermsToAlgebra(query: TriplesTermsQuery, options?: SparqlCompileOptions): SparqlSelectPlan {
   const position = triplesTermsPosition(query);
   const terms = triplesTermsOf(query);
-  if (position === undefined || terms.length === 0) {
+  if (terms.length === 0) {
     throw new Error('A terms read lists at least one object or predicate; this one lists none.');
   }
   const term = (fixed: string | undefined, name: string): SparqlTerm =>
@@ -168,7 +167,7 @@ export function triplesTermsToAlgebra(query: TriplesQuery, options?: SparqlCompi
 }
 
 /** The SPARQL text of a terms read (see {@link triplesTermsToAlgebra}). */
-export function triplesTermsToSparql(query: TriplesQuery, options?: SparqlCompileOptions): string {
+export function triplesTermsToSparql(query: TriplesTermsQuery, options?: SparqlCompileOptions): string {
   return selectPlanToSparql(triplesTermsToAlgebra(query, options), options);
 }
 

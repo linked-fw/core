@@ -32,6 +32,7 @@ import type {QueryFeature} from '../queries/queryFeatures.js';
 import {lower} from '../queries/lower.js';
 import {unsupportedGraphQuery} from '../queries/graphQuery.js';
 import {txIdOf} from '../queries/transactionQuery.js';
+import {readKindOf, type ReadQuery, type ReadResult} from '../queries/readQuery.js';
 import {graphs} from '../ontologies/graphs.js';
 import {rdf} from '../ontologies/rdf.js';
 import {findPropertyShapeById, getPropertyShapes} from '../shapes/nodeShapeData.js';
@@ -106,7 +107,8 @@ const copyData = (data: Data): Data =>
 
 /**
  * A dataset that keeps its data in memory: for tests, examples and tools, and the store that
- * shows the transaction protocol for real (`supports: ['transactions']`).
+ * shows the transaction protocol for real (`supports: ['transactions']`). It answers asks natively
+ * (`'ask'`); it has no triples reads.
  *
  * It answers a deliberate subset of queries, and refuses everything else with
  * {@link InMemoryQueryRefusal} (never a partial answer):
@@ -128,7 +130,7 @@ const copyData = (data: Data): Data =>
  */
 export class InMemoryDataset implements IDataset {
   readonly id: string;
-  readonly supports: readonly QueryFeature[] = Object.freeze(['shapelessDelete', 'transactions'] as QueryFeature[]);
+  readonly supports: readonly QueryFeature[] = Object.freeze(['shapelessDelete', 'transactions', 'ask'] as QueryFeature[]);
   readonly transactionTimeoutMs: number;
   private readonly root: string;
   private data: Data = new Map();
@@ -230,7 +232,17 @@ export class InMemoryDataset implements IDataset {
   // Reads
   // ---------------------------------------------------------------------------
 
-  async selectQuery(query: SelectQuery | CountQuery): Promise<SelectResult | number> {
+  /** Answer a select, count or ask; a triples or terms read is refused (not in `supports`). */
+  async readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    const kind = readKindOf(query);
+    if (kind === 'ask') return (await this.ask(query as AskQuery)) as ReadResult<Q>;
+    if (kind === 'select' || kind === 'count') {
+      return (await this.select(query as SelectQuery | CountQuery)) as ReadResult<Q>;
+    }
+    throw new InMemoryQueryRefusal(kind === 'triples' ? 'a triples read' : 'a terms read');
+  }
+
+  private async select(query: SelectQuery | CountQuery): Promise<SelectResult | number> {
     const ir = lower(query as SelectQuery) as IRSelectQuery | IRCountQuery;
     return this.within(query, false, (data) => {
       if (ir.kind === 'count') return this.match(data, ir).length;
@@ -238,7 +250,7 @@ export class InMemoryDataset implements IDataset {
     });
   }
 
-  async askQuery(query: AskQuery): Promise<boolean> {
+  private async ask(query: AskQuery): Promise<boolean> {
     const ir = lower(query);
     return this.within(query, false, (data) => {
       if (!ir.root) {

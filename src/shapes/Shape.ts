@@ -219,7 +219,7 @@ export abstract class Shape {
    * shapes themselves are described by `NodeShape` and `PropertyShape`, so
    * `Shape.exists` is not needed for "is this a shape?".) Because a shapeless ask
    * has no shape to route on, a router asks every dataset it knows — see
-   * `LinkedStorage.askQuery`.
+   * `LinkedStorage.readQuery`.
    *
    * ```typescript
    * if (await SourceDocument.exists({id})) {

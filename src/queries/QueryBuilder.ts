@@ -517,7 +517,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
    * A store, transport or lowering failure rejects the returned promise; it is never
    * reported as `false`. That includes an unresolved query-context reference in a
    * where clause, which `exec()` deliberately reports as `null` ("not ready") but
-   * which `exists()` must not flatten into a boolean — and a store whose `askQuery`
+   * which `exists()` must not flatten into a boolean — and a store whose ask
    * resolves to something that is not a boolean, which rejects rather than being
    * coerced into one.
    *

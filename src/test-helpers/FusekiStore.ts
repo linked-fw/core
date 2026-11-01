@@ -13,7 +13,7 @@ import {graphs} from '../ontologies/graphs.js';
  * ```ts
  * const store = new FusekiStore('http://localhost:3030', 'my-dataset');
  * await store.init();
- * const result = await store.selectQuery(irSelectQuery);
+ * const result = await store.readQuery(selectQuery);
  * ```
  */
 /** Jena's names for the portable default and union graphs. */

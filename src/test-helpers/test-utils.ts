@@ -39,7 +39,7 @@ export const sanitize = (value: unknown): unknown => {
 
 /**
  * The `IDataset` methods a test double does not exercise. Spread it first into a double
- * (`{...unusedDatasetMethods, selectQuery, askQuery}`) so the double's own methods win: the
+ * (`{...unusedDatasetMethods, readQuery, supports}`) so the double's own methods win: the
  * mutation methods reject, and `graphQuery` refuses like a dataset without graph support.
  */
 export const unusedDatasetMethods = {

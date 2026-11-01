@@ -542,7 +542,7 @@ export type ResultFieldValue =
   | Date[];
 
 /**
- * What `selectQuery` should return.
+ * What a select (`IDataset.readQuery`) should return.
  *
  * - Array of rows for multi-result queries (the default).
  * - A single row when `query.singleResult` is true (`.one()` or subject-targeted query).

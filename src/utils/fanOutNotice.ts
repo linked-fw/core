@@ -6,7 +6,7 @@
 
 /**
  * The notice `LinkedStorage` logs when a shapeless read, sent without a dataset, goes to more
- * than one dataset (see `LinkedStorage.triplesQuery` and `LinkedStorage.askQuery`).
+ * than one dataset (see `LinkedStorage.readQuery`: a shapeless ask, a node read, a terms read).
  *
  * Such a read is correct, but it costs a query per dataset, and the caller usually knows which
  * dataset it means. The notice says so once per call site: the first stack frame outside core,

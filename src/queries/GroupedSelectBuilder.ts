@@ -255,7 +255,7 @@ type GroupedInit = {
  * (a group is not a subject), and no nested selects or live patching of entities.
  *
  * It is still a select (`__queryKind: 'select'`): a dataset receives it through
- * `IDataset.selectQuery` and lowers it to an `IRSelectQuery` with `groupBy`. It needs the
+ * `IDataset.readQuery` and lowers it to an `IRSelectQuery` with `groupBy`. It needs the
  * `'groupBy'` feature, so a dataset that does not declare it (`IDataset.supports`) is never
  * sent it.
  */

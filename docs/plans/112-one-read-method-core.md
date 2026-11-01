@@ -45,6 +45,8 @@ Contracts: master plan [111](111-one-read-method.md) C-1 to C-8 (after the owner
 | 7 | phase 2, C-5 | `assertTriplesTarget`/`assertTriplesTermsTarget` are removed, but a router needs to check every dataset before it asks the first | New exported `assertReadSupported(target, query)` (any read kind), used by `resolveRead`, `dispatchRead` and `LinkedStorage`. **Contract addition** (C-5) | Keep the two per-kind asserts | One explicit way, the same check for every kind |
 | 8 | phase 3, C-6 | `Transaction.supports` must not list `triples`/`triplesTerms` (C-6), so `TriplesBuilder…exec(tx)` is refused by the feature check ("does not declare 'triples'", naming `Transaction`) before the transaction's own "does not run in a transaction" | Keep the contract; `Transaction.readQuery` still refuses them with today's messages when called directly | List them so the transaction's own message is reached | The contract as written; the refusal still names the transaction |
 | 9 | phase 3 | `LinkedStorage` used to call `dataset.selectQuery` directly for a select/count (the builder validated the count) | Every routed dataset is sent its read through `resolveRead` (a count is checked there too) | Call `dataset.readQuery` directly for select/count | C-3: a router listing `ALL_QUERY_FEATURES` forwards through `resolveRead` |
+| 10 | phase 4 | `SparqlDataset`'s per-kind methods: private or protected | Private (`selectRead`, `askRead`, `triplesRead`, `termsRead`); a subclass overrides `readQuery` and calls `super.readQuery` | Protected, so subclasses can override one kind | The plan says private; one override point |
+| 11 | phase 4 | `InMemoryDataset.readQuery` handed a triples or terms read (it declares neither) | Rejects with `InMemoryQueryRefusal` ("a triples read" / "a terms read") | A generic Error | Its existing refusal type for everything it does not answer |
 | 4 | phase 1, C-2 | `readKindOf` on a plain object with neither `__queryKind` nor a read `kind` | Throw, naming what it got | Treat it as a select | Discriminate on the kind, never structurally (C-2) |
 
 ## Progress
@@ -53,5 +55,6 @@ Contracts: master plan [111](111-one-read-method.md) C-1 to C-8 (after the owner
 |---|---|---|---|
 | 1 types, features, terms kind | done | 9607362 | `tsc --pretty false`: no error in `readQuery.ts`, `triplesQuery.ts`, `queryFeatures.ts`, `wireVersion.ts`, `fromJSON.ts`, `index.ts` (the others are the callers of phases 2-4) |
 | 2 dispatch and builders | done | a9a3c95 | `tsc --pretty false`: no error in `queryDispatch.ts`, `IDataset.ts`, the five builders |
-| 3 LinkedStorage and Transaction | done | (next commit) | `tsc --pretty false`: no error in `LinkedStorage.ts`, `Transaction.ts` |
+| 3 LinkedStorage and Transaction | done | 22cb9e9 | `tsc --pretty false`: no error in `LinkedStorage.ts`, `Transaction.ts` |
+| 4 stores and helpers | done | (next commit) | `npx tsc --noEmit -p tsconfig.json`: no errors; `tsconfig-tests.json`: errors only in `src/tests/` (phase 5) |
 

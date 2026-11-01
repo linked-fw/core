@@ -15,6 +15,8 @@ import type {SparqlQueryResults} from '../sparql/resultMapping';
 import type {GraphQuery, GraphResult} from '../queries/IntermediateRepresentation';
 import {OntologyGraph, ShapesGraph} from '../shapes/NamedGraph';
 import {inferenceProbeAnswer, isInferenceProbeGraph} from './test-utils';
+import {readKindOf, type ReadQuery, type ReadResult} from '../queries/readQuery';
+import type {AskQuery} from '../queries/AskQuery';
 
 export interface MemoryGraph {
   recordClass: string;
@@ -50,17 +52,15 @@ export class MemoryGraphStore extends SparqlDataset {
       .map(([id, g]) => ({id, ...g.record, contentHash: g.contentHash}));
   }
 
-  override async askQuery(query: any): Promise<boolean> {
+  override async readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
     this.check();
-    return inferenceProbeAnswer(query, 'named-graphs') ?? false;
-  }
-
-  override async selectQuery(query: any): Promise<any> {
-    this.check();
+    const kind = readKindOf(query);
+    if (kind === 'ask') return (inferenceProbeAnswer(query as AskQuery, 'named-graphs') ?? false) as ReadResult<Q>;
+    if (kind !== 'select' && kind !== 'count') return super.readQuery(query);
     const shape = shapeOf(query);
-    if (shape === ShapesGraph.shape.id) return this.rows(ShapesGraph.targetClass.id);
-    if (shape === OntologyGraph.shape.id) return this.rows(OntologyGraph.targetClass.id);
-    return [];
+    if (shape === ShapesGraph.shape.id) return this.rows(ShapesGraph.targetClass.id) as unknown as ReadResult<Q>;
+    if (shape === OntologyGraph.shape.id) return this.rows(OntologyGraph.targetClass.id) as unknown as ReadResult<Q>;
+    return [] as ReadResult<Q>;
   }
 
   override async graphQuery(query: GraphQuery): Promise<GraphResult> {

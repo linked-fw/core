@@ -293,7 +293,7 @@ export class NamedGraph extends GraphRecordBase {
   }
 
   /**
-   * Read every triple of the graph (a triples read, `IDataset.triplesQuery`), registered or not.
+   * Read every triple of the graph (a triples read, `IDataset.readQuery`), registered or not.
    * Routed like this class's graph queries, so `DraftGraph.readContent(g)` reads where
    * `DraftGraph.replaceContent(g, c)` writes. `.limit(n)` bounds it.
    */

@@ -864,8 +864,8 @@ export function mapSparqlCountResult(
       `A count result bound ?${variable} to ${JSON.stringify(binding.value)}, which ` +
       'is not a non-negative integer. It is not coerced — a count that silently reads ' +
       'as 0 hides a broken query behind an empty table. (These checks are repeated ' +
-      'here rather than left to `resolveCount`, because a caller may hold a store and ' +
-      'pass a count query to `selectQuery` on it directly, which does not go through ' +
+      'here rather than left to `resolveRead`, because a caller may hold a store and ' +
+      'pass a count query to `readQuery` on it directly, which does not go through ' +
       'that helper.)',
     );
   }
