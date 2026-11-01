@@ -552,6 +552,56 @@ describe('SparqlDataset.graphQuery', () => {
     const auto = await OntologyGraph.create({id: G, package: 'p', contentHash: 'x'} as any).exec(ds).catch((e) => e);
     expect(String(auto)).toMatch(/filled in by core/);
   });
+
+  describe('attributedTo, an IRI-valued field (prov:wasAttributedTo)', () => {
+    const PROV = 'http://www.w3.org/ns/prov#wasAttributedTo';
+    const ACTOR = 'https://example.org/actor/system';
+    const SHAPES = 'https://linked.cm/pkg/example/graph/shapes';
+
+    test('create writes it as an IRI object in the record', async () => {
+      const ds = new RecordingSparql(false);
+      await ShapesGraph.create({id: SHAPES, package: 'p', attributedTo: {id: ACTOR}}).withContent(ttl).exec(ds);
+      expect(ds.updates[0]).toContain(`<${PROV}> <${ACTOR}>`);
+    });
+
+    test('update().set({attributedTo}).replaceContent(c): the mark in the same update as the content', async () => {
+      const ds = new RecordingSparql(true);
+      await ShapesGraph.update(SHAPES).set({attributedTo: {id: ACTOR}}).replaceContent(nt).exec(ds);
+      expect(ds.updates).toHaveLength(1);
+      const ops = ds.updates[0].split(' ;\n');
+      const field = `GRAPH <${REG}> { <${SHAPES}> <${PROV}> ?v2 }`;
+      expect(ops).toContain(`DELETE { ${field} } WHERE { GRAPH <${REG}> { <${SHAPES}> <http://www.w3.org/ns/sparql-service-description#name> <${SHAPES}> ; a <https://linked.cm/ont/core/ShapesGraph> } ${field} }`);
+      expect(ops[ops.length - 1]).toContain(`<${PROV}> <${ACTOR}>`);
+      expect(ops.join('\n')).toContain('<urn:a> <urn:b>');
+    });
+
+    test('every record class takes it (NamedGraph, OntologyGraph, ComponentsGraph, DraftGraph)', async () => {
+      const ds = new RecordingSparql(true);
+      await NamedGraph.update(G).set({attributedTo: {id: ACTOR}}).exec(ds);
+      await OntologyGraph.update(G).set({attributedTo: {id: ACTOR}}).exec(ds);
+      await ComponentsGraph.update(G).set({attributedTo: {id: ACTOR}}).exec(ds);
+      await DraftGraph.update(G).set({attributedTo: {id: ACTOR}}).exec(ds);
+      expect(ds.updates.filter((u) => u.includes(`<${PROV}> <${ACTOR}>`))).toHaveLength(4);
+    });
+
+    test('refused: a string, a blank label, a relative IRI, a list, and {id} on a literal field', async () => {
+      const ds = new RecordingSparql(true);
+      const err = (fields: object) =>
+        ShapesGraph.update(SHAPES).set(fields as any).exec(ds).then(() => 'sent', (e) => String(e));
+      expect(await err({attributedTo: ACTOR})).toMatch(/"attributedTo" is a node: pass \{id\}/);
+      expect(await err({attributedTo: {id: '_:b0'}})).toMatch(/absolute IRI/);
+      expect(await err({attributedTo: {id: 'relative'}})).toMatch(/absolute IRI/);
+      expect(await err({attributedTo: [{id: ACTOR}]})).toMatch(/takes one value, not a list/);
+      expect(await err({version: {id: ACTOR}})).toMatch(/"version" is a string/);
+      expect(ds.updates).toEqual([]);
+    });
+
+    test('the shape reads it as {id}: a select of attributedTo', () => {
+      const sparql = selectToSparql(lower(ShapesGraph.select((g) => [g.package, g.contentHash, g.attributedTo]) as any) as any);
+      expect(sparql).toContain(`<${PROV}>`);
+      expect(sparql).toContain(`GRAPH <${REG}>`);
+    });
+  });
 });
 
 describe('store-reserved names, feedsHierarchy, record classes', () => {

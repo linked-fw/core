@@ -4,7 +4,7 @@ summary: >
   and by predicate (`TriplesBuilder.withPredicate`, `.exists()` as the ask), and an IRI-valued
   graph-record field, `attributedTo` (`prov:wasAttributedTo`) on `NamedGraph`.
 packages: [core]
-status: Tasks
+status: Implementation
 ---
 
 # 008 — Object and predicate triples reads; an IRI-valued graph-record field
@@ -243,3 +243,10 @@ CN's main checkout `npm run typecheck:gate`.
 
 Phase 1 first; phases 2 and 3 are independent (different files); phase 4 after both. One agent,
 sequential.
+
+## Progress
+
+- **Phase 1 done.** 17 new tests (unit/golden in `triples-read.test.ts` and `graph-query.test.ts`,
+  live in `triples-read-fuseki.test.ts` and `graph-query-fuseki.test.ts`), all failing against a
+  Fuseki of the suite's own (`FUSEKI_BASE_URL=http://localhost:3077`):
+  `Tests: 17 failed, 101 passed, 118 total`.

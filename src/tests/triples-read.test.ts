@@ -313,3 +313,164 @@ describe('the dispatch and the routing', () => {
     await expect(TriplesBuilder.forNode({id: S})).rejects.toThrow(/does not implement IDataset.triplesQuery/);
   });
 });
+
+describe('object reads, predicate reads and exists()', () => {
+  const O = 'https://example.org/data/o1';
+  const subClassOf = {id: 'http://www.w3.org/2000/01/rdf-schema#subClassOf'};
+
+  test('toNode reads the triples whose object is the node; withPredicate fixes the predicate', () => {
+    expect(TriplesBuilder.toNode({id: O}).from(G1).toTriplesQuery()).toEqual({kind: 'triples', object: O, graphs: [G1]});
+    expect(TriplesBuilder.withPredicate({id: P}).from([G1, G2]).limit(5).toTriplesQuery()).toEqual({
+      kind: 'triples',
+      predicate: P,
+      graphs: [G1, G2],
+      limit: 5,
+    });
+    expect(TriplesBuilder.toNode({id: O}).withPredicate(subClassOf).toTriplesQuery()).toEqual({
+      kind: 'triples',
+      object: O,
+      predicate: subClassOf.id,
+    });
+    expect(TriplesBuilder.forNode({id: S}).withPredicate({id: P}).toTriplesQuery()).toEqual({
+      kind: 'triples',
+      subject: S,
+      predicate: P,
+    });
+    expect(NamedGraph.readContent(G1).withPredicate({id: P}).toTriplesQuery()).toEqual({
+      kind: 'triples',
+      graphs: [G1],
+      predicate: P,
+      recordClass: 'http://www.w3.org/ns/sparql-service-description#NamedGraph',
+    });
+  });
+
+  test('refused: a non-IRI or blank object or predicate; a predicate read without graphs', async () => {
+    expect(() => TriplesBuilder.toNode({id: '_:b0'})).toThrow(/object must be an absolute IRI/);
+    expect(() => TriplesBuilder.toNode({id: 'nope'})).toThrow(/object must be an absolute IRI/);
+    expect(() => TriplesBuilder.withPredicate({id: 'nope'})).toThrow(/predicate must be an absolute IRI/);
+    const store = new StubStore();
+    await expect(TriplesBuilder.withPredicate({id: P}).exec(store)).rejects.toThrow(/a predicate read needs graphs/);
+    await expect(TriplesBuilder.withPredicate({id: P}).exists(store)).rejects.toThrow(/a predicate read needs graphs/);
+    expect(store.selects).toEqual([]);
+  });
+
+  test('the wire keeps object and predicate, checks them, and refuses a predicate alone', () => {
+    const query = TriplesBuilder.toNode({id: O}).withPredicate({id: P}).from(G1).toTriplesQuery();
+    expect(parseTriplesQuery({...JSON.parse(JSON.stringify(query)), v: '1.4'})).toEqual(query);
+    expect(() => parseTriplesQuery({kind: 'triples', object: '_:b1', graphs: [G1]})).toThrow(/object must be an absolute IRI/);
+    expect(() => parseTriplesQuery({kind: 'triples', predicate: 42, graphs: [G1]})).toThrow(/predicate must be an absolute IRI/);
+    expect(() => parseTriplesQuery({kind: 'triples', predicate: P})).toThrow(/a predicate read needs graphs/);
+    expect(parseTriplesQuery({kind: 'triples', object: O})).toEqual({kind: 'triples', object: O});
+  });
+
+  test('the SPARQL: fixed positions are terms, the others are projected', () => {
+    expect(triplesToSparql({kind: 'triples', object: O, graphs: [G1]})).toBe(
+      `SELECT ?s ?p\nWHERE {\n  GRAPH <${G1}> {\n    ?s ?p <${O}> .\n  }\n}`,
+    );
+    expect(triplesToSparql({kind: 'triples', predicate: P, graphs: [G1], limit: 1})).toBe(
+      `SELECT ?s ?o\nWHERE {\n  GRAPH <${G1}> {\n    ?s <${P}> ?o .\n  }\n}\nLIMIT 1`,
+    );
+    const many = triplesToSparql({kind: 'triples', predicate: P, graphs: [G1, G2]});
+    expect(many).toContain('SELECT ?s ?o ?g_s0');
+    expect(many).toContain(`FROM NAMED <${G1}>`);
+    expect(many).toContain(`GRAPH ?g_s0 {\n    ?s <${P}> ?o .`);
+    expect(triplesToSparql({kind: 'triples', object: O, predicate: P})).toBe(
+      `SELECT ?s\nWHERE {\n  ?s <${P}> <${O}> .\n}`,
+    );
+    const withDefault = triplesToSparql({kind: 'triples', object: O, graphs: [graphs.default, G1]}, {mapGraphName: jena});
+    expect(withDefault).toContain(`VALUES ?g_s0 { <${JENA_DEFAULT}> <${G1}> }`);
+    expect(() => triplesToSparql({kind: 'triples', predicate: P})).toThrow(/needs its graphs/);
+  });
+
+  test('the answer takes fixed positions from the query and the others from each row', async () => {
+    const store = new StubStore({mapGraphName: jena});
+    store.rows = [
+      {s: uri(S), p: uri(P), g_s0: uri(G1)},
+      {s: {type: 'bnode', value: 'b2'}, p: uri(subClassOf.id), g_s0: uri(JENA_DEFAULT)},
+    ];
+    expect(await TriplesBuilder.toNode({id: O}).from([graphs.default, G1]).exec(store)).toEqual([
+      {subject: {id: S}, predicate: {id: P}, object: {id: O}, graph: {id: G1}},
+      {subject: {id: '_:b2'}, predicate: subClassOf, object: {id: O}},
+    ]);
+    store.rows = [{s: uri(S), o: {type: 'literal', value: 'x'}}];
+    expect(await TriplesBuilder.withPredicate({id: P}).from(G2).exec(store)).toEqual([
+      {subject: {id: S}, predicate: {id: P}, object: {value: 'x', datatype: {id: xsd.string.id}}, graph: {id: G2}},
+    ]);
+  });
+
+  test('an object read without graphs follows the store routing like a subject read', async () => {
+    const store = new StubStore({mapGraphName: jena});
+    setShapeGraphs(store, {[Person.shape.id]: G1});
+    await TriplesBuilder.toNode({id: O}).exec(store);
+    expect(store.last()).toContain(`VALUES ?g_s0 { <${JENA_DEFAULT}> <${G1}> }`);
+    expect(store.last()).toContain(`?s ?p <${O}>`);
+  });
+
+  test('exists() sends the read with LIMIT 1 and answers whether a triple came back', async () => {
+    const store = new StubStore();
+    store.rows = [];
+    expect(await TriplesBuilder.withPredicate({id: P}).from(G1).exists(store)).toBe(false);
+    expect(store.last()).toBe(`SELECT ?s ?o\nWHERE {\n  GRAPH <${G1}> {\n    ?s <${P}> ?o .\n  }\n}\nLIMIT 1`);
+    store.rows = [{s: uri(S), o: uri(O)}];
+    const builder = TriplesBuilder.withPredicate({id: P}).from(G1).limit(10);
+    expect(await builder.exists(store)).toBe(true);
+    expect(builder.toTriplesQuery().limit).toBe(10);
+  });
+
+  test("a dataset that does not declare 'triplesPattern' is refused before it is asked", async () => {
+    const reads: TriplesQuery[] = [];
+    const old: IDataset = {
+      selectQuery: async () => [],
+      createQuery: async () => ({}) as any,
+      updateQuery: async () => ({}) as any,
+      deleteQuery: async () => ({deleted: [], count: 0}),
+      graphQuery: async () => ({graph: '', changed: false}),
+      triplesQuery: async (q: TriplesQuery) => {
+        reads.push(q);
+        return [];
+      },
+    };
+    await expect(TriplesBuilder.toNode({id: O}).from(G1).exec(old)).rejects.toThrow(/'triplesPattern'/);
+    await expect(TriplesBuilder.withPredicate({id: P}).from(G1).exists(old)).rejects.toThrow(/'triplesPattern'/);
+    // A subject read and a graph read are the baseline.
+    await TriplesBuilder.forNode({id: S}).from(G1).exec(old);
+    await NamedGraph.readContent(G1).exec(old);
+    expect(reads).toHaveLength(2);
+    expect(await TriplesBuilder.toNode({id: O}).from(G1).exec({...old, supports: ['triplesPattern']})).toEqual([]);
+  });
+
+  test('through LinkedStorage: every dataset is checked, and exists() stops at the first that answers', async () => {
+    const answering = (answer: Triple[]) => {
+      const reads: TriplesQuery[] = [];
+      const ds: IDataset & {reads: TriplesQuery[]} = {
+        reads,
+        supports: ['triplesPattern'],
+        selectQuery: async () => [],
+        createQuery: async () => ({}) as any,
+        updateQuery: async () => ({}) as any,
+        deleteQuery: async () => ({deleted: [], count: 0}),
+        graphQuery: async () => ({graph: '', changed: false}),
+        triplesQuery: async (q: TriplesQuery) => {
+          reads.push(q);
+          return answer;
+        },
+      };
+      return ds;
+    };
+    const hit: Triple = {subject: {id: S}, predicate: {id: P}, object: {id: O}};
+    const main = answering([hit]);
+    const other = answering([hit]);
+    LinkedStorage.setDefaultDataset(main);
+    LinkedStorage.setDatasetForShapes(other, Person);
+    expect(await TriplesBuilder.withPredicate({id: P}).from(G1).exists()).toBe(true);
+    expect(main.reads).toEqual([{kind: 'triples', predicate: P, graphs: [G1], limit: 1}]);
+    expect(other.reads).toEqual([]);
+    const {supports: _s, ...plain} = answering([]);
+    LinkedStorage.setDatasetForShapes(plain, Person);
+    main.reads.length = 0;
+    const lone = answering([]);
+    LinkedStorage.setDefaultDataset(lone);
+    await expect(TriplesBuilder.toNode({id: O}).from(G1)).rejects.toThrow(/'triplesPattern'/);
+    LinkedStorage.getShapeToDatasetMap().clear();
+  });
+});

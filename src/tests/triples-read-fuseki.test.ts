@@ -114,4 +114,21 @@ describeFuseki('triples reads on Fuseki', () => {
 
     expect(await TriplesBuilder.forNode({id: `${EX}nobody`}).from([G1, G2]).exec(store)).toEqual([]);
   });
+  test('an object read: the triples that point at a node, in the given graphs and in the default graph', async () => {
+    const inBoth = await TriplesBuilder.toNode({id: `${EX}o`}).from([G1, G2]).exec(store);
+    expect(inBoth).toEqual([{subject: {id: S}, predicate: {id: P}, object: {id: `${EX}o`}, graph: {id: G1}}]);
+    // The blank node in G1 is the object of <S> <Q>; a predicate narrows the read.
+    expect(await TriplesBuilder.toNode({id: `${EX}o`}).withPredicate({id: Q}).from(G1).exec(store)).toEqual([]);
+    expect(await TriplesBuilder.toNode({id: `${EX}nothing`}).from([G1, G2, graphs.default]).exec(store)).toEqual([]);
+  });
+
+  test('a predicate read and its ask: per graph, across graphs, bounded by the limit', async () => {
+    const q = await TriplesBuilder.withPredicate({id: Q}).from([G1, G2]).exec(store);
+    expect(q).toHaveLength(2);
+    expect(new Set(q.map((t) => t.graph?.id))).toEqual(new Set([G1, G2]));
+    expect(await TriplesBuilder.withPredicate({id: P}).from([G1, G2]).limit(2).exec(store)).toHaveLength(2);
+    expect(await TriplesBuilder.withPredicate({id: P}).from(G2).exists(store)).toBe(true);
+    expect(await TriplesBuilder.withPredicate({id: P}).from(graphs.default).exists(store)).toBe(true);
+    expect(await TriplesBuilder.withPredicate({id: `${EX}unused`}).from([G1, G2, graphs.default]).exists(store)).toBe(false);
+  });
 });
