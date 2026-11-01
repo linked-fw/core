@@ -4,7 +4,7 @@ summary: >
   and by predicate (`TriplesBuilder.withPredicate`, `.exists()` as the ask), and an IRI-valued
   graph-record field, `attributedTo` (`prov:wasAttributedTo`) on `NamedGraph`.
 packages: [core]
-status: Plan
+status: Tasks
 ---
 
 # 008 — Object and predicate triples reads; an IRI-valued graph-record field
@@ -199,3 +199,47 @@ as the content.
   SPARQL text, the field check gives the clear error first).
 - Core's own shapes data includes `NamedGraph`'s property shapes: a new property changes the
   generated `shapes.ttl` and any test that pins it.
+
+## Tasks
+
+### Phase 1: failing tests (golden and live)
+
+- Unit/golden in `triples-read.test.ts`: builders (`toNode`, `withPredicate`, chaining, refusals),
+  wire (new fields kept, bad IRIs refused, a predicate alone without graphs refused), SPARQL text
+  for an object read and a predicate read (one graph, several, default graph, LIMIT 1), the
+  answer mapping, `exists()`, the `triplesPattern` refusal for a dataset without it, the routing
+  fallback for an object read.
+- Golden in `graph-query.test.ts`: a create and an update with `attributedTo: {id}` write
+  `prov:wasAttributedTo <iri>`; `{id}` on a literal field, a string on `attributedTo`, a blank
+  label are refused.
+- Live in `triples-read-fuseki.test.ts`: object read and predicate read and `exists()` against
+  Fuseki. Live in `graph-query-fuseki.test.ts`: `ShapesGraph.update(g).set({attributedTo}).
+  replaceContent(c)` then `ShapesGraph.select(g => [g.package, g.contentHash, g.attributedTo])`.
+
+Validation: the new tests fail (compile or assertion) for the missing features; the rest pass.
+
+### Phase 2: K2, object and predicate reads
+
+`triplesQuery.ts`, `TriplesBuilder.ts`, `queryFeatures.ts`, `queryDispatch.ts`, `wireVersion.ts`,
+`triplesToSparql.ts`, `fanOutNotice.ts`, the version assertion in `shapeless-delete.test.ts`.
+
+Validation: `triples-read.test.ts` passes; the live triples suite passes against a Fuseki of its
+own; `tsc -p tsconfig-tests.json --noEmit` clean.
+
+### Phase 3: K3, `attributedTo`
+
+`prov.ts`, `graphRecords.ts`, `graphQueryToSparql.ts`, `NamedGraph.ts`.
+
+Validation: `graph-query.test.ts` and the live graph-query suite pass; type check clean.
+
+### Phase 4: docs, full suite, build, CN typecheck
+
+README, `dsl-json.md`, `ontologies.md`, the `IDataset` doc line, changeset.
+
+Validation: whole jest suite (live suites against a Fuseki of its own); `npx linked build`; from
+CN's main checkout `npm run typecheck:gate`.
+
+### Dependencies
+
+Phase 1 first; phases 2 and 3 are independent (different files); phase 4 after both. One agent,
+sequential.
