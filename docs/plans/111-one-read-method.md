@@ -527,7 +527,7 @@ server refuses triples/terms (S1). Applied in the contracts above.
 | C1 | core | readQuery, features, dispatch, stores | — | done | `1ffeb58` (docs), `9607362`..`81f3a67`, wrapup | 112 | contract change C-4 (`TriplesTermsQuery` keeps the fixed positions; no `recordClass`/`limit`), additions C-5 (`assertReadSupported`, `toTriplesTermsQuery()`) |
 | S1 | server | RemoteDataset + readQuery endpoint | C1 | done | `5bb39e7`..`f79155c` | 028 | `/api/select` also checks by kind; refusal messages capped; backlog 006 (triples/terms over `/call`); no contract change |
 | N1 | CN | routers, stores, Execution Gateway, gateway readQuery endpoint, unit tests | C1 (rebase on S1) | done | CN `b0931d8`..`19abbd0` | 396 | 395 was taken on dev; the typecheck gate fails only on the two copies of core until the land |
-| N2 | CN | integration specs, probes, arch docs, regular set | N1, S1 | todo | | 397 | |
+| N2 | CN | integration specs, probes, arch docs, regular set | N1, S1 | done | CN `e5c3a5c`..`d767502` | 397 | rebased on report 398; regular set green (522 passed); removed server read endpoints answer 501, gateway's 404; the 4 master failures and the 63 typecheck errors are the two copies of core in a worktree (fixed in the step's farm), not code |
 | X1 | fuseki, react, shape-ui, cli, auth, server-utils | test doubles, comments | C1 | done | react `a2512bb`, shape-ui `a02790c`, cli `a38fa01`, auth `8ddbef7`, server-utils `2f75086`, fuseki none | 113 (cli 047) | cli template pin moves to the new core minor at release |
 | W | all | wave runs, review, final report, land | all | todo | | 114 | |
 
