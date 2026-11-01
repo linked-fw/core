@@ -458,7 +458,7 @@ CN's `npm run typecheck:gate` covers all of `src/`, so a partial conversion cann
 |---|---|---|
 | core | 111 (this master plan), 112 (C1's plan doc, deleted at landing) | 112 (C1), 113 (X1, all six repos), 114 (wrap-up) |
 | server | 027 (sub-plan), 028 (S1's plan doc, deleted at landing) | 028 (S1) |
-| CN | 394 (sub-plan), 395 / 396 (N1's / N2's plan docs, deleted at landing) | 395 (N1), 396 (N2) |
+| CN | 394 (sub-plan), 396 / 397 (N1's / N2's plan docs, deleted at landing) | 396 (N1), 397 (N2); 395 was taken on dev |
 | fuseki / react / shape-ui / auth / server-utils | none | none (X1 is core report 113) |
 | cli | none | 047 (X1, it publishes) |
 
@@ -526,8 +526,8 @@ server refuses triples/terms (S1). Applied in the contracts above.
 |---|---|---|---|---|---|---|---|
 | C1 | core | readQuery, features, dispatch, stores | — | done | `1ffeb58` (docs), `9607362`..`81f3a67`, wrapup | 112 | contract change C-4 (`TriplesTermsQuery` keeps the fixed positions; no `recordClass`/`limit`), additions C-5 (`assertReadSupported`, `toTriplesTermsQuery()`) |
 | S1 | server | RemoteDataset + readQuery endpoint | C1 | done | `5bb39e7`..`f79155c` | 028 | `/api/select` also checks by kind; refusal messages capped; backlog 006 (triples/terms over `/call`); no contract change |
-| N1 | CN | routers, stores, Execution Gateway, gateway readQuery endpoint, unit tests | C1 (rebase on S1) | todo | | 395 | |
-| N2 | CN | integration specs, probes, arch docs, regular set | N1, S1 | todo | | 396 | |
+| N1 | CN | routers, stores, Execution Gateway, gateway readQuery endpoint, unit tests | C1 (rebase on S1) | done | CN `b0931d8`..`19abbd0` | 396 | 395 was taken on dev; the typecheck gate fails only on the two copies of core until the land |
+| N2 | CN | integration specs, probes, arch docs, regular set | N1, S1 | todo | | 397 | |
 | X1 | fuseki, react, shape-ui, cli, auth, server-utils | test doubles, comments | C1 | done | react `a2512bb`, shape-ui `a02790c`, cli `a38fa01`, auth `8ddbef7`, server-utils `2f75086`, fuseki none | 113 (cli 047) | cli template pin moves to the new core minor at release |
 | W | all | wave runs, review, final report, land | all | todo | | 114 | |
 
