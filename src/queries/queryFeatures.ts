@@ -22,6 +22,14 @@ import type {IRExpression} from './IntermediateRepresentation.js';
  *   (`TriplesBuilder.toNode`, `withPredicate`; `TriplesQuery.predicate`, `.object`). A store that
  *   predates them would drop the fields and answer a graph or subject read: every triple of the
  *   graphs instead of the matching ones.
+ * - `ask`: an ask query answered natively (`ASK WHERE { … }`). Unlike the others, a dataset
+ *   without it is still asked: the dispatch sends the ask's pattern as a select of ids with
+ *   `LIMIT 1` (`resolveRead`), and refuses only a shapeless ask, which has no select to write.
+ * - `triples`: a triples read (`TriplesBuilder`, `NamedGraph.readContent`; plain data,
+ *   `kind: 'triples'`). There is no shape to answer it with a select instead, so a dataset
+ *   without it is refused.
+ * - `triplesTerms`: a terms read (`TriplesBuilder.whichExist()`, `kind: 'triples_terms'`), which
+ *   also needs `triplesPattern`.
  * - `transactions`: not a feature a query uses but one a dataset has: it holds store
  *   transactions (`beginTransaction`, `commit`, `rollback`, and a txId on every query; see
  *   `utils/Transaction.ts`). A query that carries a txId needs it. It is not in
@@ -36,7 +44,16 @@ import type {IRExpression} from './IntermediateRepresentation.js';
  * store that ignored the grouping would answer *something* — ungrouped rows — and nothing
  * downstream could tell. A store that does not declare a feature is refused before it is asked.
  */
-export type QueryFeature = 'groupBy' | 'min' | 'max' | 'shapelessDelete' | 'triplesPattern' | 'transactions';
+export type QueryFeature =
+  | 'groupBy'
+  | 'min'
+  | 'max'
+  | 'shapelessDelete'
+  | 'triplesPattern'
+  | 'transactions'
+  | 'ask'
+  | 'triples'
+  | 'triplesTerms';
 
 /** Every query feature this build of core can express (what a SPARQL store supports); not `transactions`. */
 export const ALL_QUERY_FEATURES: readonly QueryFeature[] = Object.freeze([
@@ -45,6 +62,9 @@ export const ALL_QUERY_FEATURES: readonly QueryFeature[] = Object.freeze([
   'max',
   'shapelessDelete',
   'triplesPattern',
+  'ask',
+  'triples',
+  'triplesTerms',
 ] as QueryFeature[]);
 
 const KNOWN = new Set<string>(ALL_QUERY_FEATURES);

@@ -69,11 +69,12 @@ export function fromJSON(
       'check it with parseGraphQuery() and pass it to IDataset.graphQuery().',
     );
   }
-  if (kind === 'triples') {
-    // A triples read is plain data too: it goes to `IDataset.triplesQuery`.
+  if (kind === 'triples' || kind === 'triples_terms') {
+    // A triples or terms read is plain data too: it goes to `IDataset.readQuery` as it is.
+    const parse = kind === 'triples' ? 'parseTriplesQuery' : 'parseTriplesTermsQuery';
     throw new Error(
-      '"triples" is a triples read, not a query builder envelope: ' +
-      'check it with parseTriplesQuery() and pass it to IDataset.triplesQuery().',
+      `"${kind}" is a ${kind === 'triples' ? 'triples' : 'terms'} read, not a query builder envelope: ` +
+      `check it with ${parse}() and pass it to IDataset.readQuery().`,
     );
   }
   // A query of a store transaction (DSL-JSON 1.5): decoded without its txId, then returned as

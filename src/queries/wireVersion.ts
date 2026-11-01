@@ -15,10 +15,12 @@
  * (`{"friends.some": {"$type": …}}`).
  * 1.8: a quantifier key carries its relation's cast (`pets.as(Dog).some`); condition and `sortBy`
  * paths carry `as(X)` casts as fields do; a `sortBy` filter on any relation segment of its path.
- * 1.9: a triples read lists `objects` or `predicates` (a terms read, `IDataset.triplesTermsQuery`:
+ * 1.9: a triples read lists `objects` or `predicates` (a terms read:
  * which of the listed terms occur).
+ * 1.10: a terms read is `kind: 'triples_terms'` (a `kind: 'triples'` with `objects` or
+ * `predicates` is refused); every read goes to `readQuery`.
  */
-export const WIRE_VERSION = '1.9';
+export const WIRE_VERSION = '1.10';
 
 /**
  * Validate an incoming envelope's `v`. A missing `v` is tolerated (pre-versioned /
