@@ -3,7 +3,7 @@ summary: >
   Sorting keeps every instance and puts missing values last in both directions, for direct and
   nested paths; an unpaged where-aggregate with multi-valued rows filters per subject; a
   multi-valued leaf under a traversal maps to all its values. Closes backlog 089.
-status: Ideation
+status: Tasks
 packages: [core]
 ---
 
@@ -79,3 +79,72 @@ traversals too.
 
 1A, 2A, 3A, 4, 5 as above. Unpaged selects keep their row ORDER BY (an instance sorts at its
 first row, so MIN ascending and MAX descending already); no tie-break is added there.
+
+## Plan
+
+### Architecture decisions
+
+- `irToAlgebra.selectToAlgebra`: `collectRequiredTraversalAliases` no longer reads `orderBy`;
+  in an ungrouped select the order paths' traversal aliases join the OPTIONAL traversal set
+  (with the projected ones). Each order condition becomes two: `DESC(BOUND(?k))`, then the value.
+  A grouped select's non-variable key binds through its projection alias.
+- `pageBySubject`: each `?page_order_i` key gets `DESC(BOUND(?page_order_i))` before it, in the
+  page and in the outer ORDER BY; the subject key and the IRI tie-break do not.
+- A where-aggregate with more than one row per subject goes through `pageBySubject` with no
+  LIMIT/OFFSET (`.for(id)` too).
+- `resultMapping.collectNestedGroup`: nested fields from all the entity's bindings.
+
+### Contracts
+
+- `orderBy` (DSL, IR, DSL-JSON `sortBy`/`groupOrderBy`): an instance (or group) without a value
+  for a key sorts after every instance with one, in both directions; no key drops an instance.
+  Multi-valued or nested key: MIN ascending, MAX descending, over the values it has. Ties: by
+  the subject IRI when paged.
+- A where-aggregate is evaluated per subject, paged or not.
+- A multi-valued field of a nested entity is an array of its distinct values.
+
+### Expected file changes
+
+- `src/sparql/irToAlgebra.ts`, `src/sparql/resultMapping.ts`.
+- Tests: new `src/tests/select-order-missing-last.test.ts` (lowering + live), golden entries in
+  `src/tests/sparql-select-golden.test.ts`, existing goldens and live tests that assert the old
+  order (`select-subject-paging`, `select-group-by`, `sort-and-aggregate`, goldens with ORDER BY).
+- Docs: README "Sorting, limiting, one" and groupBy, `documentation/dsl-json.md`,
+  `documentation/sparql-algebra.md`, `SelectBuilder.orderBy`/`limit` JSDoc, backlog 089 removed.
+- `.changeset/*.md`: minor.
+
+### Pitfalls
+
+- An order path also in the where stays required (the where needs it anyway).
+- The page's pruning (`prunePagePattern`) must keep the OPTIONAL order traversal: it binds a
+  needed variable.
+- Grouped ORDER BY on an aggregate expression: the bound key must read the alias, not repeat
+  the aggregate inside `BOUND`.
+- Nested multi-valued fields now return arrays where they returned one value (a fix; listed in
+  the changeset).
+
+## Tasks
+
+### Phase 1: failing tests
+
+- New test file with lowering and live tests for the three decisions (Anna/Carl/Dirk data,
+  plus the 089 examples), and golden entries.
+- Validation: the new tests fail for the stated reasons (quoted in Phase results).
+
+### Phase 2: implementation
+
+- Order traversal OPTIONAL, bound keys (unpaged, paged, grouped), where-aggregate sub-SELECT,
+  nested field mapping.
+- Validation: new tests pass; the whole core suite with live Fuseki passes after updating the
+  tests that assert the old order (each change listed); `npx linked build`.
+
+### Phase 3: docs and changeset
+
+- README, dsl-json, sparql-algebra, JSDoc; backlog 089 removed; minor changeset.
+- Validation: docs read the shipped rule; `npm run typecheck`.
+
+### Dependencies
+
+Phase 1 → 2 → 3, one agent, sequential.
+
+## Phase results
