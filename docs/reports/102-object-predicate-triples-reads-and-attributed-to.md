@@ -91,8 +91,12 @@ One earlier run on a machine at load average 46 timed out in the hooks of
 `sparql-fuseki-shape-sync` and in the two race tests of `graph-query-fuseki` (19 failed); those
 suites passed alone (`17 passed`, `16 passed`) and in the run above.
 
-From CN's main checkout, after landing and building core there, `npm run typecheck:gate`: see
-"CN typecheck" below.
+From CN's main checkout, after landing and `npx linked build` in its core checkout,
+`npm run typecheck:gate`:
+
+```
+No new type errors. 0 pre-existing errors still in the baseline.
+```
 
 ### Deviations
 
@@ -123,7 +127,3 @@ From CN's main checkout, after landing and building core there, `npm run typeche
   inventory, question 3). CN (B3): `hubGraphSync.ts` moves to `attributedTo`.
 - `withPredicate(p).from(graphs.union)` reads every named graph, as `readContent(graphs.union)`
   does; the rule is that a predicate read names its graphs, not that the set is small.
-
-## CN typecheck
-
-Pending: filled in after landing.
