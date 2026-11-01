@@ -68,6 +68,7 @@ import {
   withShapeCatalog,
 } from '../utils/ShapeClass.js';
 import {UnresolvedContextError} from '../queries/QueryContext.js';
+import {containsAggregate as irContainsAggregate} from '../queries/irExpressions.js';
 import {
   scopeAlgebraToGraphs,
   scopeMutationWhere,
@@ -481,21 +482,18 @@ function markAliasAndAncestors(
   }
 }
 
+/**
+ * The traversals a row needs: those the where or an inline filter reads. A sort path's
+ * traversal is not one of them: sorting never drops an instance (see `orderWithBoundFirst`).
+ */
 function collectRequiredTraversalAliases(
   query: IRSelectQuery,
   traversePatternMap: ReadonlyMap<string, IRTraversePattern>,
-  grouped = false,
 ): Set<string> {
   const directAliases = new Set<string>();
 
   if (query.where) {
     collectExpressionAliases(query.where, directAliases);
-  }
-
-  if (query.orderBy && !grouped) {
-    for (const item of query.orderBy) {
-      collectExpressionAliases(item.expression, directAliases);
-    }
   }
 
   for (const pattern of traversePatternMap.values()) {
@@ -941,17 +939,20 @@ export function selectToAlgebra(
       for (const alias of aliases) if (alias !== rootAlias) directProjectionAliases.add(alias);
     }
   }
+  // A sort path's traversal is OPTIONAL like a projected one: an instance without it is kept
+  // and sorts last. (A grouped select sorts by its fields, which the projection covers.)
+  if (!grouped) {
+    for (const item of query.orderBy ?? []) {
+      const aliases = new Set<string>();
+      collectExpressionAliases(item.expression, aliases);
+      for (const alias of aliases) if (alias !== rootAlias) directProjectionAliases.add(alias);
+    }
+  }
   for (const alias of directProjectionAliases) {
     markAliasAndAncestors(alias, traversePatternMap, projectedTraversalAliases);
   }
 
-  const requiredTraversalAliases = collectRequiredTraversalAliases(
-    query,
-    traversePatternMap,
-    // A grouped select's ORDER BY sorts groups by projected values: it must not make a key's
-    // path required (that would drop the group of members without it).
-    grouped,
-  );
+  const requiredTraversalAliases = collectRequiredTraversalAliases(query, traversePatternMap);
 
   const optionalTraversalAliases = new Set(
     [...projectedTraversalAliases].filter((alias) => {
@@ -1372,6 +1373,10 @@ export function selectToAlgebra(
     multiRowPerSubject && !!query.subjectId && !query.offset && query.limit !== 0;
   const pageSubjects =
     multiRowPerSubject && !oneSubjectRead && (query.limit !== undefined || query.offset !== undefined);
+  // A where-aggregate (HAVING) counts per subject. Over rows that can be several per subject the
+  // outer GROUP BY would be per subject and values, so the same sub-SELECT of subjects applies
+  // it, without LIMIT/OFFSET when the select is not paged.
+  const subjectSubSelect = pageSubjects || (multiRowPerSubject && !!havingExpr);
 
   // `.from()` scopes the read to its graphs (expanded by the store); without it, a shape whose
   // instances live in one named graph (the graph-registry records, `NamedGraph.storedInGraph`)
@@ -1391,8 +1396,15 @@ export function selectToAlgebra(
     query.graphs ?? routed ?? (storedIn ? [storedIn] : undefined),
     _options,
   );
-  const paged = pageSubjects
-    ? pageBySubject(scoped.algebra, rootAlias, orderBy, havingExpr, query.limit, query.offset)
+  const paged = subjectSubSelect
+    ? pageBySubject(
+      scoped.algebra,
+      rootAlias,
+      orderBy,
+      havingExpr,
+      pageSubjects ? query.limit : undefined,
+      pageSubjects ? query.offset : undefined,
+    )
     : undefined;
   // A paged select's where-aggregate (HAVING) is applied by the page, per subject; the outer
   // query reads the page's subjects and does not repeat it (its groups are per subject and
@@ -1410,11 +1422,11 @@ export function selectToAlgebra(
     orderBy: paged
       ? paged.orderBy && [
         ...paged.orderBy,
-        ...(outerGrouped ? [] : orderBy ?? []).filter(
+        ...(outerGrouped ? [] : orderWithBoundFirst(orderBy, rootAlias) ?? []).filter(
           (o) => !paged.orderBy!.some((k) => JSON.stringify(k) === JSON.stringify(o)),
         ),
       ]
-      : orderBy,
+      : orderWithBoundFirst(orderBy, rootAlias, grouped ? projection : undefined),
     limit: pageSubjects || oneSubjectRead ? undefined : query.limit,
     offset: pageSubjects ? undefined : query.offset,
     // An ungrouped select with an aggregate groups its rows by subject and values; the page's
@@ -1621,6 +1633,39 @@ function prunePagePattern(node: SparqlAlgebraNode, needed: ReadonlySet<string>):
   }
 }
 
+/** The key that sorts the rows binding `variable` before those that leave it unbound. */
+function boundFirst(variable: string): SparqlOrderCondition {
+  return {expression: {kind: 'bound_expr', variable}, direction: 'DESC'};
+}
+
+/**
+ * The ORDER BY of a select: each key preceded by a bound-first key, so a row without a value for
+ * a key sorts after every row with one, ascending and descending. The subject itself and a
+ * count are always bound and need none. A grouped select's key that is not a variable (an
+ * aggregate field) is tested through the alias its projection gives it.
+ */
+function orderWithBoundFirst(
+  orderBy: SparqlOrderCondition[] | undefined,
+  rootAlias: string,
+  groupedProjection?: readonly SparqlProjectionItem[],
+): SparqlOrderCondition[] | undefined {
+  return orderBy?.flatMap((condition) => {
+    const e = condition.expression;
+    let variable: string | undefined;
+    if (e.kind === 'variable_expr') {
+      if (e.name === rootAlias) return [condition];
+      variable = e.name;
+    } else if (!(e.kind === 'aggregate_expr' && e.name === 'count')) {
+      const key = JSON.stringify(e);
+      const item = groupedProjection?.find(
+        (p) => p.kind !== 'variable' && JSON.stringify(p.expression) === key,
+      );
+      variable = item && item.kind !== 'variable' ? item.alias : undefined;
+    }
+    return variable ? [boundFirst(variable), condition] : [condition];
+  });
+}
+
 /**
  * Page an ungrouped select over its root subjects. A sub-SELECT picks the page:
  *
@@ -1632,8 +1677,9 @@ function prunePagePattern(node: SparqlAlgebraNode, needed: ReadonlySet<string>):
  *
  * Each sort key is one value per subject: the subject's first value in that key's direction —
  * the lowest ascending (`MIN`), the highest descending (`MAX`). A key that is the subject itself
- * sorts as is. A subject without the value has an unbound key (first ascending, last
- * descending, as SPARQL orders unbound values). Ties are broken by the subject IRI, ascending.
+ * sorts as is. A subject without the value sorts after every subject with one, in both
+ * directions (a bound-first key precedes each key). Ties are broken by the subject IRI,
+ * ascending.
  */
 function pageBySubject(
   algebra: SparqlAlgebraNode,
@@ -1644,15 +1690,15 @@ function pageBySubject(
   offset: number | undefined,
 ): {algebra: SparqlAlgebraNode; orderBy: SparqlOrderCondition[] | undefined; keys: string[]} {
   const expressions: Array<{alias: string; expression: SparqlExpression}> = [];
-  const keys: SparqlOrderCondition[] = (orderBy ?? []).map((condition, i) => {
+  const keys: SparqlOrderCondition[] = (orderBy ?? []).flatMap((condition, i) => {
     const e = condition.expression;
-    if (e.kind === 'variable_expr' && e.name === rootAlias) return condition;
+    if (e.kind === 'variable_expr' && e.name === rootAlias) return [condition];
     const alias = `page_order_${i}`;
     expressions.push({
       alias,
       expression: {kind: 'aggregate_expr', name: condition.direction === 'DESC' ? 'max' : 'min', args: [e]},
     });
-    return {expression: {kind: 'variable_expr', name: alias}, direction: condition.direction};
+    return [boundFirst(alias), {expression: {kind: 'variable_expr', name: alias}, direction: condition.direction}];
   });
   // Ties are broken by the subject, so that consecutive pages neither repeat nor skip one.
   if (keys.length > 0 && !keys.some((k) => k.expression.kind === 'variable_expr' && k.expression.name === rootAlias)) {
@@ -4642,15 +4688,14 @@ export function askToAlgebra(
     ),
     options,
   );
-  if (inner.having) {
+  if (irContainsAggregate(query.where)) {
     // Same trap as in `countToAlgebra`: an aggregate in the WHERE clause (e.g.
-    // `p.friends.size().gt(2)`) lowers to HAVING + GROUP BY on the select plan, and
-    // only `algebra` is carried over here — so the HAVING would vanish and the ASK
-    // would answer the UNFILTERED question, `true` for any store holding one
+    // `p.friends.size().gt(2)`) lowers to HAVING, on the select plan or on its sub-SELECT
+    // of subjects, and this ask is not built to carry either — the HAVING would vanish
+    // and the ASK would answer the UNFILTERED question, `true` for any store holding one
     // instance of the shape. A boolean of the right type for the wrong question is
-    // worse than an error: nothing downstream can tell. Asking it properly needs
-    // `ASK { SELECT ?a0 WHERE { … } GROUP BY ?a0 HAVING(…) }`, and `SparqlSubSelect`
-    // carries no groupBy/having today. Refuse it rather than answer it wrongly.
+    // worse than an error: nothing downstream can tell. Refuse it rather than answer it
+    // wrongly.
     throw new Error(
       'Cannot ask a query whose where clause contains an aggregate (e.g. ' +
       '`.where(p => p.friends.size().gt(2))`). That filter lowers to HAVING over a ' +
@@ -4721,14 +4766,12 @@ export function countToAlgebra(
     ),
     options,
   );
-  if (inner.having) {
+  if (irContainsAggregate(query.where)) {
     // An aggregate in the WHERE clause (e.g. `p.friends.size().gt(2)`) lowers to
-    // HAVING + GROUP BY on the select plan. Only `algebra` is carried over here, so
-    // the HAVING would vanish and the count would be of the UNFILTERED match set —
-    // a plausible-looking wrong number. Counting a HAVING-filtered group set needs
-    // `SELECT (COUNT(DISTINCT ?a0) AS ?count) WHERE { SELECT ?a0 WHERE { … }
-    // GROUP BY ?a0 HAVING(…) }`, and `SparqlSubSelect` carries no groupBy/having
-    // today. Refuse it rather than answer it wrongly.
+    // HAVING, on the select plan or on its sub-SELECT of subjects. This count is not
+    // built to carry either, so the HAVING would vanish and the count would be of the
+    // UNFILTERED match set — a plausible-looking wrong number. Refuse it rather than
+    // answer it wrongly.
     throw new Error(
       'Cannot count a query whose where clause contains an aggregate (e.g. ' +
       '`.where(p => p.friends.size().gt(2))`). That filter lowers to HAVING over a ' +

@@ -85,7 +85,7 @@ describe('sorting keeps instances (lowering)', () => {
     const sparql = sparqlOf(
       Person.select((p) => ({name: p.name, last: p.bestFriend.name.max()})).groupBy('name').orderBy('last'),
     );
-    expect(sparql).toMatch(/ORDER BY DESC\(BOUND\(\?last\)\) ASC\(MAX\(\?a1_name\)\)$/);
+    expect(sparql).toMatch(/\(MAX\(\?a1_name\) AS \?(\w+)\)[\s\S]*ORDER BY DESC\(BOUND\(\?\1\)\) ASC\(MAX\(\?a1_name\)\)$/);
   });
 
   test('an unpaged where-aggregate with multi-valued rows is applied by a sub-SELECT of subjects', () => {

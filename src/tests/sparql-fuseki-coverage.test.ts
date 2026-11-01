@@ -249,11 +249,11 @@ describeFuseki('coverage §5 — builder features', () => {
       .toEqual(['Semmy', 'Quinn', 'Moa', 'Maximilian', 'Jinx']);
   });
 
-  test('multi-key orderBy [hobby, name] (nulls first, then by name)', async () => {
+  test('multi-key orderBy [hobby, name] (missing hobby last, then by name)', async () => {
     const rows = (await store.selectQuery(
       Person.select((p: any) => [p.name, p.hobby]).orderBy((p: any) => [p.hobby, p.name]),
     )) as Row[];
-    expect(rows.map((r) => r.name)).toEqual(['Jinx', 'Maximilian', 'Quinn', 'Moa', 'Semmy']);
+    expect(rows.map((r) => r.name)).toEqual(['Moa', 'Semmy', 'Jinx', 'Maximilian', 'Quinn']);
   });
 
   test('top-level offset + limit windowing', async () => {

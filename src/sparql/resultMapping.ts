@@ -567,16 +567,6 @@ function mapFlatRows(
 }
 
 /**
- * Populates fields on a ResultRow from a single SPARQL binding.
- * Used inside nested groups where each entity is populated once per binding.
- */
-function populateFields(row: ResultRow, fields: FieldDescriptor[], binding: SparqlBinding): void {
-  for (const field of fields) {
-    row[field.key] = extractFieldValue(field, binding);
-  }
-}
-
-/**
  * Scans bindings to identify which nested groups represent literal property
  * traversals (e.g. `p.hobby.where(h => h.equals('Jogging'))`) vs entity
  * traversals. Returns a set of traverse aliases that resolve to literals.
@@ -664,12 +654,16 @@ function collectNestedGroup(
 
     let entry = entityMap.get(entityId);
     if (!entry) {
-      const nestedRow: ResultRow = {id: entityId};
-      populateFields(nestedRow, nestedGroup.flatFields, binding);
-      entry = {row: nestedRow, bindings: []};
+      entry = {row: {id: entityId}, bindings: []};
       entityMap.set(entityId, entry);
     }
     entry.bindings.push(binding);
+  }
+
+  // Fields from all of the entity's bindings: a multi-valued field collects its values across
+  // them, as on the root entity.
+  for (const entry of entityMap.values()) {
+    populateFlatFields(entry.row, nestedGroup.flatFields, entry.bindings);
   }
 
   // Recurse into deeper nested groups

@@ -162,3 +162,26 @@ Phase 1 → 2 → 3, one agent, sequential.
 - `p.friends.nickNames` (a leaf straight under a multi-valued traversal) throws in the proxy
   (`result.concat is not a function`); the test reads it through `p.friends.select(...)`. Not in
   scope; recorded as a follow-up.
+
+### Phase 2: implementation (done)
+
+- `irToAlgebra.ts`: sort paths no longer required (`collectRequiredTraversalAliases` reads only
+  the where and inline filters); an ungrouped select's order aliases join the OPTIONAL traversal
+  set; `orderWithBoundFirst` (unpaged and grouped; a grouped aggregate field through its
+  projection alias; none for the subject or a count) and `boundFirst` in `pageBySubject`;
+  `subjectSubSelect` pages by subject without LIMIT when a where-aggregate meets multi-row
+  subjects. Count and ask keep refusing a where-aggregate, now by reading the IR
+  (`containsAggregate`, moved from `GroupedSelectBuilder` to `src/queries/irExpressions.ts`):
+  their `inner.having` is empty once the sub-SELECT carries it.
+- `resultMapping.ts`: `collectNestedGroup` fills a nested entity's fields from all its bindings
+  (`populateFlatFields`); the single-binding `populateFields` is gone.
+- Tests updated for the new order (each asserted the old one): `sparql-algebra` (sortByAsc/Desc
+  plan), `sparql-fuseki-coverage` (`[hobby, name]`: Moa, Semmy now first, they have a hobby;
+  Jinx, Maximilian, Quinn last), `subject-order-and-cursor`, `select-group-by` (two goldens),
+  `property-path-integration`, `select-subject-paging` (p4 without nick names last; the
+  "values keep the select order" page moved to offset 1; grouped page `['A', 'B']`, the null
+  group last). `sparql-result-mapping`: two hand-built IRs gained `maxCount: 1` on `name`, as the
+  lowering gives it (without it a nested field is multi-valued, now mapped as an array).
+- Validation: `FUSEKI_BASE_URL=http://localhost:3967 npm test`: `Tests: 122 skipped, 3163
+  passed, 3285 total`, `[fuseki] live tests: 464 total — 462 passed, 0 failed, 2 skipped`,
+  typecheck clean. `npx linked build`: `✔ Build successful`.

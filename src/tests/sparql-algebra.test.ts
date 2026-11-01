@@ -702,17 +702,20 @@ describe('selectToAlgebra — ordering and pagination', () => {
   test('sortByAsc produces orderBy with ASC', async () => {
     const plan = await capturePlan(() => queryFactories.sortByAsc());
 
-    expect(plan.orderBy).toBeDefined();
-    expect(plan.orderBy!.length).toBeGreaterThanOrEqual(1);
-    expect(plan.orderBy![0].direction).toBe('ASC');
+    // A bound-first key, then the value: a missing value sorts last.
+    expect(plan.orderBy).toEqual([
+      {expression: {kind: 'bound_expr', variable: 'a0_name'}, direction: 'DESC'},
+      {expression: {kind: 'variable_expr', name: 'a0_name'}, direction: 'ASC'},
+    ]);
   });
 
   test('sortByDesc produces orderBy with DESC', async () => {
     const plan = await capturePlan(() => queryFactories.sortByDesc());
 
-    expect(plan.orderBy).toBeDefined();
-    expect(plan.orderBy!.length).toBeGreaterThanOrEqual(1);
-    expect(plan.orderBy![0].direction).toBe('DESC');
+    expect(plan.orderBy).toEqual([
+      {expression: {kind: 'bound_expr', variable: 'a0_name'}, direction: 'DESC'},
+      {expression: {kind: 'variable_expr', name: 'a0_name'}, direction: 'DESC'},
+    ]);
   });
 
   test('outerWhereLimit has limit and Filter', async () => {

@@ -27,6 +27,7 @@ import type {
   WherePath,
 } from './SelectQuery.js';
 import type {IRExpression} from './IntermediateRepresentation.js';
+import {containsAggregate} from './irExpressions.js';
 import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
 import {assertQuerySupported, getQueryDispatch} from './queryDispatch.js';
 import {UnresolvedContextError} from './QueryContext.js';
@@ -133,16 +134,6 @@ export type GroupedSelectJSON = {
 // =============================================================================
 // Field classification
 // =============================================================================
-
-function containsAggregate(ir: IRExpression | undefined): boolean {
-  if (!ir || typeof ir !== 'object') return false;
-  if (ir.kind === 'aggregate_expr') return true;
-  return Object.values(ir).some((v) =>
-    Array.isArray(v)
-      ? v.some((x) => containsAggregate(x as IRExpression))
-      : v && typeof v === 'object' && 'kind' in v && containsAggregate(v as IRExpression),
-  );
-}
 
 /** Whether an expression reads a member's value outside every aggregate (`count() + p.age`). */
 function readsOutsideAggregates(ir: IRExpression | undefined): boolean {

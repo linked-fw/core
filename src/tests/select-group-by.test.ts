@@ -168,7 +168,8 @@ describe('grouped select SPARQL (unit)', () => {
     const sparql = await sparqlOf(queries.latestPerFriend);
     expect(sparql).toMatch(/\(MAX\(\?a0_birthDate\) AS \?\w+\)/);
     expect(sparql).toContain('GROUP BY ?a0_bestFriend');
-    expect(sparql).toContain('ORDER BY DESC(MAX(?a0_birthDate))');
+    // The group without a birth date sorts last: a bound-first key on the aggregate's alias.
+    expect(sparql).toMatch(/\(MAX\(\?a0_birthDate\) AS \?(\w+)\)[\s\S]*ORDER BY DESC\(BOUND\(\?\1\)\) DESC\(MAX\(\?a0_birthDate\)\)$/);
   });
 
   test('a nested path key groups by the traversed value only', async () => {
@@ -185,7 +186,7 @@ describe('grouped select SPARQL (unit)', () => {
   test('ordering by a nested key keeps its path optional', async () => {
     const sparql = await sparqlOf(queries.nestedKeyOrdered);
     expect(sparql).toMatch(/OPTIONAL \{\s*\?a0 <[^>]+bestFriend> \?a1 \./);
-    expect(sparql).toContain('ORDER BY ASC(?a1_hobby)');
+    expect(sparql).toContain('ORDER BY DESC(BOUND(?a1_hobby)) ASC(?a1_hobby)');
   });
 
   test('two fields over one path are one variable and one key', async () => {

@@ -176,7 +176,7 @@ describe('property path integration — decorator to SPARQL', () => {
     );
     // The complex path should be used in the traversal, not the raw propertyShapeId
     expect(sparql).toContain(`<${testBase}member>/<${testBase}role>`);
-    expect(sparql).toContain('ORDER BY ASC(');
+    expect(sparql).toMatch(/ORDER BY DESC\(BOUND\(\?\w+\)\) ASC\(/);
   });
 
   test('where filter on complex-path property', async () => {

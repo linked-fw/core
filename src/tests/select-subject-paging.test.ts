@@ -81,9 +81,9 @@ describe('subject paging (lowering)', () => {
 
   test('an order on a multi-valued path sorts each subject by MIN ascending and MAX descending', () => {
     const asc = sparqlOf(Person.select((p) => p.name).orderBy((p) => p.nickNames).limit(2));
-    expect(asc).toMatch(/\(MIN\(\?a0_nickNames\) AS \?(\w+)\)[\s\S]*ORDER BY ASC\(\?\1\) ASC\(\?a0\) LIMIT 2/);
+    expect(asc).toMatch(/\(MIN\(\?a0_nickNames\) AS \?(\w+)\)[\s\S]*ORDER BY DESC\(BOUND\(\?\1\)\) ASC\(\?\1\) ASC\(\?a0\) LIMIT 2/);
     const desc = sparqlOf(Person.select((p) => p.name).orderBy((p) => p.nickNames, 'DESC').limit(2));
-    expect(desc).toMatch(/\(MAX\(\?a0_nickNames\) AS \?(\w+)\)[\s\S]*ORDER BY DESC\(\?\1\) ASC\(\?a0\) LIMIT 2/);
+    expect(desc).toMatch(/\(MAX\(\?a0_nickNames\) AS \?(\w+)\)[\s\S]*ORDER BY DESC\(BOUND\(\?\1\)\) DESC\(\?\1\) ASC\(\?a0\) LIMIT 2/);
   });
 
   test('.one() limits subjects, not rows', () => {
@@ -137,9 +137,9 @@ describeFuseki('subject paging', () => {
   });
 
   test('order on a multi-valued path: lowest value ascending, highest descending', async () => {
-    // Lowest nick names: p1 A, p2 C, p3 F, p4 none (unbound sorts first ascending).
-    expect(ids(await run(Person.select((p) => p.nickNames).orderBy((p) => p.nickNames).limit(3)))).toEqual([
-      'p4', 'p1', 'p2',
+    // Lowest nick names: p1 A, p2 C, p3 F, p4 none (a missing value sorts last).
+    expect(ids(await run(Person.select((p) => p.nickNames).orderBy((p) => p.nickNames).limit(4)))).toEqual([
+      'p1', 'p2', 'p3', 'p4',
     ]);
     // Highest: p3 F, p2 E, p1 B, p4 none.
     expect(
@@ -198,7 +198,7 @@ describeFuseki('subject paging', () => {
   });
 
   test('the values of a subject keep the select order', async () => {
-    const rows = (await run(Person.select((p) => p.nickNames).orderBy((p) => p.nickNames).offset(2).limit(1))) as ResultRow[];
+    const rows = (await run(Person.select((p) => p.nickNames).orderBy((p) => p.nickNames).offset(1).limit(1))) as ResultRow[];
     expect(rows[0].nickNames).toEqual(['C', 'D', 'E']);
   });
 
@@ -206,6 +206,7 @@ describeFuseki('subject paging', () => {
     const rows = (await run(
       Person.select((p) => ({nick: p.nickNames, n: Expr.count()})).groupBy('nick').orderBy('nick').limit(2),
     )) as ResultRow[];
-    expect(rows.map((r) => r.nick)).toEqual([null, 'A']);
+    // The group of persons without a nick name sorts last.
+    expect(rows.map((r) => r.nick)).toEqual(['A', 'B']);
   });
 });

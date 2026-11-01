@@ -937,7 +937,8 @@ describe('mapSparqlSelectResult — 3-level nesting', () => {
         {kind: 'traverse', from: 'a1', to: 'a2', property: PROP_BEST_FRIEND, maxCount: 1},
       ],
       projection: [
-        {alias: 'a3', expression: {kind: 'property_expr', sourceAlias: 'a2', property: PROP_NAME}},
+        // name is single-valued (maxCount 1, as the lowering reads it from the property shape).
+        {alias: 'a3', expression: {kind: 'property_expr', sourceAlias: 'a2', property: PROP_NAME, maxCount: 1}},
       ],
       resultMap: [{key: PROP_NAME, alias: 'a3'}],
       singleResult: false,
@@ -1113,7 +1114,7 @@ describe('mapSparqlSelectResult — single-value property (maxCount: 1)', () => 
         {kind: 'traverse', from: 'a0', to: 'a1', property: PROP_BEST_FRIEND, maxCount: 1},
       ],
       projection: [
-        {alias: 'a2', expression: {kind: 'property_expr', sourceAlias: 'a1', property: PROP_NAME}},
+        {alias: 'a2', expression: {kind: 'property_expr', sourceAlias: 'a1', property: PROP_NAME, maxCount: 1}},
       ],
       resultMap: [{key: PROP_NAME, alias: 'a2'}],
       singleResult: false,
