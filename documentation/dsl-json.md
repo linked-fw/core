@@ -144,6 +144,25 @@ subject IRI (`.orderBy((p) => p)`), and `{ "@path": "" }` is the subject as an o
 `[">", ["STR", { "@path": "" }], "https://ex.org/p2"]` is `.where((p) => p.str().gt(…))`, the
 cursor of a list paged by subject.
 
+**`$`-prefixed segments are facts about the node, not shape fields** (version 1.4). `$type` is the
+node's `rdf:type` values: multi-valued IRI nodes, each answered as `{id}` like any relation. It
+resolves the same on every shape, never against a property of the shape, and may end a
+path or sit inside one:
+
+```jsonc
+"fields": ["name", "$type", "bestFriend.$type"]          // t.$type(), t.bestFriend.$type()
+"fields": [{ "$type": { "customKey": "kind" } },          // a group key: one group per type
+           { "customKey": "n", "value": ["count", { "@path": "" }] }], "groupBy": ["kind"]
+"where":  { "$type": { "@id": "https://ex.org/Robot" } }  // some type is Robot (implicit some)
+"where":  { "$type.none": { "": { "@id": "https://ex.org/Robot" } } }
+"sortBy": [ { "$type": "ASC" } ]
+```
+
+The types are whatever the store answers for `rdf:type`: on a store that infers classes, the
+stored and the inferred ones. A node with two types is in two groups of a `groupBy` on `$type`.
+A reader before 1.4 does not know the segment and refuses the path. `$graph` is reserved for a
+node's named graphs.
+
 A path that crosses a **plural** relation in a condition is an **implicit `some`** (existential):
 `{ "friends.name": "Moa" }` means *"has some friend named Moa"*. Use an explicit quantifier for
 compound predicates or for `every`/`none` (see Conditions).
@@ -515,6 +534,10 @@ The **value-tags** are all `@`-sigiled — `@path`, `@id`, `@ctx`, `@date`, `@li
 `@remove`, `@unset` — and so are in a namespace no user property label can reach. This is the whole
 point of the sigil: a property literally named `path`, `id`, `date`, `list`, `add`, `remove`,
 `unset`, or `ctx` round-trips as its own bare key without any escape.
+
+The **node-metadata segments** are `$`-sigiled — `$type` (and `$graph`, reserved) — and are path
+segments, not value-tags: they name a fact about the node on every shape (see Paths). A property
+labelled `$type` or `$graph` would be unreachable, so registration refuses one.
 
 The remaining reserved keys are the **structural / grammar** words, not value-tags: `and`, `or`,
 `not`, `as`, `value`, `where`, `fields`, `cast`, `one`, `call`, `args`, `some`, `every`, `none`,

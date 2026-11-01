@@ -869,6 +869,7 @@ The query DSL is schema-parameterized: you define your own SHACL shapes, and Lin
 - Outer `where(...)` chaining
 - Counting: `.count()` for how many instances match, `.size()` for a property's value count
 - Grouping: `.groupBy('key')` with `Expr.count()`, `.countDistinct()`, `.min()`, `.max()`, `having`
+- A node's types with `$type()`: as a field, a group key, a filter, a sort key
 - Custom result formats (object mapping)
 - Computed values — derive new fields with arithmetic, string, date, and comparison methods
 - Expression-based WHERE filters (`p.name.strlen().gt(5)`)
@@ -1053,6 +1054,44 @@ A grouped select is still a select: a dataset receives it through `selectQuery` 
 an `IRSelectQuery` with `groupBy`. It needs the `'groupBy'` feature (`min`/`max` need theirs), and
 a dataset that does not list it in `supports` is refused before it is asked. `SparqlDataset`
 supports all of them.
+
+#### Node types (`$type()`)
+
+`$`-prefixed members are facts about the node, not shape fields. No property of a shape can
+shadow them, and they read the same on every shape. `$type()` is the node's `rdf:type` values:
+multi-valued IRI nodes, each typed `{id}`.
+
+```typescript
+/* Result: Array<{id: string; name: string; $type: {id: string}[]}> */
+const things = await Thing.select((t) => [t.name, t.$type()]);
+
+/* Result: Array<{kind: {id: string}; n: number}>: how many terms of each type a graph holds */
+const perType = await Term.select((t) => ({kind: t.$type(), n: Expr.count()}))
+  .from(graph)
+  .groupBy('kind');
+
+const hasClass = await Thing.select().where((t) => t.$type().equals({id: C})).exists();
+const notOfClass = await Thing.select((t) => t.name).where((t) => t.$type().none((c) => c.equals({id: C})));
+const byFriendType = await Person.select((p) => p.name).orderBy((p) => p.bestFriend.$type());
+```
+
+- **Where:** `equals(x)` holds when some type is `x` (like `equals` on any multi-valued path,
+  `p.friends.equals({id})` included), and works inside another set's callback
+  (`p.friends.some((f) => f.$type().equals({id: C}))`). `some(…)` and `none(…)` take a callback
+  on the type node; "no type is `x`" is `none((c) => c.equals(x))`, not `equals(x).not()` (which
+  holds when the node has some other type).
+- **Group key:** one group per type value. A node with two types is in two groups, so the counts
+  of a `groupBy` on `$type()` can add up to more than the number of nodes.
+- **Sorting** follows the rules in "Sorting, limiting, one": a node without a type (on a nested
+  path, say) sorts last, and a node with several types sorts by its lowest type IRI
+  ascending and its highest descending.
+- **Stored and inferred types:** `$type()` answers what the store answers for `rdf:type`. On a
+  store that infers classes through `rdfs:subClassOf` (CN's Fuseki, the inferring test image),
+  that is the stored types and every superclass; on a plain store, the stored ones only.
+- **DSL-JSON:** the path segment `$type` (`"fields": ["$type"]`, `"bestFriend.$type"`,
+  `"where": {"$type": {"@id": "…"}}`), wire version 1.4. A label select takes it too
+  (`select(['name', '$type'])`). `$type` and `$graph` are reserved: a shape may not declare a
+  property with either label. `$graph()` (a node's named graphs) is planned.
 
 #### Triples reads (no shape)
 

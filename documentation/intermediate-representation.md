@@ -331,7 +331,7 @@ DSL: `Person.select({id: 'node:1'}, (p) => p.name)`
 | Kind | Fields | Description |
 |---|---|---|
 | `literal_expr` | `value` | String, number, boolean, or null literal |
-| `property_expr` | `sourceAlias`, `property` | Property access on an aliased node |
+| `property_expr` | `sourceAlias`, `property` | Property access on an aliased node. `property` is a property shape IRI; for the DSL's `$type()` it is `NODE_TYPE_PROPERTY_ID` (`…/shape/core/Shape/$type`, path `rdf:type`, found by `findPropertyShapeById`), in a `traverse` too |
 | `alias_expr` | `alias` | Reference to an alias |
 | `binary_expr` | `operator`, `left`, `right` | Comparison (`=`, `!=`, `>`, `>=`, `<`, `<=`) |
 | `logical_expr` | `operator`, `expressions[]` | Boolean combination (`and`, `or`) |
