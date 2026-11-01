@@ -261,3 +261,10 @@ sequential.
   SPARQL writes `<iri>`; `NamedGraph.attributedTo` and `attributedTo?: {id: string}` in each class's
   `recordFields`. Core's shapes golden (`fixtures/core-shapes.ttl`) gains the property shape. The
   unit and live graph-query suites: `Tests: 85 passed, 85 total`.
+- **Phase 4 done.** README (triples reads), `documentation/dsl-json.md` (a triples-read section,
+  1.4), `docs/architecture/ontologies.md` (record fields), the `IDataset.triplesQuery` doc, a minor
+  changeset. `npx linked build`: `✔ Build successful`. Whole suite with the live suites against a
+  Fuseki of its own: `[fuseki] live tests: 456 total — 454 passed, 0 failed, 2 skipped`,
+  `Test Suites: 4 skipped, 163 passed, 163 of 167 total`, `Tests: 122 skipped, 3159 passed, 3281
+  total`, then `tsc -p tsconfig-tests.json` clean. CN's `typecheck:gate` runs from CN's main
+  checkout once the work is in core `dev` there.

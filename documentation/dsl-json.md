@@ -468,6 +468,29 @@ send it; a store sent it must list `shapelessDelete` in `supports`.
 { "v":"1.3", "op":"delete", "mode":"shapeless", "ids": [ "https://ex.org/a", "https://ex.org/b" ] }
 ```
 
+## Triples reads
+
+A triples read (`TriplesBuilder`, `NamedGraph.readContent`) is plain data, not a builder envelope:
+its wire form is the read itself, checked with `parseTriplesQuery` and sent to
+`IDataset.triplesQuery` (`fromJSON` refuses it and names `parseTriplesQuery`).
+
+```json
+{ "v": "1.4", "kind": "triples", "object": "https://ex.org/ont/Term", "graphs": ["https://ex.org/graph/ontology"] }
+{ "v": "1.4", "kind": "triples", "predicate": "https://ex.org/ont/p", "graphs": ["https://ex.org/graph/data"], "limit": 1 }
+```
+
+| Field | Meaning |
+|---|---|
+| `subject`, `predicate`, `object` | The pattern's fixed positions, absolute IRIs (the object is a node, never a literal). Absent = open. |
+| `graphs` | The graphs read, as `.from()` takes them (portable names included). |
+| `limit` | At most this many triples; no order. |
+| `recordClass` | A graph read's routing key (`DraftGraph.readContent(g)`). |
+
+A read needs a node (`subject` or `object`) or `graphs`; a `predicate` without a node needs
+`graphs`; all three positions fixed is refused. `predicate` and `object` arrived in **1.4**: a read
+that uses one needs the `triplesPattern` feature on the dataset it is sent to, because a reader
+before 1.4 keeps only the fields it knows and would answer a wider read.
+
 ## Reserved words
 
 The **value-tags** are all `@`-sigiled — `@path`, `@id`, `@ctx`, `@date`, `@list`, `@add`,

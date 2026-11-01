@@ -289,7 +289,7 @@ IRI:
 
 The record's class is the graph's kind, a built-in shape in `@_linked/core/shapes/NamedGraph`:
 `NamedGraph` (`sd:NamedGraph`, fields `name`, `contentHash`, `feedsHierarchy`, `modified`,
-`sources`), `OntologyGraph` and `ShapesGraph` (adding `package`, `version`) and `DraftGraph`, each
+`sources`, `attributedTo`), `OntologyGraph` and `ShapesGraph` (adding `package`, `version`) and `DraftGraph`, each
 class `rdfs:subClassOf sd:NamedGraph` in `core.ttl`. Selecting `NamedGraph` returns every kind's
 records through the store's inference; its `select()` reads the registry (the shapes declare
 `static storedInGraph`), so callers never name it. `feedsHierarchy` is true for an
@@ -326,7 +326,11 @@ written: a record-only update that sets `feedsHierarchy` changes what the store 
 Content is `{mediaType: 'text/turtle' | 'application/n-triples', text}`. Core fills the record's
 automatic fields: `sd:name`, `core:contentHash` (`sha256Hex` of the content text, or a hash the
 caller passes; for a patch, of its delete text, a newline and its insert text) and
-`dcterms:modified`. The calls are server-only (a browser call throws; the import does not), and a
+`dcterms:modified`. A record field is a literal or, for `attributedTo` (`prov:wasAttributedTo`,
+who the content is attributed to, e.g. a host's system actor), a node: the caller passes `{id}`
+and the record holds the IRI, so a mark rides in the same query as the content
+(`ShapesGraph.update(g).set({attributedTo: {id}}).replaceContent(c)`) and reads back as `{id}`.
+The calls are server-only (a browser call throws; the import does not), and a
 store parses each body before it enters a request. A receiving process checks a graph query that
 arrived as JSON with `parseGraphQuery`.
 

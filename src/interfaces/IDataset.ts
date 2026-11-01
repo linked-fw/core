@@ -127,9 +127,11 @@ export interface IDataset {
 
   /**
    * Answer a triples read (see {@link TriplesQuery}): every triple of a graph
-   * (`NamedGraph.readContent(g)`), or one subject's triples, shapeless
-   * (`TriplesBuilder.forNode({id})`, optionally `.from(graphs)`). Terms come back as core's values:
-   * IRIs as `{id}`, literals as `{value, datatype, language?}`.
+   * (`NamedGraph.readContent(g)`), one subject's triples (`TriplesBuilder.forNode({id})`), the
+   * triples that point at a node (`toNode({id})`) or those of one predicate (`withPredicate({id})`),
+   * shapeless, optionally `.from(graphs)`. Terms come back as core's values: IRIs as `{id}`,
+   * literals as `{value, datatype, language?}`. A read that fixes the predicate or the object is
+   * sent only to a dataset that lists `'triplesPattern'` in {@link supports}.
    *
    * **Optional.** A dataset without it is refused by the dispatch (`resolveTriples`): there is no
    * shape to answer it with a select instead. A router forwards it to the dataset that holds the

@@ -1056,11 +1056,12 @@ supports all of them.
 
 #### Triples reads (no shape)
 
-Two reads answer triples rather than rows, for data no shape describes (a draft graph, an import's
-staging graph, a node of unknown type):
+Triples reads answer triples rather than rows, for data no shape describes (a draft graph, an
+import's staging graph, a node of unknown type, the references to a term):
 
 ```typescript
 import {DraftGraph, TriplesBuilder} from '@_linked/core';
+import {graphs} from '@_linked/core/ontologies/graphs';
 import {rdf} from '@_linked/core/ontologies/rdf';
 
 // Every triple of one graph, registered or not. Routed like DraftGraph's graph queries, so it
@@ -1071,6 +1072,13 @@ const draft = await DraftGraph.readContent(graph).limit(1001);
 // shapeless ask of it looks (the default graph, or every graph the store's routing knows).
 const staged = await TriplesBuilder.forNode({id: instanceId}).from(importGraph).exec(dataset);
 const types = staged.filter((t) => t.predicate.id === rdf.type.id).map((t) => t.object);
+
+// The triples that point at a node (as their object), in the same graphs or the same fallback.
+const refs = await TriplesBuilder.toNode({id: term}).from(graphs.allOntologies).exec(dataset);
+
+// The triples of one predicate: it needs .from(), a predicate is not read across a whole store.
+// .withPredicate(p) also narrows a node read; .exists() asks whether the read finds any triple.
+const used = await TriplesBuilder.withPredicate({id: property}).from(dataGraphs).exists(dataset);
 ```
 
 Each answer is a `Triple[]`: `{subject, predicate, object, graph?}`. An IRI is `{id}`, a blank node
@@ -1079,13 +1087,17 @@ language?}` with its lexical form and its datatype as `{id}` (`xsd:string` for a
 `rdf:langString` for a tagged one), so a read writes back unchanged. `graph` is the named graph
 the triple was read in, absent for the default graph. `.limit(n)` bounds a read; no order is
 implied. `.from()` takes what select's `.from()` takes, portable names included. A read with
-neither a subject nor a graph is refused.
+no node (a subject or an object) and no graph is refused, and so is a predicate read without
+graphs. `.exists()` sends the read with `limit: 1` (a SPARQL store stops at the first match).
 
 A triples read is plain data (`toTriplesQuery()`, `parseTriplesQuery()` at a wire boundary) sent to
 the optional `IDataset.triplesQuery`. `SparqlDataset` answers it with one `SELECT`; a dataset
-without the method is refused. `LinkedStorage` sends a graph read where its record class's graph
+without the method is refused. A read that fixes the predicate or the object (`toNode`,
+`withPredicate`) needs the `'triplesPattern'` feature in the dataset's `supports`: a dataset that
+predates it is refused rather than sent fields it would drop. `LinkedStorage` sends a graph read where its record class's graph
 queries go, and a subject read (no shape, no routing key) to every dataset it knows, joining the
-answers up to the limit, as it asks a shapeless ask. A router forwards it as a read.
+answers up to the limit, as it asks a shapeless ask (an object read too). A router forwards it as
+a read.
 
 #### Shapeless reads across datasets
 
