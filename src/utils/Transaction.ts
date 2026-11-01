@@ -26,7 +26,7 @@ import {UnresolvedContextError} from '../queries/QueryContext.js';
 import {sharedState} from './sharedState.js';
 
 /**
- * A store transaction, as `LinkedStorage.begin()` opens it (backlog 090, report 101).
+ * A store transaction, as `LinkedStorage.begin()` opens it (backlog 090, report 103).
  *
  * ```ts
  * const tx = LinkedStorage.begin();             // nothing is sent yet

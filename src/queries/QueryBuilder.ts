@@ -57,7 +57,7 @@ import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryS
 export type QueryBuilderJSON = {
   /** DSL-JSON wire-format version. */
   v?: string;
-  /** The store transaction the query runs in (DSL-JSON 1.4); absent outside one. */
+  /** The store transaction the query runs in (DSL-JSON 1.5); absent outside one. */
   txId?: string;
   /**
    * Present (`'select'`) when the select needs features beyond the baseline (`requires`). A

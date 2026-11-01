@@ -8,7 +8,7 @@
  * A query sent inside a store transaction carries the transaction's id (see
  * `utils/Transaction.ts`): as `query.txId` for a store that receives the live query, and as
  * `txId` in its DSL-JSON for one that forwards it (`RemoteDataset` sends `toJSON()`), from
- * DSL-JSON 1.4 on.
+ * DSL-JSON 1.5 on.
  *
  * The query the store receives is a **transaction view** of the caller's query: an object whose
  * prototype is the query itself, with its own `txId` and a `toJSON()` that adds it. Every method,

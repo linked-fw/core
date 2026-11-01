@@ -78,7 +78,7 @@ export type RawAskInput = {
  */
 export type AskQueryJSON = {
   v?: string;
-  /** The store transaction the query runs in (DSL-JSON 1.4); absent outside one. */
+  /** The store transaction the query runs in (DSL-JSON 1.5); absent outside one. */
   txId?: string;
   op: 'ask';
   /** Omitted for a shapeless ask (no `rdf:type` constraint). */

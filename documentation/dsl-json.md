@@ -51,6 +51,7 @@ Every envelope carries a wire-format version under `v`:
 
 `fromJSON` checks it with `assertWireVersion`: a mismatched **major** is rejected; a missing
 `v` is tolerated (treated as the current major). Bump the major only for breaking wire changes.
+The current version is 1.5 (`txId`, see [Transactions](#transactions-txid)); 1.4 added triples reads by object and predicate.
 
 ## Envelopes
 
@@ -490,6 +491,23 @@ A read needs a node (`subject` or `object`) or `graphs`; a `predicate` without a
 `graphs`; all three positions fixed is refused. `predicate` and `object` arrived in **1.4**: a read
 that uses one needs the `triplesPattern` feature on the dataset it is sent to, because a reader
 before 1.4 keeps only the fields it knows and would answer a wider read.
+
+## Transactions (`txId`)
+
+From version 1.5, any query envelope (select, count, ask, create, update, upsert, delete) may
+carry `"txId"`: the id of the store transaction it runs in, as the store answered
+`beginTransaction()` (see the README, "Transactions"). It is a non-empty string; anything else is
+refused.
+
+```jsonc
+{ "v":"1.5", "op":"create", "txId":"mem-a#tx-1", "shape":"https://ex.org/shape/AppConfig", "data": { "name":"x" } }
+```
+
+`fromJSON()` decodes the envelope and returns the query with `txId` set (`query.txId`), so the
+store it is routed to answers it inside that transaction. A builder's own `fromJSON` (e.g.
+`CreateBuilder.fromJSON`) refuses an envelope with a `txId` rather than drop it, and a store that
+does not declare `'transactions'` in `supports` is never sent one. Graph-query and triples-read
+envelopes carry no `txId`.
 
 ## Reserved words
 

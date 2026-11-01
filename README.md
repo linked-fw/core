@@ -1479,7 +1479,7 @@ await LinkedStorage.transaction(async (tx) => {
 - Live queries hear of a transaction's writes when it commits.
 
 **Stores.** A store declares `'transactions'` in `supports` and implements `beginTransaction()`,
-`commit(txId)` and `rollback(txId)`; it reads the txId as `query.txId` (on DSL-JSON, from 1.4,
+`commit(txId)` and `rollback(txId)`; it reads the txId as `query.txId` (on DSL-JSON, from 1.5,
 as `txId`, which `fromJSON()` restores). It holds the transaction and rolls it back after an idle
 timeout of its own. A store without support (`SparqlDataset`, so Fuseki) is warned about once,
 loudly ("store X does not support transactions; these writes are not atomic"), and the queries run

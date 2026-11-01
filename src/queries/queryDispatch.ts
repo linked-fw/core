@@ -203,7 +203,7 @@ export async function resolveGraphQuery(
 /** A target that may answer a triples read. */
 type TriplesTarget = {
   triplesQuery?(query: TriplesQuery): Promise<Triple[]>;
-  readonly supports?: readonly QueryFeature[];
+  readonly supports?: readonly DatasetFeature[];
 };
 
 /**

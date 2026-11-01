@@ -78,7 +78,7 @@ export type RawCountInput = {
  */
 export type CountQueryJSON = {
   v?: string;
-  /** The store transaction the query runs in (DSL-JSON 1.4); absent outside one. */
+  /** The store transaction the query runs in (DSL-JSON 1.5); absent outside one. */
   txId?: string;
   op: 'count';
   /** Required — see {@link CountQuery.shape}. */

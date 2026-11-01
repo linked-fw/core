@@ -86,7 +86,7 @@ const NODE_SHAPE_KEY = '__shape';
 
 export type CreateMutationJSON = {
   v?: string;
-  /** The store transaction the query runs in (DSL-JSON 1.4); absent outside one. */
+  /** The store transaction the query runs in (DSL-JSON 1.5); absent outside one. */
   txId?: string;
   op: 'create';
   shape: string;
@@ -95,7 +95,7 @@ export type CreateMutationJSON = {
 
 export type UpdateMutationJSON = {
   v?: string;
-  /** The store transaction the query runs in (DSL-JSON 1.4); absent outside one. */
+  /** The store transaction the query runs in (DSL-JSON 1.5); absent outside one. */
   txId?: string;
   op: 'update';
   shape: string;
@@ -117,7 +117,7 @@ export type UpdateMutationJSON = {
  */
 export type UpsertMutationJSON = {
   v?: string;
-  /** The store transaction the query runs in (DSL-JSON 1.4); absent outside one. */
+  /** The store transaction the query runs in (DSL-JSON 1.5); absent outside one. */
   txId?: string;
   op: 'upsert';
   shape: string;
@@ -128,7 +128,7 @@ export type UpsertMutationJSON = {
   data: MutationNodeDataJSON;
 };
 
-/** Every delete envelope may carry `txId` (DSL-JSON 1.4): the store transaction it runs in. */
+/** Every delete envelope may carry `txId` (DSL-JSON 1.5): the store transaction it runs in. */
 export type DeleteMutationJSON =
   | {
       v?: string;

@@ -76,7 +76,7 @@ export function fromJSON(
       'check it with parseTriplesQuery() and pass it to IDataset.triplesQuery().',
     );
   }
-  // A query of a store transaction (DSL-JSON 1.4): decoded without its txId, then returned as
+  // A query of a store transaction (DSL-JSON 1.5): decoded without its txId, then returned as
   // the transaction view, so the store it is sent to answers it inside that transaction.
   if (json && typeof json === 'object') {
     const {json: bare, txId} = splitTxId(json);

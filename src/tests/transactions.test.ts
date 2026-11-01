@@ -266,26 +266,31 @@ describe('edges', () => {
 });
 
 describe('expiry', () => {
-  test('an abandoned transaction expires in the store and is rolled back', async () => {
-    const quick = new InMemoryDataset({id: 'mem-quick', transactionTimeoutMs: 20});
-    LinkedStorage.setDefaultDataset(quick);
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test('an abandoned transaction expires in the store after 30 seconds idle and is rolled back', async () => {
+    jest.useFakeTimers();
+    expect(store.transactionTimeoutMs).toBe(30_000);
     const tx = LinkedStorage.begin();
     await TxConfig.create({name: 'a'}).exec(tx);
-    expect(quick.openTransactions).toBe(1);
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(quick.openTransactions).toBe(0);
+    jest.advanceTimersByTime(29_999);
+    expect(store.openTransactions).toBe(1);
+    jest.advanceTimersByTime(1);
+    expect(store.openTransactions).toBe(0);
     await expect(tx.commit()).rejects.toThrow(/unknown or expired/);
     expect(await names()).toEqual([]);
   });
 
-  test('every query restarts the idle timer; the default is 30 seconds', async () => {
-    expect(store.transactionTimeoutMs).toBe(30_000);
+  test('every query restarts the idle timer', async () => {
+    jest.useFakeTimers();
     const quick = new InMemoryDataset({id: 'mem-busy', transactionTimeoutMs: 40});
     LinkedStorage.setDefaultDataset(quick);
     const tx = LinkedStorage.begin();
     for (let i = 0; i < 4; i++) {
       await TxConfig.create({name: `n${i}`}).exec(tx);
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      jest.advanceTimersByTime(30);
     }
     await tx.commit();
     expect(await names()).toEqual(['n0', 'n1', 'n2', 'n3']);
@@ -425,11 +430,11 @@ describe('settled behaviours', () => {
 });
 
 describe('on the wire', () => {
-  test('the txId travels on DSL-JSON (1.4) and fromJSON() returns the transaction view', () => {
-    expect(WIRE_VERSION).toBe('1.4');
+  test('the txId travels on DSL-JSON (1.5) and fromJSON() returns the transaction view', () => {
+    expect(WIRE_VERSION).toBe('1.5');
     const query = inTransaction(TxConfig.create({name: 'a'}), 'tx-1');
     const json = JSON.parse(JSON.stringify(query.toJSON()));
-    expect(json).toMatchObject({v: '1.4', op: 'create', txId: 'tx-1'});
+    expect(json).toMatchObject({v: '1.5', op: 'create', txId: 'tx-1'});
     const back = fromJSON(json);
     expect(txIdOf(back)).toBe('tx-1');
     expect(back.toJSON()).toEqual(json);
