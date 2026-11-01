@@ -185,3 +185,11 @@ Phase 1 → 2 → 3, one agent, sequential.
 - Validation: `FUSEKI_BASE_URL=http://localhost:3967 npm test`: `Tests: 122 skipped, 3163
   passed, 3285 total`, `[fuseki] live tests: 464 total — 462 passed, 0 failed, 2 skipped`,
   typecheck clean. `npx linked build`: `✔ Build successful`.
+
+### Phase 3: docs and changeset (done)
+
+- README "Sorting, limiting, one" (the rule with the Anna/Carl/Dirk example; where-aggregates
+  per instance) and the groupBy notes; `documentation/dsl-json.md` (`sortBy`/`groupOrderBy` and
+  where-aggregate semantics for stores answering envelopes); `documentation/sparql-algebra.md`
+  step 10; `SelectBuilder.orderBy`/`limit` and `GroupedSelectBuilder.orderBy` JSDoc.
+- Backlog 089 removed (items 1–3 done). `.changeset/sort-missing-last.md`: minor.

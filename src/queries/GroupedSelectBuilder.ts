@@ -319,7 +319,9 @@ export class GroupedSelectBuilder<S extends Shape = Shape, Row = any>
 
   /**
    * Sort the groups by result fields (keys or aggregates): `.orderBy('n', 'DESC')`, or several
-   * at once (`.orderBy(['type', 'n'])`), all in `direction`. Calling it again replaces it.
+   * at once (`.orderBy(['type', 'n'])`), all in `direction`. Calling it again replaces it. A
+   * group without a value for a field (the `null` key, an aggregate of no values) sorts last, in
+   * both directions.
    */
   orderBy<K extends keyof Row & string>(
     fields: K | readonly K[],

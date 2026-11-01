@@ -1044,7 +1044,8 @@ const latest = await Person.select((p) => ({friend: p.bestFriend, last: p.birthD
   `orderBy` on the members, or a `where` that holds an aggregate (filter groups with `having`).
   A field is a key or an aggregate: arithmetic on aggregates (`Expr.count().plus(1)`) is one,
   an aggregate mixed with a member's own value is refused. `orderBy` on a plain select sorts by
-  paths and refuses an aggregate. Aggregates are refused as update values.
+  paths and refuses an aggregate. The grouped `orderBy` puts the group without a value for that
+  field last, in both directions (see "Sorting, limiting, one"). Aggregates are refused as update values.
 - Outside a grouped select, an aggregate is per row, like `.size()`:
   `Person.select((p) => ({first: p.nickNames.min()}))`.
 
@@ -1249,14 +1250,24 @@ value of every selected path, as without paging. An instance is never split acro
 however many values its multi-valued paths have. `.one()` is the first instance, with all its
 values; `.for(id)` reads one instance and needs no limit.
 
+**Sorting never drops an instance, and missing values sort last**, ascending and descending,
+for direct and nested paths alike. With Anna (best friend Bob), Carl (best friend Ada) and Dirk
+(no best friend), `Person.select((p) => [p.name, p.bestFriend.name]).orderBy((p) =>
+p.bestFriend.name)` returns Carl, Anna, Dirk; with `'DESC'`, Anna, Carl, Dirk. The same holds
+for a direct path (`orderBy((p) => p.hobby)`: the instances without a hobby come last), paged
+or not, for `.one()` (the first instance that has the value, if any has it), and for a grouped
+select's `orderBy` (the group without the key's value, or whose aggregate has no value, comes
+last).
+
 An `orderBy` on a multi-valued or nested path (`p.nickNames`, `p.friends.name`) gives each
 instance one sort value: its first value in that direction, the lowest ascending and the
-highest descending. Each `orderBy` key is taken this way on its own, and ties are broken by the
-instance's IRI, so consecutive pages neither repeat nor skip an instance. An instance without a
-value of a direct path (`p.nickNames`) sorts as SPARQL sorts an unbound value: first ascending,
-last descending. Ordering by a nested path (`p.friends.name`, `p.bestFriend.name`) keeps only
-the instances that have that path. Without an `orderBy` the order of the instances, and so
-which ones a page holds, is the store's.
+highest descending, of the values it has. Each `orderBy` key is taken this way on its own, and
+on a page ties are broken by the instance's IRI, so consecutive pages neither repeat nor skip
+an instance. Without an `orderBy` the order of the instances, and so which ones a page holds,
+is the store's.
+
+A `where` that holds an aggregate (`.where((p) => p.friends.size().equals(2))`) is tested per
+instance, paged or not, whatever the select reads next to it.
 
 A grouped select (`groupBy`, below) pages over its **groups**: `limit(10)` is ten groups.
 `count()` and `exists()` drop `limit` and `offset`.

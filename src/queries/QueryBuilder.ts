@@ -295,7 +295,11 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     return this.clone({minusEntries: [...existing, entry]});
   }
 
-  /** Set sort order. */
+  /**
+   * Set sort order. Sorting never drops an instance: one without a value for the path sorts
+   * after every instance with one, ascending and descending, for direct and nested paths. See
+   * the README, "Sorting, limiting, one".
+   */
   orderBy<OR>(fn: QueryBuildFn<S, OR>, direction: 'ASC' | 'DESC' = 'ASC'): SelectBuilder<S, R, Result> {
     return this.clone({sortByFn: fn as any, sortDirection: direction});
   }
@@ -320,7 +324,8 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   /**
    * At most `n` instances (root subjects), each with all its values: a multi-valued path does
    * not make a page smaller. An `orderBy` on a multi-valued path sorts an instance by its lowest
-   * value ascending, its highest descending, ties by IRI. See the README, "Sorting, limiting, one".
+   * value ascending, its highest descending, ties by IRI; missing values last. See the README,
+   * "Sorting, limiting, one".
    */
   limit(n: number): SelectBuilder<S, R, Result> {
     return this.clone({limit: n});
