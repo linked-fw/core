@@ -7,7 +7,7 @@ import type {CreateQuery} from '../queries/CreateQuery.js';
 import type {UpdateQuery} from '../queries/UpdateQuery.js';
 import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
 import type {GraphQuery, GraphResult} from '../queries/IntermediateRepresentation.js';
-import type {Triple, TriplesQuery} from '../queries/triplesQuery.js';
+import {triplesTermsOf, type Triple, type TriplesQuery} from '../queries/triplesQuery.js';
 import {
   assertQuerySupported,
   setQueryDispatch,
@@ -15,6 +15,8 @@ import {
   resolveGraphQuery,
   resolveTriples,
   assertTriplesTarget,
+  resolveTriplesTerms,
+  assertTriplesTermsTarget,
 } from '../queries/queryDispatch.js';
 import {ALL_QUERY_FEATURES} from '../queries/queryFeatures.js';
 import {
@@ -119,6 +121,7 @@ export abstract class LinkedStorage {
       deleteQuery: (q) => this.deleteQuery(q),
       graphQuery: (q) => this.graphQuery(q),
       triplesQuery: (q) => this.triplesQuery(q),
+      triplesTermsQuery: (q) => this.triplesTermsQuery(q),
       // Every feature: `selectQuery` checks the dataset each select is routed to.
       supports: ALL_QUERY_FEATURES,
     });
@@ -685,6 +688,32 @@ export abstract class LinkedStorage {
       }
     }
     return triples;
+  }
+
+  /**
+   * Route a terms read (`TriplesBuilder.whichExist()`). It has no shape and no record class, so,
+   * like a node read, it is sent to every dataset this router knows and the answers are joined
+   * (each term once, in the list's order); every dataset is checked before the first is asked,
+   * and a fan-out without `.from()` graphs logs the same notice as a node read's.
+   */
+  static async triplesTermsQuery(query: TriplesQuery): Promise<string[]> {
+    const run = (dataset: IDataset) =>
+      getActiveShapeCatalog() === undefined
+        ? resolveTriplesTerms(dataset, query)
+        : outsideShapeCatalog(() => resolveTriplesTerms(dataset, query));
+    const datasets = this.getDatasets();
+    if (datasets.size === 0) {
+      throw new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().');
+    }
+    for (const dataset of datasets) assertTriplesTermsTarget(dataset, query);
+    if (datasets.size > 1 && !query.graphs?.length) noticeFanOut('triples', datasets.size);
+    const found = new Set<string>();
+    const terms = triplesTermsOf(query);
+    for (const dataset of datasets) {
+      for (const term of await run(dataset)) found.add(term);
+      if (found.size === terms.length) break;
+    }
+    return terms.filter((term) => found.has(term));
   }
 
   private static resolveDatasetForRecordClass(recordClass: string | undefined): IDataset | undefined {

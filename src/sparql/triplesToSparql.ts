@@ -22,8 +22,18 @@
  * ```
  *
  * No `ORDER BY`: a sort over a whole graph would cost more than the read, and the answer is a set.
+ *
+ * A terms read (a list of objects or predicates, `whichExist()`) puts the list in `VALUES ?t` and
+ * keeps the terms some triple has, the pattern under `FILTER EXISTS` so each term stops at its first
+ * match (see {@link triplesTermsToAlgebra}):
+ *
+ * ```sparql
+ * SELECT DISTINCT ?t FROM NAMED <g1> FROM NAMED <g2>
+ * WHERE { VALUES ?t { <p1> <p2> } FILTER(EXISTS { GRAPH ?g_s0 { ?s ?t ?o } }) }   # withPredicate([p1, p2]).from([g1, g2])
+ * ```
  */
 import type {SparqlAlgebraNode, SparqlBGP, SparqlProjectionItem, SparqlSelectPlan, SparqlTerm} from './SparqlAlgebra.js';
+import {triplesTermsOf, triplesTermsPosition} from '../queries/triplesQuery.js';
 import {scopeAlgebraToGraphs, type ReadGraphScope} from './graphScope.js';
 import {selectPlanToSparql} from './algebraToString.js';
 import type {SparqlCompileOptions} from './sparqlUtils.js';
@@ -100,6 +110,79 @@ export function triplesToAlgebra(query: TriplesQuery, options?: SparqlCompileOpt
     },
     graph,
   };
+}
+
+/** The variable a terms read binds its list to. */
+const TERM = 't';
+
+/**
+ * Compile a terms read (a list of `objects` or `predicates`) whose `graphs` the store has expanded
+ * already, as {@link triplesToAlgebra} takes them: `VALUES ?t { … }` over the list, kept where
+ * `FILTER EXISTS` finds the read's pattern with `?t` in the list's position, `SELECT DISTINCT ?t`.
+ * The pattern is scoped to the graphs exactly as the one-term read's is. A read without a list,
+ * or with an empty one (the store answers it without querying), is refused. Its `limit` is not
+ * part of it.
+ */
+export function triplesTermsToAlgebra(query: TriplesQuery, options?: SparqlCompileOptions): SparqlSelectPlan {
+  const position = triplesTermsPosition(query);
+  const terms = triplesTermsOf(query);
+  if (position === undefined || terms.length === 0) {
+    throw new Error('A terms read lists at least one object or predicate; this one lists none.');
+  }
+  const term = (fixed: string | undefined, name: string): SparqlTerm =>
+    fixed !== undefined ? {kind: 'iri', value: fixed} : variable(name);
+  const bgp: SparqlBGP = {
+    type: 'bgp',
+    triples: [
+      {
+        subject: term(query.subject, SUBJECT),
+        predicate: position === 'predicate' ? variable(TERM) : term(query.predicate, PREDICATE),
+        object: position === 'object' ? variable(TERM) : term(query.object, OBJECT),
+      },
+    ],
+  };
+  const nodeRead = query.subject !== undefined || position === 'object';
+  const scope: ReadGraphScope | undefined =
+    query.graphs ??
+    (nodeRead && options?.routing
+      ? {bySubject: new Map(), otherSubjects: options.routing.allGraphs()}
+      : undefined);
+  if (!nodeRead && scope === undefined) {
+    throw new Error(
+      'A terms read of predicates without a subject needs its graphs; one predicate across a store ' +
+        'is not compiled.',
+    );
+  }
+  const scoped = scopeAlgebraToGraphs(bgp, scope, options);
+  return {
+    type: 'select',
+    algebra: {
+      type: 'filter',
+      expression: {kind: 'exists_expr', pattern: scoped.algebra, negated: false},
+      inner: {type: 'values', variable: TERM, iris: [...terms]},
+    },
+    projection: [{kind: 'variable', name: TERM}],
+    distinct: true,
+    ...(scoped.dataset ? {dataset: scoped.dataset} : {}),
+  };
+}
+
+/** The SPARQL text of a terms read (see {@link triplesTermsToAlgebra}). */
+export function triplesTermsToSparql(query: TriplesQuery, options?: SparqlCompileOptions): string {
+  return selectPlanToSparql(triplesTermsToAlgebra(query, options), options);
+}
+
+/** The answer of a terms read: the IRIs bound to `?t`. */
+export function mapSparqlTriplesTermsResult(json: SparqlQueryResults): string[] {
+  if (!isSparqlSelectResults(json)) {
+    throw new Error('Expected a SPARQL SELECT result set for a terms read, got an ASK response.');
+  }
+  const terms: string[] = [];
+  for (const row of json.results.bindings) {
+    const bound = row[TERM];
+    if (bound?.type === 'uri') terms.push(bound.value);
+  }
+  return terms;
 }
 
 /** The SPARQL text of a triples read (see {@link triplesToAlgebra}). */

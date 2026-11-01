@@ -1124,6 +1124,10 @@ const refs = await TriplesBuilder.toNode({id: term}).from(graphs.allOntologies).
 // The triples of one predicate: it needs .from(), a predicate read names the graphs it reads.
 // .withPredicate(p) also narrows a node read; .exists() asks whether the read finds any triple.
 const used = await TriplesBuilder.withPredicate({id: property}).from(dataGraphs).exists(dataset);
+
+// A list of terms is a terms read: which of them occur, in one query (a Set of IRIs).
+const instantiated = await TriplesBuilder.toNode(classes).withPredicate(rdf.type).from(dataGraphs).whichExist(dataset);
+const usedProperties = await TriplesBuilder.withPredicate(properties).from(dataGraphs).whichExist(dataset);
 ```
 
 Each answer is a `Triple[]`: `{subject, predicate, object, graph?}`. An IRI is `{id}`, a blank node
@@ -1134,6 +1138,13 @@ the triple was read in, absent for the default graph. `.limit(n)` bounds a read;
 implied. `.from()` takes what select's `.from()` takes, portable names included. A read with
 no node (a subject or an object) and no graph is refused, and so is a predicate read without
 graphs. `.exists()` sends the read with `limit: 1` (a SPARQL store stops at the first match).
+
+`toNode` and `withPredicate` take a list of terms too (`[{id}, …]`, one list per read): a terms
+read. `.whichExist()` answers the `Set` of the listed IRIs that some triple of the read has in
+that position, sent to the optional `IDataset.triplesTermsQuery`; `SparqlDataset` answers it with
+`SELECT DISTINCT ?t WHERE { VALUES ?t { … } FILTER EXISTS { … } }`, one query per 400 terms, each
+term stopping at its first match. It has no `exec()` (it answers terms, not triples);
+`.exists()` asks whether any term occurs.
 
 A triples read is plain data (`toTriplesQuery()`, `parseTriplesQuery()` at a wire boundary) sent to
 the optional `IDataset.triplesQuery`. `SparqlDataset` answers it with one `SELECT`; a dataset

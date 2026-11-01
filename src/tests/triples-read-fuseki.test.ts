@@ -8,7 +8,7 @@
  * Triples reads on Fuseki: a graph read returns every triple of the graph with its terms as core
  * values (and is bounded by its limit), a draft written with replaceContent reads back the same,
  * and a subject read returns the subject's triples in one graph, in several (each with its graph)
- * and in the default graph.
+ * and in the default graph. A terms read answers which of its listed objects or predicates occur.
  */
 import {afterAll, beforeAll, expect, test} from '@jest/globals';
 import {
@@ -49,7 +49,7 @@ describeFuseki('triples reads on Fuseki', () => {
         <${S}> <${P}> <${EX}o> , "plain" , "hallo"@nl , "42"^^<${xsd.integer.id}> ;
                <${Q}> [ <${P}> "inside" ] .
       }
-      GRAPH <${G2}> { <${S}> <${Q}> "in two" . <${EX}other> <${P}> "x" . }
+      GRAPH <${G2}> { <${S}> <${Q}> "in two" . <${EX}other> <${P}> "x" ; a <${EX}C1> . }
       <${S}> <${P}> "in the default graph" .
     }`);
     store = new FusekiStore(FUSEKI_BASE_URL, DATASET_NAME);
@@ -130,5 +130,18 @@ describeFuseki('triples reads on Fuseki', () => {
     expect(await TriplesBuilder.withPredicate({id: P}).from(G2).exists(store)).toBe(true);
     expect(await TriplesBuilder.withPredicate({id: P}).from(graphs.default).exists(store)).toBe(true);
     expect(await TriplesBuilder.withPredicate({id: `${EX}unused`}).from([G1, G2, graphs.default]).exists(store)).toBe(false);
+  });
+
+  test('a terms read: which listed predicates and objects occur, per graph set, in one query each', async () => {
+    const unused = {id: `${EX}unused`};
+    expect(await TriplesBuilder.withPredicate([{id: P}, {id: Q}, unused]).from(G2).whichExist(store)).toEqual(new Set([P, Q]));
+    expect(await TriplesBuilder.withPredicate([{id: P}, unused]).from(graphs.default).whichExist(store)).toEqual(new Set([P]));
+    expect(await TriplesBuilder.withPredicate([{id: Q}, unused]).from([graphs.default, G1]).whichExist(store)).toEqual(new Set([Q]));
+    const classes = [{id: `${EX}C1`}, {id: `${EX}C2`}];
+    expect(await TriplesBuilder.toNode(classes).withPredicate(rdf.type).from([G1, G2]).whichExist(store)).toEqual(new Set([`${EX}C1`]));
+    expect(await TriplesBuilder.toNode(classes).withPredicate(rdf.type).from(G1).whichExist(store)).toEqual(new Set());
+    expect(await TriplesBuilder.toNode([{id: `${EX}o`}, ...classes]).from([G1, G2]).whichExist(store)).toEqual(
+      new Set([`${EX}o`, `${EX}C1`]),
+    );
   });
 });

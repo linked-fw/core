@@ -15,8 +15,10 @@
  * (`{"friends.some": {"$type": …}}`).
  * 1.8: a quantifier key carries its relation's cast (`pets.as(Dog).some`); condition and `sortBy`
  * paths carry `as(X)` casts as fields do; a `sortBy` filter on any relation segment of its path.
+ * 1.9: a triples read lists `objects` or `predicates` (a terms read, `IDataset.triplesTermsQuery`:
+ * which of the listed terms occur).
  */
-export const WIRE_VERSION = '1.8';
+export const WIRE_VERSION = '1.9';
 
 /**
  * Validate an incoming envelope's `v`. A missing `v` is tolerated (pre-versioned /

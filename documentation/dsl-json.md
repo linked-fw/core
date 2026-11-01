@@ -51,9 +51,10 @@ Every envelope carries a wire-format version under `v`:
 
 `fromJSON` checks it with `assertWireVersion`: a mismatched **major** is rejected; a missing
 `v` is tolerated (treated as the current major). Bump the major only for breaking wire changes.
-The current version is 1.8 (a quantifier key carries its relation's cast, `pets.as(Dog).some`;
-condition and `sortBy` paths carry `as(X)` casts as fields do; a `sortBy` filter on any relation
-segment); 1.7 added `sortBy` entries for a computed expression and a filtered path, and a quantifier
+The current version is 1.9 (a triples read lists `objects` or `predicates`, a terms read; see
+[Triples reads](#triples-reads)); 1.8 carried a quantifier key's relation cast, `pets.as(Dog).some`,
+`as(X)` casts in condition and `sortBy` paths as fields carry them, and a `sortBy` filter on any
+relation segment; 1.7 added `sortBy` entries for a computed expression and a filtered path, and a quantifier
 as the condition of another; 1.6 added the `$type` path segment (see Paths), 1.5 `txId` (see [Transactions](#transactions-txid)), 1.4 triples reads by object and predicate.
 
 ## Envelopes
@@ -532,6 +533,7 @@ its wire form is the read itself, checked with `parseTriplesQuery` and sent to
 | Field | Meaning |
 |---|---|
 | `subject`, `predicate`, `object` | The pattern's fixed positions, absolute IRIs (the object is a node, never a literal). Absent = open. |
+| `objects`, `predicates` | A terms read (1.9): a list of absolute IRIs in place of `object` or `predicate`, one list per read. |
 | `graphs` | The graphs read, as `.from()` takes them (portable names included). |
 | `limit` | At most this many triples; no order. |
 | `recordClass` | A graph read's routing key (`DraftGraph.readContent(g)`). |
@@ -540,6 +542,17 @@ A read needs a node (`subject` or `object`) or `graphs`; a `predicate` without a
 `graphs`; all three positions fixed is refused. `predicate` and `object` arrived in **1.4**: a read
 that uses one needs the `triplesPattern` feature on the dataset it is sent to, because a reader
 before 1.4 keeps only the fields it knows and would answer a wider read.
+
+A **terms read** (1.9, `TriplesBuilder.toNode([…])` or `withPredicate([…])`, then `.whichExist()`)
+lists the terms of one position and asks which of them occur. It goes to `IDataset.triplesTermsQuery`,
+never to `triplesQuery`, and its answer is a JSON array of the listed IRIs some triple of the read
+has. A list of `objects` is a node read (graphs optional); a list of `predicates` needs `graphs`.
+It has no `limit` or `recordClass`, and needs `triplesPattern` as a one-term read does.
+
+```json
+{ "v": "1.9", "kind": "triples", "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "objects": ["https://ex.org/ont/A", "https://ex.org/ont/B"], "graphs": ["https://ex.org/graph/data"] }
+{ "v": "1.9", "kind": "triples", "predicates": ["https://ex.org/ont/p", "https://ex.org/ont/q"], "graphs": ["https://ex.org/graph/data"] }
+```
 
 ## Transactions (`txId`)
 

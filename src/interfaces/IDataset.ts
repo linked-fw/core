@@ -167,6 +167,20 @@ export interface IDataset {
   triplesQuery?(query: TriplesQuery): Promise<Triple[]>;
 
   /**
+   * Answer a terms read (`TriplesBuilder.toNode([…])` or `withPredicate([…])`, then
+   * `.whichExist()`; `TriplesQuery.objects` or `.predicates`): the IRIs of the read's list that
+   * some triple of the read has in that position, in its graphs (`.from()`) or, for a list of
+   * objects without them, where a node read looks. The answer is a list of IRIs; the dispatch keeps
+   * only the list's own. Sent only to a dataset that lists `'triplesPattern'` in {@link supports},
+   * and never a read without a list (that is {@link triplesQuery}'s).
+   *
+   * **Optional**, like {@link triplesQuery}: a dataset without it is refused by the dispatch
+   * (`resolveTriplesTerms`). A router forwards it as it forwards a triples read. `SparqlDataset`
+   * implements it. Must reject on failure: an unreachable store is never an empty answer.
+   */
+  triplesTermsQuery?(query: TriplesQuery): Promise<string[]>;
+
+  /**
    * Replace terms in the default graph in one update (see {@link DefaultGraphTermsReplace}): the
    * ontology sync's `'default'` mode. Optional; that mode refuses a store without it.
    */

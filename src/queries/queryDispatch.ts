@@ -6,7 +6,13 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import type {AskQuery} from './AskQuery.js';
 import type {CountQuery} from './CountQuery.js';
 import type {GraphQuery, GraphResult} from './IntermediateRepresentation.js';
-import {triplesQueryFeatures, type Triple, type TriplesQuery} from './triplesQuery.js';
+import {
+  triplesQueryFeatures,
+  triplesTermsOf,
+  triplesTermsPosition,
+  type Triple,
+  type TriplesQuery,
+} from './triplesQuery.js';
 import {unsupportedGraphQuery} from './graphQuery.js';
 import {catalogOf, withShapeCatalog} from '../utils/ShapeClass.js';
 import type {QueryFeature} from './queryFeatures.js';
@@ -45,6 +51,11 @@ export interface QueryDispatch {
    * {@link resolveTriples} refuses a target without it.
    */
   triplesQuery?(query: TriplesQuery): Promise<Triple[]>;
+  /**
+   * Answer a terms read (`IDataset.triplesTermsQuery`). Optional, as on `IDataset`;
+   * {@link resolveTriplesTerms} refuses a target without it.
+   */
+  triplesTermsQuery?(query: TriplesQuery): Promise<string[]>;
   /**
    * The query features this dispatch answers (as `IDataset.supports`). A router that checks each
    * routed dataset itself (`LinkedStorage`) lists every feature; absent = the baseline only.
@@ -215,6 +226,12 @@ export function assertTriplesTarget(
   target: TriplesTarget | undefined,
   query: TriplesQuery,
 ): TriplesTarget & {triplesQuery(query: TriplesQuery): Promise<Triple[]>} {
+  if (triplesTermsPosition(query) !== undefined) {
+    throw new Error(
+      'A terms read (a list of objects or predicates) answers which of its terms occur, not ' +
+        'triples: send it with IDataset.triplesTermsQuery (TriplesBuilder.whichExist()).',
+    );
+  }
   if (typeof target?.triplesQuery !== 'function') {
     throw new Error(
       'This dataset does not implement IDataset.triplesQuery, so a triples read (a graph, node or ' +
@@ -224,6 +241,62 @@ export function assertTriplesTarget(
   }
   assertFeaturesSupported(target as FeatureTarget, triplesQueryFeatures(query));
   return target as TriplesTarget & {triplesQuery(query: TriplesQuery): Promise<Triple[]>};
+}
+
+/** A target that may answer a terms read. */
+type TriplesTermsTarget = {
+  triplesTermsQuery?(query: TriplesQuery): Promise<string[]>;
+  readonly supports?: readonly QueryFeature[];
+};
+
+/**
+ * Refuse a target that cannot answer the terms read `query`, and a query that is not one (no list
+ * of objects or predicates): no `triplesTermsQuery`, or a target that does not declare
+ * `'triplesPattern'` (a terms read fixes the predicate or the object). A router that sends one read
+ * to several datasets checks each of them before it asks the first.
+ */
+export function assertTriplesTermsTarget(
+  target: TriplesTermsTarget | undefined,
+  query: TriplesQuery,
+): TriplesTermsTarget & {triplesTermsQuery(query: TriplesQuery): Promise<string[]>} {
+  if (triplesTermsPosition(query) === undefined) {
+    throw new Error(
+      'A terms read lists the terms it asks about (objects or predicates); this triples read has ' +
+        'no list. Send it with IDataset.triplesQuery.',
+    );
+  }
+  if (typeof target?.triplesTermsQuery !== 'function') {
+    throw new Error(
+      'This dataset does not implement IDataset.triplesTermsQuery, so a terms read ' +
+        '(TriplesBuilder.whichExist()) cannot be answered. SparqlDataset implements it; a router ' +
+        'forwards it to the dataset that holds the data.',
+    );
+  }
+  assertFeaturesSupported(target as FeatureTarget, triplesQueryFeatures(query));
+  return target as TriplesTermsTarget & {triplesTermsQuery(query: TriplesQuery): Promise<string[]>};
+}
+
+/**
+ * Answer a terms read against `target` — the entry point `TriplesBuilder.whichExist()` and
+ * `LinkedStorage.triplesTermsQuery` go through, checked as {@link assertTriplesTermsTarget} says.
+ * An empty list answers `[]` without asking. The answer must be an array of IRIs; only the terms
+ * of the read's list are kept, each once.
+ */
+export async function resolveTriplesTerms(
+  target: TriplesTermsTarget | undefined,
+  query: TriplesQuery,
+): Promise<string[]> {
+  const answering = assertTriplesTermsTarget(target, query);
+  const terms = triplesTermsOf(query);
+  if (terms.length === 0) return [];
+  const answer = await answering.triplesTermsQuery(query);
+  if (!Array.isArray(answer)) {
+    throw new Error(
+      `triplesTermsQuery must resolve to an array of IRIs; got ${answer === null ? 'null' : typeof answer}.`,
+    );
+  }
+  const found = new Set(answer);
+  return terms.filter((term) => found.has(term));
 }
 
 /**
@@ -348,6 +421,7 @@ export type QueryDispatchEvent = (
   | {kind: 'delete'; query: DeleteQuery; result: Promise<DeleteResponse>}
   | {kind: 'graph'; query: GraphQuery; result: Promise<GraphResult>}
   | {kind: 'triples'; query: TriplesQuery; result: Promise<Triple[]>}
+  | {kind: 'triplesTerms'; query: TriplesQuery; result: Promise<string[]>}
 ) & {
   /** The explicit dataset of an `exec(target)` call; absent for the global dispatch. */
   target?: IDataset;
@@ -463,6 +537,11 @@ function instrumentDispatch(d: QueryDispatch, target?: IDataset): QueryDispatch 
       notifyDispatch({kind: 'triples', query, result, target});
       return result;
     },
+    triplesTermsQuery(query: TriplesQuery): Promise<string[]> {
+      const result = resolveTriplesTerms(d, query);
+      notifyDispatch({kind: 'triplesTerms', query, result, target});
+      return result;
+    },
     // The wrapped dispatch answers what it forwards to, no more and no less.
     ...(d.supports ? {supports: d.supports} : {}),
   };
@@ -492,6 +571,20 @@ export function dispatchTriplesQuery(query: TriplesQuery, target?: IDataset): Pr
     ? instrumentDispatch(target as unknown as QueryDispatch, target)
     : getQueryDispatch();
   return resolveTriples(dispatch, query);
+}
+
+/**
+ * Send a terms read through the explicit `target` dataset (observed like the global path), or
+ * through the global dispatch. Either way a missing `triplesTermsQuery` is refused (see
+ * {@link resolveTriplesTerms}).
+ */
+export async function dispatchTriplesTermsQuery(query: TriplesQuery, target?: IDataset): Promise<string[]> {
+  // The target itself first: the observing wrapper has every method, so it would not say which is missing.
+  if (target) assertTriplesTermsTarget(target, query);
+  const dispatch = target
+    ? instrumentDispatch(target as unknown as QueryDispatch, target)
+    : getQueryDispatch();
+  return resolveTriplesTerms(dispatch, query);
 }
 
 export function setQueryDispatch(d: QueryDispatch): void {

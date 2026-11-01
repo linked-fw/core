@@ -41,8 +41,22 @@ import {
   graphRegisteredAsk,
 } from './graphQueryToSparql.js';
 import type {SparqlQueryResults} from './resultMapping.js';
-import {triplesQueryOf, type Triple, type TriplesQuery} from '../queries/triplesQuery.js';
-import {mapSparqlTriplesResult, triplesToAlgebra} from './triplesToSparql.js';
+import {
+  triplesQueryOf,
+  triplesTermsOf,
+  triplesTermsPosition,
+  type Triple,
+  type TriplesQuery,
+} from '../queries/triplesQuery.js';
+import {
+  mapSparqlTriplesResult,
+  mapSparqlTriplesTermsResult,
+  triplesTermsToAlgebra,
+  triplesToAlgebra,
+} from './triplesToSparql.js';
+
+/** The most terms one query of a terms read lists; a longer list is sent in parts this long. */
+export const TRIPLES_TERMS_PER_QUERY = 400;
 import {
   selectToSparql,
   askToSparql,
@@ -417,27 +431,62 @@ export abstract class SparqlDataset implements IDataset {
    */
   async triplesQuery(query: TriplesQuery): Promise<Triple[]> {
     const checked = triplesQueryOf(query);
-    let read = checked;
-    if (checked.graphs) {
-      const expanded = await expandReadGraphs(checked.graphs, {
-        registry: () => readGraphRegistry(this.graphRegistryKey(), () => this.loadGraphRegistry()),
-        mapGraphName: this.options?.mapGraphName,
-      });
-      const names = 'graphs' in expanded ? expanded.graphs : [graphs.default];
-      if (names.length === 0) return [];
-      read = {...checked, graphs: names};
+    if (triplesTermsPosition(checked) !== undefined) {
+      throw new Error('A terms read (a list of objects or predicates) is answered by triplesTermsQuery, not triplesQuery.');
     }
+    const read = await this.expandTriplesGraphs(checked);
+    if (!read) return [];
     const options = this.readOptions(checked);
     const {plan, graph} = triplesToAlgebra(read, options);
+    return mapSparqlTriplesResult(await this.sendTriplesPlan(plan, options), read, graph, options);
+  }
+
+  /**
+   * Answer a terms read (`TriplesBuilder.toNode([…])` / `withPredicate([…])`, `.whichExist()`): the
+   * terms of its list some triple of the read has, with one SELECT per
+   * {@link TRIPLES_TERMS_PER_QUERY} terms (`VALUES ?t` under `FILTER EXISTS`, see
+   * `triplesToSparql.ts`). Graphs are expanded as {@link triplesQuery} expands them; an empty list
+   * or a set that expands to no graph answers `[]` without querying. Errors reject.
+   */
+  async triplesTermsQuery(query: TriplesQuery): Promise<string[]> {
+    const checked = triplesQueryOf(query);
+    if (triplesTermsPosition(checked) === undefined) {
+      throw new Error('A triples read without a list of objects or predicates is answered by triplesQuery, not triplesTermsQuery.');
+    }
+    const terms = triplesTermsOf(checked);
+    if (terms.length === 0) return [];
+    const read = await this.expandTriplesGraphs(checked);
+    if (!read) return [];
+    const options = this.readOptions(checked);
+    const listed = checked.objects !== undefined ? 'objects' : 'predicates';
+    const found: string[] = [];
+    for (let i = 0; i < terms.length; i += TRIPLES_TERMS_PER_QUERY) {
+      const part = {...read, [listed]: terms.slice(i, i + TRIPLES_TERMS_PER_QUERY)};
+      found.push(...mapSparqlTriplesTermsResult(await this.sendTriplesPlan(triplesTermsToAlgebra(part, options), options)));
+    }
+    return found;
+  }
+
+  /** A triples read with its graphs expanded like a `.from()` set; `null` when they expand to none. */
+  private async expandTriplesGraphs(checked: TriplesQuery): Promise<TriplesQuery | null> {
+    if (!checked.graphs) return checked;
+    const expanded = await expandReadGraphs(checked.graphs, {
+      registry: () => readGraphRegistry(this.graphRegistryKey(), () => this.loadGraphRegistry()),
+      mapGraphName: this.options?.mapGraphName,
+    });
+    const names = 'graphs' in expanded ? expanded.graphs : [graphs.default];
+    if (names.length === 0) return null;
+    return {...checked, graphs: names};
+  }
+
+  /** Send a triples plan, its `FROM NAMED` set as parameters when the store takes them that way. */
+  private async sendTriplesPlan(plan: SparqlSelectPlan, options: SparqlCompileOptions | undefined): Promise<SparqlQueryResults> {
     const named = this.options?.namedGraphUriParameter ? plan.dataset?.fromNamed : undefined;
-    let json: SparqlQueryResults;
     if (named && named.length > 0) {
       const {dataset: _dataset, ...withoutDataset} = plan;
-      json = await this.executeSparqlSelectWithNamedGraphs(selectPlanToSparql(withoutDataset, options), named);
-    } else {
-      json = await this.executeSparqlSelect(selectPlanToSparql(plan, options));
+      return this.executeSparqlSelectWithNamedGraphs(selectPlanToSparql(withoutDataset, options), named);
     }
-    return mapSparqlTriplesResult(json, read, graph, options);
+    return this.executeSparqlSelect(selectPlanToSparql(plan, options));
   }
 
   /**

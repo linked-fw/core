@@ -49,7 +49,14 @@ export {
 } from './algebraToString.js';
 
 // Triples reads (graph, node and predicate reads)
-export {triplesToAlgebra, triplesToSparql, mapSparqlTriplesResult} from './triplesToSparql.js';
+export {
+  triplesToAlgebra,
+  triplesToSparql,
+  mapSparqlTriplesResult,
+  triplesTermsToAlgebra,
+  triplesTermsToSparql,
+  mapSparqlTriplesTermsResult,
+} from './triplesToSparql.js';
 export type {TriplesGraph, TriplesPlan} from './triplesToSparql.js';
 
 // Result mapping

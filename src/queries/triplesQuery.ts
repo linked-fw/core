@@ -38,6 +38,11 @@ import {normalizeReadGraphs, parseReadGraphsJSON} from './readGraphs.js';
  * - Without a node the read needs `graphs`: every triple of them (a graph read), or those with the
  *   `predicate` (a predicate read). A read that names no node and no graphs (every triple of a
  *   store, or one predicate wherever it is) is not a query this API sends.
+ * - A **terms read** gives one position a list (`objects` or `predicates`) and asks which of its
+ *   terms occur: `IDataset.triplesTermsQuery` answers the IRIs of the list that some triple of the
+ *   read has in that position. A list of objects is a node read (graphs optional, as for
+ *   `object`); a list of predicates needs `graphs`. Only `triplesTermsQuery` answers a read with a
+ *   list, and it answers only such a read; `limit` is not part of it.
  *
  * A read that fixes the `predicate` or the `object` needs the `triplesPattern` query feature
  * ({@link triplesQueryFeatures}): a dataset built before them would drop the fields and answer a
@@ -51,6 +56,17 @@ export interface TriplesQuery {
   predicate?: string;
   /** The object node IRI (a node, never a literal); absent for any object. */
   object?: string;
+  /**
+   * A list of predicate IRIs instead of one (`withPredicate([…])`): a **terms read**, answered by
+   * `IDataset.triplesTermsQuery` with the ones some triple of the read has. Not with `predicate`
+   * or `objects`.
+   */
+  predicates?: string[];
+  /**
+   * A list of object node IRIs instead of one (`toNode([…])`): a terms read, answered with the ones
+   * some triple of the read points at. Not with `object` or `predicates`.
+   */
+  objects?: string[];
   /** The graphs read, as `.from()` takes them (portable names included); required without `subject`. */
   graphs?: string[];
   /** At most this many triples (no order is implied). */
@@ -112,8 +128,36 @@ export function checkTriplesTerm(position: 'subject' | 'predicate' | 'object', v
  * The query features a triples read needs (`IDataset.supports`): `triplesPattern` when it fixes the
  * predicate or the object. A subject read and a graph read are the baseline.
  */
-export function triplesQueryFeatures(query: Pick<TriplesQuery, 'predicate' | 'object'>): QueryFeature[] {
-  return query.predicate !== undefined || query.object !== undefined ? ['triplesPattern'] : [];
+export function triplesQueryFeatures(
+  query: Pick<TriplesQuery, 'predicate' | 'object' | 'predicates' | 'objects'>,
+): QueryFeature[] {
+  return query.predicate !== undefined ||
+    query.object !== undefined ||
+    query.predicates !== undefined ||
+    query.objects !== undefined
+    ? ['triplesPattern']
+    : [];
+}
+
+/** The list position of a terms read, or undefined for a read without a list. */
+export function triplesTermsPosition(query: Pick<TriplesQuery, 'predicates' | 'objects'>): 'predicate' | 'object' | undefined {
+  return query.objects !== undefined ? 'object' : query.predicates !== undefined ? 'predicate' : undefined;
+}
+
+/** The terms of a terms read's list (its `objects` or `predicates`); `[]` for a read without one. */
+export function triplesTermsOf(query: Pick<TriplesQuery, 'predicates' | 'objects'>): readonly string[] {
+  return query.objects ?? query.predicates ?? [];
+}
+
+/**
+ * A list position of a terms read (`predicates`, `objects`): an array of absolute IRIs, each kept
+ * once in the order first given. An empty list is a read that finds nothing.
+ */
+export function checkTriplesTerms(position: 'predicate' | 'object', value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    fail(`${position}s must be an array of absolute IRIs; got ${JSON.stringify(value)}.`);
+  }
+  return [...new Set(value.map((term) => checkTriplesTerm(position, term)))];
 }
 
 /** A limit: a positive integer. */
@@ -129,6 +173,8 @@ export type TriplesQueryParts = {
   subject?: string;
   predicate?: string;
   object?: string;
+  predicates?: readonly string[];
+  objects?: readonly string[];
   graphs?: readonly string[] | string;
   limit?: number;
   recordClass?: string;
@@ -140,15 +186,20 @@ export type TriplesQueryParts = {
  */
 export function triplesQueryOf(parts: TriplesQueryParts): TriplesQuery {
   const query = triplesQueryPartsOf(parts);
-  if (query.subject === undefined && query.object === undefined && query.graphs === undefined) {
+  const hasObject = query.object !== undefined || query.objects !== undefined;
+  const hasPredicate = query.predicate !== undefined || query.predicates !== undefined;
+  if (query.subject === undefined && !hasObject && query.graphs === undefined) {
     fail(
-      query.predicate !== undefined
+      hasPredicate
         ? 'a predicate read needs graphs (.from(graphs)): it names the graphs it reads.'
         : 'it needs a node (a subject or an object), graphs or both; a read of every triple of a store is not sent.',
     );
   }
-  if (query.subject !== undefined && query.predicate !== undefined && query.object !== undefined) {
+  if (query.subject !== undefined && hasPredicate && hasObject) {
     fail('subject, predicate and object are all fixed, so there is nothing to read; leave one open.');
+  }
+  if (triplesTermsPosition(query) !== undefined && query.recordClass !== undefined) {
+    fail('a terms read (a list of objects or predicates) is not a graph read; it has no recordClass.');
   }
   return query;
 }
@@ -162,6 +213,17 @@ export function triplesQueryPartsOf(parts: TriplesQueryParts): TriplesQuery {
   if (parts.subject !== undefined) query.subject = checkTriplesTerm('subject', parts.subject);
   if (parts.predicate !== undefined) query.predicate = checkTriplesTerm('predicate', parts.predicate);
   if (parts.object !== undefined) query.object = checkTriplesTerm('object', parts.object);
+  if (parts.predicates !== undefined) {
+    if (parts.predicate !== undefined) fail('predicate and predicates are both given; a read fixes one or lists several.');
+    query.predicates = checkTriplesTerms('predicate', parts.predicates);
+  }
+  if (parts.objects !== undefined) {
+    if (parts.object !== undefined) fail('object and objects are both given; a read fixes one or lists several.');
+    if (parts.predicates !== undefined) {
+      fail('objects and predicates are both lists; a terms read lists the terms of one position.');
+    }
+    query.objects = checkTriplesTerms('object', parts.objects);
+  }
   if (parts.graphs !== undefined) query.graphs = normalizeReadGraphs(parts.graphs);
   if (parts.limit !== undefined) query.limit = checkTriplesLimit(parts.limit);
   if (parts.recordClass !== undefined) {
@@ -186,6 +248,8 @@ export function parseTriplesQuery(json: unknown): TriplesQuery {
     ...(input.subject !== undefined ? {subject: input.subject as string} : {}),
     ...(input.predicate !== undefined ? {predicate: input.predicate as string} : {}),
     ...(input.object !== undefined ? {object: input.object as string} : {}),
+    ...(input.predicates !== undefined ? {predicates: input.predicates as string[]} : {}),
+    ...(input.objects !== undefined ? {objects: input.objects as string[]} : {}),
     ...(input.graphs !== undefined ? {graphs: parseReadGraphsJSON(input.graphs, 'triples')} : {}),
     ...(input.limit !== undefined ? {limit: input.limit as number} : {}),
     ...(input.recordClass !== undefined ? {recordClass: input.recordClass as string} : {}),

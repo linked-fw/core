@@ -181,6 +181,13 @@ export class Transaction implements IDataset {
     );
   }
 
+  /** Refused: a terms read does not run in a transaction. */
+  triplesTermsQuery(_query: TriplesQuery): Promise<string[]> {
+    return Promise.reject(
+      new Error('A terms read does not run in a transaction: send it with whichExist() or whichExist(dataset).'),
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // Ending
   // ---------------------------------------------------------------------------
