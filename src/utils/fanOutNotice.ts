@@ -24,7 +24,7 @@ const noticed = new Set<string>();
 
 const advice: Record<FanOutKind, {what: string; how: string; fix: string}> = {
   triples: {
-    what: 'A subject read (TriplesBuilder.forNode({id})) names no dataset and no graph',
+    what: 'A node read (TriplesBuilder.forNode({id}) or toNode({id})) names no dataset and no graph',
     how: 'read it in each and joined the answers',
     fix:
       'To read one dataset, pass it: .exec(dataset). To read only some graphs, name them: ' +

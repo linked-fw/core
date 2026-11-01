@@ -92,8 +92,7 @@ describe('the builder', () => {
 describe('DSL-JSON', () => {
   test('1.3: mode shapeless, no shape; round-trips through fromJSON and lowerMutationJSON', () => {
     const json = Shape.delete([A, {id: B}])._keepingIncoming().toJSON();
-    expect(WIRE_VERSION).toBe('1.3');
-    expect(json).toEqual({v: '1.3', op: 'delete', mode: 'shapeless', ids: [A, B], keepIncoming: true});
+    expect(json).toEqual({v: WIRE_VERSION, op: 'delete', mode: 'shapeless', ids: [A, B], keepIncoming: true});
     const back = fromJSON(json) as DeleteBuilder;
     expect(back.isShapeless).toBe(true);
     expect(lower(back)).toEqual(lower(Shape.delete([A, B])._keepingIncoming()));

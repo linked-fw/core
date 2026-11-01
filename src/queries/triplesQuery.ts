@@ -5,13 +5,16 @@
  */
 
 /**
- * Triples reads: the triples of one named graph, or of one subject, without a shape.
+ * Triples reads: the triples of one pattern, `subject predicate object`, without a shape. Each
+ * position is fixed or open: one subject's triples, the triples that point at a node, the triples
+ * of one predicate, or every triple of a named graph.
  *
  * A {@link TriplesQuery} is plain data, like a graph query: its DSL-JSON form is the object itself
  * (optionally with the wire version `v`), and a receiving process checks wire JSON with
  * {@link parseTriplesQuery} before handing it to `IDataset.triplesQuery`. The builders are
- * `NamedGraph.readContent(graph)` (a graph read, routed like the graph queries of its record class)
- * and `TriplesBuilder.forNode(id)` (a subject read, shapeless).
+ * `NamedGraph.readContent(graph)` (a graph read, routed like the graph queries of its record class),
+ * `TriplesBuilder.forNode(node)` (a subject read), `TriplesBuilder.toNode(node)` (an object read)
+ * and `TriplesBuilder.withPredicate(p)` (a predicate read), all shapeless.
  *
  * The answer is a list of {@link Triple}s whose terms are core's values: an IRI is `{id}`, a
  * literal is `{value, datatype, language?}` with its lexical form and its datatype as `{id}`
@@ -20,23 +23,34 @@
  * answer.
  */
 import type {NodeReferenceValue} from './QueryFactory.js';
+import type {QueryFeature} from './queryFeatures.js';
 import {assertWireVersion} from './wireVersion.js';
 import {isGraphIri} from './graphQuery.js';
 import {normalizeReadGraphs, parseReadGraphsJSON} from './readGraphs.js';
 
 /**
- * A triples read.
+ * A triples read: the triples matching one pattern, each of `subject`, `predicate` and `object`
+ * fixed when given and open otherwise.
  *
- * - With `subject`: the subject's triples (as a subject; triples that point at it are not read),
- *   in `graphs` when given, else where a shapeless ask of it would look (the default graph, or
- *   every graph the store's routing knows).
- * - Without `subject`: every triple of `graphs` (a graph read). One of the two is required: a read
- *   of every triple of a store is not a query this API sends.
+ * - A **node read** fixes a node, as the `subject` (its triples; triples that point at it are not
+ *   read) or as the `object` (the triples that point at it): in `graphs` when given, else where a
+ *   shapeless ask of it would look (the default graph, or every graph the store's routing knows).
+ * - Without a node the read needs `graphs`: every triple of them (a graph read), or those with the
+ *   `predicate` (a predicate read). A read of every triple of a store, or of one predicate across a
+ *   whole store, is not a query this API sends.
+ *
+ * A read that fixes the `predicate` or the `object` needs the `triplesPattern` query feature
+ * ({@link triplesQueryFeatures}): a dataset built before them would drop the fields and answer a
+ * wider read.
  */
 export interface TriplesQuery {
   kind: 'triples';
-  /** The subject IRI; absent for a graph read. */
+  /** The subject IRI; absent for a read that does not fix the subject. */
   subject?: string;
+  /** The predicate IRI; absent for any predicate. */
+  predicate?: string;
+  /** The object node IRI (a node, never a literal); absent for any object. */
+  object?: string;
   /** The graphs read, as `.from()` takes them (portable names included); required without `subject`. */
   graphs?: string[];
   /** At most this many triples (no order is implied). */
@@ -83,12 +97,28 @@ function fail(message: string): never {
   throw new Error(`Invalid triples query: ${message}`);
 }
 
-/** The subject of a subject read: an absolute IRI (a blank-node label names nothing outside one answer). */
-export function checkTriplesSubject(value: unknown): string {
+/**
+ * A fixed position of a triples read (`subject`, `predicate` or `object`): an absolute IRI. A
+ * blank-node label names nothing outside one answer, so it is refused too.
+ */
+export function checkTriplesTerm(position: 'subject' | 'predicate' | 'object', value: unknown): string {
   if (!isGraphIri(value)) {
-    fail(`subject must be an absolute IRI; got ${JSON.stringify(value)}.`);
+    fail(`${position} must be an absolute IRI; got ${JSON.stringify(value)}.`);
   }
   return value;
+}
+
+/** The subject of a subject read (see {@link checkTriplesTerm}). */
+export function checkTriplesSubject(value: unknown): string {
+  return checkTriplesTerm('subject', value);
+}
+
+/**
+ * The query features a triples read needs (`IDataset.supports`): `triplesPattern` when it fixes the
+ * predicate or the object. A subject read and a graph read are the baseline.
+ */
+export function triplesQueryFeatures(query: Pick<TriplesQuery, 'predicate' | 'object'>): QueryFeature[] {
+  return query.predicate !== undefined || query.object !== undefined ? ['triplesPattern'] : [];
 }
 
 /** A limit: a positive integer. */
@@ -99,22 +129,45 @@ export function checkTriplesLimit(value: unknown): number {
   return value;
 }
 
-/**
- * Build a checked triples read from its parts (the builders' path). Throws on a malformed part and
- * on a read that names neither a subject nor graphs.
- */
-export function triplesQueryOf(parts: {
+/** The parts of a triples read, as the builders and the wire check pass them. */
+export type TriplesQueryParts = {
   subject?: string;
+  predicate?: string;
+  object?: string;
   graphs?: readonly string[] | string;
   limit?: number;
   recordClass?: string;
-}): TriplesQuery {
-  const query: TriplesQuery = {kind: 'triples'};
-  if (parts.subject !== undefined) query.subject = checkTriplesSubject(parts.subject);
-  if (parts.graphs !== undefined) query.graphs = normalizeReadGraphs(parts.graphs);
-  if (query.subject === undefined && query.graphs === undefined) {
-    fail('it needs a subject, graphs or both; a read of every triple of a store is not sent.');
+};
+
+/**
+ * Build a checked triples read from its parts (the builders' path). Throws on a malformed part and
+ * on a read that names no node and no graphs (see {@link triplesQueryPartsOf} for the parts alone).
+ */
+export function triplesQueryOf(parts: TriplesQueryParts): TriplesQuery {
+  const query = triplesQueryPartsOf(parts);
+  if (query.subject === undefined && query.object === undefined && query.graphs === undefined) {
+    fail(
+      query.predicate !== undefined
+        ? 'a predicate read needs graphs (.from(graphs)); a predicate is not read across a whole store.'
+        : 'it needs a node (a subject or an object), graphs or both; a read of every triple of a store is not sent.',
+    );
   }
+  if (query.subject !== undefined && query.predicate !== undefined && query.object !== undefined) {
+    fail('subject, predicate and object are all fixed, so there is nothing to read; leave one open.');
+  }
+  return query;
+}
+
+/**
+ * Check each part of a triples read without requiring a whole read (a builder holds
+ * `withPredicate(p)` before its `.from()`). Throws on a malformed part.
+ */
+export function triplesQueryPartsOf(parts: TriplesQueryParts): TriplesQuery {
+  const query: TriplesQuery = {kind: 'triples'};
+  if (parts.subject !== undefined) query.subject = checkTriplesTerm('subject', parts.subject);
+  if (parts.predicate !== undefined) query.predicate = checkTriplesTerm('predicate', parts.predicate);
+  if (parts.object !== undefined) query.object = checkTriplesTerm('object', parts.object);
+  if (parts.graphs !== undefined) query.graphs = normalizeReadGraphs(parts.graphs);
   if (parts.limit !== undefined) query.limit = checkTriplesLimit(parts.limit);
   if (parts.recordClass !== undefined) {
     if (!isGraphIri(parts.recordClass)) {
@@ -136,6 +189,8 @@ export function parseTriplesQuery(json: unknown): TriplesQuery {
   if (input.kind !== 'triples') fail(`kind must be "triples"; got ${JSON.stringify(input.kind)}.`);
   return triplesQueryOf({
     ...(input.subject !== undefined ? {subject: input.subject as string} : {}),
+    ...(input.predicate !== undefined ? {predicate: input.predicate as string} : {}),
+    ...(input.object !== undefined ? {object: input.object as string} : {}),
     ...(input.graphs !== undefined ? {graphs: parseReadGraphsJSON(input.graphs, 'triples')} : {}),
     ...(input.limit !== undefined ? {limit: input.limit as number} : {}),
     ...(input.recordClass !== undefined ? {recordClass: input.recordClass as string} : {}),

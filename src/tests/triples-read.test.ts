@@ -130,7 +130,7 @@ describe('the wire form', () => {
   test('refused at the boundary: another kind, a future version, no subject and no graphs', () => {
     expect(() => parseTriplesQuery({kind: 'graph_drop', graph: G1})).toThrow(/kind must be "triples"/);
     expect(() => parseTriplesQuery({kind: 'triples', subject: S, v: '99'})).toThrow();
-    expect(() => parseTriplesQuery({kind: 'triples'})).toThrow(/needs a subject, graphs or both/);
+    expect(() => parseTriplesQuery({kind: 'triples'})).toThrow(/needs a node \(a subject or an object\), graphs or both/);
     expect(() => parseTriplesQuery({kind: 'triples', graphs: G1})).toThrow(/array of graph IRIs/);
     expect(() => parseTriplesQuery([])).toThrow(/expected an object/);
   });
@@ -361,6 +361,7 @@ describe('object reads, predicate reads and exists()', () => {
     expect(() => parseTriplesQuery({kind: 'triples', predicate: 42, graphs: [G1]})).toThrow(/predicate must be an absolute IRI/);
     expect(() => parseTriplesQuery({kind: 'triples', predicate: P})).toThrow(/a predicate read needs graphs/);
     expect(parseTriplesQuery({kind: 'triples', object: O})).toEqual({kind: 'triples', object: O});
+    expect(() => parseTriplesQuery({kind: 'triples', subject: S, predicate: P, object: O})).toThrow(/nothing to read/);
   });
 
   test('the SPARQL: fixed positions are terms, the others are projected', () => {
@@ -371,22 +372,22 @@ describe('object reads, predicate reads and exists()', () => {
       `SELECT ?s ?o\nWHERE {\n  GRAPH <${G1}> {\n    ?s <${P}> ?o .\n  }\n}\nLIMIT 1`,
     );
     const many = triplesToSparql({kind: 'triples', predicate: P, graphs: [G1, G2]});
-    expect(many).toContain('SELECT ?s ?o ?g_s0');
+    expect(many).toContain('SELECT ?s ?o ?g_s');
     expect(many).toContain(`FROM NAMED <${G1}>`);
-    expect(many).toContain(`GRAPH ?g_s0 {\n    ?s <${P}> ?o .`);
+    expect(many).toContain(`GRAPH ?g_s {\n    ?s <${P}> ?o .`);
     expect(triplesToSparql({kind: 'triples', object: O, predicate: P})).toBe(
       `SELECT ?s\nWHERE {\n  ?s <${P}> <${O}> .\n}`,
     );
     const withDefault = triplesToSparql({kind: 'triples', object: O, graphs: [graphs.default, G1]}, {mapGraphName: jena});
-    expect(withDefault).toContain(`VALUES ?g_s0 { <${JENA_DEFAULT}> <${G1}> }`);
+    expect(withDefault).toContain(`VALUES ?g_s { <${JENA_DEFAULT}> <${G1}> }`);
     expect(() => triplesToSparql({kind: 'triples', predicate: P})).toThrow(/needs its graphs/);
   });
 
   test('the answer takes fixed positions from the query and the others from each row', async () => {
     const store = new StubStore({mapGraphName: jena});
     store.rows = [
-      {s: uri(S), p: uri(P), g_s0: uri(G1)},
-      {s: {type: 'bnode', value: 'b2'}, p: uri(subClassOf.id), g_s0: uri(JENA_DEFAULT)},
+      {s: uri(S), p: uri(P), g_s: uri(G1)},
+      {s: {type: 'bnode', value: 'b2'}, p: uri(subClassOf.id), g_s: uri(JENA_DEFAULT)},
     ];
     expect(await TriplesBuilder.toNode({id: O}).from([graphs.default, G1]).exec(store)).toEqual([
       {subject: {id: S}, predicate: {id: P}, object: {id: O}, graph: {id: G1}},
@@ -402,7 +403,7 @@ describe('object reads, predicate reads and exists()', () => {
     const store = new StubStore({mapGraphName: jena});
     setShapeGraphs(store, {[Person.shape.id]: G1});
     await TriplesBuilder.toNode({id: O}).exec(store);
-    expect(store.last()).toContain(`VALUES ?g_s0 { <${JENA_DEFAULT}> <${G1}> }`);
+    expect(store.last()).toContain(`VALUES ?g_s { <${JENA_DEFAULT}> <${G1}> }`);
     expect(store.last()).toContain(`?s ?p <${O}>`);
   });
 

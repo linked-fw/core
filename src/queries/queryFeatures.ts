@@ -18,6 +18,10 @@ import type {IRExpression} from './IntermediateRepresentation.js';
  * - `shapelessDelete`: a delete by ids with no shape (`Shape.delete(ids)` on the base class,
  *   IR kind `delete_shapeless`). A store that predates it would not know the IR kind; one that
  *   lowered it as a typed delete would delete nothing or the wrong thing.
+ * - `triplesPattern`: a triples read that fixes the predicate or the object
+ *   (`TriplesBuilder.toNode`, `withPredicate`; `TriplesQuery.predicate`, `.object`). A store that
+ *   predates them would drop the fields and answer a graph or subject read: every triple of the
+ *   graphs instead of the matching ones.
  *
  * Counting is baseline: every count (`.size()`, `.countDistinct()`, `Expr.count()`) is an
  * `aggregate_expr` named `count`, and a count always counts distinct values (see
@@ -27,7 +31,7 @@ import type {IRExpression} from './IntermediateRepresentation.js';
  * store that ignored the grouping would answer *something* — ungrouped rows — and nothing
  * downstream could tell. A store that does not declare a feature is refused before it is asked.
  */
-export type QueryFeature = 'groupBy' | 'min' | 'max' | 'shapelessDelete';
+export type QueryFeature = 'groupBy' | 'min' | 'max' | 'shapelessDelete' | 'triplesPattern';
 
 /** Every feature this build of core can express (what a SPARQL store supports). */
 export const ALL_QUERY_FEATURES: readonly QueryFeature[] = Object.freeze([
@@ -35,6 +39,7 @@ export const ALL_QUERY_FEATURES: readonly QueryFeature[] = Object.freeze([
   'min',
   'max',
   'shapelessDelete',
+  'triplesPattern',
 ] as QueryFeature[]);
 
 const KNOWN = new Set<string>(ALL_QUERY_FEATURES);

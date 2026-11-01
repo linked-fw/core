@@ -250,3 +250,9 @@ sequential.
   live in `triples-read-fuseki.test.ts` and `graph-query-fuseki.test.ts`), all failing against a
   Fuseki of the suite's own (`FUSEKI_BASE_URL=http://localhost:3077`):
   `Tests: 17 failed, 101 passed, 118 total`.
+- **Phase 2 done.** `TriplesQuery.predicate`/`.object`, `triplesQueryPartsOf` (a builder holds
+  `withPredicate(p)` before `.from()`; the whole read is checked when sent), `toNode`,
+  `withPredicate` (static and instance), `exists()`, `triplesPattern` checked in `resolveTriples`,
+  wire 1.4, the lowering projects only open positions. Added during the phase: a read that fixes
+  all three positions is refused (it has no open position, so no SELECT to write). The live and
+  unit triples suites: `Tests: 33 passed, 33 total`.

@@ -409,10 +409,11 @@ export abstract class SparqlDataset implements IDataset {
   }
 
   /**
-   * Answer a triples read (`NamedGraph.readContent(g)`, `TriplesBuilder.forNode({id})`) with one
-   * SELECT (see `triplesToSparql.ts`). Its graphs are expanded like a `.from()` set (portable names,
-   * the registry kinds); a set that expands to no graph answers `[]` without querying. A subject
-   * read without graphs follows the store's routing like a shapeless ask. Errors reject.
+   * Answer a triples read (`NamedGraph.readContent(g)`, `TriplesBuilder.forNode({id})`,
+   * `toNode({id})`, `withPredicate({id})`) with one SELECT (see `triplesToSparql.ts`). Its graphs are
+   * expanded like a `.from()` set (portable names, the registry kinds); a set that expands to no
+   * graph answers `[]` without querying. A node read without graphs follows the store's routing
+   * like a shapeless ask. Errors reject.
    */
   async triplesQuery(query: TriplesQuery): Promise<Triple[]> {
     const checked = triplesQueryOf(query);

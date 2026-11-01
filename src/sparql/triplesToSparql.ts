@@ -7,8 +7,9 @@
 /**
  * Triples reads (see `queries/triplesQuery.ts`) as SPARQL, and their answers as core's values.
  *
- * One pattern, `?s ?p ?o` (or `<subject> ?p ?o`), scoped to its graphs the way every read is
- * (`scopeAlgebraToGraphs`):
+ * One pattern, `?s ?p ?o` with the read's fixed positions as terms (`<subject>`, `<predicate>`,
+ * `<object>`), scoped to its graphs the way every read is (`scopeAlgebraToGraphs`). Only the open
+ * positions are projected:
  *
  * ```sparql
  * SELECT ?s ?p ?o WHERE { GRAPH <g> { ?s ?p ?o } } LIMIT 1001          # readContent(g).limit(1001)
@@ -16,6 +17,8 @@
  * SELECT ?p ?o ?g_s0 FROM NAMED <g1> FROM NAMED <g2>
  *   WHERE { GRAPH ?g_s0 { <s> ?p ?o } }                                 # forNode({id: s}).from([g1, g2])
  * SELECT ?p ?o WHERE { <s> ?p ?o }                                      # forNode({id: s}), no routing
+ * SELECT ?s ?p WHERE { GRAPH <g> { ?s ?p <o> } }                        # toNode({id: o}).from(g)
+ * SELECT ?s ?o WHERE { GRAPH <g> { ?s <p> ?o } } LIMIT 1                # withPredicate({id: p}).from(g).exists()
  * ```
  *
  * No `ORDER BY`: a sort over a whole graph would cost more than the read, and the answer is a set.
@@ -49,27 +52,42 @@ const variable = (name: string): SparqlTerm => ({kind: 'variable', name});
 /**
  * Compile a triples read whose `graphs` the store has expanded already (`SparqlDataset` does it):
  * concrete graphs, `graphs.default` only in a set with others. Without `graphs`, under the store's
- * routing, a subject read looks in every graph the routing knows, as a shapeless ask does.
+ * routing, a node read (a subject or an object) looks in every graph the routing knows, as a
+ * shapeless ask does; a read without a node needs its graphs.
  */
 export function triplesToAlgebra(query: TriplesQuery, options?: SparqlCompileOptions): TriplesPlan {
-  const subject: SparqlTerm =
-    query.subject !== undefined ? {kind: 'iri', value: query.subject} : variable(SUBJECT);
+  const term = (fixed: string | undefined, name: string): SparqlTerm =>
+    fixed !== undefined ? {kind: 'iri', value: fixed} : variable(name);
   const bgp: SparqlBGP = {
     type: 'bgp',
-    triples: [{subject, predicate: variable(PREDICATE), object: variable(OBJECT)}],
+    triples: [
+      {
+        subject: term(query.subject, SUBJECT),
+        predicate: term(query.predicate, PREDICATE),
+        object: term(query.object, OBJECT),
+      },
+    ],
   };
+  const nodeRead = query.subject !== undefined || query.object !== undefined;
   const scope: ReadGraphScope | undefined =
     query.graphs ??
-    (options?.routing ? {bySubject: new Map(), otherSubjects: options.routing.allGraphs()} : undefined);
-  if (query.subject === undefined && scope === undefined) {
-    throw new Error('A graph read needs its graphs; a read of every triple of a store is not compiled.');
+    (nodeRead && options?.routing
+      ? {bySubject: new Map(), otherSubjects: options.routing.allGraphs()}
+      : undefined);
+  if (!nodeRead && scope === undefined) {
+    throw new Error(
+      'A triples read without a subject or an object needs its graphs; a read of every triple of a ' +
+        'store, or of one predicate across a store, is not compiled.',
+    );
   }
   const scoped = scopeAlgebraToGraphs(bgp, scope, options);
   const graph = graphOf(scoped.algebra);
+  const open = (fixed: string | undefined, name: string): SparqlProjectionItem[] =>
+    fixed === undefined ? [{kind: 'variable', name}] : [];
   const projection: SparqlProjectionItem[] = [
-    ...(query.subject === undefined ? [{kind: 'variable' as const, name: SUBJECT}] : []),
-    {kind: 'variable', name: PREDICATE},
-    {kind: 'variable', name: OBJECT},
+    ...open(query.subject, SUBJECT),
+    ...open(query.predicate, PREDICATE),
+    ...open(query.object, OBJECT),
     ...(graph.kind === 'variable' ? [{kind: 'variable' as const, name: graph.variable}] : []),
   ];
   return {
@@ -120,9 +138,11 @@ export function mapSparqlTriplesResult(
   const defaultName = options?.mapGraphName?.(graphs.default) ?? undefined;
   const triples: Triple[] = [];
   for (const row of json.results.bindings) {
-    const s = query.subject !== undefined ? {type: 'uri' as const, value: query.subject} : row[SUBJECT];
-    const p = row[PREDICATE];
-    const o = row[OBJECT];
+    const fixed = (value: string | undefined, name: string) =>
+      value !== undefined ? {type: 'uri' as const, value} : row[name];
+    const s = fixed(query.subject, SUBJECT);
+    const p = fixed(query.predicate, PREDICATE);
+    const o = fixed(query.object, OBJECT);
     if (!s || !p || !o) {
       throw new Error('A triples read answered a row without its subject, predicate or object.');
     }

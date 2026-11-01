@@ -6,7 +6,7 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import type {AskQuery} from './AskQuery.js';
 import type {CountQuery} from './CountQuery.js';
 import type {GraphQuery, GraphResult} from './IntermediateRepresentation.js';
-import type {Triple, TriplesQuery} from './triplesQuery.js';
+import {triplesQueryFeatures, type Triple, type TriplesQuery} from './triplesQuery.js';
 import {unsupportedGraphQuery} from './graphQuery.js';
 import {catalogOf, withShapeCatalog} from '../utils/ShapeClass.js';
 import type {QueryFeature} from './queryFeatures.js';
@@ -67,7 +67,11 @@ type FeatureQuery = object & {requiredFeatures?(): readonly QueryFeature[]};
  */
 export function assertQuerySupported(target: FeatureTarget, query: object): void {
   const {requiredFeatures} = query as FeatureQuery;
-  const required = typeof requiredFeatures === 'function' ? requiredFeatures.call(query) : [];
+  assertFeaturesSupported(target, typeof requiredFeatures === 'function' ? requiredFeatures.call(query) : []);
+}
+
+/** Refuse `required` features that `target` does not declare (see {@link assertQuerySupported}). */
+function assertFeaturesSupported(target: FeatureTarget, required: readonly QueryFeature[]): void {
   if (required.length === 0) return;
   const supported = new Set(target?.supports ?? []);
   const missing = required.filter((feature) => !supported.has(feature));
@@ -182,18 +186,24 @@ export async function resolveGraphQuery(
 }
 
 /** A target that may answer a triples read. */
-type TriplesTarget = {triplesQuery?(query: TriplesQuery): Promise<Triple[]>};
+type TriplesTarget = {
+  triplesQuery?(query: TriplesQuery): Promise<Triple[]>;
+  readonly supports?: readonly QueryFeature[];
+};
 
 /**
  * Answer a triples read against `target` — the entry point `TriplesBuilder.exec()` and
  * `LinkedStorage.triplesQuery` go through. A target without `triplesQuery` is refused: there is no
- * shape to answer it with a select instead, and "could not read" is never an empty answer. The
- * answer must be an array; anything else rejects.
+ * shape to answer it with a select instead, and "could not read" is never an empty answer. A read
+ * that fixes the predicate or the object is refused on a target that does not declare
+ * `'triplesPattern'` (`supports`), before it is sent. The answer must be an array; anything else
+ * rejects.
  */
 export async function resolveTriples(
   target: TriplesTarget | undefined,
   query: TriplesQuery,
 ): Promise<Triple[]> {
+  assertFeaturesSupported(target as FeatureTarget, triplesQueryFeatures(query));
   if (typeof target?.triplesQuery !== 'function') {
     throw new Error(
       'This dataset does not implement IDataset.triplesQuery, so a triples read (a graph read ' +
