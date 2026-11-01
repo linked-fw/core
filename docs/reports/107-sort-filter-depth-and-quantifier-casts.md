@@ -71,7 +71,11 @@ values last in both directions.
   `shape-graphs-fuseki` fail once (a Jena SHACL report, untouched code); it passes alone (`5
   passed`) and in the final run.
 - `npx linked build`: `✔ Build successful`.
-- CN: see below.
+- CN main checkout, core landed and built there: `npm run typecheck:gate`: `No new type errors.
+  0 pre-existing errors still in the baseline.` `CN_TEST_PORT=4597 npm run test:feature --
+  data,apps,ontologies --tier smoke`: typecheck:gate PASS, `unit (vitest, 137 files) PASS`
+  (`1433 passed | 2 skipped`), gateway package PASS (`67 passed`), `playwright (11 specs, smoke)
+  PASS` (`12 passed`), total PASS.
 
 ### Deviations
 
