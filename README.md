@@ -1075,11 +1075,12 @@ const notOfClass = await Thing.select((t) => t.name).where((t) => t.$type().none
 const byFriendType = await Person.select((p) => p.name).orderBy((p) => p.bestFriend.$type());
 ```
 
-- **Where:** `equals(x)` holds when some type is `x` (like `equals` on any multi-valued path,
-  `p.friends.equals({id})` included), and works inside another set's callback
-  (`p.friends.some((f) => f.$type().equals({id: C}))`). `some(…)` and `none(…)` take a callback
-  on the type node; "no type is `x`" is `none((c) => c.equals(x))`, not `equals(x).not()` (which
-  holds when the node has some other type).
+- **Where:** `equals(x)` holds when some type is `x` (as on any multi-valued relation:
+  `p.friends.equals({id})`). It is an EXISTS of its own, so a projected `$type()` keeps every
+  type and `t.$type().equals(A).and(t.$type().equals(B))` finds the nodes of both types; `.not()`
+  is "no type is `x`". `some(…)` and `none(…)` take a callback on the type node. A member's types
+  are written from the outside, `p.friends.$type().equals({id: C})` (a `some` callback does not
+  take another quantifier).
 - **Group key:** one group per type value. A node with two types is in two groups, so the counts
   of a `groupBy` on `$type()` can add up to more than the number of nodes.
 - **Sorting** follows the rules in "Sorting, limiting, one": a node without a type (on a nested
@@ -1088,8 +1089,10 @@ const byFriendType = await Person.select((p) => p.name).orderBy((p) => p.bestFri
 - **Stored and inferred types:** `$type()` answers what the store answers for `rdf:type`. On a
   store that infers classes through `rdfs:subClassOf` (CN's Fuseki, the inferring test image),
   that is the stored types and every superclass; on a plain store, the stored ones only.
+  `InMemoryDataset` answers `$type()` as a field with the stored types, and refuses it in a where,
+  a group key or a sort key (as it refuses those on any path).
 - **DSL-JSON:** the path segment `$type` (`"fields": ["$type"]`, `"bestFriend.$type"`,
-  `"where": {"$type": {"@id": "…"}}`), wire version 1.4. A label select takes it too
+  `"where": {"$type": {"@id": "…"}}`), wire version 1.6. A label select takes it too
   (`select(['name', '$type'])`). `$type` and `$graph` are reserved: a shape may not declare a
   property with either label. `$graph()` (a node's named graphs) is planned.
 

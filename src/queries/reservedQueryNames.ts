@@ -122,6 +122,15 @@ export function warnOnReservedPropertyLabel(
   if (reported.has(key)) return;
   reported.add(key);
   const owner = shapeLabel ?? shapeId ?? 'shape';
+  if (label!.startsWith('$')) {
+    // A shape loaded as data is not refused (see `registerPropertyShape`), only reported.
+    console.warn(
+      `[linked] ${owner}.${label} cannot be read in queries: '${label}' is node metadata ` +
+        `(\`$\`-prefixed names are facts about the node, not shape fields), in the DSL, a label ` +
+        `select and DSL-JSON alike. Rename the property; the RDF predicate can stay the same.`,
+    );
+    return;
+  }
   const escape = `Use \`select(['${label}'])\`, which takes the label as a string and never touches the proxy. Renaming the property also works; the RDF predicate can stay the same.`;
 
   if (isSetContextOnlyName(label)) {

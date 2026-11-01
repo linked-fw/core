@@ -1161,15 +1161,16 @@ export class QueryShapeSet<
   }
 
   /**
-   * Some member of the set is `value`: `t.$type().equals({id: C})`, `p.friends.equals({id})`. An
-   * expression on the multi-valued path, as `p.nickNames.equals('x')` is: in a where it holds when
-   * some value matches (DSL-JSON's plural path, `{"friends": {"@id": …}}`), and it also works
-   * inside another set's `some`/`every`/`none` callback. For "no member is `value`" use
-   * `none((m) => m.equals(value))`, not `.equals(value).not()` (which holds when some member is
-   * another node).
+   * Some member of the set is `value`: `t.$type().equals({id: C})`, `p.friends.equals({id})`. The
+   * same as `some((m) => m.equals(value))`: an EXISTS of its own, so it leaves the set's values in
+   * the projection alone and two of them combine (`t.$type().equals(A).and(t.$type().equals(B))`
+   * holds for a node of both types). `.not()` is "no member is `value`", as `none(…)` is.
+   *
+   * Inside another set's `some`/`every`/`none` callback a quantifier is not accepted (an older
+   * limit); write the path from the outside instead: `p.friends.$type().equals({id: C})`.
    */
-  equals(value: NodeReferenceValue | QShape<any> | PendingQueryContext): ExpressionNode {
-    return nodeEquals(this, value);
+  equals(value: NodeReferenceValue | QShape<any> | PendingQueryContext): ExistsCondition {
+    return this.some(((member: QShape<any>) => member.equals(value as NodeReferenceValue)) as unknown as WhereClause<S>);
   }
 
   //countable?, resultKey?: string

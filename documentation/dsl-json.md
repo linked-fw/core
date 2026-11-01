@@ -51,7 +51,7 @@ Every envelope carries a wire-format version under `v`:
 
 `fromJSON` checks it with `assertWireVersion`: a mismatched **major** is rejected; a missing
 `v` is tolerated (treated as the current major). Bump the major only for breaking wire changes.
-The current version is 1.5 (`txId`, see [Transactions](#transactions-txid)); 1.4 added triples reads by object and predicate.
+The current version is 1.6 (the `$type` path segment, see Paths); 1.5 added `txId` (see [Transactions](#transactions-txid)), 1.4 triples reads by object and predicate.
 
 ## Envelopes
 
@@ -144,7 +144,7 @@ subject IRI (`.orderBy((p) => p)`), and `{ "@path": "" }` is the subject as an o
 `[">", ["STR", { "@path": "" }], "https://ex.org/p2"]` is `.where((p) => p.str().gt(…))`, the
 cursor of a list paged by subject.
 
-**`$`-prefixed segments are facts about the node, not shape fields** (version 1.4). `$type` is the
+**`$`-prefixed segments are facts about the node, not shape fields** (version 1.6). `$type` is the
 node's `rdf:type` values: multi-valued IRI nodes, each answered as `{id}` like any relation. It
 resolves the same on every shape, never against a property of the shape, and may end a
 path or sit inside one:
@@ -160,7 +160,7 @@ path or sit inside one:
 
 The types are whatever the store answers for `rdf:type`: on a store that infers classes, the
 stored and the inferred ones. A node with two types is in two groups of a `groupBy` on `$type`.
-A reader before 1.4 does not know the segment and refuses the path. `$graph` is reserved for a
+A reader before 1.6 does not know the segment and refuses the path. `$graph` is reserved for a
 node's named graphs.
 
 A path that crosses a **plural** relation in a condition is an **implicit `some`** (existential):

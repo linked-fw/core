@@ -431,10 +431,9 @@ describe('settled behaviours', () => {
 
 describe('on the wire', () => {
   test('the txId travels on DSL-JSON (1.5) and fromJSON() returns the transaction view', () => {
-    expect(WIRE_VERSION).toBe('1.5');
     const query = inTransaction(TxConfig.create({name: 'a'}), 'tx-1');
     const json = JSON.parse(JSON.stringify(query.toJSON()));
-    expect(json).toMatchObject({v: '1.5', op: 'create', txId: 'tx-1'});
+    expect(json).toMatchObject({v: WIRE_VERSION, op: 'create', txId: 'tx-1'});
     const back = fromJSON(json);
     expect(txIdOf(back)).toBe('tx-1');
     expect(back.toJSON()).toEqual(json);

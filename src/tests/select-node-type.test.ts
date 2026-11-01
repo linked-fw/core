@@ -11,7 +11,7 @@
  * The live block runs on the inferring store: Erik is stored as an Employee only, and
  * `Employee ⊑ Person` gives him Person too, so `$type()` answers both.
  */
-import {describe, expect, test, beforeAll, afterAll} from '@jest/globals';
+import {describe, expect, jest, test, beforeAll, afterAll} from '@jest/globals';
 import {
   Employee,
   Person,
@@ -31,7 +31,12 @@ import {FieldSet} from '../queries/FieldSet';
 import {askToSparql, selectToSparql} from '../sparql/irToAlgebra';
 import {captureQuery} from '../test-helpers/query-capture-store';
 import {mapSparqlSelectResult} from '../sparql/resultMapping';
-import {RESERVED_QUERY_DSL_NAMES} from '../queries/reservedQueryNames';
+import {
+  RESERVED_QUERY_DSL_NAMES,
+  resetReservedPropertyLabelWarnings,
+  warnOnReservedPropertyLabel,
+} from '../queries/reservedQueryNames';
+import {InMemoryDataset} from '../memory/InMemoryDataset';
 import {WIRE_VERSION} from '../queries/wireVersion';
 import type {IRSelectQuery, ResultRow} from '../queries/IntermediateRepresentation';
 import {
@@ -105,18 +110,30 @@ describe('$type() lowering', () => {
     expect(ir.graphs).toEqual(['https://example.org/graphs/g']);
   });
 
-  test('where: equals holds when some type matches', () => {
+  test('where: equals is an EXISTS of its own (some type matches)', () => {
     expect(sparqlOf(Person.select().where((p) => p.$type().equals({id: ROBOT})))).toMatch(
-      /\?a0 rdf:type \?a0__type \.\s*FILTER\(\?a0__type = <https:\/\/example.org\/types\/Robot>\)/,
+      /FILTER\(EXISTS \{\s*\?a0 rdf:type \?a1 \.\s*FILTER\(\?a1 = <https:\/\/example.org\/types\/Robot>\)\s*\}\)/,
     );
   });
 
-  test("where: a member's type inside another set's some()", () => {
-    const sparql = sparqlOf(
-      Person.select().where((p) => p.friends.some((f) => f.$type().equals({id: ROBOT}))),
+  test('where: equals leaves the projected types alone, and two of them combine', () => {
+    const kept = sparqlOf(
+      Person.select((p) => [p.name, p.$type()]).where((p) => p.$type().equals({id: ROBOT})),
     );
-    expect(sparql).toMatch(/FILTER\(EXISTS \{[\s\S]*\?a1 rdf:type \?a1__type \./);
-    expect(sparql).toContain('FILTER(?a1__type = <https://example.org/types/Robot>)');
+    expect(kept).toMatch(/OPTIONAL \{\s*\?a0 rdf:type \?a0__type \.\s*\}/);
+    expect(kept).not.toContain('FILTER(?a0__type');
+    const both = sparqlOf(
+      Person.select().where((p) =>
+        p.$type().equals({id: ROBOT}).and(p.$type().equals({id: personClass.id})),
+      ),
+    );
+    expect(both.match(/EXISTS \{/g)).toHaveLength(2);
+  });
+
+  test("where: a member's types, from the outside", () => {
+    expect(sparqlOf(Person.select().where((p) => p.friends.$type().equals({id: ROBOT})))).toMatch(
+      /FILTER\(EXISTS \{\s*\?a0 <https:\/\/example.org\/props\/hasFriend> \?a1 \.\s*\?a1 rdf:type \?a2 \./,
+    );
   });
 
   test('where: some and none', () => {
@@ -133,7 +150,7 @@ describe('$type() lowering', () => {
       Person.select().where((p) => p.$type().equals({id: ROBOT})).exists(),
     );
     expect(askToSparql(ir as never)).toMatch(
-      /ASK WHERE \{[\s\S]*\?a0 rdf:type \?a0__type \.\s*FILTER\(\?a0__type = <https:\/\/example.org\/types\/Robot>\)/,
+      /ASK WHERE \{[\s\S]*EXISTS \{\s*\?a0 rdf:type \?a1 \.\s*FILTER\(\?a1 = <https:\/\/example.org\/types\/Robot>\)/,
     );
   });
 
@@ -229,9 +246,31 @@ describe('$type() names and types', () => {
     }
   });
 
+  test('a shape loaded as data with a $type property is told it cannot be read', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    resetReservedPropertyLabelWarnings();
+    warnOnReservedPropertyLabel('$type', 'Widget', 'urn:Widget');
+    const message = String(warn.mock.calls[0]?.[0] ?? '');
+    warn.mockRestore();
+    expect(message).toContain('cannot be read in queries');
+    expect(message).not.toContain("select(['$type'])");
+  });
+
   test('$type() is not in selectAll and not a property of the root shape', () => {
     const labels = (Shape.shape.propertyShapes ?? []).map((ps) => ps.label);
     expect(labels).not.toContain('$type');
+  });
+});
+
+describe('$type() on the in-memory dataset', () => {
+  test('a field answers the stored types; a where on it is refused, not answered wrongly', async () => {
+    const store = new InMemoryDataset();
+    const created = (await Person.create({name: 'Ina'}).exec(store)) as {id: string};
+    const rows = (await Person.select((p) => [p.name, p.$type()]).exec(store)) as unknown as ResultRow[];
+    expect(rows).toEqual([{id: created.id, name: 'Ina', $type: [{id: personClass.id}]}]);
+    await expect(
+      Person.select().where((p) => p.$type().equals({id: ROBOT})).exec(store),
+    ).rejects.toThrow(/InMemoryDataset does not answer this query: a exists_expr condition/);
   });
 });
 
@@ -311,12 +350,28 @@ describeFuseki('$type() on the inferring store', () => {
     ).toEqual(['anna', 'erik']);
   });
 
-  test("where: a friend's type, inside some()", async () => {
+  test("where: a friend's or a best friend's type", async () => {
     expect(
-      ids(await run(Person.select().where((p) => p.friends.some((f) => f.$type().equals({id: employeeClass.id}))))),
+      ids(await run(Person.select().where((p) => p.friends.$type().equals({id: employeeClass.id})))),
     ).toEqual(['anna']);
     expect(
       ids(await run(Person.select().where((p) => p.bestFriend.$type().equals({id: employeeClass.id})))),
+    ).toEqual(['dual']);
+  });
+
+  test('where: the field keeps every type, and "a Robot and a Person" matches', async () => {
+    const rows = (await run(
+      Person.select((p) => [p.name, p.$type()]).where((p) => p.$type().equals({id: ROBOT})),
+    )) as ResultRow[];
+    expect(rows.map((r) => [r.name, types(r.$type)])).toEqual([['Dual', ['Person', 'Robot']]]);
+    expect(
+      ids(
+        await run(
+          Person.select().where((p) =>
+            p.$type().equals({id: ROBOT}).and(p.$type().equals({id: personClass.id})),
+          ),
+        ),
+      ),
     ).toEqual(['dual']);
   });
 

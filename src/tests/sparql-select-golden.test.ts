@@ -1628,7 +1628,7 @@ WHERE {
 GROUP BY ?a0__type`);
   });
 
-  test('in a where: equals holds when some type matches', async () => {
+  test('in a where: equals is an EXISTS of its own', async () => {
     const sparql = await goldenSelect(() =>
       Person.select((p) => p.name).where((p) => p.$type().equals({id: ET})) as never,
     );
@@ -1637,11 +1637,13 @@ GROUP BY ?a0__type`);
 SELECT DISTINCT ?a0 ?a0_name
 WHERE {
   ?a0 rdf:type <${PT}> .
-  ?a0 rdf:type ?a0__type .
   OPTIONAL {
     ?a0 <${PROP}name> ?a0_name .
   }
-  FILTER(?a0__type = <${ET}>)
+  FILTER(EXISTS {
+    ?a0 rdf:type ?a1 .
+    FILTER(?a1 = <${ET}>)
+  })
 }`);
   });
 });
