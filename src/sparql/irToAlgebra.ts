@@ -1056,20 +1056,22 @@ export function selectToAlgebra(
     );
     // Default ORDER BY ?childVar for a deterministic window, unless the nested
     // select supplied its own ordering. When it did, each ordered property must
-    // also be bound inside the sub-SELECT so the ORDER BY variable resolves.
+    // also be bound inside the sub-SELECT so the ORDER BY variable resolves. It is
+    // OPTIONAL there, and a bound-first key precedes it: sorting never drops a child,
+    // and a child without the value sorts last.
     let orderBy: SparqlOrderCondition[];
     let innerNode: SparqlAlgebraNode = {type: 'bgp', triples: [innerTriple]};
     if (pattern.innerOrderBy && pattern.innerOrderBy.length > 0) {
-      orderBy = pattern.innerOrderBy.map((o) => {
+      orderBy = pattern.innerOrderBy.flatMap((o) => {
         const orderVar = registry.getOrCreate(pattern.to, o.property);
-        innerNode = joinNodes(innerNode, {
+        innerNode = wrapOptional(innerNode, {
           type: 'bgp',
           triples: [tripleOf(varTerm(pattern.to), resolvePropertyPredicateTerm(o.property), varTerm(orderVar))],
         });
-        return {
+        return [boundFirst(orderVar), {
           expression: {kind: 'variable_expr' as const, name: orderVar},
           direction: o.direction,
-        };
+        }];
       });
     } else {
       orderBy = [{
@@ -1376,7 +1378,13 @@ export function selectToAlgebra(
   // A where-aggregate (HAVING) counts per subject. Over rows that can be several per subject the
   // outer GROUP BY would be per subject and values, so the same sub-SELECT of subjects applies
   // it, without LIMIT/OFFSET when the select is not paged.
-  const subjectSubSelect = pageSubjects || (multiRowPerSubject && !!havingExpr);
+  // An ungrouped select that projects an aggregate groups its rows by subject and values, and a
+  // sort path outside those is out of scope after GROUP BY: the sub-SELECT's one key per subject
+  // sorts it instead.
+  const subjectSubSelect =
+    pageSubjects ||
+    (multiRowPerSubject && !!havingExpr) ||
+    (!grouped && aggregates.length > 0 && !!orderBy && orderBy.length > 0);
 
   // `.from()` scopes the read to its graphs (expanded by the store); without it, a shape whose
   // instances live in one named graph (the graph-registry records, `NamedGraph.storedInGraph`)

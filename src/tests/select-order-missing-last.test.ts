@@ -35,11 +35,11 @@ const node = (
   ].join('\n');
 
 // Persons: Anna (best friend Bob, hobby Chess, friends Carl and Dirk), Carl (best friend Ada,
-// hobby Archery, friend Anna), Dirk (nothing). Bob (nick names C, D, E) and Ada are not persons.
+// hobby Archery, friend Anna, nick names K, L), Dirk (nick names X, Y; nothing else). Bob (nick names C, D, E) and Ada are not persons.
 const DATA = [
   node('anna', {person: true, name: 'Anna', hobby: 'Chess', best: 'bob', friends: ['carl', 'dirk'], nicks: ['N']}),
-  node('carl', {person: true, name: 'Carl', hobby: 'Archery', best: 'ada', friends: ['anna']}),
-  node('dirk', {person: true, name: 'Dirk'}),
+  node('carl', {person: true, name: 'Carl', hobby: 'Archery', best: 'ada', friends: ['anna'], nicks: ['K', 'L']}),
+  node('dirk', {person: true, name: 'Dirk', nicks: ['X', 'Y']}),
   node('bob', {name: 'Bob', nicks: ['C', 'D', 'E']}),
   node('ada', {name: 'Ada'}),
 ].join('\n');
@@ -96,6 +96,25 @@ describe('sorting keeps instances (lowering)', () => {
     expect(sparql).not.toContain('LIMIT');
     // The outer query neither groups nor repeats the HAVING.
     expect(sparql.slice(sparql.lastIndexOf('}'))).not.toMatch(/GROUP BY|HAVING/);
+  });
+});
+
+describe('sorting keeps instances (lowering, continued)', () => {
+  test('a nested select\'s orderBy binds its key OPTIONAL in the window, bound first', () => {
+    const sparql = sparqlOf(
+      Person.select((p: any) => p.friends.select((f: any) => f.name).orderBy('hobby', 'DESC').limit(2)).for({
+        id: `${ENT}anna`,
+      }),
+    );
+    expect(sparql).toMatch(/OPTIONAL \{\s*\?a1 <[^>]*hobby> \?a1_hobby \.\s*\}[\s\S]*ORDER BY DESC\(BOUND\(\?a1_hobby\)\) DESC\(\?a1_hobby\) LIMIT 2/);
+  });
+
+  test('a projected aggregate with a sort path: the sub-SELECT of subjects carries the key', () => {
+    const sparql = sparqlOf(
+      Person.select((p) => ({name: p.name, n: p.friends.size()})).orderBy((p) => p.bestFriend.name),
+    );
+    expect(sparql).toMatch(/SELECT \?a0 \(MIN\(\?a1_name\) AS \?page_order_0\)/);
+    expect(sparql).toMatch(/GROUP BY [^\n]*\?page_order_0/);
   });
 });
 
@@ -190,11 +209,41 @@ describeFuseki('sorting keeps instances, missing values last', () => {
     expect(one.id).toBe(`${ENT}anna`);
   });
 
+  test('a nested select\'s own orderBy keeps every child, missing values last', async () => {
+    const friends = async (d: 'ASC' | 'DESC', limit?: number) => {
+      let inner = (p: any) => {
+        const q = p.friends.select((f: any) => f.name).orderBy('hobby', d);
+        return limit === undefined ? q : q.limit(limit);
+      };
+      const row = (await run(Person.select(inner as never).for({id: `${ENT}anna`}))) as ResultRow;
+      return ids(row.friends);
+    };
+    expect(await friends('ASC')).toEqual(['carl', 'dirk']);
+    expect(await friends('DESC')).toEqual(['carl', 'dirk']);
+    expect(await friends('DESC', 2)).toEqual(['carl', 'dirk']);
+  });
+
+  test('a select with a projected aggregate sorts by a path it does not group by', async () => {
+    const q = (d: 'ASC' | 'DESC') =>
+      Person.select((p) => ({name: p.name, n: p.friends.size()})).orderBy((p) => p.bestFriend.name, d);
+    expect(ids(await run(q('ASC')))).toEqual(['carl', 'anna', 'dirk']);
+    expect(ids(await run(q('DESC')))).toEqual(['anna', 'carl', 'dirk']);
+  });
+
   test('a multi-valued leaf under a single-valued traversal keeps all values', async () => {
     const row = (await run(Person.select((p) => p.bestFriend.nickNames).for({id: `${ENT}anna`}))) as ResultRow;
     const best = row.bestFriend as ResultRow;
     expect(best.id).toBe(`${ENT}bob`);
     expect([...(best.nickNames as string[])].sort()).toEqual(['C', 'D', 'E']);
+  });
+
+  test('a multi-valued leaf in a nested select under a multi-valued traversal keeps all values', async () => {
+    // The shape of `Import.select(i => [i.created.select(c => [c.shape, c.instances])])`.
+    const row = (await run(
+      Person.select((p) => [p.friends.select((f) => [f.name, f.nickNames])]).for({id: `${ENT}anna`}),
+    )) as ResultRow;
+    const friends = (row.friends as ResultRow[]).map((f) => [f.name, [...(f.nickNames as string[])].sort()]);
+    expect(friends.sort()).toEqual([['Carl', ['K', 'L']], ['Dirk', ['X', 'Y']]]);
   });
 
   test('a multi-valued leaf under a multi-valued traversal keeps all values', async () => {

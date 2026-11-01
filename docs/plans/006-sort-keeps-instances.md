@@ -3,7 +3,7 @@ summary: >
   Sorting keeps every instance and puts missing values last in both directions, for direct and
   nested paths; an unpaged where-aggregate with multi-valued rows filters per subject; a
   multi-valued leaf under a traversal maps to all its values. Closes backlog 089.
-status: Implementation
+status: Review
 packages: [core]
 ---
 
@@ -193,3 +193,48 @@ Phase 1 → 2 → 3, one agent, sequential.
   where-aggregate semantics for stores answering envelopes); `documentation/sparql-algebra.md`
   step 10; `SelectBuilder.orderBy`/`limit` and `GroupedSelectBuilder.orderBy` JSDoc.
 - Backlog 089 removed (items 1–3 done). `.changeset/sort-missing-last.md`: minor.
+
+## Review
+
+Independent review (read-only, ~30 queries printed before and after):
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| R1 | high | A nested select's own `orderBy` (`p.friends.select(...).orderBy('hobby')`) joined its key as a required triple inside the window and had no bound-first key: friends without a hobby were dropped | Fixed: the key is OPTIONAL inside the sub-SELECT, `DESC(BOUND(?k))` before it |
+| R2 | medium | An unpaged select projecting an aggregate (`[p.name, p.friends.size()]`) sorted by a path outside its GROUP BY: the sort had no effect (older than this change) | Fixed: such a select uses the sub-SELECT of subjects, whose keys join the GROUP BY |
+| R3 | medium | `orderBy` on a computed expression is dropped silently (older) | Backlog 092 |
+| R4 | low | A filter on a sort path is ignored; a sort path sharing a filtered projection's alias (older) | Backlog 092 |
+| R5 | low | A bound key also on always-bound keys (`count().plus(1)`, where-required paths) | Kept: harmless |
+| R6 | low | The unpaged where-aggregate sub-SELECT computes MIN/MAX keys with no LIMIT | Kept: they feed the outer ORDER BY |
+| R7 | low | Count/ask refuse an aggregate inside an exists too, with a HAVING message | Kept: that where yields invalid SPARQL anyway |
+| R8 | low | A nested multi-valued field with no values is `[]` (was `null`) | Changeset says so |
+| R9 | low | Report 098 states the old rule | Historical; report 101 supersedes it |
+
+Coordinator's added case (CN report 380): `Import.select(i => [i.created.select(c => [c.shape,
+c.instances])])` returned one `instances` value per created node. Same cause as backlog 089
+item 3 (`collectNestedGroup` filled nested fields from the first binding). Test: "a multi-valued
+leaf in a nested select under a multi-valued traversal"; with the old mapping it returned `K`
+and `X` only, now `['K', 'L']` and `['X', 'Y']`.
+
+## Iteration 1 — Ideation
+
+### Gap 1 of 2: nested select orderBy
+Same rule as the root: OPTIONAL key in the window plus a bound-first key (only option that keeps
+children and puts missing last).
+
+### Gap 2 of 2: aggregate projection plus sort path
+A. add sort variables to GROUP BY (splits groups for multi-valued paths); B. the sub-SELECT of
+subjects (one key per subject, already joins the GROUP BY). Chosen: B.
+
+## Iteration 1 — Plan
+
+`irToAlgebra.ts` 5a (inner order OPTIONAL + `boundFirst`) and `subjectSubSelect` gains
+"ungrouped, projects an aggregate, has an orderBy". Tests in `select-order-missing-last`;
+`nested-select-pagination` golden updated.
+
+## Iteration 1 — Phases
+
+### Phase 4: review fixes (done)
+
+- Validation: full suite `Tests: 122 skipped, 3168 passed, 3290 total`, `[fuseki] live tests:
+  467 total — 465 passed, 0 failed, 2 skipped`; `npx linked build`: `✔ Build successful`.
