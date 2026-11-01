@@ -12,5 +12,5 @@ rolls it back. A store declares `'transactions'` in `IDataset.supports` and impl
 its own, with a warning that the two are not atomic. A query with a txId is refused by a store
 that does not declare support. New `InMemoryDataset` (`@_linked/core/memory/InMemoryDataset`)
 holds transactions for real (snapshot, swap on commit, 30 s idle expiry) and answers a subset of
-queries. New exports: `Transaction`, `TransactionEndedError`, `inTransaction`, `txIdOf`,
-`DatasetFeature`.
+queries. `QueryFeature` gains `'transactions'` (not in `ALL_QUERY_FEATURES`). New exports: `Transaction`,
+`TransactionEndedError`, `inTransaction`, `txIdOf`.

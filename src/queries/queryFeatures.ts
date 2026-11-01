@@ -22,6 +22,11 @@ import type {IRExpression} from './IntermediateRepresentation.js';
  *   (`TriplesBuilder.toNode`, `withPredicate`; `TriplesQuery.predicate`, `.object`). A store that
  *   predates them would drop the fields and answer a graph or subject read: every triple of the
  *   graphs instead of the matching ones.
+ * - `transactions`: not a feature a query uses but one a dataset has: it holds store
+ *   transactions (`beginTransaction`, `commit`, `rollback`, and a txId on every query; see
+ *   `utils/Transaction.ts`). A query that carries a txId needs it. It is not in
+ *   {@link ALL_QUERY_FEATURES}, so a store that lists those (as `SparqlDataset` does) does not
+ *   claim it, and a DSL-JSON `requires` naming it is refused.
  *
  * Counting is baseline: every count (`.size()`, `.countDistinct()`, `Expr.count()`) is an
  * `aggregate_expr` named `count`, and a count always counts distinct values (see
@@ -31,18 +36,9 @@ import type {IRExpression} from './IntermediateRepresentation.js';
  * store that ignored the grouping would answer *something* — ungrouped rows — and nothing
  * downstream could tell. A store that does not declare a feature is refused before it is asked.
  */
-export type QueryFeature = 'groupBy' | 'min' | 'max' | 'shapelessDelete' | 'triplesPattern';
+export type QueryFeature = 'groupBy' | 'min' | 'max' | 'shapelessDelete' | 'triplesPattern' | 'transactions';
 
-/**
- * What a dataset can declare in `IDataset.supports`: the query features above, and
- * `'transactions'` — the dataset holds transactions (`beginTransaction`, `commit`, `rollback`, a
- * txId on every query; see `utils/Transaction.ts`). `'transactions'` is not a query feature: it is
- * not in {@link ALL_QUERY_FEATURES}, so a store that lists those (as `SparqlDataset` does) does not
- * claim it.
- */
-export type DatasetFeature = QueryFeature | 'transactions';
-
-/** Every feature this build of core can express (what a SPARQL store supports). */
+/** Every query feature this build of core can express (what a SPARQL store supports); not `transactions`. */
 export const ALL_QUERY_FEATURES: readonly QueryFeature[] = Object.freeze([
   'groupBy',
   'min',

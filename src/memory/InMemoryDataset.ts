@@ -28,7 +28,7 @@ import type {
   SelectResult,
   UpdateResult,
 } from '../queries/IntermediateRepresentation.js';
-import type {DatasetFeature} from '../queries/queryFeatures.js';
+import type {QueryFeature} from '../queries/queryFeatures.js';
 import {lower} from '../queries/lower.js';
 import {unsupportedGraphQuery} from '../queries/graphQuery.js';
 import {txIdOf} from '../queries/transactionQuery.js';
@@ -128,7 +128,7 @@ const copyData = (data: Data): Data =>
  */
 export class InMemoryDataset implements IDataset {
   readonly id: string;
-  readonly supports: readonly DatasetFeature[] = Object.freeze(['shapelessDelete', 'transactions'] as DatasetFeature[]);
+  readonly supports: readonly QueryFeature[] = Object.freeze(['shapelessDelete', 'transactions'] as QueryFeature[]);
   readonly transactionTimeoutMs: number;
   private readonly root: string;
   private data: Data = new Map();

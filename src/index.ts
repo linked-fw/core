@@ -65,7 +65,7 @@ export {
 } from './queries/QueryContext.js';
 export {subscribeQueryDispatch, assertQuerySupported} from './queries/queryDispatch.js';
 export {ALL_QUERY_FEATURES} from './queries/queryFeatures.js';
-export type {DatasetFeature, QueryFeature} from './queries/queryFeatures.js';
+export type {QueryFeature} from './queries/queryFeatures.js';
 export type {QueryDispatchEvent, QueryDispatchListener} from './queries/queryDispatch.js';
 export {
   GraphQueryError,

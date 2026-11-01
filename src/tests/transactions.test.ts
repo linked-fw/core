@@ -20,7 +20,7 @@ import {InMemoryDataset, InMemoryQueryRefusal} from '../memory/InMemoryDataset';
 import {SparqlDataset} from '../sparql/SparqlDataset';
 import type {SparqlQueryResults} from '../sparql/resultMapping';
 import type {IDataset} from '../interfaces/IDataset';
-import type {DatasetFeature} from '../queries/queryFeatures';
+import type {QueryFeature} from '../queries/queryFeatures';
 import {fromJSON, type QueryJSON} from '../queries/fromJSON';
 import {CreateBuilder} from '../queries/CreateBuilder';
 import {SelectBuilder} from '../queries/QueryBuilder';
@@ -80,7 +80,7 @@ class PlainStore extends SparqlDataset {
  * it. Begin, commit and rollback are forwarded too.
  */
 class WireDataset implements IDataset {
-  readonly supports: readonly DatasetFeature[] = ['transactions'];
+  readonly supports: readonly QueryFeature[] = ['transactions'];
   sent: unknown[] = [];
   constructor(private readonly far: InMemoryDataset) {}
   private cross(query: {toJSON(): unknown}): any {

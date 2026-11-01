@@ -9,7 +9,7 @@ import type {GraphQuery, GraphResult} from './IntermediateRepresentation.js';
 import {triplesQueryFeatures, type Triple, type TriplesQuery} from './triplesQuery.js';
 import {unsupportedGraphQuery} from './graphQuery.js';
 import {catalogOf, withShapeCatalog} from '../utils/ShapeClass.js';
-import type {DatasetFeature, QueryFeature} from './queryFeatures.js';
+import type {QueryFeature} from './queryFeatures.js';
 import {inTransaction, txIdOf} from './transactionQuery.js';
 
 /**
@@ -49,11 +49,11 @@ export interface QueryDispatch {
    * The query features this dispatch answers (as `IDataset.supports`). A router that checks each
    * routed dataset itself (`LinkedStorage`) lists every feature; absent = the baseline only.
    */
-  readonly supports?: readonly DatasetFeature[];
+  readonly supports?: readonly QueryFeature[];
 }
 
 /** Something a select is sent to: a dataset, a router, or the global dispatch. */
-type FeatureTarget = {readonly supports?: readonly DatasetFeature[]} | undefined | null;
+type FeatureTarget = {readonly supports?: readonly QueryFeature[]} | undefined | null;
 
 /** A query that may use features beyond the baseline (a select builder has `requiredFeatures`). */
 type FeatureQuery = object & {requiredFeatures?(): readonly QueryFeature[]};
@@ -203,7 +203,7 @@ export async function resolveGraphQuery(
 /** A target that may answer a triples read. */
 type TriplesTarget = {
   triplesQuery?(query: TriplesQuery): Promise<Triple[]>;
-  readonly supports?: readonly DatasetFeature[];
+  readonly supports?: readonly QueryFeature[];
 };
 
 /**

@@ -14,7 +14,7 @@ import type {
 import type {Triple, TriplesQuery} from '../queries/triplesQuery.js';
 import type {ChangeEvent} from '../live/changes.js';
 import type {DefaultGraphTermsReplace} from '../queries/defaultGraphTerms.js';
-import type {DatasetFeature} from '../queries/queryFeatures.js';
+import type {QueryFeature} from '../queries/queryFeatures.js';
 
 /**
  * Universal dataset interface. Every dataset in the Linked framework accepts
@@ -78,7 +78,7 @@ export interface IDataset {
    * carries a `txId` inside that transaction. A query with a `txId` is refused before it is sent
    * to a dataset that does not declare it.
    */
-  readonly supports?: readonly DatasetFeature[];
+  readonly supports?: readonly QueryFeature[];
   /**
    * Open a transaction and answer its id (only with `'transactions'` in {@link supports}).
    * `LinkedStorage.begin()` calls it when the first query of a transaction is routed here.

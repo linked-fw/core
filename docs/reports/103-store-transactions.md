@@ -31,7 +31,9 @@ await LinkedStorage.transaction(async (tx) => { … });  // commit on return, ro
 
 - **API:** `LinkedStorage.begin(): Transaction`, `LinkedStorage.transaction(fn)`; `Transaction`
   (`commit()`, `rollback()`, `state`, `failedWith`), `TransactionEndedError`; `inTransaction`,
-  `txIdOf`; `DatasetFeature = QueryFeature | 'transactions'`.
+  `txIdOf`; `QueryFeature` gains `'transactions'`, which `ALL_QUERY_FEATURES` leaves out (a
+  separate `DatasetFeature` type broke CN's `AppDataRouter`, which narrows `supports` to
+  `QueryFeature`).
 - **Store protocol (`IDataset`):** `supports` may list `'transactions'`; `beginTransaction():
   Promise<string>`, `commit(txId)`, `rollback(txId)`; the txId on every query as `query.txId`.
   Expiry is the store's own (documented on `IDataset`).
