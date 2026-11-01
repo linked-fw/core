@@ -28,9 +28,8 @@
  */
 import type {IDataset} from '../interfaces/IDataset.js';
 import type {NodeReferenceValue} from './QueryFactory.js';
-import {dispatchTriplesQuery} from './queryDispatch.js';
+import {dispatchTriplesQuery, dispatchTriplesTermsQuery} from './queryDispatch.js';
 import type {ReadGraphsInput} from './readGraphs.js';
-import {dispatchTriplesTermsQuery} from './queryDispatch.js';
 import {
   checkTriplesTerm,
   checkTriplesTerms,

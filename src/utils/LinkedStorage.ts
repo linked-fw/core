@@ -7,7 +7,7 @@ import type {CreateQuery} from '../queries/CreateQuery.js';
 import type {UpdateQuery} from '../queries/UpdateQuery.js';
 import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
 import type {GraphQuery, GraphResult} from '../queries/IntermediateRepresentation.js';
-import {triplesTermsOf, type Triple, type TriplesQuery} from '../queries/triplesQuery.js';
+import {triplesQueryOf, triplesTermsOf, type Triple, type TriplesQuery} from '../queries/triplesQuery.js';
 import {
   assertQuerySupported,
   setQueryDispatch,
@@ -696,7 +696,8 @@ export abstract class LinkedStorage {
    * (each term once, in the list's order); every dataset is checked before the first is asked,
    * and a fan-out without `.from()` graphs logs the same notice as a node read's.
    */
-  static async triplesTermsQuery(query: TriplesQuery): Promise<string[]> {
+  static async triplesTermsQuery(input: TriplesQuery): Promise<string[]> {
+    const query = triplesQueryOf(input);
     const run = (dataset: IDataset) =>
       getActiveShapeCatalog() === undefined
         ? resolveTriplesTerms(dataset, query)
