@@ -171,11 +171,13 @@ export interface TriplesQuery {          // loses `objects` and `predicates`
 }
 export interface TriplesTermsQuery {     // new; exactly one of objects / predicates
   kind: 'triples_terms';
+  subject?: string;                      // the fixed positions, as in 109 (contract change, C1)
+  predicate?: string;                    // with objects
+  object?: string;                       // with predicates
   objects?: string[];
   predicates?: string[];
-  graphs?: string[];                     // required with predicates, optional with objects (as in 109)
-  recordClass?: string;
-}
+  graphs?: string[];                     // required with predicates unless the subject is fixed, optional with objects (as in 109)
+}                                        // no limit, no recordClass (109 refuses both on a terms read)
 export function parseTriplesQuery(json: unknown): TriplesQuery;           // refuses objects/predicates
 export function parseTriplesTermsQuery(json: unknown): TriplesTermsQuery; // new
 export function isTriplesTermsQuery(query: unknown): query is TriplesTermsQuery;
@@ -202,8 +204,13 @@ export interface QueryDispatch {
 export function resolveRead<Q extends ReadQuery>(target: ReadTarget, query: Q): Promise<ReadResult<Q>>;
 /** Send a read through an explicit target (observed like the global path) or the global dispatch. */
 export function dispatchRead<Q extends ReadQuery>(query: Q, target?: IDataset): Promise<ReadResult<Q>>;
-type ReadTarget = Pick<IDataset, 'readQuery' | 'supports'>;
+export type ReadTarget = Pick<IDataset, 'readQuery' | 'supports'>;
+/** Refuse, before it is sent, a read the target does not declare (any kind); a router checks every dataset with it before it asks the first. (Contract addition, C1.) */
+export function assertReadSupported(target: {readonly supports?: readonly QueryFeature[]} | undefined | null, query: ReadQuery): void;
 ```
+
+`TriplesBuilder` gains `toTriplesTermsQuery()` (a terms read's plain data); its
+`toTriplesQuery()` throws for a terms read. *(Contract addition, C1.)*
 
 `resolveRead` keeps every check the per-kind helpers make today: select → `assertQuerySupported`
 (features, txId); count → a non-negative integer or reject; ask → `ask` declared: a real boolean
@@ -508,7 +515,7 @@ server refuses triples/terms (S1). Applied in the contracts above.
 
 | Step | Repo | Scope | Depends on | Status | Commits | Report | Notes |
 |---|---|---|---|---|---|---|---|
-| C1 | core | readQuery, features, dispatch, stores | — | todo | | 112 | |
+| C1 | core | readQuery, features, dispatch, stores | — | done | `1ffeb58` (docs), `9607362`..`81f3a67`, wrapup | 112 | contract change C-4 (`TriplesTermsQuery` keeps the fixed positions; no `recordClass`/`limit`), additions C-5 (`assertReadSupported`, `toTriplesTermsQuery()`) |
 | S1 | server | RemoteDataset + readQuery endpoint | C1 | todo | | 028 | |
 | N1 | CN | routers, stores, Execution Gateway, gateway readQuery endpoint, unit tests | C1 (rebase on S1) | todo | | 395 | |
 | N2 | CN | integration specs, probes, arch docs, regular set | N1, S1 | todo | | 396 | |
