@@ -921,7 +921,7 @@ export function selectToAlgebra(
       // result grouper already collects multiple child bindings into an array.
       //
       // Excluded:
-      //  - filtered traversals (`.where(...)`) — the filter makes the child required
+      //  - filtered traversals (`.where(...)`) — each is a filtered OPTIONAL block of its own (5b)
       //  - aliases otherwise required by the query (e.g. used in a top-level filter)
       //  - paginated traversals — emitted separately as a sub-SELECT (section 5a),
       //    so lowering them here too would double-emit the traverse triple
@@ -983,8 +983,10 @@ export function selectToAlgebra(
     .filter((pattern) =>
       optionalTraversalAliases.has(pattern.to) &&
       !optionalTraversalAliases.has(pattern.from) &&
-      // Children of a filtered traversal nest inside its filtered block (5b)
-      !filteredTraverseAliases.has(pattern.from),
+      // Children of a filtered traversal nest inside its filtered block (5b), children of a
+      // paginated one inside its sub-SELECT block (5a): an empty parent leaves them unbound
+      !filteredTraverseAliases.has(pattern.from) &&
+      !subSelectAliases.has(pattern.from),
     )
     .map((pattern) => pattern.to);
 
@@ -1005,6 +1007,9 @@ export function selectToAlgebra(
   //     so the flat-row structure and result mapping are unchanged.
   // Every pattern here is a root→child paginated traversal (the deep-pagination
   // guard above rejected anything else), so each maps 1:1 to a sub-SELECT.
+  // Each block is attached after 5b's builders exist, so its own OPTIONAL and filtered children
+  // nest inside it.
+  const subSelectBlocks: {alias: string; block: SparqlAlgebraNode}[] = [];
   for (const pattern of paginatedTraversePatterns) {
     const predicate = buildPredicateTerm(pattern);
     const innerTriple = tripleOf(
@@ -1055,7 +1060,7 @@ export function selectToAlgebra(
     // OPTIONAL so a parent with an empty (or fully-windowed-out) child set is
     // still returned — the sub-SELECT yields no ?a1 binding, but the parent row
     // survives (mirrors the plain nested-traverse OPTIONAL behaviour).
-    algebra = wrapOptional(algebra, childBlock);
+    subSelectBlocks.push({alias: pattern.to, block: childBlock});
   }
 
   // 5b. Build filtered OPTIONAL blocks for inline where traversals.
@@ -1079,7 +1084,10 @@ export function selectToAlgebra(
     const subject = filteredTraverseBlocks[i].traverseTriple.subject;
     const parent = subject.kind === 'variable' ? subject.name : undefined;
     const parentIdx = parent !== undefined ? filteredBlockIdxByAlias.get(parent) : undefined;
-    if (parent !== undefined && ((parentIdx !== undefined && parentIdx !== i) || optionalTraversalAliases.has(parent))) {
+    if (
+      parent !== undefined &&
+      ((parentIdx !== undefined && parentIdx !== i) || optionalTraversalAliases.has(parent) || subSelectAliases.has(parent))
+    ) {
       const children = filteredChildrenByParent.get(parent) ?? [];
       children.push(i);
       filteredChildrenByParent.set(parent, children);
@@ -1128,6 +1136,14 @@ export function selectToAlgebra(
       blockInner = wrapOptional(blockInner, buildOptionalTraversalSubtree(childAlias));
     }
     return {type: 'filter', expression: filteredBlockExprs[i], inner: wrapFilteredChildren(blockInner, block.toAlias)};
+  }
+
+  for (const {alias, block} of subSelectBlocks) {
+    let wrapped = block;
+    for (const childAlias of childOptionalAliasesByParent.get(alias) ?? []) {
+      wrapped = wrapOptional(wrapped, buildOptionalTraversalSubtree(childAlias));
+    }
+    algebra = wrapOptional(algebra, wrapFilteredChildren(wrapped, alias));
   }
 
   for (const i of rootFilteredBlockIdx) {

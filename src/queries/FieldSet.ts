@@ -17,6 +17,7 @@ import {encodeValueExpr, decodeValueExpr, type DslJsonValue} from './DslJsonExpr
 import {
   serializeWherePath,
   deserializeWherePath,
+  filteredSegmentShape,
   type WherePathJSON,
 } from './QueryBuilderSerialization.js';
 import {labelOfId, pathToStringWithCasts, walkPathWithCasts} from './castPaths.js';
@@ -716,10 +717,7 @@ export class FieldSet<R = any, Source = any> {
     }
     if (opts.where) {
       const idx = opts.whereIndex ?? path.segments.length - 1;
-      const seg = path.segments[idx] as PropertyShapeData | undefined;
-      const valueShapeId = (seg as unknown as {valueShape?: {id: string}})?.valueShape?.id;
-      const scopedShape = (valueShapeId && getQueryShapeClass(valueShapeId)?.shape) || shape;
-      entry.scopedFilter = deserializeWherePath(scopedShape, opts.where);
+      entry.scopedFilter = deserializeWherePath(filteredSegmentShape(path, idx, pathKey), opts.where);
       entry.scopedFilterIndex = idx;
     }
     // Nested-select pagination (G10).

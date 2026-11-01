@@ -1112,11 +1112,10 @@ export class QueryShapeSet<
           createShapeTarget(shape as any, existing?.id),
         ),
       );
-      return QueryShapeSet.create(
-        newOriginal,
-        this.property,
-        this.subject as any,
-      );
+      const cast = QueryShapeSet.create(newOriginal, this.property, this.subject as any);
+      // An inline filter before the cast (`p.friends.where(…).as(Employee)`) stays on the segment.
+      cast.wherePath = this.wherePath;
+      return cast;
     }
     // else return this
     return this as any as QShapeSet<InstanceType<ShapeClass>, Source, Property>;
@@ -1381,7 +1380,10 @@ export class QueryShape<
     //if the shape is not the same as the original value, then we need to create a new query shape
     if (!nodeShapeEquals(shape.shape, this.originalValue.nodeShape)) {
       const newOriginal = createShapeTarget(shape as any, this.originalValue.id);
-      return QueryShape.create(newOriginal, this.property, this.subject as any);
+      const cast = QueryShape.create(newOriginal, this.property, this.subject as any);
+      // An inline filter before the cast (`p.bestFriend.where(…).as(Employee)`) stays on the segment.
+      cast.wherePath = this.wherePath;
+      return cast;
     }
     return this as any as QShape<InstanceType<ShapeClass>, Source, Property>;
   }

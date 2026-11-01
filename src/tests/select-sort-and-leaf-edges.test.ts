@@ -111,8 +111,8 @@ describe('a filter on a sort path (lowering, wire)', () => {
     expect(sparql).toMatch(/OPTIONAL \{\s*\?a0 <[^>]*hasFriend> \?a1 \.[\s\S]*OPTIONAL \{[\s\S]*FILTER/);
   });
 
-  test('a wire filter on a literal segment or out of range is refused, not dropped', () => {
-    for (const whereIndex of [1, 7, -1]) {
+  test('a wire filter index out of range is refused, not dropped', () => {
+    for (const whereIndex of [2, 7, -1]) {
       const json = {
         ...(byAnnasHobby('ASC').toJSON() as object),
         sortBy: [{'friends.hobby': {direction: 'ASC', where: {name: 'Anna'}, whereIndex}}],

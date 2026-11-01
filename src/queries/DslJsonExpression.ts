@@ -567,7 +567,8 @@ function memberShapeOf(relation: PropertyPath): NodeShapeData {
   return (last && relationMemberShape(last)) ?? rootShape();
 }
 
-function relationMemberShape(relation: Parameters<typeof resolveRelationShape>[0]): NodeShapeData | undefined {
+/** The member shape of a relation as the DSL resolves it (`sh:node`, else the shape targeting `sh:class`). */
+export function relationMemberShape(relation: Parameters<typeof resolveRelationShape>[0]): NodeShapeData | undefined {
   const {shapeId} = resolveRelationShape(relation);
   return shapeId ? shapeOfId(shapeId) : undefined;
 }

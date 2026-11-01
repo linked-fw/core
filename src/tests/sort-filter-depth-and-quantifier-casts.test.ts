@@ -107,8 +107,8 @@ describe('a filter below the first segment of a sort path (lowering, wire)', () 
     expect(sparqlOf(roundTrip(q))).toBe(sparqlOf(q));
   });
 
-  test('a wire whereIndex out of range or on a literal leaf is refused, not dropped', () => {
-    for (const whereIndex of [2, 7, -1, 0.5]) {
+  test('a wire whereIndex out of range is refused, not dropped', () => {
+    for (const whereIndex of [3, 7, -1, 0.5]) {
       const json = {
         ...jsonOf(byDeepFilter('ASC')),
         sortBy: [{'bestFriend.friends.hobby': {direction: 'ASC', where: {name: 'Anna'}, whereIndex}}],
@@ -123,6 +123,39 @@ describe('a filter below the first segment of a projection (lowering)', () => {
     const sparql = sparqlOf(Person.select((p) => p.bestFriend.friends.where(notDirk as never).name));
     expect(sparql).toMatch(/OPTIONAL \{\s*\?a0 <[^>]*bestFriend> \?a1 \.[\s\S]*FILTER/);
     expect(sparql).not.toMatch(/WHERE \{\s*\?a0 rdf:type <[^>]+> \.\s*\?a0 <[^>]*bestFriend> \?a1 \./);
+  });
+});
+
+describe('filtered blocks under other parents (lowering, wire)', () => {
+  test('a filtered child of a paginated nested select nests in its sub-SELECT block', () => {
+    const sparql = sparqlOf(
+      Person.select((p) => p.friends.select((f) => f.friends.where((g) => g.name.equals('A')).name).limit(1)).for({
+        id: `${ENT}anna`,
+      }),
+    );
+    // One OPTIONAL holds the sub-SELECT and the filtered block: an empty window leaves ?a2 unbound.
+    expect(sparql).toMatch(/OPTIONAL \{\s*\{\s*SELECT[\s\S]*LIMIT 1\s*\}\s*OPTIONAL \{[\s\S]*hasFriend> \?a2 \.[\s\S]*FILTER/);
+  });
+
+  test('a filter before a cast is kept (sort key and projection)', () => {
+    const sort = sparqlOf(
+      Person.select((p) => p.name).orderBy((p) => p.friends.where((f) => f.name.equals('A')).as(Employee).name),
+    );
+    expect(sort).toContain('FILTER(?a1_name = "A")');
+    const field = sparqlOf(Person.select((p) => p.bestFriend.friends.where((f) => f.name.equals('A')).as(Employee).name));
+    expect(field).toMatch(/FILTER\(\?a2_name = "A"\)/);
+  });
+
+  test('a wire field filter out of range is refused, not dropped', () => {
+    for (const whereIndex of [2, 7, -1]) {
+      const json = {...jsonOf(Person.select((p) => p.name)), fields: [{'friends.hobby': {where: {name: 'A'}, whereIndex}}]};
+      expect(() => sparqlOf(fromJSON(json as never))).toThrow(/whereIndex/);
+    }
+  });
+
+  test('a deep filter under a hop the where requires', () => {
+    const q = Person.select((p) => p.bestFriend.friends.where(notDirk as never).name).where((p) => p.bestFriend.name.equals('Bob'));
+    expect(sparqlOf(q)).toMatch(/\?a0 <[^>]*bestFriend> \?a1 \.[\s\S]*OPTIONAL \{[\s\S]*hasFriend> \?a2 \.[\s\S]*FILTER/);
   });
 });
 
@@ -286,6 +319,11 @@ describeFuseki('sort filter depth and quantifier casts', () => {
     expect(ids(rows).sort()).toEqual(['anna', 'bob', 'carl', 'dirk', 'erik']);
     const anna = rows.find((r) => String(r.id).endsWith('anna'))!;
     expect(ids((anna.bestFriend as ResultRow).friends)).toEqual(['carl']);
+  });
+
+  test('a deep filter under a hop the where requires: Anna only', async () => {
+    const q = Person.select((p) => p.bestFriend.friends.where(notDirk as never).name).where((p) => p.bestFriend.name.equals('Bob'));
+    expect(ids(await run(q))).toEqual(['anna']);
   });
 
   test('a quantifier on a cast relation, through DSL-JSON', async () => {

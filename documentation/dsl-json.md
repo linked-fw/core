@@ -79,8 +79,8 @@ subject by its first value in that direction (lowest `ASC`, highest `DESC`), of 
 has; keys are taken one by one, and ties are broken by the subject IRI when paging.
 
 A `sortBy` entry is a path, `{ "bestFriend.name": "ASC" }`; a path with a filtered segment, written
-as a field's is (`where` on segment `whereIndex`, which must name one of the path's relations; an
-index out of range or on a literal is refused):
+as a field's is (`where` on segment `whereIndex`; an index that names no segment of the path is
+refused, in a field too):
 `{ "friends.hobby": { "direction": "ASC", "where": { "name": "Anna" }, "whereIndex": 0 } }`, which
 sorts each subject by the hobbies of the friends the filter keeps and keeps the others, last. The
 filter may sit further down (`"bestFriend.friends.hobby"` with `"whereIndex": 1`, since 1.8): a

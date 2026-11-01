@@ -10,8 +10,8 @@
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import {PropertyPath} from './PropertyPath.js';
 import {pathToStringWithCasts, walkPathWithCasts} from './castPaths.js';
+import {relationMemberShape} from './DslJsonExpression.js';
 import type {WherePath, SortByPath, SortKey} from './SelectQuery.js';
-import {getQueryShapeClass} from '../utils/ShapeClass.js';
 import type {RawMinusEntry, PropertyPathSegment} from './IRDesugar.js';
 import {
   encodeCondition,
@@ -85,26 +85,24 @@ export function serializeSortByPath(sort: SortByPath): SortByPathJSON {
 }
 
 /**
- * The shape a wire filter on segment `index` of a sort path reads. The segment must be one of the
- * path's relations: an index out of range or on a literal is refused, never read against the root.
+ * The shape a wire filter on segment `index` of a sort path or a field reads, as the encoder wrote
+ * it ({@link scopedShapeAt}): a relation's member shape, else (a filter on a literal,
+ * `p.hobby.where(…)`) the path's root. An index that names no segment is refused, never dropped.
  */
-function filteredSegmentShape(path: PropertyPath, index: unknown, pathKey: string): NodeShapeData {
-  const segment = Number.isInteger(index) ? path.segments[index as number] : undefined;
-  const valueShapeId = segment?.valueShape?.id;
-  const shape = valueShapeId ? getQueryShapeClass(valueShapeId)?.shape : undefined;
-  if (!shape) {
+export function filteredSegmentShape(path: PropertyPath, index: unknown, pathKey: string): NodeShapeData {
+  if (!Number.isInteger(index) || (index as number) < 0 || (index as number) >= path.segments.length) {
     throw new Error(
-      `Invalid sortBy entry '${pathKey}': whereIndex ${JSON.stringify(index)} must name one of the path's ` +
-        `relations (a segment with a value shape, 0 to ${path.segments.length - 1}).`,
+      `Invalid filter on '${pathKey}': whereIndex ${JSON.stringify(index)} must name a segment of the path ` +
+        `(0 to ${path.segments.length - 1}).`,
     );
   }
-  return shape;
+  return scopedShapeAt(path, index as number);
 }
 
 /** The shape an inline filter on segment `index` of `path` reads (that segment's value shape). */
 function scopedShapeAt(path: PropertyPath, index: number): NodeShapeData {
-  const valueShapeId = (path.segments[index] as {valueShape?: {id: string}} | undefined)?.valueShape?.id;
-  return (valueShapeId && getQueryShapeClass(valueShapeId)?.shape) || path.rootShape;
+  const segment = path.segments[index];
+  return (segment && relationMemberShape(segment)) || path.rootShape;
 }
 
 export function serializeRawMinusEntry(

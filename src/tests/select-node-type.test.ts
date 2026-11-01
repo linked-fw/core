@@ -178,7 +178,7 @@ describe('$type() in DSL-JSON', () => {
     expect(json.sortBy).toEqual([{$type: 'ASC'}]);
   });
 
-  test('the wire version is 1.7 (1.6 added $type)', () => {
+  test('the wire version is 1.8 (1.6 added $type)', () => {
     expect(WIRE_VERSION).toBe('1.8');
   });
 
