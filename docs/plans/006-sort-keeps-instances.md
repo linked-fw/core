@@ -3,7 +3,7 @@ summary: >
   Sorting keeps every instance and puts missing values last in both directions, for direct and
   nested paths; an unpaged where-aggregate with multi-valued rows filters per subject; a
   multi-valued leaf under a traversal maps to all its values. Closes backlog 089.
-status: Tasks
+status: Implementation
 packages: [core]
 ---
 
@@ -148,3 +148,17 @@ first row, so MIN ascending and MAX descending already); no tie-break is added t
 Phase 1 → 2 → 3, one agent, sequential.
 
 ## Phase results
+
+### Phase 1: failing tests (done)
+
+- `src/tests/select-order-missing-last.test.ts`: 7 lowering/mapping tests, 11 live. Before the
+  change: `Tests: 17 failed, 1 passed, 18 total`, `[fuseki] live tests: 11 total — 0 passed, 11
+  failed`. Nested sort: `['anna', 'carl']` (Dirk missing); direct `ASC`: `['dirk', 'carl',
+  'anna']`; `.one()` by hobby: `dirk`; where-aggregate: no rows; nested leaf: `nickNames: 'C'`,
+  under `friends.select(...)` too (`nickNames: 'N'`).
+- `src/tests/sparql-select-golden.test.ts`: three new goldens (nested sort, paged nested sort,
+  unpaged where-aggregate) and the two ordering goldens with bound-first keys: `5 failed, 88
+  passed`.
+- `p.friends.nickNames` (a leaf straight under a multi-valued traversal) throws in the proxy
+  (`result.concat is not a function`); the test reads it through `p.friends.select(...)`. Not in
+  scope; recorded as a follow-up.

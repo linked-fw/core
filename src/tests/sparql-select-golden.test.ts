@@ -886,7 +886,7 @@ WHERE {
     ?a0 <${PROP}name> ?a0_name .
   }
 }
-ORDER BY ASC(?a0_name)`);
+ORDER BY DESC(BOUND(?a0_name)) ASC(?a0_name)`);
   });
 
   test('sortByDesc', async () => {
@@ -900,7 +900,97 @@ WHERE {
     ?a0 <${PROP}name> ?a0_name .
   }
 }
-ORDER BY DESC(?a0_name)`);
+ORDER BY DESC(BOUND(?a0_name)) DESC(?a0_name)`);
+  });
+});
+
+describe('SPARQL golden — sorting keeps instances, missing values last', () => {
+  test('a nested sort path is OPTIONAL, with a bound-first key', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => [p.name, p.bestFriend.name]).orderBy((p) => p.bestFriend.name) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name ?a1_name ?a1
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}bestFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+  }
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+}
+ORDER BY DESC(BOUND(?a1_name)) ASC(?a1_name)`);
+  });
+
+  test('a page sorts by bound-first, then MAX descending, then the subject', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => [p.name, p.nickNames]).orderBy((p) => p.bestFriend.name, 'DESC').limit(2) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name ?a0_nickNames ?a1
+WHERE {
+  {
+    SELECT ?a0 (MAX(?a1_name) AS ?page_order_0) WHERE {
+      ?a0 rdf:type <${PT}> .
+      OPTIONAL {
+        ?a0 <${PROP}bestFriend> ?a1 .
+        OPTIONAL {
+          ?a1 <${PROP}name> ?a1_name .
+        }
+      }
+    } GROUP BY ?a0 ORDER BY DESC(BOUND(?page_order_0)) DESC(?page_order_0) ASC(?a0) LIMIT 2
+  }
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}bestFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+  }
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  OPTIONAL {
+    ?a0 <${PROP}nickName> ?a0_nickNames .
+  }
+}
+ORDER BY DESC(BOUND(?page_order_0)) DESC(?page_order_0) ASC(?a0) DESC(BOUND(?a1_name)) DESC(?a1_name)`);
+  });
+
+  test('an unpaged where-aggregate with multi-valued rows filters in a sub-SELECT of subjects', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => [p.name, p.friends.name]).where((p) => p.friends.size().equals(2)) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT DISTINCT ?a0 ?a0_name ?a1_name ?a1
+WHERE {
+  {
+    SELECT ?a0 WHERE {
+      ?a0 rdf:type <${PT}> .
+      OPTIONAL {
+        ?a0 <${PROP}hasFriend> ?a1 .
+      }
+    } GROUP BY ?a0 HAVING(COUNT(DISTINCT ?a1) = "2"^^xsd:integer)
+  }
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+  }
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+}`);
   });
 });
 
