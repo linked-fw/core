@@ -22,7 +22,8 @@ import {
   getGraphRecordClass,
   graphContentHash,
   graphRecordFieldValues,
-  type GraphRecordLiteral,
+  isGraphRecordNode,
+  type GraphRecordValue,
 } from '../queries/graphRecords.js';
 import {graphs} from '../ontologies/graphs.js';
 import {coreOntology} from '../ontologies/linked-core.js';
@@ -221,7 +222,9 @@ const iri = (value: string): string => {
   assertSafeIri(value);
   return `<${value}>`;
 };
-const literal = (l: GraphRecordLiteral): string => `"${escapeSparqlString(l.value)}"^^${iri(l.datatype)}`;
+/** A record value as a SPARQL term: `<iri>` for a node, a typed literal otherwise. */
+const recordTerm = (v: GraphRecordValue): string =>
+  isGraphRecordNode(v) ? iri(v.id) : `"${escapeSparqlString(v.value)}"^^${iri(v.datatype)}`;
 
 /**
  * The predicate of the claim a `graph_create` writes on the record it creates, so the store can
@@ -257,13 +260,13 @@ export function graphQueryToSparql(
   const inRegistry = (triples: string) => `GRAPH ${registry} { ${triples} }`;
   // A field set to an empty list has no triple to write (an update still deletes its old
   // values); writing `<p> ;` would be a SPARQL parse error.
-  const recordFields = (fields: Map<string, GraphRecordLiteral[]>) =>
+  const recordFields = (fields: Map<string, GraphRecordValue[]>) =>
     [...fields]
       .filter(([, values]) => values.length > 0)
-      .map(([p, values]) => `${iri(p)} ${values.map(literal).join(', ')}`);
+      .map(([p, values]) => `${iri(p)} ${values.map(recordTerm).join(', ')}`);
 
   const hash = graphContentHash(query);
-  const automatic = new Map<string, GraphRecordLiteral[]>();
+  const automatic = new Map<string, GraphRecordValue[]>();
   if (hash !== undefined) {
     automatic.set(coreOntology.contentHash.id, [{value: hash, datatype: xsd.string.id}]);
     automatic.set(dcterms.modified, [{value: now, datatype: xsd.dateTime.id}]);

@@ -256,3 +256,8 @@ sequential.
   wire 1.4, the lowering projects only open positions. Added during the phase: a read that fixes
   all three positions is refused (it has no open position, so no SELECT to write). The live and
   unit triples suites: `Tests: 33 passed, 33 total`.
+- **Phase 3 done.** `ontologies/prov.ts`; `GraphRecordField` is a literal field or a node field
+  (`nodeKind: 'iri'`), `GraphRecordValue` (`{id}` or a literal), `recordValueFor`; the record
+  SPARQL writes `<iri>`; `NamedGraph.attributedTo` and `attributedTo?: {id: string}` in each class's
+  `recordFields`. Core's shapes golden (`fixtures/core-shapes.ttl`) gains the property shape. The
+  unit and live graph-query suites: `Tests: 85 passed, 85 total`.

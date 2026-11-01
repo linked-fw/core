@@ -598,7 +598,8 @@ describe('SparqlDataset.graphQuery', () => {
 
     test('the shape reads it as {id}: a select of attributedTo', () => {
       const sparql = selectToSparql(lower(ShapesGraph.select((g) => [g.package, g.contentHash, g.attributedTo]) as any) as any);
-      expect(sparql).toContain(`<${PROV}>`);
+      expect(sparql).toContain('PREFIX prov: <http://www.w3.org/ns/prov#>');
+      expect(sparql).toContain('prov:wasAttributedTo');
       expect(sparql).toContain(`GRAPH <${REG}>`);
     });
   });

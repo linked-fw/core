@@ -35,6 +35,7 @@ import {linkedShape} from '../package.js';
 import {Shape} from './Shape.js';
 import {getPackageUri, literalProperty, objectProperty} from './SHACL.js';
 import {coreOntology} from '../ontologies/linked-core.js';
+import {prov} from '../ontologies/prov.js';
 import {sd} from '../ontologies/sd.js';
 import {shacl} from '../ontologies/shacl.js';
 import {xsd} from '../ontologies/xsd.js';
@@ -184,7 +185,7 @@ export class NamedGraph extends GraphRecordBase {
   /** Records live in the graph registry; reads of this shape and its subclasses go there. */
   static storedInGraph: string = graphs.registry;
   /** The own record fields of this class, for typing the statics only. */
-  declare static readonly recordFields?: {sources?: string | string[]};
+  declare static readonly recordFields?: {sources?: string | string[]; attributedTo?: {id: string}};
 
   /** The graph's name (its IRI; the record's subject repeats it). */
   @objectProperty({path: sd.name, maxCount: 1, nodeKind: shacl.IRI})
@@ -213,6 +214,16 @@ export class NamedGraph extends GraphRecordBase {
   /** Where the content came from: data files, or the URL of an import. */
   @literalProperty({path: {id: dcterms.source}, datatype: xsd.string})
   get sources(): string[] {
+    return null;
+  }
+
+  /**
+   * Who the graph's content is attributed to (`prov:wasAttributedTo`, an agent IRI), for instance a
+   * host's system actor marking the graphs it writes. Set it with the content, in the same query:
+   * `ShapesGraph.update(g).set({attributedTo: {id}}).replaceContent(c)`.
+   */
+  @objectProperty({path: prov.wasAttributedTo, maxCount: 1, nodeKind: shacl.IRI})
+  get attributedTo(): {id: string} {
     return null;
   }
 
@@ -312,7 +323,7 @@ export class NamedGraph extends GraphRecordBase {
 registerGraphRecordShape(
   NamedGraph,
   'NamedGraph',
-  "A named graph's record in the graph registry: name, content hash, load time, sources, whether it feeds the class hierarchy. (graph registry, named graph)",
+  "A named graph's record in the graph registry: name, content hash, load time, sources, who it is attributed to, whether it feeds the class hierarchy. (graph registry, named graph)",
 );
 
 /** A graph holding one package's whole ontology data, at `{package IRI}/graph/ontology`. Feeds the hierarchy. */
@@ -322,6 +333,7 @@ export class OntologyGraph extends NamedGraph {
     package: string;
     version?: string;
     sources?: string | string[];
+    attributedTo?: {id: string};
     feedsHierarchy?: boolean;
     packageHashes?: string | string[];
   };
@@ -365,6 +377,7 @@ export class ShapesGraph extends NamedGraph {
     package: string;
     version?: string;
     sources?: string | string[];
+    attributedTo?: {id: string};
     packageHashes?: string | string[];
   };
 
@@ -412,6 +425,7 @@ export class ComponentsGraph extends NamedGraph {
     version?: string;
     commit?: string;
     sources?: string | string[];
+    attributedTo?: {id: string};
   };
 
   /** The npm name of the package. */
