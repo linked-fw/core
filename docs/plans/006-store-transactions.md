@@ -150,3 +150,29 @@ class TransactionEndedError extends Error {}
 - Validation: the new spec, core's whole suite, `npx linked build`.
 
 Dependencies: 1 → 2 → 3 (2 and 3's docs could run beside each other; one agent, so sequential).
+
+## Review
+
+An independent review found (medium or higher): `transaction(fn)` resolved after a failed query
+that `fn` caught; a create or update with a txId sent by `exec(target)` was not checked against
+the target; a partial commit did not report the writes that committed; a select whose context had
+not landed failed the transaction while answering `null`; the in-memory store's conflict check was
+coarser than needed (a read-only commit swapped and bumped the version; a write that threw partway
+did not bump it). Low: the failed store was not rolled back; a txId on a graph envelope; a second
+`rollback()` during one threw; `process` unguarded; the double report to dispatch listeners
+undocumented; `commit`/`rollback` naming (kept: the owner's names). RemoteDataset forwarding is
+the next step (owner), so it is not done here.
+
+## Iteration 1 — Phases
+
+### Phase 4: review fixes
+- `transaction(fn)` rejects with `TransactionEndedError` (cause: the query's error) when the
+  transaction failed and `fn` returned; `tx.failedWith` exposes the error.
+- `CreateBuilder.exec(target)` / `UpdateBuilder.exec(target)` call `assertQuerySupported`.
+- A partial commit reports the committed stores' writes; the refusing store is rolled back too.
+- `UnresolvedContextError` does not fail the transaction.
+- `InMemoryDataset`: a transaction that only read commits as a no-op; a write outside one moves
+  the version in `finally`; `process` guarded.
+- A second `rollback()` resolves with the first; a txId on a graph or triples envelope is refused
+  as before (the kind checks run first); `subscribeQueryDispatch` documents the double report.
+- Validation: the spec (27 tests) passes; typecheck clean.

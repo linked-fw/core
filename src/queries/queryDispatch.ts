@@ -353,6 +353,10 @@ export type QueryDispatchListener = (event: QueryDispatchEvent) => void;
  * with it. A listener that throws is logged (`console.error`) and isolated — it
  * neither rejects the query nor stops later listeners.
  *
+ * A write in a store transaction is reported twice: when it runs (`target` is the transaction,
+ * which declares `authoritativeChanges`) and when the transaction commits (`target` is the store;
+ * see {@link notifyCommittedWrites}). A listener that acts on changed data acts on the second.
+ *
  * The listener set lives on `globalThis`, beside `current`, for the same reason the
  * dispatch itself does: core can be evaluated twice in dev, and a subscription made
  * through one copy must see queries dispatched through the other.

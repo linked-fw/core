@@ -21,7 +21,8 @@ import type {Triple, TriplesQuery} from '../queries/triplesQuery.js';
 import {ALL_QUERY_FEATURES} from '../queries/queryFeatures.js';
 import {inTransaction} from '../queries/transactionQuery.js';
 import {notifyCommittedWrites, type CommittedWrite} from '../queries/queryDispatch.js';
-import {brandLinkedClass, brandLinkedError} from './linkedError.js';
+import {brandLinkedClass, brandLinkedError, isLinkedError} from './linkedError.js';
+import {UnresolvedContextError} from '../queries/QueryContext.js';
 import {sharedState} from './sharedState.js';
 
 /**
@@ -121,6 +122,7 @@ export class Transaction implements IDataset {
   /** Set once `commit()` or `rollback()` was called: no query may start after it. */
   private ending = false;
   private failure?: unknown;
+  private rollingBack?: Promise<void>;
   private readonly bindings = new Map<IDataset, Binding>();
   private readonly pending = new Set<Promise<unknown>>();
   private readonly writes: Array<CommittedWrite & {target: IDataset}> = [];
@@ -131,6 +133,14 @@ export class Transaction implements IDataset {
   /** `'open'`, `'committed'`, `'rolledBack'`, or `'failed'` (a commit that applied in some stores only). */
   get state(): TransactionState {
     return this._state;
+  }
+
+  /**
+   * The error that ended the transaction: a failed query (it was rolled back then) or a failed
+   * commit. Undefined while it is open, and after a commit or a rollback that was asked for.
+   */
+  get failedWith(): unknown {
+    return this.failure;
   }
 
   // ---------------------------------------------------------------------------
@@ -195,9 +205,13 @@ export class Transaction implements IDataset {
         committed++;
       }
     } catch (err) {
-      await this.rollbackStores(bound.slice(committed + 1));
+      // The store that refused is rolled back too (a no-op when it did so itself).
+      await this.rollbackStores(bound.slice(committed));
       this._state = committed === 0 ? 'rolledBack' : 'failed';
       this.failure = err;
+      // What did commit is visible now: report those writes.
+      const done = new Set(bound.slice(0, committed).map((b) => b.dataset));
+      notifyCommittedWrites(this.writes.splice(0).filter((w) => done.has(w.target)));
       if (committed > 0) {
         const partial = new Error(
           `The transaction committed in ${bound
@@ -218,19 +232,28 @@ export class Transaction implements IDataset {
 
   /**
    * Roll back in every store the transaction opened, once its queries in flight have settled.
-   * A no-op on a transaction that is rolled back already; throws {@link TransactionEndedError}
-   * after a commit (or while one is under way).
+   * A no-op on a transaction that is rolled back already (a second call while one is under way
+   * resolves with it); throws {@link TransactionEndedError} after a commit (or while one is under
+   * way).
    */
-  async rollback(): Promise<void> {
-    if (this._state === 'rolledBack') return;
-    this.assertOpen('rollback');
-    this.ending = true;
-    await this.settle();
-    if (this._state === 'open') {
-      this._state = 'rolledBack';
-      await this.rollbackStores(await this.openedStores());
+  rollback(): Promise<void> {
+    if (this.rollingBack) return this.rollingBack;
+    if (this._state === 'rolledBack') return Promise.resolve();
+    try {
+      this.assertOpen('rollback');
+    } catch (err) {
+      return Promise.reject(err);
     }
-    this.writes.length = 0;
+    this.ending = true;
+    this.rollingBack = (async () => {
+      await this.settle();
+      if (this._state === 'open') {
+        this._state = 'rolledBack';
+        await this.rollbackStores(await this.openedStores());
+      }
+      this.writes.length = 0;
+    })();
+    return this.rollingBack;
   }
 
   /** Refused: a transaction never opens another. Run the queries in this one (pass `tx` on). */
@@ -280,7 +303,11 @@ export class Transaction implements IDataset {
       }
       return answer;
     })();
-    const tracked = result.catch((err) => this.failWith<R>(err));
+    const tracked = result.catch((err) =>
+      // A select whose where-context has not landed yet answers "not ready" (null): the query did
+      // not run, so it does not fail the transaction.
+      isLinkedError(err, UnresolvedContextError) ? Promise.reject(err) : this.failWith<R>(err),
+    );
     this.pending.add(tracked);
     tracked.then(
       () => this.pending.delete(tracked),

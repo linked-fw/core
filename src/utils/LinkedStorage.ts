@@ -28,7 +28,7 @@ import type {NodeShapeData} from '../shapes/SHACL.js';
 import {setShapeGraphs, unsetShapeGraph} from './graphRouting.js';
 import type {GraphRoute} from '../ontologies/graphs.js';
 import {noticeFanOut} from './fanOutNotice.js';
-import {Transaction} from './Transaction.js';
+import {Transaction, TransactionEndedError} from './Transaction.js';
 
 // plan-011 — count physical evaluations of THIS module on the one shared
 // global object. With the single-loader fix there should be exactly one copy;
@@ -358,7 +358,8 @@ export abstract class LinkedStorage {
   /**
    * Run `fn` in a store transaction: commit when it returns, roll back when it throws (the error
    * is passed on). `fn` may end the transaction itself; then nothing more is done. Resolves what
-   * `fn` resolves.
+   * `fn` resolves; rejects with `TransactionEndedError` when a query of it failed (so it was
+   * rolled back) and `fn` returned anyway.
    *
    * ```ts
    * await LinkedStorage.transaction(async (tx) => {
@@ -381,6 +382,16 @@ export abstract class LinkedStorage {
       throw err;
     }
     if (tx.state === 'open') await tx.commit();
+    // A query of it failed and fn went on (it caught the error, or did not await the query):
+    // nothing was committed, so this does not resolve as if it had been.
+    else if (tx.failedWith !== undefined) {
+      const ended = new TransactionEndedError(
+        'The transaction was rolled back after a failed query, and fn returned as if it had not: ' +
+          'nothing it wrote was committed.',
+      );
+      Object.defineProperty(ended, 'cause', {value: tx.failedWith, writable: true, configurable: true});
+      throw ended;
+    }
     return result;
   }
 

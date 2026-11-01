@@ -221,6 +221,50 @@ describe('rollback', () => {
   });
 });
 
+describe('edges', () => {
+  test('transaction(fn) rejects when a query failed and fn went on', async () => {
+    const run = LinkedStorage.transaction(async (tx) => {
+      await TxConfig.create({name: 'a'}).exec(tx);
+      await TxConfig.select((c) => c.name).orderBy((c) => c.name).exec(tx).catch(() => null);
+      return 'done';
+    });
+    await expect(run).rejects.toThrow(/rolled back after a failed query/);
+    expect(await names()).toEqual([]);
+  });
+
+  test('a transaction that only read commits without a conflict', async () => {
+    const reader = LinkedStorage.begin();
+    const writer = LinkedStorage.begin();
+    await names(reader);
+    await TxConfig.create({name: 'w'}).exec(writer);
+    await reader.commit();
+    await writer.commit();
+    expect(await names()).toEqual(['w']);
+  });
+
+  test('a second rollback() while one is under way resolves with it', async () => {
+    const tx = LinkedStorage.begin();
+    await TxConfig.create({name: 'a'}).exec(tx);
+    await Promise.all([tx.rollback(), tx.rollback()]);
+    expect(tx.state).toBe('rolledBack');
+  });
+
+  test('exec(target) of a create or update with a txId is refused by a store without transactions', async () => {
+    const plain = new PlainStore('fuseki-like');
+    await expect(inTransaction(TxConfig.create({name: 'a'}), 't').exec(plain)).rejects.toThrow(
+      /does not declare 'transactions'/,
+    );
+    await expect(
+      inTransaction(TxConfig.update({name: 'a'}).for(`${P}x`), 't').exec(plain),
+    ).rejects.toThrow(/does not declare 'transactions'/);
+    expect(plain.updates).toHaveLength(0);
+  });
+
+  test('fromJSON refuses a txId on a graph query envelope as before (it is not a builder)', () => {
+    expect(() => fromJSON({kind: 'graph_drop', graph: 'urn:g', txId: 't'} as any)).toThrow(/graph query/);
+  });
+});
+
 describe('expiry', () => {
   test('an abandoned transaction expires in the store and is rolled back', async () => {
     const quick = new InMemoryDataset({id: 'mem-quick', transactionTimeoutMs: 20});

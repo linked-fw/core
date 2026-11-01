@@ -6,7 +6,7 @@ import type {UpdatePartial} from './QueryFactory.js';
 import type {CreateResponse} from './CreateQuery.js';
 import {MutationQueryFactory} from './MutationQuery.js';
 import {MutationThenable} from './MutationThenable.js';
-import {resolveMutationDispatch} from './queryDispatch.js';
+import {assertQuerySupported, resolveMutationDispatch} from './queryDispatch.js';
 import type {IDataset} from '../interfaces/IDataset.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
 import {refuseTxIdIn} from './transactionQuery.js';
@@ -204,6 +204,8 @@ export class CreateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
    *   untouched. Rejects if the target dataset doesn't implement create.
    */
   async exec(target?: IDataset): Promise<CreateResponse<U>> {
+    // Refused before it is sent: a feature the target lacks, or a txId it would ignore.
+    if (target) assertQuerySupported(target, this);
     return resolveMutationDispatch('create', target).createQuery(this) as Promise<CreateResponse<U>>;
   }
 }

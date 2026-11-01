@@ -76,6 +76,8 @@ type OpenTransaction = {
   data: Data;
   /** The store's version when the transaction began: a commit after another write is refused. */
   baseVersion: number;
+  /** Whether it wrote anything: a transaction that only read commits as a no-op. */
+  dirty: boolean;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -136,7 +138,8 @@ export class InMemoryDataset implements IDataset {
 
   constructor(options: InMemoryDatasetOptions = {}) {
     this.id = options.id ?? 'in-memory';
-    this.root = (options.dataRoot ?? process.env.DATA_ROOT ?? 'http://example.org/data').replace(/\/+$/, '');
+    const envRoot = typeof process !== 'undefined' ? process.env?.DATA_ROOT : undefined;
+    this.root = (options.dataRoot ?? envRoot ?? 'http://example.org/data').replace(/\/+$/, '');
     this.transactionTimeoutMs = options.transactionTimeoutMs ?? DEFAULT_TRANSACTION_TIMEOUT_MS;
   }
 
@@ -155,7 +158,7 @@ export class InMemoryDataset implements IDataset {
 
   async beginTransaction(): Promise<string> {
     const txId = `${this.id}#tx-${++this.nextTx}`;
-    this.transactions.set(txId, {data: copyData(this.data), baseVersion: this.version});
+    this.transactions.set(txId, {data: copyData(this.data), baseVersion: this.version, dirty: false});
     this.touch(txId);
     return txId;
   }
@@ -163,6 +166,7 @@ export class InMemoryDataset implements IDataset {
   async commit(txId: string): Promise<void> {
     const tx = this.open(txId);
     this.end(txId);
+    if (!tx.dirty) return;
     if (tx.baseVersion !== this.version) {
       throw new Error(
         `InMemoryDataset ${this.id}: transaction ${txId} cannot commit; the store was written ` +
@@ -203,17 +207,22 @@ export class InMemoryDataset implements IDataset {
 
   /**
    * Run `fn` on the data a query reads and writes: its transaction's snapshot, or the store's.
-   * A write outside a transaction moves the version, so an open transaction can tell.
+   * A write outside a transaction moves the version, so an open transaction can tell (a commit
+   * would undo it); a write inside one marks it dirty.
    */
   private within<T>(query: object, write: boolean, fn: (data: Data) => T): T {
     const txId = txIdOf(query);
     if (txId === undefined) {
-      const result = withShapeCatalog(catalogOf(query), () => fn(this.data));
-      if (write) this.version++;
-      return result;
+      try {
+        return withShapeCatalog(catalogOf(query), () => fn(this.data));
+      } finally {
+        // Also after a write that threw partway: what it wrote is there.
+        if (write) this.version++;
+      }
     }
     const tx = this.open(txId);
     this.touch(txId);
+    if (write) tx.dirty = true;
     return withShapeCatalog(catalogOf(query), () => fn(tx.data));
   }
 

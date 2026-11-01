@@ -60,12 +60,6 @@ export function fromJSON(
     return withShapeCatalog(catalog, () => fromJSON(json, rest));
   }
   assertWireVersion((json as {v?: unknown})?.v);
-  // A query of a store transaction (DSL-JSON 1.4): decoded without its txId, then returned as
-  // the transaction view, so the store it is sent to answers it inside that transaction.
-  if (json && typeof json === 'object') {
-    const {json: bare, txId} = splitTxId(json);
-    if (txId !== undefined) return inTransaction(fromJSON(bare, options), txId);
-  }
   const kind = (json as unknown as {kind?: unknown})?.kind;
   if (isGraphQueryKind(kind)) {
     // A graph query is plain data, not a builder: it has no `exec()` and goes to
@@ -81,6 +75,12 @@ export function fromJSON(
       '"triples" is a triples read, not a query builder envelope: ' +
       'check it with parseTriplesQuery() and pass it to IDataset.triplesQuery().',
     );
+  }
+  // A query of a store transaction (DSL-JSON 1.4): decoded without its txId, then returned as
+  // the transaction view, so the store it is sent to answers it inside that transaction.
+  if (json && typeof json === 'object') {
+    const {json: bare, txId} = splitTxId(json);
+    if (txId !== undefined) return inTransaction(fromJSON(bare, options), txId);
   }
   if (json && typeof json === 'object' && 'op' in json) {
     switch (json.op) {
