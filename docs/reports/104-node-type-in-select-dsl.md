@@ -79,7 +79,8 @@ Thing.select().where((t) => t.$type().equals({id: C})).exists()
   475 passed, 0 failed, 2 skipped`; typecheck clean. `transactions.test.ts` asserted wire 1.5; it
   now reads `WIRE_VERSION`.
 - `npx linked build`: `✔ Build successful`.
-- CN main checkout: CN_GATE
+- CN main checkout, core landed and built there: `npm run typecheck:gate`: `No new type errors.
+  0 pre-existing errors still in the baseline.`
 
 ### Deviations
 
