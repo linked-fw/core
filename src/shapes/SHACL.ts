@@ -6,7 +6,7 @@
 import {type NodeReferenceValue, toNodeReference} from '../utils/NodeReference.js';
 import {Shape, type ShapeConstructor} from './Shape.js';
 import {shacl} from '../ontologies/shacl.js';
-import {warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
+import {DSL_JSON_COMBINATOR_NAMES, warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
 import {getShapeClass, getSuperShapes} from '../utils/ShapeClass.js';
 import {sharedState} from '../utils/sharedState.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
@@ -722,10 +722,11 @@ const connectValueShape = <
 };
 
 /**
- * A `$`-prefixed label is refused: in queries `$` names are facts about the node (`$type()`, and
+ * `$`-prefixed names and `and`/`or`/`not` throw; the other reserved names warn (see
+ * `warnOnReservedPropertyLabel`). In queries `$` names are facts about the node (`$type()`, and
  * `$graph()` reserved), in the DSL, a label select and a DSL-JSON path alike, so such a property
- * has no way in. No RDF label starts with `$` in practice, so the refusal breaks no shape built
- * from data. Every other reserved name only warns (see `warnOnReservedPropertyLabel`).
+ * has no way in; no RDF label starts with `$` in practice. `and`/`or`/`not` are the DSL-JSON
+ * condition combinators. A shape loaded as data is not refused, only reported.
  */
 export function registerPropertyShape(
   shape: NodeShapeData,
@@ -736,6 +737,12 @@ export function registerPropertyShape(
       `Property label '${propertyShape.label}' is reserved: \`$\`-prefixed names are node metadata ` +
         `in queries (facts about the node, not shape fields). Rename the property; its RDF ` +
         `predicate can stay the same.`,
+    );
+  }
+  if (propertyShape.label && DSL_JSON_COMBINATOR_NAMES.has(propertyShape.label)) {
+    throw new Error(
+      `Property label '${propertyShape.label}' is reserved: \`and\`, \`or\` and \`not\` are the ` +
+        `DSL-JSON condition combinators. Rename the property; its RDF predicate can stay the same.`,
     );
   }
   // Not fatal, but the author needs to hear it here rather than from the field tracer.

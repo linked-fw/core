@@ -1095,10 +1095,9 @@ const byFriendType = await Person.select((p) => p.name).orderBy((p) => p.bestFri
   a group key or a sort key (as it refuses those on any path).
 - **DSL-JSON:** the path segment `$type` (`"fields": ["$type"]`, `"bestFriend.$type"`,
   `"where": {"$type": {"@id": "…"}}`), wire version 1.6. A label select takes it too
-  (`select(['name', '$type'])`). **`$`-prefixed labels are refused:** registering a property
-  whose label starts with `$` throws (no RDF label starts with one). Every other reserved name
-  (a query builder member such as `size`, a DSL-JSON combinator `and`/`or`/`not`) only warns, so
-  an existing shape keeps loading. `$graph()` (a node's named graphs) is planned.
+  (`select(['name', '$type'])`). **Reserved names:** `$`-prefixed names and `and`/`or`/`not` throw;
+  the other reserved names warn (a query builder member such as `size`), so an existing shape
+  keeps loading. A shape loaded as data is only reported. `$graph()` (a node's named graphs) is planned.
 
 #### Triples reads (no shape)
 

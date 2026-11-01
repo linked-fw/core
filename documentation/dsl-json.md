@@ -552,7 +552,8 @@ point of the sigil: a property literally named `path`, `id`, `date`, `list`, `ad
 
 The **node-metadata segments** are `$`-sigiled — `$type` (and `$graph`, reserved) — and are path
 segments, not value-tags: they name a fact about the node on every shape (see Paths). Registration
-refuses a property whose label starts with `$`; it is the one reserved name that throws.
+refuses a property whose label starts with `$`. `$`-prefixed names and `and`/`or`/`not` throw; the
+other reserved names warn.
 
 The remaining reserved keys are the **structural / grammar** words, not value-tags: `and`, `or`,
 `not`, `as`, `value`, `where`, `fields`, `cast`, `one`, `call`, `args`, `some`, `every`, `none`,
@@ -560,8 +561,8 @@ The remaining reserved keys are the **structural / grammar** words, not value-ta
 and the operator symbols.
 
 **Key** position (a condition key) has no wrapper, so a property labelled after one of the three
-boolean **combinators `and` / `or` / `not`** cannot be keyed: registration warns about such a label,
-and the serializer writes a condition on it as an S-expr, `["=", { "@path": "and" }, "x"]`. The
+boolean **combinators `and` / `or` / `not`** cannot be keyed: registration throws for such a label
+(a shape loaded as data is only reported, and the serializer writes a condition on it as an S-expr, `["=", { "@path": "and" }, "x"]`). The
 other structural words only matter as path suffixes, envelope fields, or option keys and do not
 collide with bare property labels. In **value / operand** position a property is always written
 `{ "@path": "<label>" }`, so even a label matching a structural word is unambiguous there.

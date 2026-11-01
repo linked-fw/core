@@ -1,8 +1,7 @@
 /**
- * Reserved property labels. A `$`-prefixed label is refused at registration: `$` names are facts
- * about the node in queries (`$type()`), and no RDF label starts with one in practice. Every other
- * reserved name (the DSL-JSON combinators `and`/`or`/`not`, the query proxies' own members) only
- * warns, so a shape that uses one keeps loading.
+ * Reserved property labels. `$`-prefixed names and `and`/`or`/`not` throw at registration; the
+ * other reserved names (the query proxies' own members) warn, so a shape that uses one keeps
+ * loading. A shape loaded as data is only reported.
  */
 import {describe, expect, jest, test} from '@jest/globals';
 import {registerPropertyShape} from '../shapes/SHACL';
@@ -18,13 +17,13 @@ import {xsd} from '../ontologies/xsd';
 const stub = (label: string) => [{label: 'Widget', id: 'urn:Widget'} as any, {label} as any] as const;
 
 describe('reserved property labels', () => {
-  for (const label of ['$type', '$graph', '$anything']) {
+  for (const label of ['$type', '$graph', '$anything', 'and', 'or', 'not']) {
     test(`registering a property named '${label}' throws`, () => {
       expect(() => registerPropertyShape(...stub(label))).toThrow(/is reserved/);
     });
   }
 
-  for (const label of ['and', 'or', 'not', 'size']) {
+  for (const label of ['size', 'id', 'some']) {
     test(`registering a property named '${label}' warns and does not throw the reserved error`, () => {
       const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
       resetReservedPropertyLabelWarnings();
@@ -44,7 +43,7 @@ describe('reserved property labels', () => {
   });
 });
 
-describe('a property labelled after a DSL-JSON combinator', () => {
+describe('a property labelled after a DSL-JSON combinator, loaded as data', () => {
   const GATE = 'https://example.org/reserved/shape/Gate';
   test('a condition on it is written as an S-expr and reads back the same', () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});

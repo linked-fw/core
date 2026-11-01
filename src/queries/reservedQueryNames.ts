@@ -10,8 +10,9 @@
  * `QueryShape`/`QueryShapeSet` resolve a key against their own surface (`key in
  * queryShape`) before they look for a property shape with that label, so a property
  * named after one of these is unreachable through the builder: the caller gets the DSL
- * method, and the field tracer then fails on a native function. Registration warns about
- * such a label (see `warnOnReservedPropertyLabel`).
+ * method, and the field tracer then fails on a native function. `$`-prefixed names and
+ * `and`/`or`/`not` throw at registration; the other reserved names warn (see
+ * `warnOnReservedPropertyLabel`).
  *
  * Deliberately a literal, not derived from the classes: the shape registry must not
  * import the query builder (that edge would close an import cycle through `SHACL.ts`).
@@ -84,8 +85,9 @@ export const SET_CONTEXT_ONLY_NAMES: ReadonlySet<string> = new Set([
 
 /**
  * The DSL-JSON condition combinators. A condition key is a bare string, so a property with one of
- * these labels cannot be keyed in a condition; the encoder writes a condition on it in the S-expr
- * form (`["=", {"@path": "and"}, …]`) instead, which has no key to collide with.
+ * these labels cannot be keyed in a condition. Registering such a property throws (like a
+ * `$`-prefixed name); a shape loaded as data is only reported, and the encoder writes a condition
+ * on it in the S-expr form (`["=", {"@path": "and"}, …]`), which has no key to collide with.
  */
 export const DSL_JSON_COMBINATOR_NAMES: ReadonlySet<string> = new Set(['and', 'or', 'not']);
 
@@ -104,12 +106,12 @@ const reported = new Set<string>();
 /**
  * Tell the model author about a colliding label while they can still rename it.
  *
- * A warning rather than a throw, on purpose. `size`, `id` and `some` are legitimate
- * names for a domain property, and the property still works everywhere except the
- * proxy-traced builder. Throwing here would break existing apps on upgrade over a property
- * they may never select through the builder. Only a `$`-prefixed label throws, at registration
- * (`registerPropertyShape`): no RDF label starts with `$`; a shape loaded as data that has one is
- * reported here.
+ * `$`-prefixed names and `and`/`or`/`not` throw; the other reserved names warn. `size`, `id`
+ * and `some` are legitimate names for a domain property, and the property still works
+ * everywhere except the proxy-traced builder, so throwing would break existing apps on upgrade
+ * over a property they may never select through the builder. The throw is in
+ * `registerPropertyShape`; a shape loaded as data that has a `$`-prefixed or combinator label is
+ * reported here instead.
  *
  * Two messages, because the two cases are genuinely different: a `QueryShape` member is
  * always shadowed, while a set-only member is fine until the shape is reached through a
