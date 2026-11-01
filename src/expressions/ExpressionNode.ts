@@ -557,6 +557,11 @@ export class ExistsCondition {
     public readonly negated: boolean = false,
     /** Optional chained and/or conditions. */
     private readonly _chain: Array<{op: 'and' | 'or'; condition: ExpressionNode | ExistsCondition}> = [],
+    /**
+     * The shape the predicate reads its members as: the relation's own shape, or the shape it
+     * was cast to (`p.pets.as(Dog).some(…)`), which the wire writes as `pets.as(Dog).some`.
+     */
+    public readonly memberShapeId?: string,
   ) {}
 
   /**
@@ -569,22 +574,24 @@ export class ExistsCondition {
       this.pathSegmentIds,
       this.predicate,
       !this.negated,
-      this._chain.map(({op, condition}) => ({op: op === 'and' ? 'or' : 'and', condition: condition.not()})),
+      this._chain.map(({op, condition}) => ({op: op === 'and' ? 'or' : 'and', condition: negate(condition)})),
+      this.memberShapeId,
     );
   }
 
   and(other: ExpressionInput | ExistsCondition): ExistsCondition {
-    return new ExistsCondition(this.pathSegmentIds, this.predicate, this.negated, [
-      ...this._chain,
-      {op: 'and', condition: isLinkedInstance(other, ExistsCondition) ? other : isLinkedInstance(other, ExpressionNode) ? other : new ExpressionNode(toIRExpression(other))},
-    ]);
+    return this.chained('and', other);
   }
 
   or(other: ExpressionInput | ExistsCondition): ExistsCondition {
-    return new ExistsCondition(this.pathSegmentIds, this.predicate, this.negated, [
-      ...this._chain,
-      {op: 'or', condition: isLinkedInstance(other, ExistsCondition) ? other : isLinkedInstance(other, ExpressionNode) ? other : new ExpressionNode(toIRExpression(other))},
-    ]);
+    return this.chained('or', other);
+  }
+
+  private chained(op: 'and' | 'or', other: ExpressionInput | ExistsCondition): ExistsCondition {
+    const condition = isLinkedInstance(other, ExistsCondition) || isLinkedInstance(other, ExpressionNode)
+      ? other
+      : new ExpressionNode(toIRExpression(other));
+    return new ExistsCondition(this.pathSegmentIds, this.predicate, this.negated, [...this._chain, {op, condition}], this.memberShapeId);
   }
 
   get chain(): ReadonlyArray<{op: 'and' | 'or'; condition: ExpressionNode | ExistsCondition}> {
@@ -592,6 +599,14 @@ export class ExistsCondition {
   }
 }
 brandLinkedClass(ExistsCondition, '@_linked/core', 'ExistsCondition');
+
+/** The negation of a chained condition; a negated expression is unwrapped, so `not().not()` is the condition again. */
+function negate(condition: ExpressionNode | ExistsCondition): ExpressionNode | ExistsCondition {
+  if (isLinkedInstance(condition, ExpressionNode) && condition.ir.kind === 'not_expr') {
+    return new ExpressionNode(condition.ir.expression, condition._refs);
+  }
+  return condition.not();
+}
 
 
 export function isExistsCondition(value: unknown): value is ExistsCondition {

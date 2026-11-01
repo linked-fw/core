@@ -51,8 +51,10 @@ Every envelope carries a wire-format version under `v`:
 
 `fromJSON` checks it with `assertWireVersion`: a mismatched **major** is rejected; a missing
 `v` is tolerated (treated as the current major). Bump the major only for breaking wire changes.
-The current version is 1.7 (`sortBy` entries for a computed expression and a filtered path, a
-quantifier as the condition of another); 1.6 added the `$type` path segment (see Paths), 1.5 `txId` (see [Transactions](#transactions-txid)), 1.4 triples reads by object and predicate.
+The current version is 1.8 (a quantifier key carries its relation's cast, `pets.as(Dog).some`;
+condition and `sortBy` paths carry `as(X)` casts as fields do; a `sortBy` filter on any relation
+segment); 1.7 added `sortBy` entries for a computed expression and a filtered path, and a quantifier
+as the condition of another; 1.6 added the `$type` path segment (see Paths), 1.5 `txId` (see [Transactions](#transactions-txid)), 1.4 triples reads by object and predicate.
 
 ## Envelopes
 
@@ -76,10 +78,14 @@ key sorts after every one with a value, in both directions, whether the path is 
 subject by its first value in that direction (lowest `ASC`, highest `DESC`), of the values it
 has; keys are taken one by one, and ties are broken by the subject IRI when paging.
 
-A `sortBy` entry is a path, `{ "bestFriend.name": "ASC" }`; a path whose first segment is filtered,
-written as a field's is (`where` on segment `whereIndex`, which must be 0; another index is refused):
+A `sortBy` entry is a path, `{ "bestFriend.name": "ASC" }`; a path with a filtered segment, written
+as a field's is (`where` on segment `whereIndex`, which must name one of the path's relations; an
+index out of range or on a literal is refused):
 `{ "friends.hobby": { "direction": "ASC", "where": { "name": "Anna" }, "whereIndex": 0 } }`, which
-sorts each subject by the hobbies of the friends the filter keeps and keeps the others, last; or a
+sorts each subject by the hobbies of the friends the filter keeps and keeps the others, last. The
+filter may sit further down (`"bestFriend.friends.hobby"` with `"whereIndex": 1`, since 1.8): a
+subject without a best friend, or whose best friend has no friend the filter keeps, is kept and
+sorts last; or a
 computed expression, `{ "value": ["STRLEN", { "@path": "hobby" }], "direction": "DESC" }` (two keys,
 so never read as a path; an expression holding an aggregate is refused). A key reads its path on its
 own: a filter elsewhere in the select does not narrow it. A reader before 1.7 does not take the two
@@ -181,7 +187,9 @@ A path segment may also **narrow type** with `as(<ShapeLabel>)`, mirroring the D
 `"pets.as(Dog).guardDogLevel"`. The shape is given by its short **label**, not its IRI, to keep
 the path readable. (This is the one place an argument-bearing call rides inside a path string;
 it is allowed because a cast is a path operation. The same inline `as(...)` form is used in a
-projection key — `{ "pets.as(Dog)": ["guardDogLevel"] }`.)
+projection key — `{ "pets.as(Dog)": ["guardDogLevel"] }` — and, since 1.8, in condition and `sortBy`
+paths and at the end of a quantifier's relation, `{ "pets.as(Dog).some": { "guardDogLevel": 2 } }`.)
+An unknown shape label is refused.
 
 ## Projection (`fields`)
 
@@ -251,7 +259,14 @@ nothing, an empty `notOneOf` matches everything. Everything else without a symbo
 { "friends.some":  { "name": "Moa", "hobby": "Chess" } }        // compound predicate
 { "friends.some":  { "friends.some": { "name": "Moa" } } }      // nested
 { "friends.some":  { "$type": { "@id": "https://ex.org/Robot" } } }  // a member's type
+{ "pets.as(Dog).some": { "guardDogLevel": 2 } }                 // members read as a cast shape
 ```
+
+The sub-condition reads the member's shape: the relation's `sh:node`, the shape targeting its
+`sh:class`, or the cast (`pets.as(Dog)`, version 1.8). A relation with none of them reads core's root
+`Shape`, so the member itself (`""`) and `$type` can be tested and any other path is refused, never
+read on the outer shape. An empty condition `{}` is refused (in a where, a quantifier or a filter).
+In an `and`/`or`, a quantifier may be any operand.
 
 A quantifier's condition may itself be a quantifier on the member's paths (an EXISTS inside the
 EXISTS; version 1.7). `every` of a quantifier is written as `none` of its negation, which holds for

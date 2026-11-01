@@ -13,8 +13,10 @@
  * 1.7: `sortBy` entries for a computed expression (`{value, direction}`) and a filtered path
  * (`{path: {direction, where, whereIndex}}`); a quantifier as the condition of another
  * (`{"friends.some": {"$type": …}}`).
+ * 1.8: a quantifier key carries its relation's cast (`pets.as(Dog).some`); condition and `sortBy`
+ * paths carry `as(X)` casts as fields do; a `sortBy` filter on any relation segment of its path.
  */
-export const WIRE_VERSION = '1.7';
+export const WIRE_VERSION = '1.8';
 
 /**
  * Validate an incoming envelope's `v`. A missing `v` is tolerated (pre-versioned /

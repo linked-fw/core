@@ -227,7 +227,7 @@ export function getPropertyShapes(
 }
 
 /** Core's root `Shape` (core's shapes are always under `https://linked.cm/`). */
-const ROOT_SHAPE_IRI = 'https://linked.cm/shape/core/Shape';
+export const ROOT_SHAPE_IRI = 'https://linked.cm/shape/core/Shape';
 
 /**
  * The shapes whose property shapes `nodeShape` inherits: {@link getSuperShapes}, ending at the

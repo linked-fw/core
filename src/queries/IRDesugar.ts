@@ -387,15 +387,6 @@ const toSortBy = (query: RawSelectInput): DesugaredSortBy | undefined => {
     keys: query.sortBy.keys.map((key) => {
       if ('expression' in key) return {kind: 'expression_select' as const, expressionNode: key.expression};
       const whereIndex = key.whereIndex ?? key.path.segments.length - 1;
-      // A filter deeper in the path would make the hops before it required, dropping the
-      // instances without them; sorting never drops an instance.
-      if (key.where && whereIndex !== 0) {
-        throw new Error(
-          `orderBy(): a sort path takes a filter on its first segment only (this one filters segment ` +
-            `${whereIndex} of '${key.path.toString()}'). Filter the first relation ` +
-            `(\`p.friends.where(…).hobby\`), or filter the select with where().`,
-        );
-      }
       return {
         kind: 'selection_path' as const,
         steps: key.path.segments.map((seg, i) => {

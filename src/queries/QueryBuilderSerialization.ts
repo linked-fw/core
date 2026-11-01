@@ -8,7 +8,8 @@
  */
 
 import type {NodeShapeData} from '../shapes/SHACL.js';
-import {PropertyPath, walkPropertyPath} from './PropertyPath.js';
+import {PropertyPath} from './PropertyPath.js';
+import {pathToStringWithCasts, walkPathWithCasts} from './castPaths.js';
 import type {WherePath, SortByPath, SortKey} from './SelectQuery.js';
 import {getQueryShapeClass} from '../utils/ShapeClass.js';
 import type {RawMinusEntry, PropertyPathSegment} from './IRDesugar.js';
@@ -70,7 +71,7 @@ export function serializeSortByPath(sort: SortByPath): SortByPathJSON {
     if ('expression' in key) {
       return {value: encodeValueExpr(key.expression.ir, key.expression._refs), direction};
     }
-    const path = key.path.toString();
+    const path = pathToStringWithCasts(key.path.rootShape, key.path.segments);
     if (!key.where) return {[path]: direction};
     const whereIndex = key.whereIndex ?? key.path.segments.length - 1;
     return {
@@ -81,6 +82,23 @@ export function serializeSortByPath(sort: SortByPath): SortByPathJSON {
       },
     };
   });
+}
+
+/**
+ * The shape a wire filter on segment `index` of a sort path reads. The segment must be one of the
+ * path's relations: an index out of range or on a literal is refused, never read against the root.
+ */
+function filteredSegmentShape(path: PropertyPath, index: unknown, pathKey: string): NodeShapeData {
+  const segment = Number.isInteger(index) ? path.segments[index as number] : undefined;
+  const valueShapeId = segment?.valueShape?.id;
+  const shape = valueShapeId ? getQueryShapeClass(valueShapeId)?.shape : undefined;
+  if (!shape) {
+    throw new Error(
+      `Invalid sortBy entry '${pathKey}': whereIndex ${JSON.stringify(index)} must name one of the path's ` +
+        `relations (a segment with a value shape, 0 to ${path.segments.length - 1}).`,
+    );
+  }
+  return shape;
 }
 
 /** The shape an inline filter on segment `index` of `path` reads (that segment's value shape). */
@@ -137,13 +155,13 @@ export function deserializeSortByPath(
     }
     const pathKey = names[0];
     const spec = (entry as Record<string, unknown>)[pathKey];
-    const path = pathKey === '' ? new PropertyPath(shape, []) : walkPropertyPath(shape, pathKey);
+    const path = pathKey === '' ? new PropertyPath(shape, []) : walkPathWithCasts(shape, pathKey);
     if (spec && typeof spec === 'object') {
       const opts = spec as {direction?: unknown; where?: WherePathJSON; whereIndex?: number};
       const key: Extract<SortKey, {path: PropertyPath}> = {path};
       if (opts.where) {
         const whereIndex = opts.whereIndex ?? path.segments.length - 1;
-        key.where = deserializeWherePath(scopedShapeAt(path, whereIndex), opts.where);
+        key.where = deserializeWherePath(filteredSegmentShape(path, whereIndex, pathKey), opts.where);
         key.whereIndex = whereIndex;
       }
       keys.push(key);

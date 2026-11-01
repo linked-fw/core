@@ -1328,9 +1328,11 @@ same rules: an instance whose expression has no value (no hobby) comes last. A k
 aggregate (`p.friends.size()`, `Expr.count()`) is refused; group the select and sort the groups
 instead. A sort path can **filter** a segment, `orderBy((p) => p.friends.where((f) =>
 f.name.equals('Anna')).hobby)`: each instance sorts by the hobbies of its friends named Anna, and
-an instance without such a friend is kept and comes last. The filter goes on the path's first
-segment; one further down (`p.bestFriend.friends.where(…)`) is refused, since it would drop the
-instances without a best friend. A sort key reads its path on its own:
+an instance without such a friend is kept and comes last. The filter may sit on any relation of
+the path: with `orderBy((p) => p.bestFriend.friends.where(…).hobby)` an instance without a best
+friend, or whose best friend has no friend the filter keeps, is kept and comes last. A projection
+keeps those instances too (`select((p) => p.bestFriend.friends.where(…).name)`). A sort key reads
+its path on its own:
 a filter in the projection (`select((p) => p.friends.where(…).name)`) does not filter the
 friends an `orderBy((p) => p.friends.hobby)` reads. An `orderBy` callback that returns anything
 else (a string, `undefined`) is refused, never ignored.

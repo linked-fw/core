@@ -179,7 +179,7 @@ describe('$type() in DSL-JSON', () => {
   });
 
   test('the wire version is 1.7 (1.6 added $type)', () => {
-    expect(WIRE_VERSION).toBe('1.7');
+    expect(WIRE_VERSION).toBe('1.8');
   });
 
   test('round trips to the same SPARQL', () => {

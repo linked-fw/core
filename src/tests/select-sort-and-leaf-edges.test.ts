@@ -104,19 +104,20 @@ describe('a filter on a sort path (lowering, wire)', () => {
     expect(sparql.match(/hasFriend> \?a\d+ \./g)).toHaveLength(2);
   });
 
-  test('a filter on a later segment is refused: it would make the hops before it required', () => {
-    expect(() =>
-      sparqlOf(Person.select((p) => p.name).orderBy((p) => p.friends.friends.where((f) => f.name.equals('A')).hobby)),
-    ).toThrow(/first segment only/);
+  test('a filter on a later segment keeps the hops before it OPTIONAL (sort-filter-depth-and-quantifier-casts)', () => {
+    const sparql = sparqlOf(
+      Person.select((p) => p.name).orderBy((p) => p.friends.friends.where((f) => f.name.equals('A')).hobby),
+    );
+    expect(sparql).toMatch(/OPTIONAL \{\s*\?a0 <[^>]*hasFriend> \?a1 \.[\s\S]*OPTIONAL \{[\s\S]*FILTER/);
   });
 
-  test('a wire filter on another segment than the first is refused, not dropped', () => {
+  test('a wire filter on a literal segment or out of range is refused, not dropped', () => {
     for (const whereIndex of [1, 7, -1]) {
       const json = {
         ...(byAnnasHobby('ASC').toJSON() as object),
         sortBy: [{'friends.hobby': {direction: 'ASC', where: {name: 'Anna'}, whereIndex}}],
       };
-      expect(() => sparqlOf(fromJSON(json as never))).toThrow(/first segment only/);
+      expect(() => sparqlOf(fromJSON(json as never))).toThrow(/whereIndex/);
     }
   });
 

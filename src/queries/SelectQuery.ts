@@ -982,6 +982,15 @@ function memberShapeClass(set: QueryShapeSet<any>): ShapeConstructor | undefined
 }
 
 /**
+ * A quantifier over a set's members, read as the set's member shape (its cast, if any:
+ * `p.pets.as(Dog).some(…)`). A function, not a member, so it reserves no name on the query proxies.
+ */
+function quantified(set: QueryShapeSet<any>, predicate: ExpressionNode | ExistsCondition, negated: boolean): ExistsCondition {
+  const pathSegmentIds = FieldSet.collectPropertySegments(set).map((s) => s.id);
+  return new ExistsCondition(pathSegmentIds, predicate, negated, [], memberShapeClass(set)?.shape?.id);
+}
+
+/**
  * `memberShapeClass`, else the base Shape: a relation with no resolvable shape (`sh:class` only,
  * no shape targeting the class) still allows `equals` and `id` on its members.
  */
@@ -1257,23 +1266,17 @@ export class QueryShapeSet<
   }
 
   some(validation: WhereClause<S>): ExistsCondition {
-    const predicate = this.buildPredicateExpression(validation);
-    const pathSegmentIds = FieldSet.collectPropertySegments(this).map(s => s.id);
-    return new ExistsCondition(pathSegmentIds, predicate, false);
+    return quantified(this, this.buildPredicateExpression(validation), false);
   }
 
   every(validation: WhereClause<S>): ExistsCondition {
     // every(fn) = NOT EXISTS(path WHERE NOT(fn))
-    const predicate = this.buildPredicateExpression(validation);
-    const pathSegmentIds = FieldSet.collectPropertySegments(this).map(s => s.id);
-    return new ExistsCondition(pathSegmentIds, predicate.not(), true);
+    return quantified(this, this.buildPredicateExpression(validation).not(), true);
   }
 
   none(validation: WhereClause<S>): ExistsCondition {
     // none(fn) = NOT EXISTS(path WHERE fn) = some(fn).not()
-    const predicate = this.buildPredicateExpression(validation);
-    const pathSegmentIds = FieldSet.collectPropertySegments(this).map(s => s.id);
-    return new ExistsCondition(pathSegmentIds, predicate, true);
+    return quantified(this, this.buildPredicateExpression(validation), true);
   }
 
   private buildPredicateExpression(validation: WhereClause<S>): ExpressionNode | ExistsCondition {

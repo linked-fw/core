@@ -483,8 +483,10 @@ function markAliasAndAncestors(
 }
 
 /**
- * The traversals a row needs: those the where or an inline filter reads. A sort path's
- * traversal is not one of them: sorting never drops an instance (see `orderWithBoundFirst`).
+ * The traversals a row needs: those the where reads. A sort path's traversal is not one of them:
+ * sorting never drops an instance (see `orderWithBoundFirst`). Nor are the hops above an inline
+ * filter (`p.bestFriend.friends.where(…)`): its block nests in their OPTIONAL subtree, so an
+ * instance without them is kept.
  */
 function collectRequiredTraversalAliases(
   query: IRSelectQuery,
@@ -496,55 +498,11 @@ function collectRequiredTraversalAliases(
     collectExpressionAliases(query.where, directAliases);
   }
 
-  for (const pattern of traversePatternMap.values()) {
-    if (pattern.filter) {
-      directAliases.add(pattern.to);
-    }
-  }
-
   const requiredAliases = new Set<string>();
   for (const alias of directAliases) {
     markAliasAndAncestors(alias, traversePatternMap, requiredAliases);
   }
   return requiredAliases;
-}
-
-function buildOptionalTraversalSubtree(
-  alias: string,
-  traversePatternMap: ReadonlyMap<string, IRTraversePattern>,
-  childOptionalAliasesByParent: ReadonlyMap<string, string[]>,
-  propertyTriplesByAlias: ReadonlyMap<string, SparqlTriple[]>,
-): SparqlAlgebraNode {
-  const pattern = traversePatternMap.get(alias);
-  if (!pattern) {
-    throw new Error(`Missing traverse pattern for alias "${alias}"`);
-  }
-
-  let subtree: SparqlAlgebraNode = {
-    type: 'bgp',
-    triples: [buildTraverseTriple(pattern)],
-  };
-
-  for (const propTriple of propertyTriplesByAlias.get(alias) ?? []) {
-    subtree = wrapOptional(subtree, {
-      type: 'bgp',
-      triples: [propTriple],
-    });
-  }
-
-  for (const childAlias of childOptionalAliasesByParent.get(alias) ?? []) {
-    subtree = wrapOptional(
-      subtree,
-      buildOptionalTraversalSubtree(
-        childAlias,
-        traversePatternMap,
-        childOptionalAliasesByParent,
-        propertyTriplesByAlias,
-      ),
-    );
-  }
-
-  return subtree;
 }
 
 // ---------------------------------------------------------------------------
@@ -1104,20 +1062,59 @@ export function selectToAlgebra(
   //     Each block contains: traverse triple + OPTIONAL property triples + FILTER.
   //     Filter property triples are nested as OPTIONALs so that OR filters work
   //     even when some entities lack certain properties.
-  // First pass: build each filtered block's inner group and filter expression.
-  const filteredBlockInners: SparqlAlgebraNode[] = [];
-  const filteredBlockExprs: SparqlExpression[] = [];
+  // The filter expressions first, in block order (they register variables).
+  const filteredBlockExprs = filteredTraverseBlocks.map((block, i) =>
+    convertExpression(block.filter, registry, filterPropertyTriplesMap.get(i) || []),
+  );
+  // Where each block goes: inside its parent's filtered block, or inside its parent's OPTIONAL
+  // traversal subtree (`p.bestFriend.friends.where(…)`: the best-friend hop stays OPTIONAL), so an
+  // empty parent leaves the block unbound instead of cross-producting it over the whole graph;
+  // else at the top level.
   const filteredBlockIdxByAlias = new Map<string, number>(
     filteredTraverseBlocks.map((block, i) => [block.toAlias, i]),
   );
-  for (let i = 0; i < filteredTraverseBlocks.length; i++) {
+  const filteredChildrenByParent = new Map<string, number[]>();
+  const rootFilteredBlockIdx: number[] = [];
+  for (let i = filteredTraverseBlocks.length - 1; i >= 0; i--) {
+    const subject = filteredTraverseBlocks[i].traverseTriple.subject;
+    const parent = subject.kind === 'variable' ? subject.name : undefined;
+    const parentIdx = parent !== undefined ? filteredBlockIdxByAlias.get(parent) : undefined;
+    if (parent !== undefined && ((parentIdx !== undefined && parentIdx !== i) || optionalTraversalAliases.has(parent))) {
+      const children = filteredChildrenByParent.get(parent) ?? [];
+      children.push(i);
+      filteredChildrenByParent.set(parent, children);
+    } else {
+      rootFilteredBlockIdx.unshift(i);
+    }
+  }
+
+  const wrapFilteredChildren = (node: SparqlAlgebraNode, alias: string): SparqlAlgebraNode => {
+    let wrapped = node;
+    for (const i of filteredChildrenByParent.get(alias) ?? []) wrapped = wrapOptional(wrapped, buildFilteredBlock(i));
+    return wrapped;
+  };
+
+  const buildOptionalTraversalSubtree = (alias: string): SparqlAlgebraNode => {
+    const pattern = traversePatternMap.get(alias);
+    if (!pattern) {
+      throw new Error(`Missing traverse pattern for alias "${alias}"`);
+    }
+    let subtree: SparqlAlgebraNode = {type: 'bgp', triples: [buildTraverseTriple(pattern)]};
+    for (const propTriple of nestedOptionalPropertyTriplesByAlias.get(alias) ?? []) {
+      subtree = wrapOptional(subtree, {type: 'bgp', triples: [propTriple]});
+    }
+    for (const childAlias of childOptionalAliasesByParent.get(alias) ?? []) {
+      subtree = wrapOptional(subtree, buildOptionalTraversalSubtree(childAlias));
+    }
+    return wrapFilteredChildren(subtree, alias);
+  };
+
+  function buildFilteredBlock(i: number): SparqlFilter {
     const block = filteredTraverseBlocks[i];
-    const filterPropertyTriples = filterPropertyTriplesMap.get(i) || [];
-    const filterExpr = convertExpression(block.filter, registry, filterPropertyTriples);
     // Start with the traverse triple as the required BGP
     let blockInner: SparqlAlgebraNode = {type: 'bgp', triples: [block.traverseTriple]};
     // Wrap each filter property triple in its own nested OPTIONAL
-    for (const propTriple of filterPropertyTriples) {
+    for (const propTriple of filterPropertyTriplesMap.get(i) || []) {
       blockInner = wrapOptional(blockInner, {type: 'bgp', triples: [propTriple]});
     }
     // Projected property triples on the filtered alias that aren't part of the
@@ -1128,56 +1125,17 @@ export function selectToAlgebra(
     // Optional child traversal subtrees (nested sub-selects below the filtered
     // alias) — kept inside the block so an empty filter match leaves them unbound
     for (const childAlias of childOptionalAliasesByParent.get(block.toAlias) ?? []) {
-      blockInner = wrapOptional(
-        blockInner,
-        buildOptionalTraversalSubtree(
-          childAlias,
-          traversePatternMap,
-          childOptionalAliasesByParent,
-          nestedOptionalPropertyTriplesByAlias,
-        ),
-      );
+      blockInner = wrapOptional(blockInner, buildOptionalTraversalSubtree(childAlias));
     }
-    filteredBlockInners.push(blockInner);
-    filteredBlockExprs.push(filterExpr);
+    return {type: 'filter', expression: filteredBlockExprs[i], inner: wrapFilteredChildren(blockInner, block.toAlias)};
   }
-  // Second pass, children first (blocks are created parent-before-child):
-  // finish each block and either nest it inside its parent's filtered block —
-  // a filtered sub-select inside another filtered sub-select must stay scoped
-  // to the parent alias, or an empty parent match leaves the alias unbound and
-  // the block cross-products over the whole graph — or attach it at top level.
-  const rootFilteredBlocks: SparqlAlgebraNode[] = [];
-  for (let i = filteredTraverseBlocks.length - 1; i >= 0; i--) {
-    const block = filteredTraverseBlocks[i];
-    const finished: SparqlFilter = {
-      type: 'filter',
-      expression: filteredBlockExprs[i],
-      inner: filteredBlockInners[i],
-    };
-    const subject = block.traverseTriple.subject;
-    const parentIdx = subject.kind === 'variable'
-      ? filteredBlockIdxByAlias.get(subject.name)
-      : undefined;
-    if (parentIdx !== undefined && parentIdx !== i) {
-      filteredBlockInners[parentIdx] = wrapOptional(filteredBlockInners[parentIdx], finished);
-    } else {
-      rootFilteredBlocks.unshift(finished);
-    }
-  }
-  for (const filteredBlock of rootFilteredBlocks) {
-    algebra = wrapOptional(algebra, filteredBlock);
+
+  for (const i of rootFilteredBlockIdx) {
+    algebra = wrapOptional(algebra, buildFilteredBlock(i));
   }
 
   for (const alias of rootOptionalTraversalAliases) {
-    algebra = wrapOptional(
-      algebra,
-      buildOptionalTraversalSubtree(
-        alias,
-        traversePatternMap,
-        childOptionalAliasesByParent,
-        nestedOptionalPropertyTriplesByAlias,
-      ),
-    );
+    algebra = wrapOptional(algebra, buildOptionalTraversalSubtree(alias));
   }
 
   // Wrap each optional property triple in its own OPTIONAL (LeftJoin)
