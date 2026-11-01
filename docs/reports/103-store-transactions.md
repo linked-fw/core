@@ -91,7 +91,10 @@ transaction as target, at commit with the store).
   ```
   (after the rebase onto report 102's triples reads; no Fuseki of this run's own, so the live tests skip)
 - `npx linked build`: `✔ Build successful`.
-- CN main checkout `npm run typecheck:gate`: GATE
+- CN main checkout `npm run typecheck:gate`, after landing and `npx linked build` there:
+  `No new type errors. 0 pre-existing errors still in the baseline.` (The first landing reported
+  `src/data/AppDataRouter.ts: TS2345: Argument of type 'DatasetFeature' is not assignable to
+  parameter of type 'QueryFeature'`; fixed in core by making `'transactions'` a `QueryFeature`.)
 
 ### Deviations from the brief
 
