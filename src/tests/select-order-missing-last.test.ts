@@ -9,6 +9,7 @@
 import {describe, expect, test, beforeAll, afterAll} from '@jest/globals';
 import {Person, tmpEntityBase, personClass, propBase} from '../test-helpers/query-fixtures';
 import {Expr} from '../expressions/Expr';
+import {NodeShape} from '../shapes/SHACL';
 import {lower} from '../queries/lower';
 import {selectToSparql} from '../sparql/irToAlgebra';
 import {mapSparqlSelectResult} from '../sparql/resultMapping';
@@ -128,6 +129,19 @@ describe('a nested entity keeps every value of a multi-valued field (mapping)', 
     const bindings = ['C', 'D', 'E'].map((n) => ({a0: uri('anna'), a1: uri('bob'), [v('nickName')]: lit(n)}));
     const rows = mapSparqlSelectResult({head: {vars: []}, results: {bindings}} as never, ir) as ResultRow[];
     expect(rows).toEqual([{id: `${ENT}anna`, bestFriend: {id: `${ENT}bob`, nickNames: ['C', 'D', 'E']}}]);
+  });
+});
+
+describe('the shape metamodel reads single-valued fields as one value (mapping)', () => {
+  test('a property shape\'s sh:path under NodeShape.properties is one node, not a list', () => {
+    const ir = irOf((NodeShape as any).select((ns: any) => [ns.properties.select((ps: any) => [ps.path, ps.name])]));
+    const sparql = selectToSparql(ir);
+    const pathVar = sparql.match(/\?(a1_path\w*)/)![1];
+    const nameVar = sparql.match(/\?(a1_name\w*)/)![1];
+    const uri = (value: string) => ({type: 'uri', value});
+    const bindings = [{a0: uri('urn:s'), a1: uri('urn:s/p'), [pathVar]: uri('urn:x:p'), [nameVar]: {type: 'literal', value: 'p'}}];
+    const rows = mapSparqlSelectResult({head: {vars: []}, results: {bindings}} as never, ir) as ResultRow[];
+    expect(rows[0].properties).toEqual([{id: 'urn:s/p', path: {id: 'urn:x:p'}, name: 'p'}]);
   });
 });
 

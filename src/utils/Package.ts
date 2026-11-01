@@ -810,6 +810,8 @@ createPropertyShape(
     // create pipeline use each value's own shape. Simple paths are passed as
     // {id} node references, complex paths as PathList/PathNode node-data.
     path: shacl.path,
+    // Exactly one per property shape (SHACL), so a read maps it to one value, not a list.
+    maxCount: 1,
     // Not `contains`: a predicate path is a shared IRI. A complex path's operator node or
     // sequence list is written without an id, so it becomes a blank node, as SHACL requires,
     // and the blank-node cascade deletes it with the property shape.

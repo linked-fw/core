@@ -68,6 +68,11 @@ Backlog 089:
 - `src/queries/irExpressions.ts`: `containsAggregate` (moved from `GroupedSelectBuilder`).
 - `src/sparql/resultMapping.ts`: nested fields from all of an entity's bindings
   (`populateFlatFields`); `populateFields` removed.
+- `src/utils/Package.ts`: `PropertyShape.path` declares `maxCount: 1` (SHACL: exactly one
+  `sh:path`). Found by CN's smoke run: CN's shape catalog reads `ns.properties.select((ps) =>
+  [ps.path, …])`, and with the mapping fix the undeclared-cardinality `path` came back as a
+  list, so every shape was skipped ("Invalid property path step"). `fixtures/core-shapes.ttl`
+  regenerated (one line).
 - Tests: new `src/tests/select-order-missing-last.test.ts` (9 lowering/mapping, 14 live);
   three goldens in `sparql-select-golden.test.ts`. Updated for the new order: `sparql-algebra`,
   `sparql-fuseki-coverage` (`[hobby, name]`), `subject-order-and-cursor`, `select-group-by`,

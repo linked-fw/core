@@ -726,6 +726,7 @@
 <https://linked.cm/shape/core/PropertyShape/path>
   a sh:PropertyShape ;
   rdfs:label "path" ;
+  sh:maxCount "1"^^xsd:integer ;
   sh:nodeKind sh:BlankNodeOrIRI ;
   sh:path sh:path .
 
