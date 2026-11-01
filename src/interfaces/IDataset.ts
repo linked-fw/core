@@ -14,7 +14,7 @@ import type {
 import type {Triple, TriplesQuery} from '../queries/triplesQuery.js';
 import type {ChangeEvent} from '../live/changes.js';
 import type {DefaultGraphTermsReplace} from '../queries/defaultGraphTerms.js';
-import type {QueryFeature} from '../queries/queryFeatures.js';
+import type {DatasetFeature} from '../queries/queryFeatures.js';
 
 /**
  * Universal dataset interface. Every dataset in the Linked framework accepts
@@ -72,8 +72,34 @@ export interface IDataset {
    * Optional. Absent = the baseline only: a dataset written before features existed keeps
    * answering everything it answered before, and fails loudly on anything new. `SparqlDataset`
    * lists every feature. A router lists what it forwards and checks each target itself.
+   *
+   * `'transactions'` declares that the dataset holds transactions: it implements
+   * {@link beginTransaction}, {@link commit} and {@link rollback}, and answers every query that
+   * carries a `txId` inside that transaction. A query with a `txId` is refused before it is sent
+   * to a dataset that does not declare it.
    */
-  readonly supports?: readonly QueryFeature[];
+  readonly supports?: readonly DatasetFeature[];
+  /**
+   * Open a transaction and answer its id (only with `'transactions'` in {@link supports}).
+   * `LinkedStorage.begin()` calls it when the first query of a transaction is routed here.
+   *
+   * The store holds the transaction: every later query carrying that `txId` (`query.txId`, and
+   * `txId` in its DSL-JSON) is answered inside it — its writes applied there, its reads seeing
+   * them — and resolves once that is done. Nothing of it is visible outside before
+   * {@link commit}.
+   *
+   * **Expiry.** The store rolls back a transaction left idle for longer than a timeout of its own
+   * choosing (`InMemoryDataset`: 30 seconds since its last query), so an abandoned one never holds
+   * anything for good. A query or commit with an expired or unknown txId rejects.
+   */
+  beginTransaction?(): Promise<string>;
+  /**
+   * Apply the transaction's writes, all of them or none, and end it. Rejects when the
+   * transaction is unknown or expired, or cannot be applied (the store then rolls it back).
+   */
+  commit?(txId: string): Promise<void>;
+  /** Drop the transaction's writes and end it. An unknown or expired txId is a no-op. */
+  rollback?(txId: string): Promise<void>;
   /**
    * Answer an ask query — a boolean, not a result set.
    *

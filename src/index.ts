@@ -32,6 +32,10 @@ export type {
   ValidatableShape,
 } from './shapes/validation.js';
 export {LinkedStorage} from './utils/LinkedStorage.js';
+// Store transactions: `LinkedStorage.begin()` / `LinkedStorage.transaction(fn)`.
+export {Transaction, TransactionEndedError} from './utils/Transaction.js';
+export type {TransactionState} from './utils/Transaction.js';
+export {inTransaction, txIdOf} from './queries/transactionQuery.js';
 // Where the ontology and shape syncs write, one global setting the host sets at boot.
 export {setGraphTargets, getGraphTargets} from './utils/graphTargets.js';
 export type {GraphTarget, GraphTargets, GraphTargetOptions} from './utils/graphTargets.js';
@@ -61,7 +65,7 @@ export {
 } from './queries/QueryContext.js';
 export {subscribeQueryDispatch, assertQuerySupported} from './queries/queryDispatch.js';
 export {ALL_QUERY_FEATURES} from './queries/queryFeatures.js';
-export type {QueryFeature} from './queries/queryFeatures.js';
+export type {DatasetFeature, QueryFeature} from './queries/queryFeatures.js';
 export type {QueryDispatchEvent, QueryDispatchListener} from './queries/queryDispatch.js';
 export {
   GraphQueryError,

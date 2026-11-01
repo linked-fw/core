@@ -22,6 +22,7 @@ import type {AskQueryJSON} from './AskQuery.js';
 import type {CountQueryJSON} from './CountQuery.js';
 import type {InboundMutationOptions, MutationJSON} from './MutationSerialization.js';
 import {assertWireVersion} from './wireVersion.js';
+import {inTransaction, splitTxId} from './transactionQuery.js';
 import {isGraphQueryKind} from './graphQuery.js';
 import {getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
@@ -59,6 +60,12 @@ export function fromJSON(
     return withShapeCatalog(catalog, () => fromJSON(json, rest));
   }
   assertWireVersion((json as {v?: unknown})?.v);
+  // A query of a store transaction (DSL-JSON 1.4): decoded without its txId, then returned as
+  // the transaction view, so the store it is sent to answers it inside that transaction.
+  if (json && typeof json === 'object') {
+    const {json: bare, txId} = splitTxId(json);
+    if (txId !== undefined) return inTransaction(fromJSON(bare, options), txId);
+  }
   const kind = (json as unknown as {kind?: unknown})?.kind;
   if (isGraphQueryKind(kind)) {
     // A graph query is plain data, not a builder: it has no `exec()` and goes to

@@ -16,6 +16,8 @@ import type {DeleteLowerSpec} from './mutationLowerSpec.js';
  */
 export interface DeleteQuery {
   readonly __queryKind: 'delete';
+  /** The store transaction this query runs in (`LinkedStorage.begin()`); absent outside one. */
+  readonly txId?: string;
   /** The shape deleted from — `undefined` for a shapeless delete (`Shape.delete(ids)`). */
   readonly shape: NodeShapeData | undefined;
   toJSON(): DeleteMutationJSON;

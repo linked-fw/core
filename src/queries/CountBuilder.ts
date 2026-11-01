@@ -27,6 +27,7 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import {PendingQueryContext} from './QueryContext.js';
 import {encodeContextRef, isContextRefJSON} from './ContextRef.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
+import {refuseTxIdIn} from './transactionQuery.js';
 import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
 import {getQueryDispatch, resolveCount} from './queryDispatch.js';
 import {
@@ -180,6 +181,7 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
 
   static fromJSON(json: CountQueryJSON): CountBuilder {
     assertWireVersion(json.v);
+    refuseTxIdIn(json, 'CountBuilder');
     if (!json.shape) {
       throw new Error(
         'A count envelope must name a `shape`. A shapeless count would count every ' +

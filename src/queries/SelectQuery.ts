@@ -57,6 +57,8 @@ const INTEROP_PASSTHROUGH_KEYS = new Set<string>([
  */
 export interface SelectQuery {
   readonly __queryKind: 'select';
+  /** The store transaction this query runs in (`LinkedStorage.begin()`); absent outside one. */
+  readonly txId?: string;
   readonly shape: NodeShapeData;
   toJSON(): QueryBuilderJSON;
   toRawInput(): RawSelectInput;

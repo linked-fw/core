@@ -1,0 +1,400 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+import type {IDataset} from '../interfaces/IDataset.js';
+import type {SelectQuery} from '../queries/SelectQuery.js';
+import type {CountQuery} from '../queries/CountQuery.js';
+import type {AskQuery} from '../queries/AskQuery.js';
+import type {CreateQuery} from '../queries/CreateQuery.js';
+import type {UpdateQuery} from '../queries/UpdateQuery.js';
+import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
+import type {
+  CreateResult,
+  GraphQuery,
+  GraphResult,
+  SelectResult,
+  UpdateResult,
+} from '../queries/IntermediateRepresentation.js';
+import type {Triple, TriplesQuery} from '../queries/triplesQuery.js';
+import {ALL_QUERY_FEATURES} from '../queries/queryFeatures.js';
+import {inTransaction} from '../queries/transactionQuery.js';
+import {notifyCommittedWrites, type CommittedWrite} from '../queries/queryDispatch.js';
+import {brandLinkedClass, brandLinkedError} from './linkedError.js';
+import {sharedState} from './sharedState.js';
+
+/**
+ * A store transaction, as `LinkedStorage.begin()` opens it (backlog 090, report 101).
+ *
+ * ```ts
+ * const tx = LinkedStorage.begin();             // nothing is sent yet
+ * await AppConfig.delete(oldId).exec(tx);       // routed to store X: X.beginTransaction() → t1
+ * await AppConfig.create(cfg).exec(tx);         // sent at once, with t1
+ * const c = await AppConfig.select().exec(tx);  // X answers with t1's own writes
+ * await tx.commit();                            // X.commit(t1)
+ * ```
+ *
+ * - **No dataset is named.** The transaction binds to a store when shape routing first sends one
+ *   of its queries there, and calls that store's `beginTransaction()`. It holds only
+ *   `{store → txId}`; the store holds the transaction itself.
+ * - **Every later query** to that store carries the txId (`query.txId`, and `txId` in its
+ *   DSL-JSON) and is sent at once. Nothing is buffered here. `exec(tx)` resolves when the store
+ *   has applied the write inside the transaction.
+ * - **A store without support** (no `'transactions'` in `supports`: `SparqlDataset`, so Fuseki)
+ *   is warned about once per store, and the queries run directly. Nothing is emulated.
+ * - **A second store** gets its own transaction (or runs directly), with a warning that the
+ *   stores together are not atomic. `commit()` commits them one after the other.
+ * - **A failed query fails the transaction**: every store it opened is rolled back, the error is
+ *   passed on, and the transaction has ended.
+ * - **Ended means ended**: a query, a `commit()` after the end, or a `rollback()` after a commit
+ *   throws {@link TransactionEndedError}. A `rollback()` of a rolled back transaction is a no-op,
+ *   so a `catch` that rolls back never hides the error that ended it.
+ * - **No nesting**: `tx.begin()` and `tx.transaction()` throw. Core has no async context, so a
+ *   `LinkedStorage.begin()` elsewhere is a transaction of its own; pass `tx` on instead.
+ *
+ * A transaction is an `IDataset` only so `exec(tx)` accepts it; it is never a dataset to route to.
+ */
+export type TransactionState = 'open' | 'committed' | 'rolledBack' | 'failed';
+
+/** A transaction was used after it ended (committed, rolled back, or failed). */
+export class TransactionEndedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = new.target.name;
+  }
+}
+brandLinkedError(TransactionEndedError, '@_linked/core', 'TransactionEndedError');
+
+/** What a transaction needs from the router that opened it (`LinkedStorage`). @internal */
+export interface TransactionRouter {
+  /** The dataset a query of the transaction is routed to; throws when there is none. */
+  datasetFor(query: object): IDataset;
+  selectQuery(query: SelectQuery | CountQuery): Promise<unknown>;
+  askQuery(query: AskQuery): Promise<boolean>;
+  createQuery(query: CreateQuery): Promise<unknown>;
+  updateQuery(query: UpdateQuery): Promise<unknown>;
+  deleteQuery(query: DeleteQuery): Promise<DeleteResponse>;
+}
+
+/** One store the transaction reached: its txId, or undefined when the store runs queries directly. */
+type Binding = {dataset: IDataset; txId: Promise<string | undefined>};
+
+/** Stores already warned about (once per store per process, across copies of this module). */
+const warned = sharedState('@_linked/core', 'Transaction.warnedUnsupported', () => ({
+  stores: new WeakSet<object>(),
+}));
+
+/** A dataset's name for a warning: its `id` when it has one, else its class. */
+export function datasetName(dataset: IDataset): string {
+  const id = (dataset as {id?: unknown}).id;
+  if (typeof id === 'string' && id) return id;
+  const name = (dataset as {constructor?: {name?: string}}).constructor?.name;
+  return name && name !== 'Object' ? name : 'an unnamed dataset';
+}
+
+/** Whether a dataset holds transactions: it declares `'transactions'`, and has the three methods. */
+export function supportsTransactions(dataset: IDataset): boolean {
+  if (!(dataset.supports ?? []).includes('transactions')) return false;
+  const missing = (['beginTransaction', 'commit', 'rollback'] as const).filter(
+    (method) => typeof dataset[method] !== 'function',
+  );
+  if (missing.length) {
+    throw new Error(
+      `The dataset ${datasetName(dataset)} declares 'transactions' in \`supports\` but has no ` +
+        `${missing.join(', ')}.`,
+    );
+  }
+  return true;
+}
+
+export class Transaction implements IDataset {
+  /** Every feature: the dataset each query is routed to is checked by the router. */
+  readonly supports = ALL_QUERY_FEATURES;
+  /**
+   * The live-query store waits: a write in a transaction is not visible outside it, so it is
+   * reported when the transaction commits (or at once, for a store that runs it directly).
+   */
+  readonly authoritativeChanges = true;
+
+  private _state: TransactionState = 'open';
+  /** Set once `commit()` or `rollback()` was called: no query may start after it. */
+  private ending = false;
+  private failure?: unknown;
+  private readonly bindings = new Map<IDataset, Binding>();
+  private readonly pending = new Set<Promise<unknown>>();
+  private readonly writes: Array<CommittedWrite & {target: IDataset}> = [];
+
+  /** @internal Opened by `LinkedStorage.begin()`. */
+  constructor(private readonly router: TransactionRouter) {}
+
+  /** `'open'`, `'committed'`, `'rolledBack'`, or `'failed'` (a commit that applied in some stores only). */
+  get state(): TransactionState {
+    return this._state;
+  }
+
+  // ---------------------------------------------------------------------------
+  // The dispatch surface `exec(tx)` calls
+  // ---------------------------------------------------------------------------
+
+  selectQuery(query: SelectQuery | CountQuery): Promise<SelectResult | number> {
+    return this.run(query, (q) => this.router.selectQuery(q)) as Promise<SelectResult | number>;
+  }
+
+  askQuery(query: AskQuery): Promise<boolean> {
+    return this.run(query, (q) => this.router.askQuery(q));
+  }
+
+  createQuery(query: CreateQuery): Promise<CreateResult> {
+    return this.run(query, (q) => this.router.createQuery(q), 'create') as Promise<CreateResult>;
+  }
+
+  updateQuery(query: UpdateQuery): Promise<UpdateResult> {
+    return this.run(query, (q) => this.router.updateQuery(q), 'update') as Promise<UpdateResult>;
+  }
+
+  deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
+    return this.run(query, (q) => this.router.deleteQuery(q), 'delete');
+  }
+
+  /** Refused: a graph query is one transaction in its store already, and runs outside this one. */
+  graphQuery(_query: GraphQuery): Promise<GraphResult> {
+    return Promise.reject(
+      new Error('A graph query does not run in a transaction: send it with exec() or exec(dataset).'),
+    );
+  }
+
+  /** Refused: a triples read does not run in a transaction. */
+  triplesQuery(_query: TriplesQuery): Promise<Triple[]> {
+    return Promise.reject(
+      new Error('A triples read does not run in a transaction: send it with exec() or exec(dataset).'),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ending
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Commit in every store the transaction opened, one after the other, once its queries in flight
+   * have settled. Throws {@link TransactionEndedError} when it has ended (or a commit is under
+   * way), also when one of its queries failed (the transaction was rolled back then). When a
+   * store refuses the commit, the stores not yet committed are rolled back and the error is
+   * thrown; the state is `'rolledBack'` when none had committed, else `'failed'`.
+   */
+  async commit(): Promise<void> {
+    this.assertOpen('commit');
+    this.ending = true;
+    await this.settle();
+    if (this.failure !== undefined) throw this.endedError('commit');
+    const bound = await this.openedStores();
+    let committed = 0;
+    try {
+      for (const {dataset, txId} of bound) {
+        await dataset.commit!(txId);
+        committed++;
+      }
+    } catch (err) {
+      await this.rollbackStores(bound.slice(committed + 1));
+      this._state = committed === 0 ? 'rolledBack' : 'failed';
+      this.failure = err;
+      if (committed > 0) {
+        const partial = new Error(
+          `The transaction committed in ${bound
+            .slice(0, committed)
+            .map((b) => datasetName(b.dataset))
+            .join(', ')} and failed in ${datasetName(bound[committed].dataset)}: ` +
+            `${err instanceof Error ? err.message : String(err)}. The stores together were not atomic.`,
+        );
+        // `cause` as an own non-enumerable property: this package targets es6.
+        Object.defineProperty(partial, 'cause', {value: err, writable: true, configurable: true});
+        throw partial;
+      }
+      throw err;
+    }
+    this._state = 'committed';
+    notifyCommittedWrites(this.writes.splice(0));
+  }
+
+  /**
+   * Roll back in every store the transaction opened, once its queries in flight have settled.
+   * A no-op on a transaction that is rolled back already; throws {@link TransactionEndedError}
+   * after a commit (or while one is under way).
+   */
+  async rollback(): Promise<void> {
+    if (this._state === 'rolledBack') return;
+    this.assertOpen('rollback');
+    this.ending = true;
+    await this.settle();
+    if (this._state === 'open') {
+      this._state = 'rolledBack';
+      await this.rollbackStores(await this.openedStores());
+    }
+    this.writes.length = 0;
+  }
+
+  /** Refused: a transaction never opens another. Run the queries in this one (pass `tx` on). */
+  begin(): never {
+    throw new Error(
+      'Nested transactions are refused: this is a transaction already. Run the queries in it ' +
+        '(exec(tx)), or commit it before you begin another.',
+    );
+  }
+
+  /** Refused, as {@link begin}. */
+  transaction(): never {
+    return this.begin();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internals
+  // ---------------------------------------------------------------------------
+
+  private run<R>(
+    query: object,
+    send: (query: any) => Promise<R>,
+    write?: CommittedWrite['kind'],
+  ): Promise<R> {
+    try {
+      this.assertOpen('query');
+    } catch (err) {
+      return Promise.reject(err);
+    }
+    let dataset: IDataset;
+    try {
+      dataset = this.router.datasetFor(query);
+    } catch (err) {
+      return this.failWith(err);
+    }
+    const result = (async () => {
+      const txId = await this.bind(dataset).txId;
+      // The transaction may have failed while this store was being opened. (A commit called
+      // meanwhile waits for this query, so only the state counts here.)
+      if (this._state !== 'open') throw this.endedError('query');
+      const answer = await send(txId === undefined ? query : inTransaction(query as any, txId));
+      if (write) {
+        const record = {kind: write, query, result: answer, target: dataset} as CommittedWrite & {target: IDataset};
+        // A store that ran it directly has applied it: say so now.
+        if (txId === undefined) notifyCommittedWrites([record]);
+        else this.writes.push(record);
+      }
+      return answer;
+    })();
+    const tracked = result.catch((err) => this.failWith<R>(err));
+    this.pending.add(tracked);
+    tracked.then(
+      () => this.pending.delete(tracked),
+      () => this.pending.delete(tracked),
+    );
+    return tracked;
+  }
+
+  /** The store's binding, opening its transaction (or warning) the first time it is reached. */
+  private bind(dataset: IDataset): Binding {
+    const existing = this.bindings.get(dataset);
+    if (existing) return existing;
+    const others = [...this.bindings.keys()];
+    let txId: Promise<string | undefined>;
+    if (supportsTransactions(dataset)) {
+      txId = dataset.beginTransaction!().then((id) => {
+        if (typeof id !== 'string' || !id) {
+          throw new Error(
+            `${datasetName(dataset)}.beginTransaction() must answer a non-empty string; got ${
+              id === null ? 'null' : typeof id
+            }.`,
+          );
+        }
+        return id;
+      });
+    } else {
+      if (!warned.stores.has(dataset)) {
+        warned.stores.add(dataset);
+        console.warn(
+          `[linked] store ${datasetName(dataset)} does not support transactions; these writes are ` +
+            'not atomic. The queries of a transaction run directly on it, one by one.',
+        );
+      }
+      txId = Promise.resolve(undefined);
+    }
+    if (others.length) {
+      console.warn(
+        `[linked] This transaction now reaches ${datasetName(dataset)} as well as ` +
+          `${others.map(datasetName).join(', ')}: each store has a transaction of its own, and ` +
+          'the stores together are not atomic.',
+      );
+    }
+    const binding = {dataset, txId};
+    this.bindings.set(dataset, binding);
+    return binding;
+  }
+
+  /** A failed query (or a refused one) fails the transaction: roll back, end, pass the error on. */
+  private async failWith<R>(err: unknown): Promise<R> {
+    if (this.failure === undefined && this._state === 'open') {
+      this.failure = err;
+      this._state = 'rolledBack';
+      await this.rollbackStores(await this.openedStores());
+      this.writes.length = 0;
+    }
+    throw err;
+  }
+
+  /** The stores this transaction opened a transaction in, with their txIds. */
+  private async openedStores(): Promise<Array<{dataset: IDataset; txId: string}>> {
+    const opened: Array<{dataset: IDataset; txId: string}> = [];
+    for (const {dataset, txId} of this.bindings.values()) {
+      try {
+        const id = await txId;
+        if (id !== undefined) opened.push({dataset, txId: id});
+      } catch {
+        // beginTransaction failed: there is nothing to commit or roll back there.
+      }
+    }
+    return opened;
+  }
+
+  /** Roll back each store; a store that fails to is logged (its transaction expires there). */
+  private async rollbackStores(stores: Array<{dataset: IDataset; txId: string}>): Promise<void> {
+    for (const {dataset, txId} of stores) {
+      try {
+        await dataset.rollback!(txId);
+      } catch (err) {
+        console.error(
+          `[linked] rolling back transaction ${txId} in ${datasetName(dataset)} failed; it expires ` +
+            'there instead.',
+          err,
+        );
+      }
+    }
+  }
+
+  /** Wait for the queries in flight. */
+  private async settle(): Promise<void> {
+    while (this.pending.size) {
+      await Promise.allSettled([...this.pending]);
+    }
+  }
+
+  private assertOpen(action: 'query' | 'commit' | 'rollback'): void {
+    if (this._state === 'open' && !this.ending) return;
+    throw this.endedError(action);
+  }
+
+  private endedError(action: 'query' | 'commit' | 'rollback'): TransactionEndedError {
+    const how =
+      this._state === 'open'
+        ? 'is ending (commit() or rollback() was called)'
+        : this._state === 'committed'
+          ? 'was committed'
+          : this._state === 'failed'
+            ? 'failed to commit in every store'
+            : this.failure !== undefined
+              ? `was rolled back after a failed query (${
+                  this.failure instanceof Error ? this.failure.message : String(this.failure)
+                })`
+              : 'was rolled back';
+    const what = action === 'query' ? 'run a query in it' : `${action}() it`;
+    return new TransactionEndedError(`This transaction ${how}; you cannot ${what}.`);
+  }
+}
+brandLinkedClass(Transaction, '@_linked/core', 'Transaction');

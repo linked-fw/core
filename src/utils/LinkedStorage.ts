@@ -28,6 +28,7 @@ import type {NodeShapeData} from '../shapes/SHACL.js';
 import {setShapeGraphs, unsetShapeGraph} from './graphRouting.js';
 import type {GraphRoute} from '../ontologies/graphs.js';
 import {noticeFanOut} from './fanOutNotice.js';
+import {Transaction} from './Transaction.js';
 
 // plan-011 — count physical evaluations of THIS module on the one shared
 // global object. With the single-loader fix there should be exactly one copy;
@@ -329,6 +330,84 @@ export abstract class LinkedStorage {
   }
 
   /**
+   * Open a store transaction (see `Transaction`). Nothing is sent yet: the transaction binds to a
+   * store when shape routing first sends one of its queries (`exec(tx)`) there, and opens a
+   * transaction in it. End it with `tx.commit()` or `tx.rollback()`; a failed query rolls it back.
+   *
+   * ```ts
+   * const tx = LinkedStorage.begin();
+   * await AppConfig.delete(oldId).exec(tx);
+   * await AppConfig.create(cfg).exec(tx);
+   * await tx.commit();
+   * ```
+   *
+   * A store without transaction support runs the queries directly, with a warning (once per
+   * store) that they are not atomic.
+   */
+  static begin(): Transaction {
+    return new Transaction({
+      datasetFor: (query) => this.datasetInTransaction(query),
+      selectQuery: (query) => this.selectQuery(query),
+      askQuery: (query) => this.askQuery(query),
+      createQuery: (query) => this.createQuery(query),
+      updateQuery: (query) => this.updateQuery(query),
+      deleteQuery: (query) => this.deleteQuery(query),
+    });
+  }
+
+  /**
+   * Run `fn` in a store transaction: commit when it returns, roll back when it throws (the error
+   * is passed on). `fn` may end the transaction itself; then nothing more is done. Resolves what
+   * `fn` resolves.
+   *
+   * ```ts
+   * await LinkedStorage.transaction(async (tx) => {
+   *   await AppConfig.delete(oldId).exec(tx);
+   *   await AppConfig.create(cfg).exec(tx);
+   * });
+   * ```
+   */
+  static async transaction<T>(fn: (tx: Transaction) => Promise<T> | T): Promise<T> {
+    const tx = this.begin();
+    let result: T;
+    try {
+      result = await fn(tx);
+    } catch (err) {
+      try {
+        await tx.rollback();
+      } catch {
+        // Committed inside fn, then threw: nothing to roll back; fn's error is the one to see.
+      }
+      throw err;
+    }
+    if (tx.state === 'open') await tx.commit();
+    return result;
+  }
+
+  /**
+   * The dataset a query of a transaction goes to: the one its shape routes to. A shapeless ask or
+   * delete has no shape to route on, so in a transaction it needs LinkedStorage to know exactly
+   * one dataset.
+   */
+  private static datasetInTransaction(query: {shape?: unknown}): IDataset {
+    if (!query?.shape) {
+      const datasets = [...this.getDatasets()];
+      if (datasets.length === 1) return datasets[0];
+      throw new Error(
+        datasets.length === 0
+          ? 'No query dataset configured. Call LinkedStorage.setDefaultDataset().'
+          : `A query without a shape has no store to run in, in a transaction: LinkedStorage knows ` +
+              `${datasets.length} datasets. Ask through a shape, or send it with exec(dataset).`,
+      );
+    }
+    const dataset = this.resolveDatasetForQuery(query);
+    if (!dataset) {
+      throw new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().');
+    }
+    return dataset;
+  }
+
+  /**
    * Route a select query — **and a count**, which is a select.
    *
    * A count is not a separate query form (an ask is: `ASK WHERE { … }`); it is
@@ -448,6 +527,11 @@ export abstract class LinkedStorage {
         new Error('No update handler configured on the query dataset.'),
       );
     }
+    try {
+      assertQuerySupported(dataset, query);
+    } catch (err) {
+      return Promise.reject(err);
+    }
     return (getActiveShapeCatalog() === undefined
       ? dataset.updateQuery(query)
       : outsideShapeCatalog(() => dataset.updateQuery(query))) as Promise<ResponseType>;
@@ -466,6 +550,11 @@ export abstract class LinkedStorage {
       return Promise.reject(
         new Error('No create handler configured on the query dataset.'),
       );
+    }
+    try {
+      assertQuerySupported(dataset, query);
+    } catch (err) {
+      return Promise.reject(err);
     }
     return (getActiveShapeCatalog() === undefined
       ? dataset.createQuery(query)
@@ -488,6 +577,11 @@ export abstract class LinkedStorage {
       return Promise.reject(
         new Error('No delete handler configured on the query dataset.'),
       );
+    }
+    try {
+      assertQuerySupported(dataset, query);
+    } catch (err) {
+      return Promise.reject(err);
     }
     return getActiveShapeCatalog() === undefined
       ? dataset.deleteQuery(query)

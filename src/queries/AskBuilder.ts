@@ -23,6 +23,7 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import {PendingQueryContext} from './QueryContext.js';
 import {encodeContextRef, isContextRefJSON} from './ContextRef.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
+import {refuseTxIdIn} from './transactionQuery.js';
 import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
 import {getQueryDispatch, resolveExistence} from './queryDispatch.js';
 import {resolveUriOrThrow} from '../utils/NodeReference.js';
@@ -183,6 +184,7 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
 
   static fromJSON(json: AskQueryJSON): AskBuilder {
     assertWireVersion(json.v);
+    refuseTxIdIn(json, 'AskBuilder');
     const shapeClass = json.shape
       ? (resolveShape(json.shape as any) as ShapeConstructor<any>)
       : undefined;

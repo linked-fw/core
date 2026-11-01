@@ -9,7 +9,8 @@ import type {GraphQuery, GraphResult} from './IntermediateRepresentation.js';
 import {triplesQueryFeatures, type Triple, type TriplesQuery} from './triplesQuery.js';
 import {unsupportedGraphQuery} from './graphQuery.js';
 import {catalogOf, withShapeCatalog} from '../utils/ShapeClass.js';
-import type {QueryFeature} from './queryFeatures.js';
+import type {DatasetFeature, QueryFeature} from './queryFeatures.js';
+import {inTransaction, txIdOf} from './transactionQuery.js';
 
 /**
  * Abstraction boundary between the DSL layer (Shape) and the storage layer
@@ -48,11 +49,11 @@ export interface QueryDispatch {
    * The query features this dispatch answers (as `IDataset.supports`). A router that checks each
    * routed dataset itself (`LinkedStorage`) lists every feature; absent = the baseline only.
    */
-  readonly supports?: readonly QueryFeature[];
+  readonly supports?: readonly DatasetFeature[];
 }
 
 /** Something a select is sent to: a dataset, a router, or the global dispatch. */
-type FeatureTarget = {readonly supports?: readonly QueryFeature[]} | undefined | null;
+type FeatureTarget = {readonly supports?: readonly DatasetFeature[]} | undefined | null;
 
 /** A query that may use features beyond the baseline (a select builder has `requiredFeatures`). */
 type FeatureQuery = object & {requiredFeatures?(): readonly QueryFeature[]};
@@ -64,8 +65,20 @@ type FeatureQuery = object & {requiredFeatures?(): readonly QueryFeature[]};
  * (or the global dispatch), and `LinkedStorage` on the dataset it routed to. It is the reason a
  * grouped select needs no query kind of its own: a store that does not know grouping is never
  * asked, rather than asked and trusted to notice.
+ *
+ * A query that runs in a store transaction (it carries a `txId`) needs `'transactions'`: a store
+ * that does not hold transactions would run it directly, outside the transaction it belongs to.
  */
 export function assertQuerySupported(target: FeatureTarget, query: object): void {
+  const txId = txIdOf(query);
+  if (txId !== undefined && !(target?.supports ?? []).includes('transactions')) {
+    const name = (target as {constructor?: {name?: string}} | null)?.constructor?.name;
+    throw new Error(
+      `This query runs in transaction "${txId}", and the dataset it was sent ` +
+        `to${name && name !== 'Object' ? ` (${name})` : ''} does not declare 'transactions' in ` +
+        '`supports`. It is refused rather than run outside its transaction.',
+    );
+  }
   const {requiredFeatures} = query as FeatureQuery;
   assertFeaturesSupported(target, typeof requiredFeatures === 'function' ? requiredFeatures.call(query) : []);
 }
@@ -139,7 +152,7 @@ async function existenceBySelect(target: ExistenceTarget, query: AskQuery): Prom
       'ask query cannot be answered.',
     );
   }
-  const {op: _op, nullSubject, ...pattern} = query.toJSON();
+  const {op: _op, nullSubject, txId, ...pattern} = query.toJSON();
   // `.for(null)`: no subject to ask about. AskBuilder.exec answers false before this, but a
   // rehydrated ask can arrive here directly, and without a subject the select would match any
   // instance.
@@ -152,9 +165,11 @@ async function existenceBySelect(target: ExistenceTarget, query: AskQuery): Prom
     );
   }
   const {SelectBuilder} = await import('./QueryBuilder.js');
-  const select = withShapeCatalog(catalogOf(query), () =>
+  const bare = withShapeCatalog(catalogOf(query), () =>
     SelectBuilder.fromJSON({...pattern, shape: pattern.shape as string, limit: 1}),
   );
+  // In a transaction, the select answers inside it, as the ask would have.
+  const select = txId === undefined ? bare : inTransaction(bare, txId);
   assertQuerySupported(target as FeatureTarget, select);
   const answer = await target.selectQuery(select);
   // A select with one subject is a single-result query: a row or null. Otherwise rows.
@@ -360,6 +375,25 @@ function notifyDispatch(event: QueryDispatchEvent): void {
     } catch (err) {
       console.error('[linked] query dispatch listener failed', err);
     }
+  }
+}
+
+/** A write that ran in a store transaction, as reported when that transaction commits. */
+export type CommittedWrite =
+  | {kind: 'create'; query: CreateQuery; result: unknown}
+  | {kind: 'update'; query: UpdateQuery; result: unknown}
+  | {kind: 'delete'; query: DeleteQuery; result: DeleteResponse};
+
+/**
+ * Report the writes of a committed transaction to the dispatch listeners, each with the store it
+ * was written to as `target`. A transaction's writes are not visible outside it before the
+ * commit, so the live-query store (which refetches on a write) hears of them only now: the
+ * transaction declares `authoritativeChanges`, and its exec-time events are not acted on.
+ * @internal `utils/Transaction.ts` calls it.
+ */
+export function notifyCommittedWrites(writes: ReadonlyArray<CommittedWrite & {target: IDataset}>): void {
+  for (const write of writes) {
+    notifyDispatch({...write, result: Promise.resolve(write.result)} as QueryDispatchEvent);
   }
 }
 

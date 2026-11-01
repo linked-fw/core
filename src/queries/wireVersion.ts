@@ -4,8 +4,13 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-/** Current DSL-JSON wire-format version, stamped onto every `toJSON` envelope as `v`. */
-export const WIRE_VERSION = '1.4';
+/**
+ * Current DSL-JSON wire-format version, stamped onto every `toJSON` envelope as `v`.
+ *
+ * 1.5: `txId` on every query envelope, the store transaction it runs in (see
+ * `queries/transactionQuery.ts`).
+ */
+export const WIRE_VERSION = '1.5';
 
 /**
  * Validate an incoming envelope's `v`. A missing `v` is tolerated (pre-versioned /

@@ -33,6 +33,15 @@ import type {IRExpression} from './IntermediateRepresentation.js';
  */
 export type QueryFeature = 'groupBy' | 'min' | 'max' | 'shapelessDelete' | 'triplesPattern';
 
+/**
+ * What a dataset can declare in `IDataset.supports`: the query features above, and
+ * `'transactions'` — the dataset holds transactions (`beginTransaction`, `commit`, `rollback`, a
+ * txId on every query; see `utils/Transaction.ts`). `'transactions'` is not a query feature: it is
+ * not in {@link ALL_QUERY_FEATURES}, so a store that lists those (as `SparqlDataset` does) does not
+ * claim it.
+ */
+export type DatasetFeature = QueryFeature | 'transactions';
+
 /** Every feature this build of core can express (what a SPARQL store supports). */
 export const ALL_QUERY_FEATURES: readonly QueryFeature[] = Object.freeze([
   'groupBy',

@@ -86,6 +86,8 @@ const NODE_SHAPE_KEY = '__shape';
 
 export type CreateMutationJSON = {
   v?: string;
+  /** The store transaction the query runs in (DSL-JSON 1.4); absent outside one. */
+  txId?: string;
   op: 'create';
   shape: string;
   data: MutationNodeDataJSON;
@@ -93,6 +95,8 @@ export type CreateMutationJSON = {
 
 export type UpdateMutationJSON = {
   v?: string;
+  /** The store transaction the query runs in (DSL-JSON 1.4); absent outside one. */
+  txId?: string;
   op: 'update';
   shape: string;
   mode: 'for' | 'forAll' | 'where';
@@ -113,6 +117,8 @@ export type UpdateMutationJSON = {
  */
 export type UpsertMutationJSON = {
   v?: string;
+  /** The store transaction the query runs in (DSL-JSON 1.4); absent outside one. */
+  txId?: string;
   op: 'upsert';
   shape: string;
   /** Upsert targets one known id; there is no `forAll`/`where` form. */
@@ -122,9 +128,11 @@ export type UpsertMutationJSON = {
   data: MutationNodeDataJSON;
 };
 
+/** Every delete envelope may carry `txId` (DSL-JSON 1.4): the store transaction it runs in. */
 export type DeleteMutationJSON =
   | {
       v?: string;
+      txId?: string;
       op: 'delete';
       shape: string;
       mode: 'ids';
@@ -137,6 +145,7 @@ export type DeleteMutationJSON =
     }
   | {
       v?: string;
+      txId?: string;
       op: 'delete';
       /**
        * A shapeless delete (`Shape.delete(ids)`, DSL-JSON 1.3): no `shape`. Every triple of each
@@ -147,8 +156,8 @@ export type DeleteMutationJSON =
       ids: (string | ContextRefJSON)[];
       keepIncoming?: boolean;
     }
-  | {v?: string; op: 'delete'; shape: string; mode: 'all'}
-  | {v?: string; op: 'delete'; shape: string; mode: 'where'; where: WherePathJSON};
+  | {v?: string; txId?: string; op: 'delete'; shape: string; mode: 'all'}
+  | {v?: string; txId?: string; op: 'delete'; shape: string; mode: 'where'; where: WherePathJSON};
 
 /** How a receiver decodes inbound mutation DSL-JSON (`fromJSON`, `lowerMutationJSON`). */
 export type InboundMutationOptions = {

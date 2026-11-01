@@ -14,6 +14,7 @@ import {
 import type {SortByPath, WherePath} from './SelectQuery.js';
 import type {PropertyPathSegment, RawMinusEntry, RawSelectInput} from './IRDesugar.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
+import {refuseTxIdIn} from './transactionQuery.js';
 import {featuresOfExpressions, parseRequires, type QueryFeature} from './queryFeatures.js';
 import {
   GroupedSelectBuilder,
@@ -56,6 +57,8 @@ import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryS
 export type QueryBuilderJSON = {
   /** DSL-JSON wire-format version. */
   v?: string;
+  /** The store transaction the query runs in (DSL-JSON 1.4); absent outside one. */
+  txId?: string;
   /**
    * Present (`'select'`) when the select needs features beyond the baseline (`requires`). A
    * build that predates them has no `'select'` op and refuses the envelope ("Unknown query op")
@@ -917,6 +920,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   /** The select part of an envelope (`fromJSON` adds a grouping when it carries one). */
   private static selectFromJSON<S extends Shape = Shape>(json: QueryBuilderJSON): SelectBuilder<S> {
     assertWireVersion(json.v);
+    refuseTxIdIn(json, 'SelectBuilder');
     parseRequires(json.requires);
     let builder = SelectBuilder.from<S>(json.shape as any);
 

@@ -10,6 +10,7 @@ import type {QueryFeature} from './queryFeatures.js';
 import type {NodeReferenceValue} from './QueryFactory.js';
 import type {IDataset} from '../interfaces/IDataset.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
+import {refuseTxIdIn} from './transactionQuery.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import {type WhereClause, type WherePath, processWhereClause} from './SelectQuery.js';
 import {type DeleteMutationJSON, type InboundMutationOptions, readKeepIncoming} from './MutationSerialization.js';
@@ -133,6 +134,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
   /** Reconstruct a DeleteBuilder from its DSL-JSON (inverse of `toJSON`). */
   static fromJSON(json: DeleteMutationJSON, options?: InboundMutationOptions): DeleteBuilder {
     assertWireVersion(json.v);
+    refuseTxIdIn(json, 'DeleteBuilder');
     if (json.mode === 'shapeless') {
       if ('shape' in json && (json as {shape?: unknown}).shape !== undefined) {
         throw new Error('DeleteBuilder.fromJSON(): a shapeless delete names no shape.');
