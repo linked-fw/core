@@ -722,34 +722,20 @@ const connectValueShape = <
 };
 
 /**
- * The DSL-JSON where-clause combinators. A property may not be named after one,
- * because a condition key in those positions has no `{path}` escape (the key is a
- * bare string). See documentation/dsl-json.md (Reserved words).
+ * A `$`-prefixed label is refused: in queries `$` names are facts about the node (`$type()`, and
+ * `$graph()` reserved), in the DSL, a label select and a DSL-JSON path alike, so such a property
+ * has no way in. No RDF label starts with `$` in practice, so the refusal breaks no shape built
+ * from data. Every other reserved name only warns (see `warnOnReservedPropertyLabel`).
  */
-const RESERVED_PROPERTY_LABELS = new Set(['and', 'or', 'not']);
-
-/**
- * The node-metadata names (`$type()`, `$graph()`): in the DSL, a label select and a DSL-JSON path
- * they always mean the node's own types or graphs, so a property with one of these labels has no
- * way in at all.
- */
-const NODE_METADATA_LABELS = new Set(['$type', '$graph']);
-
 export function registerPropertyShape(
   shape: NodeShapeData,
   propertyShape: PropertyShapeData,
 ) {
-  if (NODE_METADATA_LABELS.has(propertyShape.label)) {
+  if (propertyShape.label?.startsWith('$')) {
     throw new Error(
-      `Property label '${propertyShape.label}' is reserved: \`${propertyShape.label}\` is node metadata ` +
-        `in queries (\`$\`-prefixed names are facts about the node, not shape fields). Rename the ` +
-        `property; its RDF predicate can stay the same.`,
-    );
-  }
-  if (RESERVED_PROPERTY_LABELS.has(propertyShape.label)) {
-    throw new Error(
-      `Property label '${propertyShape.label}' is reserved (a DSL-JSON boolean combinator) ` +
-        `and cannot be used as a property name. See documentation/dsl-json.md (Reserved words).`,
+      `Property label '${propertyShape.label}' is reserved: \`$\`-prefixed names are node metadata ` +
+        `in queries (facts about the node, not shape fields). Rename the property; its RDF ` +
+        `predicate can stay the same.`,
     );
   }
   // Not fatal, but the author needs to hear it here rather than from the field tracer.

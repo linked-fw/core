@@ -548,16 +548,29 @@ export class ExistsCondition {
   constructor(
     /** PropertyShapeData IDs forming the path from root to the collection. */
     public readonly pathSegmentIds: readonly string[],
-    /** The inner predicate ExpressionNode. */
-    public readonly predicate: ExpressionNode,
+    /**
+     * The condition on a member: an expression, or another quantifier on the member's own path
+     * (`p.friends.some((f) => f.$type().equals(C))`), lowered as an EXISTS inside this one.
+     */
+    public readonly predicate: ExpressionNode | ExistsCondition,
     /** Whether the EXISTS is negated (NOT EXISTS). */
     public readonly negated: boolean = false,
     /** Optional chained and/or conditions. */
     private readonly _chain: Array<{op: 'and' | 'or'; condition: ExpressionNode | ExistsCondition}> = [],
   ) {}
 
+  /**
+   * The negation of the whole condition, chain included. The chain folds left
+   * (`((A op B) op C)`), so by De Morgan every part is negated and every `and`/`or` swapped:
+   * `not(A and B)` is `not A or not B`, never `(not A) and B`.
+   */
   not(): ExistsCondition {
-    return new ExistsCondition(this.pathSegmentIds, this.predicate, !this.negated, this._chain);
+    return new ExistsCondition(
+      this.pathSegmentIds,
+      this.predicate,
+      !this.negated,
+      this._chain.map(({op, condition}) => ({op: op === 'and' ? 'or' : 'and', condition: condition.not()})),
+    );
   }
 
   and(other: ExpressionInput | ExistsCondition): ExistsCondition {

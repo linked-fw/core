@@ -82,6 +82,13 @@ export const SET_CONTEXT_ONLY_NAMES: ReadonlySet<string> = new Set([
   'where',
 ]);
 
+/**
+ * The DSL-JSON condition combinators. A condition key is a bare string, so a property with one of
+ * these labels cannot be keyed in a condition; the encoder writes a condition on it in the S-expr
+ * form (`["=", {"@path": "and"}, …]`) instead, which has no key to collide with.
+ */
+export const DSL_JSON_COMBINATOR_NAMES: ReadonlySet<string> = new Set(['and', 'or', 'not']);
+
 export function isReservedQueryDslName(label: string | undefined): boolean {
   return !!label && RESERVED_QUERY_DSL_NAMES.has(label);
 }
@@ -100,8 +107,9 @@ const reported = new Set<string>();
  * A warning rather than a throw, on purpose. `size`, `id` and `some` are legitimate
  * names for a domain property, and the property still works everywhere except the
  * proxy-traced builder. Throwing here would break existing apps on upgrade over a property
- * they may never select through the builder. (Contrast `RESERVED_PROPERTY_LABELS` in
- * `SHACL.ts`, which does throw: a DSL-JSON combinator name has no escape hatch at all.)
+ * they may never select through the builder. Only a `$`-prefixed label throws, at registration
+ * (`registerPropertyShape`): no RDF label starts with `$`; a shape loaded as data that has one is
+ * reported here.
  *
  * Two messages, because the two cases are genuinely different: a `QueryShape` member is
  * always shadowed, while a set-only member is fine until the shape is reached through a
@@ -117,12 +125,24 @@ export function warnOnReservedPropertyLabel(
   shapeLabel: string | undefined,
   shapeId?: string,
 ): void {
-  if (!isReservedQueryDslName(label)) return;
+  if (!label) return;
+  const metadata = label.startsWith('$');
+  const combinator = DSL_JSON_COMBINATOR_NAMES.has(label);
+  if (!metadata && !combinator && !isReservedQueryDslName(label)) return;
   const key = `${shapeId ?? shapeLabel ?? ''}#${label}`;
   if (reported.has(key)) return;
   reported.add(key);
   const owner = shapeLabel ?? shapeId ?? 'shape';
-  if (label!.startsWith('$')) {
+  if (combinator) {
+    console.warn(
+      `[linked] ${owner}.${label} is named after a DSL-JSON combinator ('${label}'). It works in ` +
+        `the DSL and in fields; a DSL-JSON condition on it is written in the S-expr form ` +
+        `(\`["=", {"@path": "${label}"}, …]\`), which the serializer does for you. Renaming the ` +
+        `property avoids that; the RDF predicate can stay the same.`,
+    );
+    return;
+  }
+  if (metadata) {
     // A shape loaded as data is not refused (see `registerPropertyShape`), only reported.
     console.warn(
       `[linked] ${owner}.${label} cannot be read in queries: '${label}' is node metadata ` +

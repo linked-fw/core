@@ -10,8 +10,11 @@
  * 1.5: `txId` on every query envelope, the store transaction it runs in (see
  * `queries/transactionQuery.ts`).
  * 1.6: the `$type` path segment, a node's `rdf:type` values (`$type()` in the select DSL).
+ * 1.7: `sortBy` entries for a computed expression (`{value, direction}`) and a filtered path
+ * (`{path: {direction, where, whereIndex}}`); a quantifier as the condition of another
+ * (`{"friends.some": {"$type": …}}`).
  */
-export const WIRE_VERSION = '1.6';
+export const WIRE_VERSION = '1.7';
 
 /**
  * Validate an incoming envelope's `v`. A missing `v` is tolerated (pre-versioned /

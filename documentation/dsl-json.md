@@ -51,7 +51,8 @@ Every envelope carries a wire-format version under `v`:
 
 `fromJSON` checks it with `assertWireVersion`: a mismatched **major** is rejected; a missing
 `v` is tolerated (treated as the current major). Bump the major only for breaking wire changes.
-The current version is 1.6 (the `$type` path segment, see Paths); 1.5 added `txId` (see [Transactions](#transactions-txid)), 1.4 triples reads by object and predicate.
+The current version is 1.7 (`sortBy` entries for a computed expression and a filtered path, a
+quantifier as the condition of another); 1.6 added the `$type` path segment (see Paths), 1.5 `txId` (see [Transactions](#transactions-txid)), 1.4 triples reads by object and predicate.
 
 ## Envelopes
 
@@ -73,7 +74,16 @@ groups.
 key sorts after every one with a value, in both directions, whether the path is direct
 (`name`) or nested (`bestFriend.name`). A `sortBy` on a multi-valued or nested path sorts each
 subject by its first value in that direction (lowest `ASC`, highest `DESC`), of the values it
-has; keys are taken one by one, and ties are broken by the subject IRI when paging. A `where`
+has; keys are taken one by one, and ties are broken by the subject IRI when paging.
+
+A `sortBy` entry is a path, `{ "bestFriend.name": "ASC" }`; a path whose first segment is filtered,
+written as a field's is (`where` on segment `whereIndex`, which must be 0; another index is refused):
+`{ "friends.hobby": { "direction": "ASC", "where": { "name": "Anna" }, "whereIndex": 0 } }`, which
+sorts each subject by the hobbies of the friends the filter keeps and keeps the others, last; or a
+computed expression, `{ "value": ["STRLEN", { "@path": "hobby" }], "direction": "DESC" }` (two keys,
+so never read as a path; an expression holding an aggregate is refused). A key reads its path on its
+own: a filter elsewhere in the select does not narrow it. A reader before 1.7 does not take the two
+newer forms. A `where`
 holding an aggregate (`[">", ["count", …], 2]`) holds or fails per subject. A store that
 answers envelopes itself must sort, filter and page the same way.
 
@@ -240,7 +250,12 @@ nothing, an empty `notOneOf` matches everything. Everything else without a symbo
 { "friends.none":  { "hobby": "Chess" } }
 { "friends.some":  { "name": "Moa", "hobby": "Chess" } }        // compound predicate
 { "friends.some":  { "friends.some": { "name": "Moa" } } }      // nested
+{ "friends.some":  { "$type": { "@id": "https://ex.org/Robot" } } }  // a member's type
 ```
+
+A quantifier's condition may itself be a quantifier on the member's paths (an EXISTS inside the
+EXISTS; version 1.7). `every` of a quantifier is written as `none` of its negation, which holds for
+the same subjects.
 
 **Functions / aggregates in the key** (no-arg, trailing the path):
 
@@ -536,20 +551,20 @@ point of the sigil: a property literally named `path`, `id`, `date`, `list`, `ad
 `unset`, or `ctx` round-trips as its own bare key without any escape.
 
 The **node-metadata segments** are `$`-sigiled — `$type` (and `$graph`, reserved) — and are path
-segments, not value-tags: they name a fact about the node on every shape (see Paths). A property
-labelled `$type` or `$graph` would be unreachable, so registration refuses one.
+segments, not value-tags: they name a fact about the node on every shape (see Paths). Registration
+refuses a property whose label starts with `$`; it is the one reserved name that throws.
 
 The remaining reserved keys are the **structural / grammar** words, not value-tags: `and`, `or`,
 `not`, `as`, `value`, `where`, `fields`, `cast`, `one`, `call`, `args`, `some`, `every`, `none`,
 `minus`, `sortBy`, `subject`, `subjects`, `op`, `shape`, `data`, `mode`, `targetId`, `ids`, `keepIncoming`, `v`,
 and the operator symbols.
 
-**Key** position (a condition key) has no wrapper, so the three boolean **combinators `and` / `or`
-/ `not` are globally reserved** — a NodeShape may not declare a property with one of those labels
-(enforced at shape registration). The other structural words only matter as path suffixes, envelope
-fields, or option keys and do not collide with bare property labels. In **value / operand** position
-a property is always written `{ "@path": "<label>" }`, so even a label matching a structural word is
-unambiguous there.
+**Key** position (a condition key) has no wrapper, so a property labelled after one of the three
+boolean **combinators `and` / `or` / `not`** cannot be keyed: registration warns about such a label,
+and the serializer writes a condition on it as an S-expr, `["=", { "@path": "and" }, "x"]`. The
+other structural words only matter as path suffixes, envelope fields, or option keys and do not
+collide with bare property labels. In **value / operand** position a property is always written
+`{ "@path": "<label>" }`, so even a label matching a structural word is unambiguous there.
 
 ## Producing and consuming DSL-JSON
 

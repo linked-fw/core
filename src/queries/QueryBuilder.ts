@@ -447,7 +447,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     const trees: IRExpression[] = [];
     const collect = (condition: ExpressionNode | ExistsCondition) => {
       if (isLinkedInstance(condition, ExistsCondition)) {
-        trees.push(condition.predicate.ir);
+        collect(condition.predicate);
         for (const link of condition.chain) collect(link.condition);
       } else {
         trees.push(condition.ir);

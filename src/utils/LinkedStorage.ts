@@ -14,6 +14,7 @@ import {
   resolveExistence,
   resolveGraphQuery,
   resolveTriples,
+  assertTriplesTarget,
 } from '../queries/queryDispatch.js';
 import {ALL_QUERY_FEATURES} from '../queries/queryFeatures.js';
 import {
@@ -650,8 +651,8 @@ export abstract class LinkedStorage {
    * class as `recordClass`) goes where that class's graph queries go, so it reads where they
    * write. A subject read has no shape and so no routing key: like a shapeless ask it means
    * "anywhere I can reach", so it is sent to every dataset this router knows, in order, and the
-   * answers are joined (up to the read's `limit`). A dataset that cannot answer it fails the read:
-   * a missing part is not an empty one. With more than one dataset and no `.from()` graphs, that
+   * answers are joined (up to the read's `limit`). A dataset that cannot answer it fails the read,
+   * checked for every dataset before the first is asked: a missing part is not an empty one. With more than one dataset and no `.from()` graphs, that
    * fan-out logs a notice once per call site (`noticeFanOut`), naming `.exec(dataset)` and
    * `.from(graph)`; a read with graphs still reads every dataset, in those graphs only.
    */
@@ -671,6 +672,9 @@ export abstract class LinkedStorage {
     if (datasets.size === 0) {
       throw new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().');
     }
+    // Every dataset the read goes to is checked before the first is asked, so a dataset that
+    // cannot answer fails the read wherever it is in the order (the limit may be reached first).
+    for (const dataset of datasets) assertTriplesTarget(dataset, query);
     // Before the first `await`, while the caller's frames are still on the stack.
     if (datasets.size > 1 && !query.graphs?.length) noticeFanOut('triples', datasets.size);
     const triples: Triple[] = [];

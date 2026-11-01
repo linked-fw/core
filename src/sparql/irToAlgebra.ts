@@ -1414,8 +1414,22 @@ export function selectToAlgebra(
       havingExpr,
       pageSubjects ? query.limit : undefined,
       pageSubjects ? query.offset : undefined,
+      (query.orderBy ?? []).map((item) => readsThroughMultiValuedTraversal(item.expression, traversePatternMap)),
     )
     : undefined;
+  // Unpaged, a sort key that is an expression (`p.hobby.strlen()`) is bound to a variable of its
+  // own, so a row without its value can be told apart and sorted last (BOUND takes a variable).
+  let unpagedAlgebra = scoped.algebra;
+  let unpagedOrderBy = orderBy;
+  if (!paged && !grouped && orderBy) {
+    unpagedOrderBy = orderBy.map((condition, i) => {
+      const e = condition.expression;
+      if (e.kind === 'variable_expr' || e.kind === 'aggregate_expr') return condition;
+      const variable = `order_${i}`;
+      unpagedAlgebra = {type: 'extend', inner: unpagedAlgebra, variable, expression: e};
+      return {expression: {kind: 'variable_expr', name: variable}, direction: condition.direction};
+    });
+  }
   // A paged select's where-aggregate (HAVING) is applied by the page, per subject; the outer
   // query reads the page's subjects and does not repeat it (its groups are per subject and
   // values, where the HAVING would count something else). It groups only for the aggregates
@@ -1423,7 +1437,7 @@ export function selectToAlgebra(
   const outerGrouped = paged ? aggregates.length > 0 : hasAggregates;
   return {
     type: 'select',
-    algebra: paged ? paged.algebra : scoped.algebra,
+    algebra: paged ? paged.algebra : unpagedAlgebra,
     ...(scoped.dataset ? {dataset: scoped.dataset} : {}),
     projection,
     distinct: !outerGrouped ? true : undefined,
@@ -1436,7 +1450,7 @@ export function selectToAlgebra(
           (o) => !paged.orderBy!.some((k) => JSON.stringify(k) === JSON.stringify(o)),
         ),
       ]
-      : orderWithBoundFirst(orderBy, rootAlias, grouped ? projection : undefined),
+      : orderWithBoundFirst(unpagedOrderBy, rootAlias, grouped ? projection : undefined),
     limit: pageSubjects || oneSubjectRead ? undefined : query.limit,
     offset: pageSubjects ? undefined : query.offset,
     // An ungrouped select with an aggregate groups its rows by subject and values; the page's
@@ -1677,6 +1691,25 @@ function orderWithBoundFirst(
 }
 
 /**
+ * Whether a sort expression reads through a multi-valued traversal (`p.friends.hobby`): then a
+ * subject has a row per member, and some rows may lack the value while others have it.
+ */
+function readsThroughMultiValuedTraversal(
+  expr: IRExpression,
+  traversePatternMap: ReadonlyMap<string, IRTraversePattern>,
+): boolean {
+  const aliases = new Set<string>();
+  collectExpressionAliases(expr, aliases);
+  for (const alias of aliases) {
+    for (let t = traversePatternMap.get(alias); t; t = traversePatternMap.get(t.from)) {
+      const maxCount = t.maxCount ?? findPropertyShapeById(t.property)?.maxCount;
+      if (!(typeof maxCount === 'number' && maxCount <= 1)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Page an ungrouped select over its root subjects. A sub-SELECT picks the page:
  *
  *   { SELECT ?a0 (MIN(?a0_x) AS ?page_order_0) WHERE { <where part> }
@@ -1690,6 +1723,15 @@ function orderWithBoundFirst(
  * sorts as is. A subject without the value sorts after every subject with one, in both
  * directions (a bound-first key precedes each key). Ties are broken by the subject IRI,
  * ascending.
+ *
+ * A key read through a multi-valued traversal (`p.friends.hobby`) can be bound on some of a subject's rows
+ * and not on others (a friend without a hobby), and a store may answer `MIN` over such a group
+ * as unbound (Jena does: an aggregate over an error is an error). Such a key is computed by a
+ * sub-SELECT of its own over the rows that bind it, joined OPTIONAL to the page:
+ *
+ *   OPTIONAL { SELECT ?a0 (MIN(?page_value_0) AS ?page_order_0)
+ *              WHERE { <pattern> BIND(<key> AS ?page_value_0) FILTER(BOUND(?page_value_0)) }
+ *              GROUP BY ?a0 }
  */
 function pageBySubject(
   algebra: SparqlAlgebraNode,
@@ -1698,31 +1740,61 @@ function pageBySubject(
   having: SparqlExpression | undefined,
   limit: number | undefined,
   offset: number | undefined,
+  ownKeyPage: readonly boolean[] = [],
 ): {algebra: SparqlAlgebraNode; orderBy: SparqlOrderCondition[] | undefined; keys: string[]} {
   const expressions: Array<{alias: string; expression: SparqlExpression}> = [];
+  const keyPages: Array<{alias: string; page: SparqlAlgebraNode}> = [];
+  const needed = new Set<string>([rootAlias]);
+  expressionVariables(having, needed);
   const keys: SparqlOrderCondition[] = (orderBy ?? []).flatMap((condition, i) => {
     const e = condition.expression;
     if (e.kind === 'variable_expr' && e.name === rootAlias) return [condition];
     const alias = `page_order_${i}`;
-    expressions.push({
-      alias,
-      expression: {kind: 'aggregate_expr', name: condition.direction === 'DESC' ? 'max' : 'min', args: [e]},
+    const aggregate = (arg: SparqlExpression): SparqlExpression => ({
+      kind: 'aggregate_expr',
+      name: condition.direction === 'DESC' ? 'max' : 'min',
+      args: [arg],
     });
+    if (ownKeyPage[i]) {
+      const value = `page_value_${i}`;
+      const keyNeeded = new Set<string>([rootAlias]);
+      expressionVariables(e, keyNeeded);
+      keyPages.push({
+        alias,
+        page: {
+          type: 'subselect',
+          projection: [rootAlias],
+          expressions: [{alias, expression: aggregate({kind: 'variable_expr', name: value})}],
+          inner: {
+            type: 'filter',
+            expression: {kind: 'bound_expr', variable: value},
+            inner: {type: 'extend', inner: prunePagePattern(algebra, keyNeeded), variable: value, expression: e},
+          },
+          groupBy: [rootAlias],
+        },
+      });
+    } else {
+      expressionVariables(e, needed);
+      expressions.push({alias, expression: aggregate(e)});
+    }
     return [boundFirst(alias), {expression: {kind: 'variable_expr', name: alias}, direction: condition.direction}];
   });
   // Ties are broken by the subject, so that consecutive pages neither repeat nor skip one.
   if (keys.length > 0 && !keys.some((k) => k.expression.kind === 'variable_expr' && k.expression.name === rootAlias)) {
     keys.push({expression: {kind: 'variable_expr', name: rootAlias}, direction: 'ASC'});
   }
-  const needed = new Set<string>([rootAlias]);
-  for (const condition of orderBy ?? []) expressionVariables(condition.expression, needed);
-  expressionVariables(having, needed);
+  // A key computed by its own sub-SELECT is one value per subject: grouping by it changes nothing.
+  const keyAliases = keyPages.map((k) => k.alias);
+  const inner = keyPages.reduce<SparqlAlgebraNode>(
+    (left, {page}) => ({type: 'left_join', left, right: page}),
+    prunePagePattern(algebra, needed),
+  );
   const page: SparqlAlgebraNode = {
     type: 'subselect',
-    projection: [rootAlias],
+    projection: [rootAlias, ...keyAliases],
     ...(expressions.length > 0 ? {expressions} : {}),
-    inner: prunePagePattern(algebra, needed),
-    groupBy: [rootAlias],
+    inner,
+    groupBy: [rootAlias, ...keyAliases],
     ...(having ? {having} : {}),
     ...(keys.length > 0 ? {orderBy: keys} : {}),
     ...(limit !== undefined ? {limit} : {}),
@@ -1731,7 +1803,7 @@ function pageBySubject(
   return {
     algebra: {type: 'join', left: page, right: algebra},
     orderBy: keys.length > 0 ? keys : undefined,
-    keys: expressions.map((e) => e.alias),
+    keys: [...keyAliases, ...expressions.map((e) => e.alias)],
   };
 }
 

@@ -1079,8 +1079,10 @@ const byFriendType = await Person.select((p) => p.name).orderBy((p) => p.bestFri
   `p.friends.equals({id})`). It is an EXISTS of its own, so a projected `$type()` keeps every
   type and `t.$type().equals(A).and(t.$type().equals(B))` finds the nodes of both types; `.not()`
   is "no type is `x`". `some(…)` and `none(…)` take a callback on the type node. A member's types
-  are written from the outside, `p.friends.$type().equals({id: C})` (a `some` callback does not
-  take another quantifier).
+  can be tested inside a quantifier, `p.friends.some((f) => f.$type().equals({id: C}).and(…))`,
+  or from the outside, `p.friends.$type().equals({id: C})` (some friend has type `C`). A
+  `some`/`every`/`none` callback takes any quantifier on the member's own paths
+  (`p.friends.some((f) => f.friends.some(…))`).
 - **Group key:** one group per type value. A node with two types is in two groups, so the counts
   of a `groupBy` on `$type()` can add up to more than the number of nodes.
 - **Sorting** follows the rules in "Sorting, limiting, one": a node without a type (on a nested
@@ -1093,8 +1095,10 @@ const byFriendType = await Person.select((p) => p.name).orderBy((p) => p.bestFri
   a group key or a sort key (as it refuses those on any path).
 - **DSL-JSON:** the path segment `$type` (`"fields": ["$type"]`, `"bestFriend.$type"`,
   `"where": {"$type": {"@id": "…"}}`), wire version 1.6. A label select takes it too
-  (`select(['name', '$type'])`). `$type` and `$graph` are reserved: a shape may not declare a
-  property with either label. `$graph()` (a node's named graphs) is planned.
+  (`select(['name', '$type'])`). **`$`-prefixed labels are refused:** registering a property
+  whose label starts with `$` throws (no RDF label starts with one). Every other reserved name
+  (a query builder member such as `size`, a DSL-JSON combinator `and`/`or`/`not`) only warns, so
+  an existing shape keeps loading. `$graph()` (a node's named graphs) is planned.
 
 #### Triples reads (no shape)
 
@@ -1319,6 +1323,18 @@ highest descending, of the values it has. Each `orderBy` key is taken this way o
 on a page ties are broken by the instance's IRI, so consecutive pages neither repeat nor skip
 an instance. Without an `orderBy` the order of the instances, and so which ones a page holds,
 is the store's.
+
+A sort key can be a **computed expression** (`orderBy((p) => p.hobby.strlen())`), sorted by the
+same rules: an instance whose expression has no value (no hobby) comes last. A key holding an
+aggregate (`p.friends.size()`, `Expr.count()`) is refused; group the select and sort the groups
+instead. A sort path can **filter** a segment, `orderBy((p) => p.friends.where((f) =>
+f.name.equals('Anna')).hobby)`: each instance sorts by the hobbies of its friends named Anna, and
+an instance without such a friend is kept and comes last. The filter goes on the path's first
+segment; one further down (`p.bestFriend.friends.where(…)`) is refused, since it would drop the
+instances without a best friend. A sort key reads its path on its own:
+a filter in the projection (`select((p) => p.friends.where(…).name)`) does not filter the
+friends an `orderBy((p) => p.friends.hobby)` reads. An `orderBy` callback that returns anything
+else (a string, `undefined`) is refused, never ignored.
 
 A `where` that holds an aggregate (`.where((p) => p.friends.size().equals(2))`) is tested per
 instance, paged or not, whatever the select reads next to it.

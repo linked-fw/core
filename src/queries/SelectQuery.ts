@@ -30,6 +30,7 @@ import type {
 import {unresolvedValueShapeError} from '../utils/unresolvedShape.js';
 import {resolveRelationShape} from '../shapes/relationShape.js';
 import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
+import {containsAggregate} from './irExpressions.js';
 
 /**
  * String keys the query-shape proxy must let through *without* treating them as
@@ -132,9 +133,18 @@ export type QueryBuildFn<T extends Shape, ResponseType> = (
   p: ToQueryBuilderObject<T>,
 ) => ResponseType;
 
+/**
+ * One sort key of a select: a property path, with the inline filter of one of its segments
+ * (`p.friends.where(…).hobby`, the filter on segment `whereIndex`), or a computed expression
+ * (`p.hobby.strlen()`).
+ */
+export type SortKey =
+  | {path: PropertyPath; where?: WherePath; whereIndex?: number}
+  | {expression: ExpressionNode};
+
 export type SortByPath = {
-  paths: PropertyPath[];
-  /** Per-path sort direction (parallel to `paths`). */
+  keys: SortKey[];
+  /** Per-key sort direction (parallel to `keys`). */
   directions: ('ASC' | 'DESC')[];
 };
 
@@ -911,33 +921,49 @@ export const evaluateSortCallback = <S extends Shape>(
 ): SortByPath => {
   const proxy = createProxiedPathBuilder(shape);
   const response = sortFn(proxy);
-  const nodeShape = shape.shape;
-  const paths: PropertyPath[] = [];
-  for (const item of Array.isArray(response) ? response : [response]) {
-    if (isLinkedInstance(item, SetSize) || isLinkedInstance(item, AggregateExpression)) {
-      // A SetSize is a QueryPrimitive over the counted path, so it used to be read as that path:
-      // `orderBy(p => p.friends.size())` sorted by the friends' ids, not by how many there are.
-      throw new Error(
-        'orderBy() on a select sorts by property paths; it cannot sort by an aggregate ' +
-        '(`.size()`, `.max()`, `Expr.count()`, …), which it would read as the path itself. ' +
-        'Group the select and sort the groups: ' +
-        "`Shape.select((s) => ({node: s, n: s.items.size()})).groupBy('node').orderBy('n', 'DESC')`.",
-      );
-    }
+  const keys = (Array.isArray(response) ? response : [response]).map((item) => sortKeyOf(shape.shape, item));
+  // The DSL callback carries a single direction for all its keys; per-key directions come
+  // from the wire form (deserializeSortByPath).
+  return {keys, directions: keys.map(() => direction)};
+};
+
+const AGGREGATE_SORT_REFUSAL =
+  'orderBy() on a select sorts by property paths and expressions; it cannot sort by an aggregate ' +
+  '(`.size()`, `.max()`, `Expr.count()`, …), which it would read as the path itself. ' +
+  'Group the select and sort the groups: ' +
+  "`Shape.select((s) => ({node: s, n: s.items.size()})).groupBy('node').orderBy('n', 'DESC')`.";
+
+/** One item an orderBy callback returned, as a sort key. Anything else is refused, never dropped. */
+function sortKeyOf(nodeShape: NodeShapeData, item: unknown): SortKey {
+  if (isLinkedInstance(item, SetSize) || isLinkedInstance(item, AggregateExpression)) {
+    // A SetSize is a QueryPrimitive over the counted path, so it used to be read as that path:
+    // `orderBy(p => p.friends.size())` sorted by the friends' ids, not by how many there are.
+    throw new Error(AGGREGATE_SORT_REFUSAL);
   }
-  if (isLinkedInstance(response, QueryBuilderObject) || isLinkedInstance(response, QueryPrimitiveSet)) {
-    paths.push(new PropertyPath(nodeShape, FieldSet.collectPropertySegments(response)));
-  } else if (Array.isArray(response)) {
-    for (const item of response) {
-      if (isLinkedInstance(item, QueryBuilderObject)) {
-        paths.push(new PropertyPath(nodeShape, FieldSet.collectPropertySegments(item)));
+  if (isLinkedInstance(item, QueryBuilderObject)) {
+    const segments = FieldSet.collectPropertySegments(item);
+    const key: Extract<SortKey, {path: PropertyPath}> = {path: new PropertyPath(nodeShape, segments)};
+    // The inline filter of a segment (`p.friends.where(…).hobby`), found walking leaf to root.
+    // A path holds one at most: `where()` refuses a second.
+    let current: QueryBuilderObject | undefined = item;
+    for (let distance = 0; current; distance++, current = current.subject as QueryBuilderObject | undefined) {
+      if (current.wherePath) {
+        key.where = current.wherePath;
+        key.whereIndex = segments.length - 1 - distance;
+        break;
       }
     }
+    return key;
   }
-  // The DSL callback carries a single direction for all its paths; per-path
-  // directions come from the wire form (deserializeSortByPath).
-  return {paths, directions: paths.map(() => direction)};
-};
+  if (isExpressionNode(item)) {
+    if (containsAggregate(item.ir)) throw new Error(AGGREGATE_SORT_REFUSAL);
+    return {expression: item};
+  }
+  throw new Error(
+    'orderBy(): the callback must return a property path, an expression (`p.name.strlen()`) or ' +
+    `an array of them; it returned ${item === null ? 'null' : typeof item}.`,
+  );
+}
 
 /**
  * The shape class of a query set's members: the least specific authored class, else the shape the
@@ -1139,6 +1165,10 @@ export class QueryShapeSet<
       if (shapeQueryValue) {
         if (expectSingleValues) {
           (result as any).add(shapeQueryValue);
+        } else if (isLinkedInstance(result, QueryPrimitiveSet)) {
+          // A multi-valued literal (`p.friends.nickNames`): each member answers a set of
+          // primitives; merge their contents.
+          for (const value of (shapeQueryValue as QueryPrimitiveSet<any>).values()) result.add(value);
         } else {
           //if each of the shapes in a set return a new shapeset for the request accessor
           //then we merge all the returned values into a single shapeset
@@ -1165,9 +1195,8 @@ export class QueryShapeSet<
    * same as `some((m) => m.equals(value))`: an EXISTS of its own, so it leaves the set's values in
    * the projection alone and two of them combine (`t.$type().equals(A).and(t.$type().equals(B))`
    * holds for a node of both types). `.not()` is "no member is `value`", as `none(…)` is.
-   *
-   * Inside another set's `some`/`every`/`none` callback a quantifier is not accepted (an older
-   * limit); write the path from the outside instead: `p.friends.$type().equals({id: C})`.
+   * Inside another set's `some`/`every`/`none` callback it is an EXISTS inside that one
+   * (`p.friends.some((f) => f.$type().equals({id: C}))`).
    */
   equals(value: NodeReferenceValue | QShape<any> | PendingQueryContext): ExistsCondition {
     return this.some(((member: QShape<any>) => member.equals(value as NodeReferenceValue)) as unknown as WhereClause<S>);
@@ -1247,16 +1276,18 @@ export class QueryShapeSet<
     return new ExistsCondition(pathSegmentIds, predicate, true);
   }
 
-  private buildPredicateExpression(validation: WhereClause<S>): ExpressionNode {
+  private buildPredicateExpression(validation: WhereClause<S>): ExpressionNode | ExistsCondition {
     if (validation instanceof Function) {
       const proxy = createProxiedPathBuilder(memberShapeClassOrBase(this)) as any;
       const result = validation(proxy);
-      if (isExpressionNode(result)) {
+      // A quantifier on the member's own path (`f.$type().equals(C)`, `f.friends.some(…)`) is an
+      // EXISTS inside this one.
+      if (isExpressionNode(result) || isExistsCondition(result)) {
         return result;
       }
       throw new Error('Validation callback must return an ExpressionNode or ExistsCondition');
     }
-    if (isExpressionNode(validation)) {
+    if (isExpressionNode(validation) || isExistsCondition(validation)) {
       return validation;
     }
     throw new Error('Expected a callback or ExpressionNode for some/every/none');

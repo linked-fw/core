@@ -1647,3 +1647,97 @@ WHERE {
 }`);
   });
 });
+
+describe('sort keys and nested quantifiers', () => {
+  test('a computed sort key is bound, then sorted bound first', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.name).orderBy((p) => p.hobby.strlen(), 'DESC') as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  OPTIONAL {
+    ?a0 <${PROP}hobby> ?a0_hobby .
+  }
+  BIND(STRLEN(?a0_hobby) AS ?order_0)
+}
+ORDER BY DESC(BOUND(?order_0)) DESC(?order_0)`);
+  });
+
+  test('paged, a key through a multi-valued traversal is computed over the rows that bind it', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.name).orderBy((p) => p.friends.where((f) => f.name.equals('Moa')).hobby).limit(10) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name ?a1
+WHERE {
+  {
+    SELECT ?a0 ?page_order_0 WHERE {
+      ?a0 rdf:type <${PT}> .
+      OPTIONAL {
+        {
+          SELECT ?a0 (MIN(?page_value_0) AS ?page_order_0) WHERE {
+            ?a0 rdf:type <${PT}> .
+            OPTIONAL {
+              ?a0 <${PROP}hasFriend> ?a1 .
+              OPTIONAL {
+                ?a1 <${PROP}name> ?a1_name .
+              }
+              OPTIONAL {
+                ?a1 <${PROP}hobby> ?a1_hobby .
+              }
+              FILTER(?a1_name = "Moa")
+            }
+            BIND(?a1_hobby AS ?page_value_0)
+            FILTER(BOUND(?page_value_0))
+          } GROUP BY ?a0
+        }
+      }
+    } GROUP BY ?a0 ?page_order_0 ORDER BY DESC(BOUND(?page_order_0)) ASC(?page_order_0) ASC(?a0) LIMIT 10
+  }
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+    OPTIONAL {
+      ?a1 <${PROP}hobby> ?a1_hobby .
+    }
+    FILTER(?a1_name = "Moa")
+  }
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+}
+ORDER BY DESC(BOUND(?page_order_0)) ASC(?page_order_0) ASC(?a0) DESC(BOUND(?a1_hobby)) ASC(?a1_hobby)`);
+  });
+
+  test('a quantifier inside a quantifier is an EXISTS inside an EXISTS', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.name).where((p) => p.friends.some((f) => f.$type().equals({id: PT}))) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  FILTER(EXISTS {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    FILTER(EXISTS {
+      ?a1 rdf:type ?a2 .
+      FILTER(?a2 = <${PT}>)
+    })
+  })
+}`);
+  });
+});

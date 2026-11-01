@@ -207,6 +207,26 @@ type TriplesTarget = {
 };
 
 /**
+ * Refuse a target that cannot answer `query`: no `triplesQuery`, or a read that fixes the
+ * predicate or the object on a target that does not declare `'triplesPattern'`. A router that
+ * sends one read to several datasets checks each of them before it asks the first.
+ */
+export function assertTriplesTarget(
+  target: TriplesTarget | undefined,
+  query: TriplesQuery,
+): TriplesTarget & {triplesQuery(query: TriplesQuery): Promise<Triple[]>} {
+  if (typeof target?.triplesQuery !== 'function') {
+    throw new Error(
+      'This dataset does not implement IDataset.triplesQuery, so a triples read (a graph, node or ' +
+        'predicate read) cannot be answered. SparqlDataset implements it; a router forwards it ' +
+        'to the dataset that holds the data.',
+    );
+  }
+  assertFeaturesSupported(target as FeatureTarget, triplesQueryFeatures(query));
+  return target as TriplesTarget & {triplesQuery(query: TriplesQuery): Promise<Triple[]>};
+}
+
+/**
  * Answer a triples read against `target` — the entry point `TriplesBuilder.exec()` and
  * `LinkedStorage.triplesQuery` go through. A target without `triplesQuery` is refused: there is no
  * shape to answer it with a select instead, and "could not read" is never an empty answer. A read
@@ -218,15 +238,8 @@ export async function resolveTriples(
   target: TriplesTarget | undefined,
   query: TriplesQuery,
 ): Promise<Triple[]> {
-  if (typeof target?.triplesQuery !== 'function') {
-    throw new Error(
-      'This dataset does not implement IDataset.triplesQuery, so a triples read (a graph, node or ' +
-        'predicate read) cannot be answered. SparqlDataset implements it; a router forwards it ' +
-        'to the dataset that holds the data.',
-    );
-  }
-  assertFeaturesSupported(target as FeatureTarget, triplesQueryFeatures(query));
-  const answer = await target.triplesQuery(query);
+  const answering = assertTriplesTarget(target, query);
+  const answer = await answering.triplesQuery(query);
   if (!Array.isArray(answer)) {
     throw new Error(
       `triplesQuery must resolve to an array of triples; got ${answer === null ? 'null' : typeof answer}.`,

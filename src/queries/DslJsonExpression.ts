@@ -29,7 +29,8 @@ import {
 } from '../expressions/ExpressionNode.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import type {WherePath} from './SelectQuery.js';
-import {walkPropertyPath} from './PropertyPath.js';
+import {walkPropertyPath, type PropertyPath} from './PropertyPath.js';
+import {getQueryShapeClass} from '../utils/ShapeClass.js';
 import {isLinkedInstance} from '../utils/linkedError.js';
 
 // ---------------------------------------------------------------------------
@@ -291,21 +292,28 @@ export function encodeCondition(
 
 function encodeExists(ec: ExistsCondition, shape: NodeShapeData): DslJsonCondition {
   const rel = segmentsToPath(ec.pathSegmentIds);
-  let quantifier: 'some' | 'none' | 'every';
-  let predIr = ec.predicate.ir;
-  const predRefs = ec.predicate._refs;
-  if (!ec.negated) {
-    quantifier = 'some';
-  } else if (predIr.kind === 'not_expr') {
-    // every(fn) was built as NOT EXISTS(NOT fn) — unwrap the inner predicate.
-    quantifier = 'every';
-    predIr = predIr.expression;
+  let base: DslJsonCondition;
+  if (isLinkedInstance(ec.predicate, ExistsCondition)) {
+    // An inner quantifier, on the member's shape. every(fn) was built as NOT EXISTS(NOT fn),
+    // which is `none` of the negated inner one: the same members.
+    base = {
+      [`${rel}.${ec.negated ? 'none' : 'some'}`]: encodeCondition(ec.predicate, shape),
+    };
   } else {
-    quantifier = 'none';
+    let quantifier: 'some' | 'none' | 'every';
+    let predIr = ec.predicate.ir;
+    const predRefs = ec.predicate._refs;
+    if (!ec.negated) {
+      quantifier = 'some';
+    } else if (predIr.kind === 'not_expr') {
+      // every(fn) was built as NOT EXISTS(NOT fn) — unwrap the inner predicate.
+      quantifier = 'every';
+      predIr = predIr.expression;
+    } else {
+      quantifier = 'none';
+    }
+    base = {[`${rel}.${quantifier}`]: encodeBoolExpr(predIr, predRefs, shape)};
   }
-  let base: DslJsonCondition = {
-    [`${rel}.${quantifier}`]: encodeBoolExpr(predIr, predRefs, shape),
-  };
   // Fold any chained and/or conditions into nested logical combinators.
   for (const {op, condition} of ec.chain) {
     const c = encodeCondition(
@@ -353,8 +361,17 @@ function encodeBoolExpr(
   return encodeValueExpr(ir, refs) as DslJsonCondition;
 }
 
-/** A path key for a left operand that is a single property/alias/context property. */
+/**
+ * A path key for a left operand that is a single property/alias/context property. A path that
+ * is a combinator name (a property labelled `and`) has none: it would be read as the combinator,
+ * so the condition is written as an S-expr.
+ */
 function pathKeyOf(ir: IRExpression, refs: PropertyRefMap): string | null {
+  const key = pathKeyOfOperand(ir, refs);
+  return key !== null && COMBINATORS.has(key) ? null : key;
+}
+
+function pathKeyOfOperand(ir: IRExpression, refs: PropertyRefMap): string | null {
   if (ir.kind === 'property_expr') {
     const segs = refs.get(ir.sourceAlias);
     return segs ? segmentsToPath(segs) : labelOf(ir.property);
@@ -433,14 +450,18 @@ function decodeConditionNode(
   if (keys.length === 1) {
     const q = matchQuantifier(keys[0]);
     if (q) {
-      const predicate = expressionNodeFromCondition(o[keys[0]] as DslJsonCondition, shape);
-      const segmentIds = pathToSegmentIds(shape, q.rel);
+      const relation = walkPropertyPath(shape, q.rel);
+      const segmentIds = relation.segments.map((s) => s.id);
+      // The condition is on a member: its paths are the member shape's.
+      const predicate = decodeConditionNode(o[keys[0]] as DslJsonCondition, memberShapeOf(relation, shape));
       if (q.kind === 'some') return new ExistsCondition(segmentIds, predicate, false);
       if (q.kind === 'none') return new ExistsCondition(segmentIds, predicate, true);
       // every(fn) = NOT EXISTS(NOT fn)
       return new ExistsCondition(
         segmentIds,
-        new ExpressionNode({kind: 'not_expr', expression: predicate.ir}, predicate._refs),
+        isLinkedInstance(predicate, ExistsCondition)
+          ? predicate.not()
+          : new ExpressionNode({kind: 'not_expr', expression: predicate.ir}, predicate._refs),
         true,
       );
     }
@@ -512,6 +533,13 @@ function isOpMap(value: unknown): boolean {
   );
 }
 
+/** The shape of a relation's members (its last segment's value shape), else `fallback`. */
+function memberShapeOf(relation: PropertyPath, fallback: NodeShapeData): NodeShapeData {
+  const last = relation.segments[relation.segments.length - 1];
+  const valueShapeId = last?.valueShape?.id;
+  return (valueShapeId && getQueryShapeClass(valueShapeId)?.shape) || fallback;
+}
+
 function matchQuantifier(
   key: string,
 ): {rel: string; kind: 'some' | 'every' | 'none'} | null {
@@ -524,11 +552,3 @@ function matchQuantifier(
 }
 
 /** A quantifier predicate decodes to an ExpressionNode (its inner boolean). */
-function expressionNodeFromCondition(json: DslJsonCondition, shape: NodeShapeData): ExpressionNode {
-  const node = decodeConditionNode(json, shape);
-  if (isLinkedInstance(node, ExistsCondition)) {
-    // Nested exists as a predicate is uncommon; wrap is not representable here.
-    throw new Error('Nested exists inside a quantifier predicate is not supported');
-  }
-  return node;
-}

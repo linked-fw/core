@@ -480,4 +480,34 @@ describe('object reads, predicate reads and exists()', () => {
     await expect(TriplesBuilder.toNode({id: O}).from(G1)).rejects.toThrow(/'triplesPattern'/);
     LinkedStorage.getShapeToDatasetMap().clear();
   });
+
+  test('through LinkedStorage: a dataset that cannot answer is refused whatever its place in the order', async () => {
+    const hit: Triple = {subject: {id: S}, predicate: {id: P}, object: {id: O}};
+    const reads: TriplesQuery[] = [];
+    const base = {
+      selectQuery: async () => [],
+      createQuery: async () => ({}) as any,
+      updateQuery: async () => ({}) as any,
+      deleteQuery: async () => ({deleted: [], count: 0}),
+      graphQuery: async () => ({graph: '', changed: false}),
+    };
+    const answering: IDataset = {
+      ...base,
+      supports: ['triplesPattern'],
+      triplesQuery: async (q: TriplesQuery) => {
+        reads.push(q);
+        return [hit];
+      },
+    };
+    // The first dataset answers enough for the limit, so the read never reaches the second.
+    LinkedStorage.setDefaultDataset(answering);
+    LinkedStorage.setDatasetForShapes({...answering, supports: []}, Person);
+    await expect(TriplesBuilder.withPredicate({id: P}).from(G1).exists()).rejects.toThrow(/'triplesPattern'/);
+    LinkedStorage.setDatasetForShapes(base as IDataset, Person);
+    await expect(TriplesBuilder.forNode({id: S}).from(G1).limit(1).exec()).rejects.toThrow(
+      /does not implement IDataset.triplesQuery/,
+    );
+    expect(reads).toEqual([]);
+    LinkedStorage.getShapeToDatasetMap().clear();
+  });
 });

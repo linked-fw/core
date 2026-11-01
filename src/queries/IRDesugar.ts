@@ -127,9 +127,10 @@ export type DesugaredExistsWhere = {
 export type DesugaredWhere = DesugaredExpressionWhere | DesugaredExistsWhere;
 
 export type DesugaredSortBy = {
-  /** Per-path sort direction (parallel to `paths`). */
+  /** Per-key sort direction (parallel to `keys`). */
   directions: ('ASC' | 'DESC')[];
-  paths: DesugaredSelectionPath[];
+  /** A path (a step may carry its inline filter) or a computed expression. */
+  keys: Array<DesugaredSelectionPath | DesugaredExpressionSelect>;
 };
 
 /** A desugared MINUS entry. */
@@ -383,19 +384,35 @@ const toSortBy = (query: RawSelectInput): DesugaredSortBy | undefined => {
 
   return {
     directions: query.sortBy.directions,
-    paths: query.sortBy.paths.map((path) => ({
-      kind: 'selection_path' as const,
-      steps: path.segments.map((seg) => {
-        const step: DesugaredPropertyStep = {
-          kind: 'property_step' as const,
-          propertyShapeId: seg.id,
-        };
-        if (seg.path && isComplexPathExpr(seg.path)) {
-          step.pathExpr = seg.path;
-        }
-        return step;
-      }),
-    })),
+    keys: query.sortBy.keys.map((key) => {
+      if ('expression' in key) return {kind: 'expression_select' as const, expressionNode: key.expression};
+      const whereIndex = key.whereIndex ?? key.path.segments.length - 1;
+      // A filter deeper in the path would make the hops before it required, dropping the
+      // instances without them; sorting never drops an instance.
+      if (key.where && whereIndex !== 0) {
+        throw new Error(
+          `orderBy(): a sort path takes a filter on its first segment only (this one filters segment ` +
+            `${whereIndex} of '${key.path.toString()}'). Filter the first relation ` +
+            `(\`p.friends.where(…).hobby\`), or filter the select with where().`,
+        );
+      }
+      return {
+        kind: 'selection_path' as const,
+        steps: key.path.segments.map((seg, i) => {
+          const step: DesugaredPropertyStep = {
+            kind: 'property_step' as const,
+            propertyShapeId: seg.id,
+          };
+          if (seg.path && isComplexPathExpr(seg.path)) {
+            step.pathExpr = seg.path;
+          }
+          if (key.where && i === whereIndex) {
+            step.where = toWhere(key.where);
+          }
+          return step;
+        }),
+      };
+    }),
   };
 };
 

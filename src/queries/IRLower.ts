@@ -77,7 +77,23 @@ class LoweringContext {
     const key = `${fromAlias}:${propertyShapeId}`;
     const existing = this.traverseMap.get(key);
     if (existing) return existing;
+    const toAlias = this.createTraversal(fromAlias, propertyShapeId, pathExpr, maxCount);
+    this.traverseMap.set(key, toAlias);
+    return toAlias;
+  }
 
+  /** The traversal `getOrCreateTraversal` would share for this step, if there is one. */
+  existingTraversal(fromAlias: string, propertyShapeId: string): string | undefined {
+    return this.traverseMap.get(`${fromAlias}:${propertyShapeId}`);
+  }
+
+  /** Whether an inline filter is attached to the traversal reaching `toAlias`. */
+  hasFilter(toAlias: string): boolean {
+    return this.filterMap.has(toAlias);
+  }
+
+  /** A traversal of its own, never shared through `getOrCreateTraversal`. */
+  createTraversal(fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number): string {
     const toAlias = this.nextAlias();
     const pattern: IRTraversePattern = {
       kind: 'traverse',
@@ -92,7 +108,6 @@ class LoweringContext {
       pattern.maxCount = maxCount;
     }
     this.patterns.push(pattern);
-    this.traverseMap.set(key, toAlias);
     return toAlias;
   }
 
@@ -149,11 +164,6 @@ type PathLoweringOptions = {
   rootAlias: string;
   resolveTraversal: (fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number) => string;
 };
-
-const lowerPath = (
-  path: DesugaredSelectionPath,
-  options: PathLoweringOptions,
-): IRExpression => lowerSelectionPathExpression(path, options);
 
 /**
  * Resolve any `{@ctx}` context references carried in a lowered expression tree —
@@ -249,13 +259,16 @@ const lowerExistsCondition = (
     currentAlias = existsResolve(currentAlias, segmentId);
   }
 
-  // Resolve the inner predicate's property refs against the EXISTS scope
-  const filter = resolveExpressionRefs(
-    condition.predicate.ir,
-    condition.predicate._refs,
-    currentAlias,
-    existsResolve,
-  );
+  // Resolve the inner predicate's property refs against the EXISTS scope; an inner quantifier
+  // is an EXISTS of its own, rooted at the member.
+  const filter = isLinkedInstance(condition.predicate, ExistsCondition)
+    ? lowerExistsCondition(condition.predicate, ctx, {rootAlias: currentAlias, resolveTraversal: existsResolve})
+    : resolveExpressionRefs(
+      condition.predicate.ir,
+      condition.predicate._refs,
+      currentAlias,
+      existsResolve,
+    );
 
   let existsExpr: IRExpression = {
     kind: 'exists_expr',
@@ -483,11 +496,36 @@ export const lowerSelectQuery = (
   const groupBy = group ? group.keys.map((key) => projectionOfKey(key, 'groupBy')) : undefined;
   const having = group?.having ? lowerWhere(group.having, ctx, pathOptions) : undefined;
 
+  // A sort key shares the traversals of the projection and the where, except where the filters
+  // differ: a step the key filters (`p.friends.where(…).hobby`), or one whose shared traversal a
+  // filtered projection holds, gets a traversal of its own. Otherwise the key would sort by
+  // members another filter chose, or filter the projection by its own.
+  const lowerSortKey = (key: DesugaredSelectionPath | DesugaredExpressionSelect): IRExpression => {
+    const steps = key.kind === 'selection_path' ? key.steps : [];
+    let call = 0;
+    const resolveTraversal = (fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number) => {
+      const step = steps[call++];
+      const filtered = step?.kind === 'property_step' && !!step.where;
+      const shared = ctx.existingTraversal(fromAlias, propertyShapeId);
+      return filtered || (shared !== undefined && ctx.hasFilter(shared))
+        ? ctx.createTraversal(fromAlias, propertyShapeId, pathExpr, maxCount)
+        : ctx.getOrCreateTraversal(fromAlias, propertyShapeId, pathExpr, maxCount);
+    };
+    if (key.kind === 'expression_select') {
+      return resolveContextRefs(resolveExpressionRefs(
+        key.expressionNode.ir,
+        key.expressionNode._refs,
+        ctx.rootAlias,
+        resolveTraversal,
+      ));
+    }
+    return lowerSelectionPathExpression(key, {rootAlias: ctx.rootAlias, resolveTraversal}, inlineFilterHandler);
+  };
   const orderBy: IROrderByItem[] | undefined = group
     ? group.orderBy?.map((o) => ({expression: projectionOfKey(o.key, 'orderBy'), direction: o.direction}))
     : canonical.sortBy
-      ? canonical.sortBy.paths.map((path, i) => ({
-          expression: lowerPath(path, pathOptions),
+      ? canonical.sortBy.keys.map((key, i) => ({
+          expression: lowerSortKey(key),
           direction: canonical.sortBy!.directions[i],
         }))
       : undefined;
