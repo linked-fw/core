@@ -416,6 +416,12 @@ const drafts = await OwlClass.select((c) => c.label).from(draftGraph); // .from(
 - **The graph targets apply.** Under `'default'` the set reads the default graph, under a shared
   IRI that graph. `InMemoryDataset`, which keeps one graph, reads it for `graphs.allOntologies`
   and `graphs.allShapes`.
+- **A graph route for such a shape is refused** (`graph-name-read-only`): its instances would be
+  written where its reads never look. A dataset pin (`setDatasetForShapes` without `graph`) is fine.
+- **The whole read covers the set.** A traversal from a shape shape into terms
+  (`ns.targetClass.label`) reads the shape graphs only; read the terms with a read of their own.
+- **Shape catalogs:** the set is read from the class registered in code for the shape IRI, so a
+  query received as DSL-JSON and lowered inside a catalog gets it too.
 - A triples read has no shape, so it has no default read set: it names its graphs.
 
 **`isolateLinkedTypeChecks`** (a `SparqlOptions` flag, set per store, never per query): a subject

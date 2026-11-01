@@ -92,7 +92,7 @@ export abstract class Shape {
    * the default graph, or the shape's routed graphs. Core's shape shapes (`NodeShape`,
    * `PropertyShape`) declare `graphs.allShapes`, and the ontology term shapes of `@_linked/rdfs`
    * and `@_linked/owl` `graphs.allOntologies`. An explicit `.from()` wins; writes are not
-   * affected. See the README, "Named graphs".
+   * affected. See docs/architecture/ontologies.md, "A shape's default read set".
    */
   static defaultReadGraphs?: ReadGraphsInput;
   static get typesToShapes(): Map<string, Set<typeof Shape>> {

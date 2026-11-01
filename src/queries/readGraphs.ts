@@ -13,7 +13,7 @@
  * knows its registry and its own names for the default and union graphs.
  */
 import {isGraphIri} from './graphQuery.js';
-import {getShapeClass} from '../utils/ShapeClass.js';
+import {getRegisteredShapeClass, getShapeClass} from '../utils/ShapeClass.js';
 
 /** What `.from()` accepts: one graph name or several. */
 export type ReadGraphsInput = string | readonly string[];
@@ -53,11 +53,15 @@ export function parseReadGraphsJSON(value: unknown, envelope: string): string[] 
  * (`static defaultReadGraphs`, inherited by subclasses): the ontology term shapes read
  * `graphs.allOntologies`, the shape shapes (`NodeShape`, `PropertyShape`) `graphs.allShapes`.
  * `undefined` for every other shape (it reads the default graph, or its routed graphs). The
- * declaration is checked like a `.from()` argument.
+ * declaration is checked like a `.from()` argument. Read from the class registered in code for
+ * the IRI, whatever shape catalog is active.
  */
 export function defaultReadGraphsOf(shapeId: string | undefined): string[] | undefined {
   if (!shapeId) return undefined;
-  const declared = (getShapeClass(shapeId) as {defaultReadGraphs?: unknown} | undefined)?.defaultReadGraphs;
+  // The class registered in code first: inside a shape catalog (a query received as DSL-JSON) the
+  // active classes are built from data, and only code declares a default read set.
+  const cls = getRegisteredShapeClass(shapeId) ?? getShapeClass(shapeId);
+  const declared = (cls as {defaultReadGraphs?: unknown} | undefined)?.defaultReadGraphs;
   if (declared === undefined || declared === null) return undefined;
   return normalizeReadGraphs(declared, `The defaultReadGraphs of <${shapeId}>`);
 }

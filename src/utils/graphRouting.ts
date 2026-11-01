@@ -57,6 +57,7 @@ import {
   type GraphRoute,
 } from '../ontologies/graphs.js';
 import {GraphQueryError} from '../queries/graphQuery.js';
+import {defaultReadGraphsOf} from '../queries/readGraphs.js';
 import {getAllNodeShapes, getRegisteredShapeClass, getSubShapes, getSuperShapes} from './ShapeClass.js';
 import {getPropertyShapes} from '../shapes/nodeShapeData.js';
 import {packageNameToSlug} from '../shapes/SHACL.js';
@@ -172,9 +173,27 @@ export function ownGraphPath(shape: string): string {
   return `graph/${slug}/${name}`;
 }
 
+/**
+ * Refuse a route for a shape that declares a default read set (`static defaultReadGraphs`: the
+ * ontology term and shape shapes): its reads go to that set, so instances written to a routed
+ * graph would never be read back. One that opts out (`graphs.default`) may be routed.
+ */
+function checkNoDefaultReadSet(shape: string): void {
+  const declared = defaultReadGraphsOf(shape);
+  if (!declared || (declared.length === 1 && declared[0] === graphs.default)) return;
+  throw new GraphQueryError(
+    'graph-name-read-only',
+    `<${shape}> reads ${declared.map((g) => `<${g}>`).join(', ')} by default (its defaultReadGraphs), ` +
+      `which its own sync writes; a graph route for it would write where its reads never look. ` +
+      `Leave it unrouted, or read and write a graph of its own with .from() and .into().`,
+    declared[0],
+  );
+}
+
 /** A route as stored: `undefined` for the default graph (no route). */
 function storedRoute(shape: string, route: GraphRoute): StoredRoute | undefined {
   checkShape(shape);
+  if (route !== graphs.default) checkNoDefaultReadSet(shape);
   if (route === OWN_GRAPH) {
     const path = ownGraphPath(shape);
     checkOwnPath(shape, path, `{DATA_ROOT}/${path}`);

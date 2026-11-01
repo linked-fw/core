@@ -19,6 +19,9 @@ import {graphs} from '../ontologies/graphs';
 import {defaultReadGraphsOf} from '../queries/readGraphs';
 import {InMemoryDataset} from '../memory/InMemoryDataset';
 import {Person} from '../test-helpers/query-fixtures';
+import {ShapeCatalog, withShapeCatalog} from '../utils/ShapeCatalog';
+import {setShapeGraphs} from '../utils/graphRouting';
+import {dataGraph} from '../ontologies/graphs';
 
 const EX = 'https://example.org/default-read/';
 
@@ -88,6 +91,29 @@ describe('a shape that declares a default read set', () => {
       static defaultReadGraphs = 'not an iri';
     }
     expect(() => lower(SelectBuilder.from(BadTermShape).select([]))).toThrow(/defaultReadGraphs of <.*Bad.*>.*absolute IRI/);
+  });
+});
+
+describe('shape catalogs and graph routes', () => {
+  test('a query received as DSL-JSON and lowered inside a catalog keeps the default', () => {
+    const json = JSON.parse(JSON.stringify(TermShape.select((t) => t.title).toJSON()));
+    const catalog = ShapeCatalog.from([
+      {id: TermShape.shape.id, label: 'TermShape', targetClass: {id: `${EX}Term`}, propertyShapes: [
+        {id: `${TermShape.shape.id}/title`, label: 'title', path: {id: `${EX}title`}, maxCount: 1},
+      ]},
+    ] as never);
+    const ir = withShapeCatalog(catalog, () => lower(SelectBuilder.fromJSON(json)));
+    expect(ir.graphs).toEqual([graphs.allOntologies]);
+  });
+
+  test('a graph route for a shape with a default read set is refused; one that opts out may be routed', () => {
+    const ds = {};
+    expect(() => setShapeGraphs(ds, {[NodeShape.shape.id]: dataGraph('shapes-copy')})).toThrow(/defaultReadGraphs/);
+    expect(() => setShapeGraphs(ds, {[SubTermShape.shape.id]: 'https://example.org/graph/terms'})).toThrow(
+      /defaultReadGraphs/,
+    );
+    expect(() => setShapeGraphs(ds, {[LocalTermShape.shape.id]: 'https://example.org/graph/terms'})).not.toThrow();
+    expect(() => setShapeGraphs(ds, {[NodeShape.shape.id]: graphs.default})).not.toThrow();
   });
 });
 
