@@ -7,17 +7,21 @@ import type {CreateQuery} from '../queries/CreateQuery.js';
 import type {UpdateQuery} from '../queries/UpdateQuery.js';
 import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
 import type {GraphQuery, GraphResult} from '../queries/IntermediateRepresentation.js';
-import {triplesQueryOf, triplesTermsOf, type Triple, type TriplesQuery} from '../queries/triplesQuery.js';
+import {
+  triplesTermsOf,
+  triplesTermsQueryOf,
+  type Triple,
+  type TriplesQuery,
+  type TriplesTermsQuery,
+} from '../queries/triplesQuery.js';
 import {
   assertQuerySupported,
+  assertReadSupported,
   setQueryDispatch,
-  resolveExistence,
   resolveGraphQuery,
-  resolveTriples,
-  assertTriplesTarget,
-  resolveTriplesTerms,
-  assertTriplesTermsTarget,
+  resolveRead,
 } from '../queries/queryDispatch.js';
+import {readKindOf, type ReadQuery, type ReadResult} from '../queries/readQuery.js';
 import {ALL_QUERY_FEATURES} from '../queries/queryFeatures.js';
 import {
   catalogOf,
@@ -114,15 +118,12 @@ export abstract class LinkedStorage {
       routingState.defaultDataset.init();
     }
     setQueryDispatch({
-      selectQuery: (q) => this.selectQuery(q),
-      askQuery: (q) => this.askQuery(q),
+      readQuery: (q) => this.readQuery(q),
       createQuery: (q) => this.createQuery(q),
       updateQuery: (q) => this.updateQuery(q),
       deleteQuery: (q) => this.deleteQuery(q),
       graphQuery: (q) => this.graphQuery(q),
-      triplesQuery: (q) => this.triplesQuery(q),
-      triplesTermsQuery: (q) => this.triplesTermsQuery(q),
-      // Every feature: `selectQuery` checks the dataset each select is routed to.
+      // Every feature: `readQuery` checks the dataset each read is routed to.
       supports: ALL_QUERY_FEATURES,
     });
     notifyRoutingChanged();
@@ -351,8 +352,7 @@ export abstract class LinkedStorage {
   static begin(): Transaction {
     return new Transaction({
       datasetFor: (query) => this.datasetInTransaction(query),
-      selectQuery: (query) => this.selectQuery(query),
-      askQuery: (query) => this.askQuery(query),
+      readQuery: (query) => this.readQuery(query),
       createQuery: (query) => this.createQuery(query),
       updateQuery: (query) => this.updateQuery(query),
       deleteQuery: (query) => this.deleteQuery(query),
@@ -423,31 +423,56 @@ export abstract class LinkedStorage {
   }
 
   /**
-   * Route a select query — **and a count**, which is a select.
+   * Route a read (see `IDataset.readQuery`) by its kind:
    *
-   * A count is not a separate query form (an ask is: `ASK WHERE { … }`); it is
-   * `SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE { … }`, routed by the same shape to
-   * the same dataset and answered over the same channel. So it needs no arm of its
-   * own here — which is the point: when it had one, this router was missing it, and
-   * `.count()` failed on every path that went through the router while passing
-   * against a store held directly.
+   * - a **select** or a **count** (a select with an aggregate projection) by its shape, to one
+   *   dataset;
+   * - an **ask** by its shape, or, shapeless, to every dataset this router knows
+   *   ({@link askAnyDataset});
+   * - a **triples read** by its record class (a graph read), or to every dataset
+   *   ({@link readTriples});
+   * - a **terms read** to every dataset ({@link readTerms}).
    *
-   * The count contract — a real, non-negative integer, a failure never flattened
-   * into `0` — belongs to `resolveCount`, which the builder goes through. None of it
-   * is re-implemented here, exactly as none of `resolveExistence` is.
+   * Each dataset is sent the read through `resolveRead`, which holds it to the read's contract
+   * (features, the ask fallback, the answer checks); none of it is re-implemented here. The
+   * dataset is called outside any shape catalog: a router's own queries never run in the query's
+   * catalog (routing resolves in the catalog the query captured).
    */
-  static selectQuery<ResultType>(
-    query: SelectQuery | CountQuery,
-  ): Promise<ResultType> {
+  static readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    let kind: ReturnType<typeof readKindOf>;
+    try {
+      kind = readKindOf(query);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+    switch (kind) {
+      case 'select':
+      case 'count':
+        return this.readByShape(query as SelectQuery | CountQuery) as Promise<ReadResult<Q>>;
+      case 'ask':
+        return this.ask(query as AskQuery) as Promise<ReadResult<Q>>;
+      case 'triples':
+        return this.readTriples(query as TriplesQuery) as Promise<ReadResult<Q>>;
+      case 'triples_terms':
+        return this.readTerms(query as TriplesTermsQuery) as Promise<ReadResult<Q>>;
+    }
+  }
+
+  /**
+   * Route a select — **and a count**, which is a select: routed by the same shape to the same
+   * dataset. The count contract (a real, non-negative integer, a failure never flattened into
+   * `0`) belongs to `resolveRead`.
+   */
+  private static readByShape(query: SelectQuery | CountQuery): Promise<unknown> {
     if (!query?.shape) {
       return Promise.reject(
         new Error(
-          'Invalid select query passed to LinkedStorage.selectQuery(): missing shape.',
+          'Invalid select query passed to LinkedStorage.readQuery(): missing shape.',
         ),
       );
     }
     const dataset = this.resolveDatasetForQuery(query);
-    if (!dataset?.selectQuery) {
+    if (!dataset?.readQuery) {
       return Promise.reject(
         new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().'),
       );
@@ -457,10 +482,12 @@ export abstract class LinkedStorage {
     } catch (err) {
       return Promise.reject(err);
     }
-    // Called outside any catalog: a router's own queries never run in the query's catalog.
-    return (getActiveShapeCatalog() === undefined
-      ? dataset.selectQuery(query)
-      : outsideShapeCatalog(() => dataset.selectQuery(query))) as Promise<ResultType>;
+    return this.outsideCatalog(() => resolveRead(dataset, query));
+  }
+
+  /** Run `send` outside any shape catalog (see {@link readQuery}). */
+  private static outsideCatalog<T>(send: () => Promise<T>): Promise<T> {
+    return getActiveShapeCatalog() === undefined ? send() : outsideShapeCatalog(send);
   }
 
   /**
@@ -479,11 +506,10 @@ export abstract class LinkedStorage {
    * ask means "anywhere I can reach", not "in my default store".
    *
    * The contract itself — a real boolean, errors never flattened to `false`, and
-   * the answer for a dataset without `askQuery` (a select `LIMIT 1`) — belongs to
-   * `resolveExistence`, which the builder also goes through. None of it is
-   * re-implemented here.
+   * the answer for a dataset without `'ask'` (a select `LIMIT 1`) — belongs to
+   * `resolveRead`, which the builder also goes through.
    */
-  static async askQuery(query: AskQuery): Promise<boolean> {
+  private static async ask(query: AskQuery): Promise<boolean> {
     if (!query?.shape) {
       return this.askAnyDataset(query);
     }
@@ -493,9 +519,7 @@ export abstract class LinkedStorage {
         'No query dataset configured. Call LinkedStorage.setDefaultDataset().',
       );
     }
-    return getActiveShapeCatalog() === undefined
-      ? resolveExistence(dataset, query)
-      : outsideShapeCatalog(() => resolveExistence(dataset, query));
+    return this.outsideCatalog(() => resolveRead(dataset, query));
   }
 
   /**
@@ -520,10 +544,7 @@ export abstract class LinkedStorage {
     }
     if (datasets.size > 1) noticeFanOut('ask', datasets.size);
     for (const dataset of datasets) {
-      const exists = getActiveShapeCatalog() === undefined
-        ? resolveExistence(dataset, query)
-        : outsideShapeCatalog(() => resolveExistence(dataset, query));
-      if (await exists) return true;
+      if (await this.outsideCatalog(() => resolveRead(dataset, query))) return true;
     }
     return false;
   }
@@ -655,16 +676,14 @@ export abstract class LinkedStorage {
    * write. A subject read has no shape and so no routing key: like a shapeless ask it means
    * "anywhere I can reach", so it is sent to every dataset this router knows, in order, and the
    * answers are joined (up to the read's `limit`). A dataset that cannot answer it fails the read,
-   * checked for every dataset before the first is asked: a missing part is not an empty one. With more than one dataset and no `.from()` graphs, that
-   * fan-out logs a notice once per call site (`noticeFanOut`), naming `.exec(dataset)` and
-   * `.from(graph)`; a read with graphs still reads every dataset, in those graphs only.
+   * checked for every dataset before the first is asked: a missing part is not an empty one. With
+   * more than one dataset and no `.from()` graphs, that fan-out logs a notice once per call site
+   * (`noticeFanOut`), naming `.exec(dataset)` and `.from(graph)`; a read with graphs still reads
+   * every dataset, in those graphs only.
    */
-  static async triplesQuery(query: TriplesQuery): Promise<Triple[]> {
-    const run = (dataset: IDataset) =>
-      getActiveShapeCatalog() === undefined
-        ? resolveTriples(dataset, query)
-        : outsideShapeCatalog(() => resolveTriples(dataset, query));
-    if (query?.recordClass) {
+  private static async readTriples(query: TriplesQuery): Promise<Triple[]> {
+    const run = (dataset: IDataset) => this.outsideCatalog(() => resolveRead(dataset, query));
+    if (query.recordClass) {
       const dataset = this.resolveDatasetForRecordClass(query.recordClass);
       if (!dataset) {
         throw new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().');
@@ -677,7 +696,7 @@ export abstract class LinkedStorage {
     }
     // Every dataset the read goes to is checked before the first is asked, so a dataset that
     // cannot answer fails the read wherever it is in the order (the limit may be reached first).
-    for (const dataset of datasets) assertTriplesTarget(dataset, query);
+    for (const dataset of datasets) assertReadSupported(dataset, query);
     // Before the first `await`, while the caller's frames are still on the stack.
     if (datasets.size > 1 && !query.graphs?.length) noticeFanOut('triples', datasets.size);
     const triples: Triple[] = [];
@@ -696,22 +715,18 @@ export abstract class LinkedStorage {
    * (each term once, in the list's order); every dataset is checked before the first is asked,
    * and a fan-out without `.from()` graphs logs the same notice as a node read's.
    */
-  static async triplesTermsQuery(input: TriplesQuery): Promise<string[]> {
-    const query = triplesQueryOf(input);
-    const run = (dataset: IDataset) =>
-      getActiveShapeCatalog() === undefined
-        ? resolveTriplesTerms(dataset, query)
-        : outsideShapeCatalog(() => resolveTriplesTerms(dataset, query));
+  private static async readTerms(input: TriplesTermsQuery): Promise<string[]> {
+    const query = triplesTermsQueryOf(input);
     const datasets = this.getDatasets();
     if (datasets.size === 0) {
       throw new Error('No query dataset configured. Call LinkedStorage.setDefaultDataset().');
     }
-    for (const dataset of datasets) assertTriplesTermsTarget(dataset, query);
+    for (const dataset of datasets) assertReadSupported(dataset, query);
     if (datasets.size > 1 && !query.graphs?.length) noticeFanOut('triples', datasets.size);
     const found = new Set<string>();
     const terms = triplesTermsOf(query);
     for (const dataset of datasets) {
-      for (const term of await run(dataset)) found.add(term);
+      for (const term of await this.outsideCatalog(() => resolveRead(dataset, query))) found.add(term);
       if (found.size === terms.length) break;
     }
     return terms.filter((term) => found.has(term));

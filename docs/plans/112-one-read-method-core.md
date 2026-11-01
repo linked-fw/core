@@ -43,6 +43,8 @@ Contracts: master plan [111](111-one-read-method.md) C-1 to C-8 (after the owner
 | 5 | phase 2, C-5 | Where a select's feature check runs in `QueryBuilder.exec` (it threw outside the error wrapping) | Keep `assertQuerySupported` before the `try`, then `resolveRead` (which checks again) | Only `resolveRead` inside the `try` | The refusal keeps its own message, unwrapped, as today |
 | 6 | phase 2, C-5 | `exec(target)` of a select, count or ask was not observed (no instrumenting), unlike graph, triples and mutations | Unchanged: they call `resolveRead(target ?? dispatch, q)`; triples and terms use `dispatchRead` (observed) | Route every builder through `dispatchRead` | Backward compatibility: listeners (the live-query store) see what they saw |
 | 7 | phase 2, C-5 | `assertTriplesTarget`/`assertTriplesTermsTarget` are removed, but a router needs to check every dataset before it asks the first | New exported `assertReadSupported(target, query)` (any read kind), used by `resolveRead`, `dispatchRead` and `LinkedStorage`. **Contract addition** (C-5) | Keep the two per-kind asserts | One explicit way, the same check for every kind |
+| 8 | phase 3, C-6 | `Transaction.supports` must not list `triples`/`triplesTerms` (C-6), so `TriplesBuilder…exec(tx)` is refused by the feature check ("does not declare 'triples'", naming `Transaction`) before the transaction's own "does not run in a transaction" | Keep the contract; `Transaction.readQuery` still refuses them with today's messages when called directly | List them so the transaction's own message is reached | The contract as written; the refusal still names the transaction |
+| 9 | phase 3 | `LinkedStorage` used to call `dataset.selectQuery` directly for a select/count (the builder validated the count) | Every routed dataset is sent its read through `resolveRead` (a count is checked there too) | Call `dataset.readQuery` directly for select/count | C-3: a router listing `ALL_QUERY_FEATURES` forwards through `resolveRead` |
 | 4 | phase 1, C-2 | `readKindOf` on a plain object with neither `__queryKind` nor a read `kind` | Throw, naming what it got | Treat it as a select | Discriminate on the kind, never structurally (C-2) |
 
 ## Progress
@@ -50,5 +52,6 @@ Contracts: master plan [111](111-one-read-method.md) C-1 to C-8 (after the owner
 | Phase | Status | Commit | Validation |
 |---|---|---|---|
 | 1 types, features, terms kind | done | 9607362 | `tsc --pretty false`: no error in `readQuery.ts`, `triplesQuery.ts`, `queryFeatures.ts`, `wireVersion.ts`, `fromJSON.ts`, `index.ts` (the others are the callers of phases 2-4) |
-| 2 dispatch and builders | done | (next commit) | `tsc --pretty false`: no error in `queryDispatch.ts`, `IDataset.ts`, the five builders |
+| 2 dispatch and builders | done | a9a3c95 | `tsc --pretty false`: no error in `queryDispatch.ts`, `IDataset.ts`, the five builders |
+| 3 LinkedStorage and Transaction | done | (next commit) | `tsc --pretty false`: no error in `LinkedStorage.ts`, `Transaction.ts` |
 

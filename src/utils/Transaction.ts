@@ -14,11 +14,10 @@ import type {
   CreateResult,
   GraphQuery,
   GraphResult,
-  SelectResult,
   UpdateResult,
 } from '../queries/IntermediateRepresentation.js';
-import type {Triple, TriplesQuery} from '../queries/triplesQuery.js';
-import {ALL_QUERY_FEATURES} from '../queries/queryFeatures.js';
+import {ALL_QUERY_FEATURES, type QueryFeature} from '../queries/queryFeatures.js';
+import {readKindOf, type ReadQuery, type ReadResult} from '../queries/readQuery.js';
 import {inTransaction} from '../queries/transactionQuery.js';
 import {notifyCommittedWrites, type CommittedWrite} from '../queries/queryDispatch.js';
 import {brandLinkedClass, brandLinkedError, isLinkedError} from './linkedError.js';
@@ -71,8 +70,8 @@ brandLinkedError(TransactionEndedError, '@_linked/core', 'TransactionEndedError'
 export interface TransactionRouter {
   /** The dataset a query of the transaction is routed to; throws when there is none. */
   datasetFor(query: object): IDataset;
-  selectQuery(query: SelectQuery | CountQuery): Promise<unknown>;
-  askQuery(query: AskQuery): Promise<boolean>;
+  /** Route a select, count or ask (the reads that run in a transaction). */
+  readQuery(query: SelectQuery | CountQuery | AskQuery): Promise<unknown>;
   createQuery(query: CreateQuery): Promise<unknown>;
   updateQuery(query: UpdateQuery): Promise<unknown>;
   deleteQuery(query: DeleteQuery): Promise<DeleteResponse>;
@@ -109,9 +108,17 @@ export function supportsTransactions(dataset: IDataset): boolean {
   return true;
 }
 
+/** The reads that do not run in a transaction: a transaction does not claim them. */
+const NOT_IN_A_TRANSACTION = new Set<QueryFeature>(['triples', 'triplesTerms']);
+
 export class Transaction implements IDataset {
-  /** Every feature: the dataset each query is routed to is checked by the router. */
-  readonly supports = ALL_QUERY_FEATURES;
+  /**
+   * Every feature but the triples and terms reads (they do not run in a transaction): the dataset
+   * each query is routed to is checked by the router.
+   */
+  readonly supports: readonly QueryFeature[] = Object.freeze(
+    ALL_QUERY_FEATURES.filter((feature) => !NOT_IN_A_TRANSACTION.has(feature)),
+  );
   /**
    * The live-query store waits: a write in a transaction is not visible outside it, so it is
    * reported when the transaction commits (or at once, for a store that runs it directly).
@@ -147,12 +154,30 @@ export class Transaction implements IDataset {
   // The dispatch surface `exec(tx)` calls
   // ---------------------------------------------------------------------------
 
-  selectQuery(query: SelectQuery | CountQuery): Promise<SelectResult | number> {
-    return this.run(query, (q) => this.router.selectQuery(q)) as Promise<SelectResult | number>;
-  }
-
-  askQuery(query: AskQuery): Promise<boolean> {
-    return this.run(query, (q) => this.router.askQuery(q));
+  /**
+   * Run a select, count or ask in the transaction. A triples or terms read is refused: it does not
+   * run in a transaction (send it with `exec()` or `exec(dataset)`).
+   */
+  readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    let kind: ReturnType<typeof readKindOf>;
+    try {
+      kind = readKindOf(query);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+    if (kind === 'triples') {
+      return Promise.reject(
+        new Error('A triples read does not run in a transaction: send it with exec() or exec(dataset).'),
+      );
+    }
+    if (kind === 'triples_terms') {
+      return Promise.reject(
+        new Error('A terms read does not run in a transaction: send it with whichExist() or whichExist(dataset).'),
+      );
+    }
+    return this.run(query as SelectQuery | CountQuery | AskQuery, (q) => this.router.readQuery(q)) as Promise<
+      ReadResult<Q>
+    >;
   }
 
   createQuery(query: CreateQuery): Promise<CreateResult> {
@@ -174,19 +199,6 @@ export class Transaction implements IDataset {
     );
   }
 
-  /** Refused: a triples read does not run in a transaction. */
-  triplesQuery(_query: TriplesQuery): Promise<Triple[]> {
-    return Promise.reject(
-      new Error('A triples read does not run in a transaction: send it with exec() or exec(dataset).'),
-    );
-  }
-
-  /** Refused: a terms read does not run in a transaction. */
-  triplesTermsQuery(_query: TriplesQuery): Promise<string[]> {
-    return Promise.reject(
-      new Error('A terms read does not run in a transaction: send it with whichExist() or whichExist(dataset).'),
-    );
-  }
 
   // ---------------------------------------------------------------------------
   // Ending
