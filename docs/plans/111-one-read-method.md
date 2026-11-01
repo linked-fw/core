@@ -525,7 +525,7 @@ server refuses triples/terms (S1). Applied in the contracts above.
 | Step | Repo | Scope | Depends on | Status | Commits | Report | Notes |
 |---|---|---|---|---|---|---|---|
 | C1 | core | readQuery, features, dispatch, stores | — | done | `1ffeb58` (docs), `9607362`..`81f3a67`, wrapup | 112 | contract change C-4 (`TriplesTermsQuery` keeps the fixed positions; no `recordClass`/`limit`), additions C-5 (`assertReadSupported`, `toTriplesTermsQuery()`) |
-| S1 | server | RemoteDataset + readQuery endpoint | C1 | todo | | 028 | |
+| S1 | server | RemoteDataset + readQuery endpoint | C1 | done | `5bb39e7`..`f79155c` | 028 | `/api/select` also checks by kind; refusal messages capped; backlog 006 (triples/terms over `/call`); no contract change |
 | N1 | CN | routers, stores, Execution Gateway, gateway readQuery endpoint, unit tests | C1 (rebase on S1) | todo | | 395 | |
 | N2 | CN | integration specs, probes, arch docs, regular set | N1, S1 | todo | | 396 | |
 | X1 | fuseki, react, shape-ui, cli, auth, server-utils | test doubles, comments | C1 | done | react `a2512bb`, shape-ui `a02790c`, cli `a38fa01`, auth `8ddbef7`, server-utils `2f75086`, fuseki none | 113 (cli 047) | cli template pin moves to the new core minor at release |
