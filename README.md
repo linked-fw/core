@@ -1441,6 +1441,58 @@ target, `LinkedStorage` sends it to the one dataset it knows, and refuses it whe
 (name the dataset). It reaches every data graph, so a receiver that runs it for a client decides
 who may send it.
 
+#### Transactions
+
+`LinkedStorage.begin()` opens a store transaction; pass it to `exec(tx)`. No dataset is named: the
+transaction binds to a store when shape routing first sends one of its queries there, and calls
+that store's `beginTransaction()`. Every later query to that store carries the txId and is sent at
+once (nothing is buffered); reads in the transaction see its own writes, and nothing of it shows
+outside before the commit.
+
+```typescript
+import {LinkedStorage} from '@_linked/core';
+
+const tx = LinkedStorage.begin();             // nothing is sent yet
+await AppConfig.delete(oldId).exec(tx);       // routed to store X: X.beginTransaction() → t1
+await AppConfig.create(cfg).exec(tx);         // sent at once, with t1
+const c = await AppConfig.select().exec(tx);  // X answers with t1's own writes
+await tx.commit();                            // X.commit(t1)
+
+// The convenient form: commit on return, rollback on a throw.
+await LinkedStorage.transaction(async (tx) => {
+  await AppConfig.delete(oldId).exec(tx);
+  await AppConfig.create(cfg).exec(tx);
+});
+```
+
+- `exec(tx)` resolves when the store has applied the query inside the transaction.
+- A failed (or refused) query fails the transaction: it is rolled back in every store it reached,
+  and the error is passed on.
+- After the end, a query, a second `commit()` or a `rollback()` after a commit throws
+  `TransactionEndedError`; a `rollback()` of a rolled back transaction does nothing, so a `catch`
+  that rolls back never hides the error.
+- `tx.begin()` is refused (no nesting). Core has no async context, so pass `tx` on to the code that
+  should run in it.
+- An `update().for(id)` of a missing node writes nothing and resolves with its fields, as outside a
+  transaction.
+- Graph queries and triples reads do not run in a transaction.
+- Live queries hear of a transaction's writes when it commits.
+
+**Stores.** A store declares `'transactions'` in `supports` and implements `beginTransaction()`,
+`commit(txId)` and `rollback(txId)`; it reads the txId as `query.txId` (on DSL-JSON, from 1.4,
+as `txId`, which `fromJSON()` restores). It holds the transaction and rolls it back after an idle
+timeout of its own. A store without support (`SparqlDataset`, so Fuseki) is warned about once,
+loudly ("store X does not support transactions; these writes are not atomic"), and the queries run
+on it directly: core does not emulate transactions in SPARQL. A second store in one transaction
+gets a transaction of its own, with a warning that the stores together are not atomic. A query
+with a txId is refused by a store that does not declare `'transactions'`.
+
+`InMemoryDataset` (`@_linked/core/memory/InMemoryDataset`) keeps its data in memory and holds
+transactions for real: a snapshot at begin, swapped in at commit (refused when the store was
+written since), dropped at rollback, expired after 30 seconds idle (`transactionTimeoutMs`). It
+answers a subset of queries (creates, updates and deletes by id, selects, counts and asks of one
+shape with its own properties) and refuses the rest.
+
 
 ## Extending shapes
 
