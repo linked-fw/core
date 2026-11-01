@@ -412,18 +412,23 @@ Report 396.
   - cli: `defaults/app-react-native/apps/mobile/__tests__/nativeDefaults.test.tsx:16-18` (a
     template: generated apps run it against the new core) + `.changeset` (patch).
   - auth: `test/issuer-tokens.test.mjs:21`, `test/solid-access-token.test.mjs:27` (the URL fixture
-    becomes `…/readQuery`; DPoP `htu` only, no behaviour).
-  - server-utils: `src/utils/QueryAccess.ts:48,393,396` (comments: `LinkedStorage.readQuery`).
+    becomes `…/readQuery`; DPoP `htu` only, no behaviour) and the README's DPoP example URL.
+  - server-utils: the README's `rejectOnError` example (`method: 'readQuery'`).
+    `src/utils/QueryAccess.ts:48,393,396` name `LinkedStorage.graphQuery`, which stays (owner
+    decision 1); `Lincd_API_Client.selectQuery` calls the `LincdAPI` `select` route, not an
+    `IDataset` method: both unchanged.
 - **Pitfalls:** react's and shape-ui's doubles keep `graphQuery` and its `unsupportedGraphQuery`
   import. The cli template's test runs in a generated app, against the core that app installs:
   it is exercised by cli's `tests/template/react-native.full.test.ts`.
 - **Verify:** in each repo's worktree: react, shape-ui, fuseki, auth `npm test`; server-utils
-  `npm test`; cli `npm run test:unit` and `npx jest --config jest.config.cjs tests/template/react-native.full.test.ts`;
+  `npm test`; cli `npm run test:unit` and `RUN_TEMPLATE_FULL=1 npx jest --config jest.template.config.cjs tests/template/react-native.full.test.ts`
+  (the template suite has its own config and is gated; it needs the built CLI);
   quote the summaries.
   `grep -rnwE 'selectQuery|askQuery|triplesQuery|triplesTermsQuery' src test defaults`
   per repo → only unrelated identifiers.
-- **Done when:** every repo's tests pass against the landed C1; reports: fuseki 006, react 006,
-  shape-ui 007, cli 047, auth 024, server-utils 008 (one short report each); cli changeset in.
+- **Done when:** every repo's tests pass against the landed C1; one short core report, 113,
+  covers all six repos (owner simplification); cli, which publishes, also gets report 047 and a
+  patch changeset; the test-only repos get no changeset.
 - **Size:** small, 1 phase per repo (no plan doc).
 
 ### W — wrap-up (master)
@@ -432,7 +437,7 @@ Report 396.
 - **Scope:** the full CN regular set (`npm run test:regular`) and `npm run test:heavy` on the
   master worktree with its own port and dataset; core, server and satellite suites once more;
   a final security-minded review of S1 + N1 (authorization by decoded kind); one report linking
-  every repo's report (core report 113); this plan's status set to done; then
+  every repo's report (core report 114); this plan's status set to done; then
   `npx linked branch land one-read-method --dry-run` and, after the owner approves, the land.
 - **Size:** small.
 
@@ -451,10 +456,11 @@ CN's `npm run typecheck:gate` covers all of `src/`, so a partial conversion cann
 
 | Repo | Plan docs | Reports |
 |---|---|---|
-| core | 111 (this master plan), 112 (C1's plan doc, deleted at landing) | 112 (C1), 113 (wrap-up) |
+| core | 111 (this master plan), 112 (C1's plan doc, deleted at landing) | 112 (C1), 113 (X1, all six repos), 114 (wrap-up) |
 | server | 027 (sub-plan), 028 (S1's plan doc, deleted at landing) | 028 (S1) |
 | CN | 394 (sub-plan), 395 / 396 (N1's / N2's plan docs, deleted at landing) | 395 (N1), 396 (N2) |
-| fuseki / react / shape-ui / cli / auth / server-utils | none | 006 / 006 / 007 / 047 / 024 / 008 (X1) |
+| fuseki / react / shape-ui / auth / server-utils | none | none (X1 is core report 113) |
+| cli | none | 047 (X1, it publishes) |
 
 ## Release order
 
@@ -464,7 +470,10 @@ Through the release skill, only when the owner asks:
 2. **server** minor, its `@_linked/core` range raised to the core minor of step 1 (it calls
    `readQuery`). **fuseki**, **react**, **shape-ui**, **auth**, **server-utils**: their test-only
    PRs, after core is on npm (their CI installs core from npm, and the old doubles fail against
-   it). **cli** patch (the template test), after core.
+   it). **cli** patch (the template test), after core: the react-native
+   template pins `@_linked/core` exactly (`2.43.0` in `apps/mobile`, `packages/app-shapes`,
+   `services/api`), and its `nativeDefaults` stub answers only `readQuery`, so the cli release
+   PR moves that pin to the new core minor; until then the template's full test fails.
 3. **CN** last, with the ranges bumped (core, server, cli).
 
 A CN deployed before the server minor, or an app on `@_linked/server` ≤ 3.13 against a new CN
@@ -519,8 +528,8 @@ server refuses triples/terms (S1). Applied in the contracts above.
 | S1 | server | RemoteDataset + readQuery endpoint | C1 | todo | | 028 | |
 | N1 | CN | routers, stores, Execution Gateway, gateway readQuery endpoint, unit tests | C1 (rebase on S1) | todo | | 395 | |
 | N2 | CN | integration specs, probes, arch docs, regular set | N1, S1 | todo | | 396 | |
-| X1 | fuseki, react, shape-ui, cli, auth, server-utils | test doubles, comments | C1 | todo | | see numbers | |
-| W | all | wave runs, review, final report, land | all | todo | | 113 | |
+| X1 | fuseki, react, shape-ui, cli, auth, server-utils | test doubles, comments | C1 | done | react `a2512bb`, shape-ui `a02790c`, cli `a38fa01`, auth `8ddbef7`, server-utils `2f75086`, fuseki none | 113 (cli 047) | cli template pin moves to the new core minor at release |
+| W | all | wave runs, review, final report, land | all | todo | | 114 | |
 
 ## Starter prompt (template)
 
