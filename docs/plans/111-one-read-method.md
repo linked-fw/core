@@ -1,9 +1,9 @@
 ---
 summary: >
-  Master plan: every read method of IDataset (selectQuery, askQuery, graphQuery, triplesQuery,
+  Master plan: every read method of IDataset (selectQuery, askQuery, triplesQuery,
   triplesTermsQuery) becomes one method, readQuery<Q extends ReadQuery>(q): Promise<ReadResult<Q>>,
-  dispatched by the query's kind, with ask, graph, triples and terms support declared as query
-  features. One read endpoint on the /call wire (readQuery) in @_linked/server and CN's gateway;
+  dispatched by the query's kind, with ask, triples and terms support declared as query
+  features; graphQuery (a write) stays its own method. One read endpoint on the /call wire (readQuery) in @_linked/server and CN's gateway;
   DSL-JSON 1.10. Steps across core, server, CN and the repos with test doubles; waves, report
   numbers, release order.
 status: Plan
@@ -38,6 +38,13 @@ Collapse all read methods of `IDataset` into one method, `readQuery`.
   with `LIMIT 1`) keeps working, through the features.
 - Ships as a **minor** (the owner's semver rule). Release order: core, then dependants, then CN.
 
+**Owner decisions on the open questions (2026-11-01):** (1) `graphQuery` stays a separate
+method: graph kinds are writes, so `readQuery` covers select, count, ask, triples and terms only,
+there is no `'graph'` feature and graph detection stays as it is; (2) `LinkedStorage`'s read
+statics collapse into `LinkedStorage.readQuery`; (3) no legacy endpoints or aliases; (4) the
+server's `readQuery` refuses triples and terms reads (S1). The contracts below apply them; the
+bullets above are the original input.
+
 ## What the code says today (found, not assumed)
 
 - Published `@_linked/core` 2.45.0 (DSL-JSON 1.1) has `selectQuery`, `askQuery?`, `graphQuery`.
@@ -57,7 +64,7 @@ Collapse all read methods of `IDataset` into one method, `readQuery`.
   `RemoteDataset` has no `triplesQuery`.
 - Graph support is detected by method presence in three places
   (`shapes/syncShapeGraphs.ts:147`, `shapes/syncTargets.ts:476`, `ontology/syncOntologies.ts:278`)
-  and in `resolveGraphQuery`; with one method that becomes the `'graph'` feature.
+  and in `resolveGraphQuery`; it stays so (graph queries keep their own method).
 - `instrumentDispatch` casts an `IDataset` to `QueryDispatch` (`queryDispatch.ts`), so the
   dispatch interface must have the same read method as `IDataset`.
 
@@ -86,23 +93,26 @@ Provider: core, unless noted. Consumers: every step. Items marked *open* wait on
 ### C-1 `IDataset.readQuery`
 
 ```ts
-// src/interfaces/IDataset.ts — replaces selectQuery, askQuery?, graphQuery, triplesQuery?, triplesTermsQuery?
+// src/interfaces/IDataset.ts — replaces selectQuery, askQuery?, triplesQuery?, triplesTermsQuery?
 readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>>;
+graphQuery(query: GraphQuery): Promise<GraphResult>; // unchanged: graph kinds are writes
 ```
 
 Required. Every dataset answers `select` and `count` (the baseline, as `selectQuery` did). A kind
 beyond the baseline is sent only to a dataset that declares its feature (C-3); a dataset handed a
-kind it does not handle rejects (graph kinds: `unsupportedGraphQuery(query)`, as today). Must
-reject on failure; an unreachable store is never an empty answer, `false` or `0`.
+kind it does not handle rejects. Must reject on failure; an unreachable store is never an empty
+answer, `false` or `0`. **`graphQuery` stays a method of its own** (owner decision 1): every
+`GraphQuery` kind writes a graph and its record, routers fork and fire `onWrite` for it, and
+transactions refuse it, so it is not a read.
 
 ### C-2 Types and helpers (new module `src/queries/readQuery.ts`, export path `@_linked/core/queries/readQuery`)
 
 ```ts
 export type ReadQuery =
   | SelectQuery | CountQuery | AskQuery      // live (closed) queries, by __queryKind
-  | GraphQuery | TriplesQuery | TriplesTermsQuery; // plain data, by kind
+  | TriplesQuery | TriplesTermsQuery;        // plain data, by kind
 
-export type ReadKind = 'select' | 'count' | 'ask' | 'graph' | 'triples' | 'triples_terms';
+export type ReadKind = 'select' | 'count' | 'ask' | 'triples' | 'triples_terms';
 
 export type ReadResult<Q extends ReadQuery> =
   Q extends {readonly __queryKind: 'count'} ? number :
@@ -110,12 +120,11 @@ export type ReadResult<Q extends ReadQuery> =
   Q extends {readonly __queryKind: 'select'} ? SelectResult :
   Q extends {kind: 'triples_terms'} ? string[] :
   Q extends {kind: 'triples'} ? Triple[] :
-  Q extends GraphQuery ? GraphResult :
   never;
 
-/** The kind of a read: `__queryKind` of a live query, else from `kind` (`graph_*` → 'graph'). Throws on a mutation. */
+/** The kind of a read: `__queryKind` of a live query, else `kind`. Throws on a mutation or a graph query. */
 export function readKindOf(query: ReadQuery): ReadKind;
-/** The same for a wire body (DSL-JSON `op`, absent = select; plain-data `kind`). Throws on a mutation envelope or an unknown kind. */
+/** The same for a wire body (DSL-JSON `op`, absent = select; plain-data `kind`). Throws on a mutation envelope, a graph kind or an unknown kind. */
 export function readKindOfJSON(json: unknown): ReadKind;
 /** The features a read needs (C-3): a select's/count's own (featuresOf), plus the kind's. */
 export function readFeaturesOf(query: ReadQuery): QueryFeature[];
@@ -129,25 +138,25 @@ structurally. Re-export the types and `readKindOf` from `src/index.ts`.
 ```ts
 export type QueryFeature =
   | 'groupBy' | 'min' | 'max' | 'shapelessDelete' | 'triplesPattern' | 'transactions'
-  | 'ask' | 'graph' | 'triples' | 'triplesTerms';   // new
+  | 'ask' | 'triples' | 'triplesTerms';   // new
 ```
 
 | Feature | Declared by a dataset that… | Without it |
 |---|---|---|
 | `ask` | answers an `AskQuery` natively | the dispatch sends the ask's pattern as a select of ids with `LIMIT 1` (`true` when a row comes back); a shapeless ask is refused — today's `resolveExistence`, unchanged |
-| `graph` | answers graph queries (`graph_create/replace/patch/drop`) | refused before it is sent with `unsupportedGraphQuery` (`unsupported-query-kind`), which the ontology sync and graph callers already fall back on; the syncs treat the store as holding no named graphs (as for a missing method today) |
 | `triples` | answers a triples read (graph, subject read) | refused, as `resolveTriples` refuses a store without `triplesQuery` |
 | `triplesPattern` | (unchanged) also answers a triples read that fixes the predicate or the object | refused |
 | `triplesTerms` | answers a terms read (C-4) | refused |
 
-- `ALL_QUERY_FEATURES` gains `ask`, `graph`, `triples`, `triplesTerms` (it stays "what a SPARQL
-  store supports"; `transactions` stays out). `SparqlDataset` keeps `supports = ALL_QUERY_FEATURES`.
-- `InMemoryDataset.supports` becomes `['shapelessDelete', 'transactions', 'ask']` (its graph
-  method only refuses today; no triples).
+- There is **no `'graph'` feature**: graph support stays detected as today (a `graphQuery`
+  method, and `unsupported-query-kind` from one that refuses).
+- `ALL_QUERY_FEATURES` gains `ask`, `triples`, `triplesTerms` (it stays "what a SPARQL store
+  supports"; `transactions` stays out). `SparqlDataset` keeps `supports = ALL_QUERY_FEATURES`.
+- `InMemoryDataset.supports` becomes `['shapelessDelete', 'transactions', 'ask']` (no triples).
 - A router lists what it forwards and checks each target itself (as today). A router that lists
   `ALL_QUERY_FEATURES` must forward through `resolveRead` (C-5), never `child.readQuery(q)`
-  directly, so a child without `ask` still gets the fallback and a child without `graph`/`triples`
-  is refused with the right error.
+  directly, so a child without `ask` still gets the fallback and a child without `triples` is
+  refused with the right error.
 - `parseRequires` knows the new names (they are in `ALL_QUERY_FEATURES`); no query writes them
   into `requires`, since the kind carries them.
 
@@ -181,7 +190,8 @@ only the list's own, as today). Per-400-term chunking in `SparqlDataset` is unch
 
 ```ts
 export interface QueryDispatch {
-  readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>>; // replaces selectQuery, askQuery, graphQuery?, triplesQuery?, triplesTermsQuery?
+  readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>>; // replaces selectQuery, askQuery, triplesQuery?, triplesTermsQuery?
+  graphQuery?(query: GraphQuery): Promise<GraphResult>;             // unchanged
   createQuery<R = any>(query: CreateQuery): Promise<R>;
   updateQuery<R = any>(query: UpdateQuery): Promise<R>;
   deleteQuery(query: DeleteQuery): Promise<DeleteResponse>;
@@ -197,26 +207,27 @@ type ReadTarget = Pick<IDataset, 'readQuery' | 'supports'>;
 
 `resolveRead` keeps every check the per-kind helpers make today: select → `assertQuerySupported`
 (features, txId); count → a non-negative integer or reject; ask → `ask` declared: a real boolean
-or reject, else the `LIMIT 1` fallback (shapeless refused); graph → `graph` declared else
-`unsupportedGraphQuery`; triples → `triples` (+`triplesPattern`) declared, an array or reject;
-terms → `triplesTerms` declared, an array of IRIs, filtered to the list's own.
+or reject, else the `LIMIT 1` fallback (shapeless refused); triples → `triples` (+`triplesPattern`)
+declared, an array or reject; terms → `triplesTerms` declared, an array of IRIs, filtered to the
+list's own.
 
 **Removed** (no alias): `resolveExistence`, `resolveCount`, `resolveTriples`, `resolveTriplesTerms`,
-`resolveGraphQuery`, `dispatchGraphQuery`, `dispatchTriplesQuery`, `dispatchTriplesTermsQuery`,
-`assertTriplesTarget`, `assertTriplesTermsTarget`. `assertQuerySupported` stays (CN's gateway
-uses it). `QueryDispatchEvent.kind` values stay as today (`'select'` for a select and a count,
-`'ask'`, `'graph'`, `'triples'`, `'triplesTerms'`, plus the writes): listeners are unaffected.
+`dispatchTriplesQuery`, `dispatchTriplesTermsQuery`, `assertTriplesTarget`,
+`assertTriplesTermsTarget`. **Kept:** `resolveGraphQuery`, `dispatchGraphQuery` (graph queries are
+not reads), `assertQuerySupported` (CN's gateway uses it). `QueryDispatchEvent.kind` values stay
+as today (`'select'` for a select and a count, `'ask'`, `'graph'`, `'triples'`, `'triplesTerms'`,
+plus the writes): listeners are unaffected.
 
-### C-6 `LinkedStorage`, `Transaction` *(open question 2 for the statics)*
+### C-6 `LinkedStorage`, `Transaction`
 
 - `LinkedStorage.readQuery<Q extends ReadQuery>(q: Q): Promise<ReadResult<Q>>` replaces the
-  statics `selectQuery`, `askQuery`, `graphQuery`, `triplesQuery`, `triplesTermsQuery`. It routes
-  per kind exactly as the five do today (select/count/ask by shape, a shapeless ask across the
-  datasets with the fan-out notice, graph by record class, triples and terms as today, every one
-  outside the shape catalog where it is today). Writes keep their statics.
-- `Transaction.readQuery` runs select, count and ask in the transaction; graph, triples and terms
-  reads are refused with today's messages ("does not run in a transaction"). `Transaction.supports`
-  does not list `graph`, `triples`, `triplesTerms`.
+  statics `selectQuery`, `askQuery`, `triplesQuery`, `triplesTermsQuery` (owner decision 2). It
+  routes per kind exactly as the four do today (select/count/ask by shape, a shapeless ask across
+  the datasets with the fan-out notice, triples and terms as today, every one outside the shape
+  catalog where it is today). `LinkedStorage.graphQuery` and the write statics stay.
+- `Transaction.readQuery` runs select, count and ask in the transaction; triples and terms reads
+  are refused with today's messages ("does not run in a transaction"). `Transaction.graphQuery`
+  refuses as today. `Transaction.supports` does not list `triples`, `triplesTerms`.
 - `TransactionRouter` (`utils/Transaction.ts`): `readQuery(query: SelectQuery | CountQuery | AskQuery)`
   replaces `selectQuery` and `askQuery`. CN's `AppDataRouter.gatewayRouter` and
   `ExecutionGateway.childRouter` implement it.
@@ -226,19 +237,19 @@ uses it). `QueryDispatchEvent.kind` values stay as today (`'select'` for a selec
 - One read endpoint: `POST /call/@_linked/server/readQuery` with `{"args": [json]}`, on
   `@_linked/server`'s provider (`@callable('public')`) and on CN's gateway
   (`/gateway/call/@_linked/server/readQuery`). `json` is the query's wire form: DSL-JSON for
-  select, count and ask (`op`; absent = select), plain data for graph, triples and terms
-  (`kind`). The receiver decodes with `readKindOfJSON` and then `fromJSON` / `parseGraphQuery` /
-  `parseTriplesQuery` / `parseTriplesTermsQuery`.
-- Removed endpoints: `selectQuery`, `askQuery`, `graphQuery` (server and gateway),
-  `triplesQuery`, `triplesTermsQuery` (gateway). Writes, `ping`, `beginTransaction`, `commit`,
-  `rollback` and `rawQuery` are unchanged. *(open question 3: compatibility with older clients)*
+  select, count and ask (`op`; absent = select), plain data for triples and terms (`kind`). The
+  receiver decodes with `readKindOfJSON` and then `fromJSON` / `parseTriplesQuery` /
+  `parseTriplesTermsQuery`. A graph query posted to `readQuery` is refused (400).
+- **`graphQuery` stays its own endpoint** on the server and the gateway, unchanged.
+- Removed endpoints (owner decision 3, no legacy): `selectQuery`, `askQuery` (server and gateway),
+  `triplesQuery`, `triplesTermsQuery` (gateway). Writes, `graphQuery`, `ping`,
+  `beginTransaction`, `commit`, `rollback` and `rawQuery` are unchanged.
 - Authorization is by the decoded kind, never the endpoint: select and count under the `select`
-  operation, ask under `ask`, graph under the `graph` rule (a write: CN's gateway forks and runs
-  `onGraphWrite` as now), triples and terms under `triples` (gateway only). A graph query with a
-  `txId` is refused as today. Refusal codes and statuses are unchanged; the endpoint name in error
-  messages becomes `readQuery`.
+  operation, ask under `ask`, triples and terms under `triples` (gateway only). Graph queries are
+  authorized on `graphQuery` as today. Refusal codes and statuses are unchanged; the endpoint
+  name in error messages becomes `readQuery`.
 - The server's `readQuery` refuses `triples` and `triples_terms` with 400 (it has no triples
-  reads today; *open question 4*). `RemoteDataset.supports` is `['ask', 'graph']`, plus
+  reads today; owner decision 4 leaves that to S1). `RemoteDataset.supports` is `['ask']`, plus
   `'transactions'` once `ping` lists it; it does not claim `triples`/`triplesTerms` or the select
   features (it declares none of those today either).
 - DSL-JSON **1.10** (`WIRE_VERSION = '1.10'`): "a terms read is `kind: 'triples_terms'` (a
@@ -248,9 +259,11 @@ uses it). `QueryDispatchEvent.kind` values stay as today (`'select'` for a selec
 ### C-8 Not changed
 
 Builders and their results (`exec()`, `.exists()`, `.whichExist()`, `NamedGraph.readContent`,
-the graph statics, `Shape.select`/`.count`/`.exists`); the writes; `IDataset`'s other members;
-`GraphQuery`/`GraphResult`/`Triple`/`SelectResult` shapes; `Lincd_API_Client` and the server's
-`/api/select` legacy path.
+the graph statics, `Shape.select`/`.count`/`.exists`); the writes; **`IDataset.graphQuery`,
+`QueryDispatch.graphQuery`, `LinkedStorage.graphQuery`, `resolveGraphQuery`, `dispatchGraphQuery`
+and graph detection** (`syncShapeGraphs`, `syncTargets`, `syncOntologies` keep checking for a
+`graphQuery` method); `IDataset`'s other members; `GraphQuery`/`GraphResult`/`Triple`/`SelectResult`
+shapes; `Lincd_API_Client` and the server's `/api/select` legacy path.
 
 ## Decisions taken in this plan (reversible by the owner)
 
@@ -258,8 +271,8 @@ the graph statics, `Shape.select`/`.count`/`.exists`); the writes; `IDataset`'s 
   type `string[]` against `Triple[]`, and the form never shipped.
 - The per-kind `resolve*`/`dispatch*` helpers fold into `resolveRead`/`dispatchRead` (C-5): one
   explicit way.
-- Graph support becomes the feature `'graph'` (C-3): with one method, presence can no longer say
-  whether a store holds named graphs.
+- ~~Graph support becomes the feature `'graph'`~~: withdrawn by owner decision 1 (`graphQuery`
+  stays its own method, graph detection unchanged).
 
 ## Rules for every step
 
@@ -278,9 +291,9 @@ the graph statics, `Shape.select`/`.count`/`.exists`); the writes; `IDataset`'s 
 - `strictNullChecks`; no `as any`, `@ts-ignore` or `@ts-expect-error`. A cast `as ReadResult<Q>`
   inside a `switch (readKindOf(q))` arm is the expected way to answer the generic signature.
 - No alias, no legacy method, no compatibility shim for `selectQuery` & co. Grep for the old
-  names before landing: `grep -rnwE 'selectQuery|askQuery|graphQuery|triplesQuery|triplesTermsQuery'`
+  names before landing: `grep -rnwE 'selectQuery|askQuery|triplesQuery|triplesTermsQuery'`
   over the step's repo (source, tests, README, docs/architecture) must show only historical
-  reports/plans and unrelated identifiers (e.g. a local variable named `graphQuery`).
+  reports/plans and unrelated identifiers (`graphQuery` stays a method: owner decision 1).
 - Every framework repo with a published change gets a changeset (core minor, server minor, cli
   patch); test-only repos get none.
 - Commits and reports never name the AI tooling; code comments never name steps or phases.
@@ -296,8 +309,8 @@ the graph statics, `Shape.select`/`.count`/`.exists`); the writes; `IDataset`'s 
   `Transaction`, the builders and core's tests use it; DSL-JSON 1.10.
 - **Scope:** C-1 to C-6 and C-7's DSL-JSON part, in core only. Docs and changesets.
 - **Files:**
-  - `src/interfaces/IDataset.ts` (the method and its doc: fold the select/count, ask, graph,
-    triples, terms docs into one, per kind).
+  - `src/interfaces/IDataset.ts` (the method and its doc: fold the select/count, ask,
+    triples, terms docs into one, per kind; `graphQuery` stays).
   - `src/queries/readQuery.ts` (new; the `./*` export covers its subpath), `src/index.ts` (exports).
   - `src/queries/queryFeatures.ts`, `src/queries/queryDispatch.ts`, `src/queries/triplesQuery.ts`,
     `src/queries/wireVersion.ts`, `src/queries/fromJSON.ts` (its two error messages).
@@ -307,11 +320,10 @@ the graph statics, `Shape.select`/`.count`/`.exists`); the writes; `IDataset`'s 
   - `src/utils/LinkedStorage.ts` (statics, `setDefaultDataset`'s dispatch, `begin()`'s router),
     `src/utils/Transaction.ts`, `src/utils/fanOutNotice.ts` (doc).
   - Stores: `src/sparql/SparqlDataset.ts` (`selectQuery` overloads, `askQuery`, `triplesQuery`,
-    `triplesTermsQuery`, `graphQuery` → one `readQuery` switching on `readKindOf`; keep the
-    per-kind private methods), `src/sparql/resultMapping.ts:867` (message),
+    `triplesTermsQuery` → one `readQuery` switching on `readKindOf`; keep the per-kind private
+    methods; `graphQuery` stays), `src/sparql/resultMapping.ts:867` (message),
     `src/sparql/triplesToSparql.ts` (terms types), `src/memory/InMemoryDataset.ts`.
-  - Graph detection: `src/shapes/syncShapeGraphs.ts:147`, `src/shapes/syncTargets.ts:476`,
-    `src/ontology/syncOntologies.ts:278-292` → `supports.includes('graph')`.
+  - Graph detection (`syncShapeGraphs`, `syncTargets`, `syncOntologies`): unchanged.
   - `src/shapes/Shape.ts:222` (doc).
   - Test helpers: `src/test-helpers/memory-graph-store.ts`, `query-capture-store.ts`,
     `test-utils.ts`.
@@ -338,10 +350,6 @@ the graph statics, `Shape.select`/`.count`/`.exists`); the writes; `IDataset`'s 
   - The terms read that `dispatchTriplesTermsQuery` checks on the bare target before wrapping
     ("the observing wrapper has every method, so it would not say which is missing") becomes a
     feature check on the target's own `supports`; keep the target-specific error.
-  - Graph detection by feature changes who counts as graph-capable: a test double whose
-    `graphQuery` only threw `unsupported-query-kind` was "capable" and then fell back on the code;
-    without `'graph'` it is now skipped earlier. Check `ontology-sync.test.ts`,
-    `shape-graphs.test.ts`, `shacl-syncshapes.test.ts` keep their assertions for the right reason.
   - `LinkedStorage.readQuery` must keep `outsideShapeCatalog` exactly where each static had it,
     and the pinned-dataset identity (`dataset-pin-identity.test.ts`).
   - `fromJSON` refuses plain-data kinds; add `'triples_terms'` to that refusal.
@@ -356,13 +364,13 @@ the graph statics, `Shape.select`/`.count`/`.exists`); the writes; `IDataset`'s 
   - `cd ../wt/one-read-method--c1/packages-local/_linked-core && npx linked build`
   - `FUSEKI_BASE_URL=http://localhost:<free port> FUSEKI_ADMIN_PASSWORD=admin npm test` (unit,
     live Fuseki and typecheck; quote the jest summary and the `[fuseki] live tests` line).
-  - `grep -rnwE 'selectQuery|askQuery|triplesQuery|triplesTermsQuery|resolveExistence|resolveCount|resolveTriples|resolveTriplesTerms|resolveGraphQuery' src README.md docs/architecture`
-    → no hits; `graphQuery` only as the module path `queries/graphQuery` and local names.
+  - `grep -rnwE 'selectQuery|askQuery|triplesQuery|triplesTermsQuery|resolveExistence|resolveCount|resolveTriples|resolveTriplesTerms' src README.md docs/architecture`
+    → no hits (`graphQuery` stays, as a method).
 - **Done when:** the old read methods and helpers are gone from core, every core test passes,
   report 112 written, changeset in, the C1 plan doc deleted. CN and server do not compile against
   it yet (expected; wave 2).
 - **Size:** large, 5 phases (types/features/terms kind; dispatch + builders; LinkedStorage +
-  Transaction; stores + graph detection + helpers; tests, docs, changesets).
+  Transaction; stores + helpers; tests, docs, changesets).
 
 ### S1 — server: `RemoteDataset.readQuery` and the `readQuery` endpoint (`@_linked/server`)
 
@@ -387,10 +395,10 @@ Report 396.
 - **Goal:** no repo of the workspace names a removed read method.
 - **Scope:** test doubles implement `readQuery` (a `switch (readKindOf(q))` that answers what the
   double answered and refuses the rest); `supports` lists `ask` where the double had `askQuery`;
-  doubles that had `graphQuery` throwing `unsupportedGraphQuery` drop it (no `'graph'`). Comments
+  `graphQuery` stays as it is in every double (it remains a method of `IDataset`). Comments
   renamed. No production code changes.
 - **Files:**
-  - fuseki: `src/shapes/FusekiStore.graphs.test.ts:62` (`store().readQuery({kind: 'graph_replace', …})`).
+  - fuseki: `src/shapes/FusekiStore.graphs.test.ts` (check only: its `graphQuery` calls stay).
   - react: `src/tests/fixtures.ts:106,140,183`, `src/tests/react-component-behavior.test.tsx:96,311-318`
     (`LinkedStorage.readQuery`), `src/tests/native-barrel.test.tsx:35`.
   - shape-ui: `src/catalog.test.ts:58,67,91`.
@@ -399,13 +407,13 @@ Report 396.
   - auth: `test/issuer-tokens.test.mjs:21`, `test/solid-access-token.test.mjs:27` (the URL fixture
     becomes `…/readQuery`; DPoP `htu` only, no behaviour).
   - server-utils: `src/utils/QueryAccess.ts:48,393,396` (comments: `LinkedStorage.readQuery`).
-- **Pitfalls:** react's and shape-ui's doubles import `unsupportedGraphQuery`; drop the import if
-  unused. The cli template's test runs in a generated app, against the core that app installs:
+- **Pitfalls:** react's and shape-ui's doubles keep `graphQuery` and its `unsupportedGraphQuery`
+  import. The cli template's test runs in a generated app, against the core that app installs:
   it is exercised by cli's `tests/template/react-native.full.test.ts`.
 - **Verify:** in each repo's worktree: react, shape-ui, fuseki, auth `npm test`; server-utils
   `npm test`; cli `npm run test:unit` and `npx jest --config jest.config.cjs tests/template/react-native.full.test.ts`;
   quote the summaries.
-  `grep -rnwE 'selectQuery|askQuery|graphQuery|triplesQuery|triplesTermsQuery' src test defaults`
+  `grep -rnwE 'selectQuery|askQuery|triplesQuery|triplesTermsQuery' src test defaults`
   per repo → only unrelated identifiers.
 - **Done when:** every repo's tests pass against the landed C1; reports: fuseki 006, react 006,
   shape-ui 007, cli 047, auth 024, server-utils 008 (one short report each); cli changeset in.
@@ -469,7 +477,10 @@ gateway, gets 404 on its reads (open question 3).
 - Command sources: core `package.json` (`test`, `test:fuseki`) and README "Running the tests";
   server `package.json` `test`; CN `package.json` and `tests/README.md`.
 
-## Open questions (owner)
+## Open questions (owner) — answered 2026-11-01
+
+Answers: 1 keep `graphQuery` separate; 2 collapse the statics; 3 no legacy endpoints; 4 the
+server refuses triples/terms (S1). Applied in the contracts above.
 
 1. **`GraphQuery` is a write.** All four kinds write a graph and its record; routers fork and fire
    `onWrite` for it, the wire authorizes it under the `graph` rule, `Transaction` refuses it. The
