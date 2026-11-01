@@ -1384,7 +1384,9 @@ export function selectToAlgebra(
   const subjectSubSelect =
     pageSubjects ||
     (multiRowPerSubject && !!havingExpr) ||
-    (!grouped && aggregates.length > 0 && !!orderBy && orderBy.length > 0);
+    (!grouped &&
+      aggregates.length > 0 &&
+      (orderBy ?? []).some((o) => !(o.expression.kind === 'variable_expr' && o.expression.name === rootAlias)));
 
   // `.from()` scopes the read to its graphs (expanded by the store); without it, a shape whose
   // instances live in one named graph (the graph-registry records, `NamedGraph.storedInGraph`)
