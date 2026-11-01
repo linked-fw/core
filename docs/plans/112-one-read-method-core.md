@@ -37,13 +37,18 @@ Contracts: master plan [111](111-one-read-method.md) C-1 to C-8 (after the owner
 
 | # | Where | Problem | Choice | Alternative | Rationale |
 |---|---|---|---|---|---|
-| 1 types, features, terms kind | done | (this commit) | `tsc --pretty false`: no error in `readQuery.ts`, `triplesQuery.ts`, `queryFeatures.ts`, `wireVersion.ts`, `fromJSON.ts`, `index.ts` (the others are the callers of phases 2-4) |
 | 1 | phase 1, C-4 | The contract's `TriplesTermsQuery` has no `subject`/`predicate`/`object`, but report 109's terms reads fix them (`forNode(s).withPredicate([…])`, `toNode([…]).withPredicate(p)`), and has `recordClass?`, which 109 refuses on a terms read | `TriplesTermsQuery` keeps `subject?`, `predicate?` (with `objects`), `object?` (with `predicates`); no `recordClass`, no `limit`. **Contract change**, recorded in 111, 027 and 394 | Drop the fixed positions (loses 109's reads) or keep a `recordClass` that is always refused | Correctness (keeps every read 109 ships); one explicit way (no dead field) |
 | 2 | phases 1-4 | `IDataset`'s method changes break every implementer at once, so a phase cannot compile alone | Phases 1-3 are checked by the typecheck of their own files (`tsc --pretty false` filtered); the whole build compiles from phase 4 on | One commit for everything | The plan asks for 5 phases; each commit stays reviewable |
 | 3 | phase 1, C-2 | `readFeaturesOf` of an ask: include `ask`, though a dataset without it is still answered | Include it, and say in its doc that `ask` alone is not refused (the `LIMIT 1` fallback) | Leave `ask` out | It says what the read uses natively; `resolveRead` owns the fallback |
+| 5 | phase 2, C-5 | Where a select's feature check runs in `QueryBuilder.exec` (it threw outside the error wrapping) | Keep `assertQuerySupported` before the `try`, then `resolveRead` (which checks again) | Only `resolveRead` inside the `try` | The refusal keeps its own message, unwrapped, as today |
+| 6 | phase 2, C-5 | `exec(target)` of a select, count or ask was not observed (no instrumenting), unlike graph, triples and mutations | Unchanged: they call `resolveRead(target ?? dispatch, q)`; triples and terms use `dispatchRead` (observed) | Route every builder through `dispatchRead` | Backward compatibility: listeners (the live-query store) see what they saw |
+| 7 | phase 2, C-5 | `assertTriplesTarget`/`assertTriplesTermsTarget` are removed, but a router needs to check every dataset before it asks the first | New exported `assertReadSupported(target, query)` (any read kind), used by `resolveRead`, `dispatchRead` and `LinkedStorage`. **Contract addition** (C-5) | Keep the two per-kind asserts | One explicit way, the same check for every kind |
 | 4 | phase 1, C-2 | `readKindOf` on a plain object with neither `__queryKind` nor a read `kind` | Throw, naming what it got | Treat it as a select | Discriminate on the kind, never structurally (C-2) |
 
 ## Progress
 
 | Phase | Status | Commit | Validation |
 |---|---|---|---|
+| 1 types, features, terms kind | done | 9607362 | `tsc --pretty false`: no error in `readQuery.ts`, `triplesQuery.ts`, `queryFeatures.ts`, `wireVersion.ts`, `fromJSON.ts`, `index.ts` (the others are the callers of phases 2-4) |
+| 2 dispatch and builders | done | (next commit) | `tsc --pretty false`: no error in `queryDispatch.ts`, `IDataset.ts`, the five builders |
+

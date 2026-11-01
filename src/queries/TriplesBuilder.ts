@@ -23,27 +23,30 @@
  *
  * `toNode` and `withPredicate` also take a list of terms: a terms read, whose `.whichExist()`
  * answers which of them occur (the IRIs some triple of the read has in that position), in one query
- * (`IDataset.triplesTermsQuery`; a store may split a long list). A terms read answers terms, not
- * triples, so it has no `exec()`.
+ * (a {@link TriplesTermsQuery} to `IDataset.readQuery`; a store may split a long list). A terms read
+ * answers terms, not triples, so it has no `exec()`.
  */
 import type {IDataset} from '../interfaces/IDataset.js';
 import type {NodeReferenceValue} from './QueryFactory.js';
-import {dispatchTriplesQuery, dispatchTriplesTermsQuery} from './queryDispatch.js';
+import {dispatchRead} from './queryDispatch.js';
 import type {ReadGraphsInput} from './readGraphs.js';
 import {
   checkTriplesTerm,
   checkTriplesTerms,
+  isTermsParts,
   triplesQueryOf,
-  triplesTermsPosition,
   triplesQueryPartsOf,
+  triplesTermsQueryOf,
+  type CheckedTriplesParts,
   type Triple,
   type TriplesQuery,
+  type TriplesTermsQuery,
 } from './triplesQuery.js';
 import {brandLinkedClass} from '../utils/linkedError.js';
 
 export class TriplesBuilder implements PromiseLike<Triple[]> {
   /** Each part is checked; whether the parts make a whole read is checked when it is sent. */
-  private constructor(private readonly query: TriplesQuery) {}
+  private constructor(private readonly query: CheckedTriplesParts) {}
 
   /**
    * Read the triples of one subject (as a subject), under any type or none: in the graphs of
@@ -82,7 +85,8 @@ export class TriplesBuilder implements PromiseLike<Triple[]> {
 
   /** @internal The builder of a checked query (`NamedGraph.readContent`). */
   static of(query: TriplesQuery): TriplesBuilder {
-    return new TriplesBuilder(triplesQueryOf(query));
+    const {kind: _kind, ...parts} = triplesQueryOf(query);
+    return new TriplesBuilder(parts);
   }
 
   /**
@@ -112,10 +116,26 @@ export class TriplesBuilder implements PromiseLike<Triple[]> {
 
   /**
    * The triples read this builder sends (plain data, its own wire form). Throws for a read that is
-   * not whole yet (`withPredicate(p)` without `.from()`).
+   * not whole yet (`withPredicate(p)` without `.from()`) and for a terms read (a list of terms; see
+   * {@link toTriplesTermsQuery}).
    */
   toTriplesQuery(): TriplesQuery {
+    if (isTermsParts(this.query)) throw termsReadExec();
     return triplesQueryOf(this.query);
+  }
+
+  /**
+   * The terms read this builder sends (`toNode([…])`, `withPredicate([…])`; plain data, its own
+   * wire form), without the builder's limit. Throws for a read without a list.
+   */
+  toTriplesTermsQuery(): TriplesTermsQuery {
+    if (!isTermsParts(this.query)) {
+      throw new Error(
+        'whichExist() answers which terms of a list occur; build the read with a list: ' +
+          'toNode([{id}, …]) or withPredicate([{id}, …]). For one term, use exists().',
+      );
+    }
+    return triplesTermsQueryOf(this.query);
   }
 
   /**
@@ -123,9 +143,7 @@ export class TriplesBuilder implements PromiseLike<Triple[]> {
    * terms read (a list of terms) is refused: it answers terms, through {@link whichExist}.
    */
   async exec(target?: IDataset): Promise<Triple[]> {
-    const query = this.toTriplesQuery();
-    if (triplesTermsPosition(query) !== undefined) throw termsReadExec();
-    return dispatchTriplesQuery(query, target);
+    return dispatchRead(this.toTriplesQuery(), target);
   }
 
   /**
@@ -135,27 +153,19 @@ export class TriplesBuilder implements PromiseLike<Triple[]> {
    * any of its terms occurs.
    */
   async exists(target?: IDataset): Promise<boolean> {
-    const query = this.toTriplesQuery();
-    if (triplesTermsPosition(query) !== undefined) return (await this.whichExist(target)).size > 0;
-    const triples = await dispatchTriplesQuery({...query, limit: 1}, target);
+    if (isTermsParts(this.query)) return (await this.whichExist(target)).size > 0;
+    const triples = await dispatchRead({...this.toTriplesQuery(), limit: 1}, target);
     return triples.length > 0;
   }
 
   /**
    * Which terms of a terms read occur (`toNode([…])`, `withPredicate([…])`): the IRIs of its list
-   * that some triple of the read has in that position. One query (`IDataset.triplesTermsQuery`)
+   * that some triple of the read has in that position. One query (a {@link TriplesTermsQuery})
    * that stops at the first match of each term; an empty list answers an empty set without one.
    * Throws for a read without a list. A limit set on the builder is not part of it.
    */
   async whichExist(target?: IDataset): Promise<Set<string>> {
-    const {limit: _limit, ...query} = this.toTriplesQuery();
-    if (triplesTermsPosition(query) === undefined) {
-      throw new Error(
-        'whichExist() answers which terms of a list occur; build the read with a list: ' +
-          'toNode([{id}, …]) or withPredicate([{id}, …]). For one term, use exists().',
-      );
-    }
-    return new Set(await dispatchTriplesTermsQuery(query, target));
+    return new Set(await dispatchRead(this.toTriplesTermsQuery(), target));
   }
 
   then<TResult1 = Triple[], TResult2 = never>(

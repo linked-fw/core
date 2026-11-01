@@ -24,7 +24,7 @@ import {
 } from './GroupedSelectBuilder.js';
 import type {IRExpression} from './IntermediateRepresentation.js';
 import {ExistsCondition, type ExpressionNode} from '../expressions/ExpressionNode.js';
-import {getQueryDispatch, assertQuerySupported} from './queryDispatch.js';
+import {getQueryDispatch, assertQuerySupported, resolveRead} from './queryDispatch.js';
 import {AskBuilder} from './AskBuilder.js';
 import {CountBuilder} from './CountBuilder.js';
 import type {IDataset} from '../interfaces/IDataset.js';
@@ -1127,7 +1127,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     // A select with min/max is refused by a dataset that does not declare them, before it is sent.
     assertQuerySupported(dispatch, this);
     try {
-      return await dispatch.selectQuery(this);
+      return await resolveRead(dispatch, this);
     } catch (err) {
       // A where-clause context reference that hasn't resolved yet surfaces as
       // UnresolvedContextError when the dataset lowers the query. For SELECT this

@@ -25,7 +25,7 @@ import {encodeContextRef, isContextRefJSON} from './ContextRef.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
 import {refuseTxIdIn} from './transactionQuery.js';
 import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
-import {getQueryDispatch, resolveExistence} from './queryDispatch.js';
+import {getQueryDispatch, resolveRead} from './queryDispatch.js';
 import {resolveUriOrThrow} from '../utils/NodeReference.js';
 import {
   serializeWherePath,
@@ -240,7 +240,7 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
     // `async` ensures a missing global dispatch rejects rather than throwing
     // synchronously past the caller's `.catch()`.
     const dispatch = target ?? getQueryDispatch();
-    return resolveExistence(dispatch as any, this);
+    return resolveRead(dispatch, this);
   }
 
 

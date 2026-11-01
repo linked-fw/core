@@ -29,7 +29,7 @@ import type {
 import type {IRExpression} from './IntermediateRepresentation.js';
 import {containsAggregate} from './irExpressions.js';
 import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
-import {assertQuerySupported, getQueryDispatch} from './queryDispatch.js';
+import {assertQuerySupported, getQueryDispatch, resolveRead} from './queryDispatch.js';
 import {UnresolvedContextError} from './QueryContext.js';
 import {
   deserializeWherePath,
@@ -435,7 +435,7 @@ export class GroupedSelectBuilder<S extends Shape = Shape, Row = any>
     const dispatch = target ?? getQueryDispatch();
     assertQuerySupported(dispatch, this);
     try {
-      return (await dispatch.selectQuery(this)) as Row[];
+      return (await resolveRead(dispatch, this)) as unknown as Row[];
     } catch (err) {
       // As a select: a where-clause context that has not resolved yet means "not ready".
       if (isLinkedError(err, UnresolvedContextError)) return null as unknown as Row[];

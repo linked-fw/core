@@ -29,7 +29,7 @@ import {encodeContextRef, isContextRefJSON} from './ContextRef.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
 import {refuseTxIdIn} from './transactionQuery.js';
 import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
-import {getQueryDispatch, resolveCount} from './queryDispatch.js';
+import {getQueryDispatch, resolveRead} from './queryDispatch.js';
 import {
   serializeWherePath,
   serializeRawMinusEntry,
@@ -233,10 +233,9 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
     // `async` ensures a missing global dispatch rejects rather than throwing
     // synchronously past the caller's `.catch()`.
     const dispatch = target ?? getQueryDispatch();
-    // `resolveCount` dispatches over the SELECT channel — a count is a select with
-    // an aggregate projection, not a query form of its own — and checks the answer
-    // is a real non-negative integer before it reaches the caller.
-    return resolveCount(dispatch as any, this);
+    // `resolveRead` checks the answer is a real non-negative integer before it
+    // reaches the caller.
+    return resolveRead(dispatch, this);
   }
 
 
