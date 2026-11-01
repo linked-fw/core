@@ -87,9 +87,19 @@ Backlog 089:
 - New tests before the change: `Tests: 17 failed, 1 passed, 18 total`, `[fuseki] live tests:
   11 total — 0 passed, 11 failed`; goldens `5 failed, 88 passed`.
 - Final, whole core suite against an own Fuseki (`FUSEKI_BASE_URL=http://localhost:3967 npm
-  test`): `Tests: 122 skipped, 3168 passed, 3290 total`, `[fuseki] live tests: 467 total — 465
+  test`): `Tests: 122 skipped, 3169 passed, 3291 total`, `[fuseki] live tests: 467 total — 465
   passed, 0 failed, 2 skipped`; typecheck clean. `npx linked build`: `✔ Build successful`.
-- CN (main checkout, core built there): see CN impact below.
+- CN main checkout, core landed and built there: `npm run typecheck:gate`: `No new type errors.
+  0 pre-existing errors still in the baseline.` `npm run test:feature -- data,apps,ontologies
+  --tier smoke`: typecheck, `unit (vitest, 136 files) PASS`, gateway package PASS, playwright
+  `1 failed, 10 passed`. The first run failed 4 specs (`app-scope`, `gateway-shapeless-delete`,
+  `gateway-triples`, `llm-data-queries`), all from the shape catalog's `ps.path` arriving as a
+  list; fixed in core (`PropertyShape.path` `maxCount: 1`). The one left,
+  `gateway-shapeless-delete` "with the flag, a dataset-wide writer deletes a person", is not
+  core's: in the smoke tier it runs without the untagged test before it that turns the
+  connection's flag on (`setFlag(true)`), so it gets `shapeless-delete-not-allowed`. The whole
+  spec passes: `npx playwright test --project=integration
+  tests/integration/gateway-shapeless-delete.spec.ts`: `6 passed (40.7s)`.
 
 ### Deviations
 
@@ -101,12 +111,31 @@ Backlog 089:
 
 ### CN impact
 
-CN_IMPACT
+No CN change was needed. Callers checked:
+
+- `orderBy` in CN: `src/backend.ts:3252`, `src/backend/shapes/InstanceProvider.ts:504` and
+  `:721` sort by the subject only (`orderBy((p) => p)`), which gets no bound key: unchanged. No
+  CN caller sorts by a nested path. DSL-JSON `sortBy` from the AI data queries
+  (`src/backend/ai/dataQuery.ts`, `src/utils/prompts.ts`, `llm-data-queries.spec.ts`) now puts
+  instances without the key last; the `llm-data-queries` smoke passes.
+- `rowLimitOf` (`src/services/ontologyTermSearch.ts:114`, `termSelect` `.limit(...)`): the term
+  select projects multi-valued `label`/`comment`, so since report 098 its limit counts terms,
+  not rows; the ×4 headroom now over-reads (no wrong results). Not changed.
+- `src/utils/documentStaging.ts` reads the import's created record at the top level and then
+  `ImportCreated.select(...).forAll(ids)` (CN report 380), working around the nested
+  multi-valued mapping fixed here; it can go back to one nested select. Not changed.
+- `src/utils/shapeCatalogQuery.ts` (`fetchShapeCatalog`, `ns.properties.select((ps) =>
+  [ps.path, …])`): broke on the mapping fix, fixed in core (above).
+- CN smoke spec `gateway-shapeless-delete` (smoke) depends on an untagged test's `setFlag(true)`:
+  a CN test issue, for whoever owns plan 376.
 
 ### Follow-ups
 
 - Backlog 092: `orderBy` on a computed expression is dropped silently; a filter on a sort path
   is ignored; `p.friends.nickNames` throws in the proxy.
+- CN (not recorded in CN, for the coordinator): `documentStaging.ts` can return to one nested
+  select; `rowLimitOf` headroom can go; the `gateway-shapeless-delete` smoke test's order
+  dependency.
 
 ## Details
 
