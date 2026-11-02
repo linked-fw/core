@@ -25,6 +25,11 @@ the registry and storage — a shape registered on copy A is invisible to a quer
 dispatched on copy B ("No query dispatch configured"). Keeping core single-instance is
 the build's responsibility (see `@_linked/cli` → `docs/architecture/vite-runtime-config`).
 
+Framework code that discovers and imports package modules at runtime (stores, ontology register
+modules) loads them through the host's module loader (`importPackageModule`), never a bare
+`import()`, so in dev a package Vite bundles is not loaded a second time by Node: see
+[Loading package modules](./loading-package-modules.md).
+
 Critical process-wide state is additionally **`globalThis`-backed** (e.g.
 `LinkedStorage.getLoadedInstanceCount`), so an accidental double-evaluation shares state
 rather than silently forking it.
