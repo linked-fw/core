@@ -93,7 +93,7 @@ describe('display metadata — decorator to shape', () => {
     expect(propByLabel('title').group).toEqual({id: 'https://example.org/display/basics'});
   });
 
-  test('the terms live in the core ontology namespace, not the CN code vocab', () => {
+  test('the terms live in the core ontology namespace, not an app code vocab', () => {
     expect(coreOntology.displayRank.id).toBe(
       'https://linked.cm/ont/core/displayRank',
     );

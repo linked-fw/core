@@ -68,6 +68,6 @@ Two levels, smallest-first:
 
 ## Origin
 
-Surfaced during CN Phase 1.5 onboarding debugging: `new (this.userShape)({ id })` in
+Surfaced while debugging onboarding in a consumer app: `new (this.userShape)({ id })` in
 dev-signin serialized to `{__s,u}` and broke client auth state. Fixed at the source with
 plain data; this backlog captures making that a core-enforced invariant.

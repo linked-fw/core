@@ -10,7 +10,7 @@
  * A record's subject is the graph IRI. Core fills the automatic fields (`sd:name`,
  * `core:contentHash`, `dcterms:modified`, and `core:feedsHierarchy` on create, from the class's
  * default); the caller passes only the class's own fields. This table is what a store needs to
- * write a record from a {@link GraphQuery} alone (CN's gateway receives one over the wire), so it
+ * write a record from a {@link GraphQuery} alone (a host's gateway receives one over the wire), so it
  * does not depend on the shape classes in `shapes/NamedGraph.ts`, which read the same terms.
  */
 import type {GraphQuery} from './IntermediateRepresentation.js';

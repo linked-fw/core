@@ -123,8 +123,8 @@ describe('syncShapes orphanScope (multi-writer, arch-04)', () => {
   const userIri = () => TUser.shape.id;
   // An orphan in the SAME package namespace as the app's shapes (a renamed/removed app shape).
   const OWNED_ORPHAN = 'https://linked.cm/shape/syncshapes-test/GoneShape';
-  // An orphan in a DIFFERENT package namespace — a second writer's shape (e.g. a CN
-  // capability shape materialized into the same app-data dataset via syncShape).
+  // An orphan in a DIFFERENT package namespace — a second writer's shape (e.g. a host
+  // app's capability shape materialized into the same app-data dataset via syncShape).
   const FOREIGN_ORPHAN = 'https://id.linked.cm/shape/documents/SourceDocument';
 
   beforeEach(() => installMock([userIri(), OWNED_ORPHAN, FOREIGN_ORPHAN]));

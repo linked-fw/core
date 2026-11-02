@@ -1,6 +1,6 @@
 ---
 summary: >
-  Sub-plan of Create Now master plan 057 (package repos) for `linked-fw/core` and the new
+  Sub-plan of a host app's master plan (package repos) for `linked-fw/core` and the new
   `@_linked/npm`: step CK — package kinds `core:OntologyPackage` / `core:AssetPackage` in core,
   core's `npm:` module, `core:packageName` and the default-graph `OntologySync` fallback removed,
   and a new hand-made `@_linked/npm` package (ontology + shapes after `package.json`). Lands on `dev`.
@@ -11,21 +11,20 @@ status: Done
 
 ## Master plan
 
-[CN plan 057](../../../../docs/plans/057-package-repo-creation.md) —
-`/Users/rene/web/create_now/docs/plans/057-package-repo-creation.md` (rules for every step,
+The host app's master plan for package repos, kept in its repository (rules for every step,
 status table, numbers, starter prompt). Steps land on integration branch `dev`.
 
 ## Contracts
 
-Copied verbatim from plan 057; the rest are there. A step that changes one updates it here and in
-057 in the same landing.
+Copied verbatim from the master plan; the rest are there. A step that changes one updates it here
+and in the master in the same landing.
 
-- **K-core** (provider CK; consumers PR, CN): `https://linked.cm/ont/core/OntologyPackage` and
+- **K-core** (provider CK; consumers PR, host app): `https://linked.cm/ont/core/OntologyPackage` and
   `https://linked.cm/ont/core/AssetPackage`, `rdfs:subClassOf core:Package`, exported as
   `coreOntology.OntologyPackage` / `coreOntology.AssetPackage`. Core has no `npm` module and no
   `core:packageName`; it refers to npm terms by IRI only. Registry records keep `core:package` /
   `core:version`. `core:Package ⊑ npm:Package`, by IRI (added by PR).
-- **K-npm** (provider CK; consumers PR, CN): package `@_linked/npm`, namespace
+- **K-npm** (provider CK; consumers PR, host app): package `@_linked/npm`, namespace
   `https://linked.cm/ont/npm/`, terms: classes `npm:Package` (⊑ `schema:SoftwareSourceCode`),
   `npm:Dependency`; literals `npm:name`, `npm:version`, `npm:description`, `npm:keyword`,
   `npm:license`, `npm:private`, `npm:range`; IRIs `npm:homepage`, `npm:repository`
@@ -34,7 +33,7 @@ Copied verbatim from plan 057; the rest are there. A step that changes one updat
   `npm:peerDependency`, `npm:optionalDependency`, `npm:engine` (to `npm:Dependency` with
   `npm:name` + `npm:range`). Shapes `NpmPackage`, `NpmDependency`. Exports
   `@_linked/npm/ontologies/npm` and `@_linked/npm/shapes/*`.
-- **K-kind** (provider LK; consumers RK, PC, CO, CN, server): every `package.json` carries
+- **K-kind** (provider LK; consumers RK, PC, CO, host app, server): every `package.json` carries
   `"linked": { "kind": "app" | "ontology" | "assets" | "library" }`, merged into an existing
   `linked` object (e.g. `linked.serverOnly`), never replacing it. `linkedPackage` and `linkedApp`
   are gone; no reader accepts them. One helper, `linkedKind(json)` →
@@ -42,7 +41,7 @@ Copied verbatim from plan 057; the rest are there. A step that changes one updat
   (with `LinkedKind`, `LINKED_KINDS`, `isLinkedPackageJson`); `@_linked/server` keeps a
   byte-identical copy in `@_linked/server/utils/linkedDependencies`, between marker comments that
   name the twin. `discoverLinkedDependencies(appDir, pkg, isLinked?)` takes an optional test; only
-  CN's `appPackagesOf` passes one (accepting `linkedPackage: true` too, until the release). A linked package is `kind !== undefined && kind !== 'app'`.
+  the host app's `appPackagesOf` passes one (accepting `linkedPackage: true` too, until the release). A linked package is `kind !== undefined && kind !== 'app'`.
   `ontology` packages may carry shapes for their own terms; `library` is framework code.
 
   (CK consumes it for `@_linked/npm`'s own `package.json`: `"linked": {"kind": "ontology"}`. Core's
@@ -61,7 +60,7 @@ schema:CreativeWork`), so its inherited `name` / `description` are `schema:name`
 repo). **Plan doc:** core `docs/plans/006-…`. **Reports:** core `docs/reports/080-…`, npm
 `docs/reports/001-…`. **Test port:** 4341. **Size:** medium, 2 phases: (1) core — kinds in,
 `npm:` module, `core:packageName` and the default-graph fallback out; (2) the new `@_linked/npm`
-package, built and wired into CN's workspace.
+package, built and wired into the host app's workspace.
 
 **Goal.** K-core and K-npm: core names the package kinds and nothing npm-specific; npm's terms live
 in their own vocabulary package on `https://linked.cm/ont/npm/`, like every other `@_linked`
@@ -78,12 +77,12 @@ vocabulary.
 - A store without graph queries no longer gets a fallback: the `'package'` and shared-graph modes
   throw a clear error naming the store (the error style of the `'default'` mode's blank-node
   checks). Report it under Deviations if a test or caller relied on the fallback.
-- New package `@_linked/npm` (K-npm) at `/Users/rene/web/create_now/packages-local/_linked-npm`, a
+- New package `@_linked/npm` (K-npm) at `<host>/packages-local/_linked-npm` (the host app's checkout), a
   local git repo with branch `dev` (from an initial commit on `main`), no remote.
 - Changeset in core (minor: the removals are small breaking changes, master decision). The npm
   package gets a changeset for its first release (`minor`, from `0.0.0` or `0.1.0`).
-- Not here: `linked.kind` in core's or any other existing `package.json` (RK); CN code that uses
-  the new terms (PR).
+- Not here: `linked.kind` in core's or any other existing `package.json` (RK); host-app code that
+  uses the new terms (PR).
 
 **Verify.**
 - Core: `NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs` green,
@@ -91,18 +90,18 @@ vocabulary.
   finds nothing; `git grep -n 'ontologies/npm' src` finds nothing.
 - npm: `npx linked build && npm test` (shape check) green; `npx linked generate-ontology --check`
   (cli `src/cli.ts:317-348`) reports nothing stale.
-- CN, after rebuilding core and npm in the main checkouts and restarting the owner's CN on :4040
-  (one ontology sync):
+- Host app, after rebuilding core and npm in the main checkouts and restarting the owner's host
+  app (one ontology sync):
   `SELECT (COUNT(*) AS ?n) {GRAPH ?g {?s ?p ?o FILTER(STRSTARTS(STR(?s),"http://purl.org/on/npm/"))}}`
-  on cn-main returns `0` (the core package's ontology graph content hash changes, so the sync
+  on the host app's main dataset returns `0` (the core package's ontology graph content hash changes, so the sync
   replaces it; no migration). Same query with `https://linked.cm/ont/npm/` returns the new terms
-  once something CN loads depends on `@_linked/npm` (PR adds CN's dependency; until then `0` is
+  once something the host app loads depends on `@_linked/npm` (PR adds the host app's dependency; until then `0` is
   expected).
-- The owner's path: sign in on :4040, open a project and its Ontology Manager.
+- The owner's path: sign in to the host app, open a project and its Ontology Manager.
 
 **Done when.** K-core and K-npm hold as written; core's tests and build are green; the npm package
-builds, passes its shape check and is a workspace member of CN (`npm ls @_linked/npm` from CN's
-root resolves to `packages-local/_linked-npm`); both changesets exist; the purl query returns 0.
+builds, passes its shape check and is a workspace member of the host app (`npm ls @_linked/npm` from
+its root resolves to `packages-local/_linked-npm`); both changesets exist; the purl query returns 0.
 
 ### Files (found in the code)
 
@@ -164,9 +163,10 @@ New `@_linked/npm` (`packages-local/_linked-npm`), on the layout of `packages-lo
   schema:codeRepository`, people ranges `schema:Person`);
 - `src/shapes/NpmPackage.ts`, `src/shapes/NpmDependency.ts`, `src/shapes/index.ts`;
 - `test/shape-check.test.mjs` (copy rdfs's, mirrors list = the npm namespace only).
-- CN picks it up through the `packages-local/*` workspace glob after `npm install` at CN's root
+- The host app picks it up through the `packages-local/*` workspace glob after `npm install` at
+  its root
   (the postinstall hook restores the committed lockfile; never commit a lockfile listing
-  `packages-local/`). Do not add it to CN's `package.json` here.
+  `packages-local/`). Do not add it to the host app's `package.json` here.
 
 ### Pitfalls
 
@@ -182,22 +182,21 @@ New `@_linked/npm` (`packages-local/_linked-npm`), on the layout of `packages-lo
   schema:CreativeWork`; `@_linked/schema` has `CreativeWork` and `Person` shapes but no
   `SoftwareSourceCode` shape. Run the shape check early and follow what it asks (extend
   `CreativeWork`, or none); report a finding you cannot resolve without a design choice.
-- **No migration.** Old `http://purl.org/on/npm/` triples in cn-main and app datasets heal on the
-  next ontology sync (core's graph's content hash changes → `replaceContent`). CN's
-  `src/services/projectOntologies.test.ts:25,30` has the purl IRI as fixture data only; leave it.
+- **No migration.** Old `http://purl.org/on/npm/` triples in the host app's main dataset and app datasets heal on the
+  next ontology sync (core's graph's content hash changes → `replaceContent`). The host
+  app's `src/services/projectOntologies.test.ts:25,30` has the purl IRI as fixture data only; leave it.
 - **`create-ont-package` is not used**: it would name the package `npm-ont`.
-- **Owner actions at release only** (plan 057 §Owner actions): repo `linked-fw/npm`, first publish
+- **Owner actions at release only** (the master plan's owner actions): repo `linked-fw/npm`, first publish
   by hand, trusted publisher. Never add a remote, push or publish.
 - Rebuild core and npm in the main checkouts after landing (`npx linked build`), else the owner's
-  CN runs the stale `lib/`.
+  host app runs the stale `lib/`.
 
 ### Architecture
 
 - Core `docs/architecture/ontologies.md` (core's own vocabularies; ontology sync, the default
   mode, the per-package sync node) — update it in the same landing.
-- CN arch-03 §Package types and §Standard-vocabulary packages
-  (`/Users/rene/web/create_now/docs/architecture/03-packages-and-governance.md:15,41`), arch-01
-  §Package (kinds as RDF subclasses).
+- The host app's architecture of package types and standard-vocabulary packages (kinds as RDF
+  subclasses).
 
 ### Tests
 
@@ -206,8 +205,8 @@ New `@_linked/npm` (`packages-local/_linked-npm`), on the layout of `packages-lo
   npm `npx linked build && npm test`.
 - **Full gate (landing):** core `npm test` (jest + typecheck; the Fuseki suites need
   `FUSEKI_BASE_URL`/`FUSEKI_ADMIN_PASSWORD` of a Fuseki of your own, never :3030's datasets) and
-  `npx linked build`; npm `npx linked build && npm test`; CN `npm run typecheck:gate` and
-  `CN_TEST_PORT=4341 npm run test:regular` (CN code is unchanged, but it runs the new core).
+  `npx linked build`; npm `npx linked build && npm test`; the host app's `npm run typecheck:gate` and
+  regular test set on port 4341 (its code is unchanged, but it runs the new core).
 - New tests: core — `coreOntology.OntologyPackage`/`AssetPackage` exist and `core.ttl` types them
   `rdfs:subClassOf core:Package`; `coreOntology` has no `packageName`; the `'package'` mode on a
   dataset without `graphQuery` throws. npm — the shape check; every K-npm term is exported and

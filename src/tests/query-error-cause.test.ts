@@ -16,7 +16,7 @@
  * perfectly ordinary state) is a different fact from "this query is wrong" or
  * "the store is broken", and with the chain broken the only way to separate
  * them is to pattern-match the message — which is exactly what nobody should
- * be doing. CN hit this in `ProjectProvider.getShapeCatalog`: an unknown
+ * be doing. A host app hit this in its shape-catalog read: an unknown
  * project id derives a dataset Fuseki does not host, and a 500 came back where
  * an empty catalog belonged, with no structural way to detect it.
  *

@@ -79,9 +79,9 @@ export class Prefix {
    *
    * Returning an invalid prefixed name is not a cosmetic problem: `#` is not in
    * `PN_LOCAL`, so a namespace that merely string-prefixes another one turns
-   * `https://data.create.now/access#PolicyRegistry` into
-   * `create-now:access#PolicyRegistry`, where the tokenizer ends the name at
-   * `create-now:access` and reads `#PolicyRegistry .` as a COMMENT — eating the
+   * `https://data.example.org/access#PolicyRegistry` into
+   * `my-app:access#PolicyRegistry`, where the tokenizer ends the name at
+   * `my-app:access` and reads `#PolicyRegistry .` as a COMMENT — eating the
    * triple terminator and producing a query the store rejects with a parse
    * error that points at the *next* line. See docs/plans/041.
    *

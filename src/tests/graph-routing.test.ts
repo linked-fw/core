@@ -245,7 +245,7 @@ describe('route forms: own and dataGraph resolve under the store data root', () 
     expect(own.dataRoot()).toBe(`${ROOT}//`);
     expect(dataRootOf(own)).toBe(ROOT);
 
-    // A root the store learns later (CN resolves an app's root lazily) is the one used.
+    // A root the store learns later (a host resolving an app's root lazily) is the one used.
     let late: string | undefined;
     const lazy = {dataRoot: () => late} as unknown as IDataset;
     setShapeGraphs(lazy, {[GRAlbum.shape.id]: dataGraph('albums')});

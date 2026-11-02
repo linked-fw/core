@@ -12,7 +12,7 @@
  * disagrees with the class tree validates and queries nodes its author did not mean to, or misses
  * nodes they did. One function checks the registered shapes against the hierarchy parsed from the
  * registered ontology data; `linked build` fails on its errors, the app logs its findings at boot
- * and at ontology sync, and CN's builder refuses or offers the fix.
+ * and at ontology sync, and a host's shape builder can refuse or offer the fix.
  *
  * Kinds:
  * - `extends-without-subclass` (error): `sC extends sD` but the data does not state `C ⊑* D`.
@@ -22,7 +22,7 @@
  *   `rdf:Property`) are never B. Multiple inheritance: when sA already extends an in-scope shape
  *   of a superclass, a sB that is not a sub-shape of the nearest one is off the extends chain
  *   (`extends` cannot reach both), so it is a warning; a sB below it stays an error, since sA
- *   could extend sB instead. CN's `Dataset` (`⊑ dcat:Dataset, schema:CreativeWork`) extends
+ *   could extend sB instead. An app's `Dataset` (`⊑ dcat:Dataset, schema:CreativeWork`) extends
  *   `CreativeWork`, and dcat's `Resource` is a warning.
  * - `borrowed-target-class` (error): a shape that is not the least specific shape of its class
  *   (it borrowed its parent's), or one of several unrelated roots of a class. Exempt:

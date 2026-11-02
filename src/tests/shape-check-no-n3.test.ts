@@ -1,5 +1,5 @@
 /*
- * A caller that passes the hierarchy (CN's builder) never loads the Turtle parser: with no mirror
+ * A caller that passes the hierarchy (a host's shape builder) never loads the Turtle parser: with no mirror
  * package registered, checkShapeHierarchy does not import `n3`.
  */
 import {expect, jest, test} from '@jest/globals';

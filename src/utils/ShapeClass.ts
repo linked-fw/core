@@ -239,7 +239,7 @@ const adapterCatalogs = sharedState(
  *
  * Inside a scope: the active catalog when the root is an IRI (`shape` undefined) or a
  * shape the catalog holds; otherwise none. A class the active catalog does not hold is
- * authored code (CN's own shapes, built by CN code while a project scope is active) and
+ * authored code (a host app's own shapes, built by its code while a project scope is active) and
  * must lower against the global registry. Outside a scope: the catalog that built the
  * adapter class, if it is one, else none.
  * @internal
@@ -393,7 +393,7 @@ export function getAllNodeShapes(): ReadonlyMap<string, NodeShapeData> {
  * The builder entry points (`QueryBuilder`, `CreateBuilder`, `UpdateBuilder`,
  * `DeleteBuilder` via `resolveShape`) take a `ShapeConstructor` and instantiate result
  * proxies from it, so they need *a* class. Rather than have every caller hand-roll one —
- * which is what `create-now-js`'s `registerRuntimeShape` used to do, losing `extends` and
+ * which is what a host app's `registerRuntimeShape` used to do, losing `extends` and
  * every value constraint on the way — core derives one on demand from the registered
  * metadata and caches it.
  *

@@ -1403,8 +1403,8 @@ export class QueryShape<
    * - a filter: `.where((t) => t.$type().equals({id: C}))` (some type is C), `.some(…)`, `.none(…)`;
    * - a sort key, and on nested paths (`p.bestFriend.$type()`).
    *
-   * The types are what the store answers for `rdf:type`: on a store that infers classes (CN's
-   * Fuseki, through `rdfs:subClassOf`) the stored and the inferred types.
+   * The types are what the store answers for `rdf:type`: on a store that infers classes (an
+   * inferring Fuseki, through `rdfs:subClassOf`) the stored and the inferred types.
    */
   $type<Self>(this: Self): QShapeSet<Shape, Self, '$type'> {
     return QueryBuilderObject.generatePathValue(

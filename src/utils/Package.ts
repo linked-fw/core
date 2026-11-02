@@ -339,8 +339,8 @@ export function linkedPackage(
 ): LinkedPackageObject
 {
   // Declare the package's publish root before any shape/metadata IRI is built.
-  // The slug is derived from `packageName`; only `baseUri` is configurable — CN
-  // injects a workspace-scoped root for private packages, first-party packages
+  // The slug is derived from `packageName`; only `baseUri` is configurable — a host
+  // app may inject a workspace-scoped root for private packages, first-party packages
   // default to linked.cm.
   setPackagePublishConfig(packageName, options);
   if (options?.mirrors) {

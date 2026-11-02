@@ -181,7 +181,7 @@ export abstract class SparqlDataset implements IDataset {
   /**
    * The key this store's graph-registry cache is kept under (see `graphRegistryCache.ts`): one per
    * dataset per process. The default is unique to this instance; a store that knows its dataset's
-   * identity (a Fuseki dataset URL, a dataset name CN pushes invalidations for) overrides it, so
+   * identity (a Fuseki dataset URL, a dataset name a host pushes invalidations for) overrides it, so
    * every instance for that dataset shares one entry.
    */
   protected graphRegistryKey(): string {

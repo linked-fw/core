@@ -11,8 +11,8 @@ export const dataFiles = ['../data/core.ttl'];
 /** Reads this ontology's data (server only). */
 export const loadData = () => loadOntologyFiles(import.meta.url, dataFiles);
 
-// The @_linked/core framework vocabulary. First-party ontology IRIs follow Create Now
-// arch-02 §"Public ontology namespace":
+// The @_linked/core framework vocabulary. First-party ontology IRIs follow the public
+// ontology namespace:
 //   https://linked.cm/ont/{ontologySlug}/{localName}
 // where ontologySlug defaults to the owning package's publicSlug (`@_linked/core` -> `core`)
 // and the prefix label equals the ontologySlug. Previously `https://linked.cm/ont/linked-core/`
@@ -55,7 +55,7 @@ const PathNode = ns('PathNode');
 //
 // Placement is deliberate (backlog-029): this is an ecosystem SHACL extension that
 // materializes onto the pure `sh:NodeShape` and therefore travels with an ejected
-// app — NOT the CN-proprietary `code:` vocab, which describes source-code structure.
+// app — NOT an app's own `code:` vocab, which describes source-code structure.
 const displayRank = ns('displayRank');
 const displayHidden = ns('displayHidden');
 

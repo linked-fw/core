@@ -300,7 +300,7 @@ export abstract class LinkedStorage {
   /**
    * The dataset a query routes to, resolved in the catalog the query captured. Only the
    * routing runs in that catalog: the caller then calls the dataset in the scope it was
-   * called in, so a router's own queries (CN's `BranchDataFork` lookups) never run inside
+   * called in, so a router's own queries (e.g. a host's branch-fork lookups) never run inside
    * a project's catalog. The dataset re-enters from the query or its IR where it lowers.
    */
   private static resolveDatasetForQuery(query: {shape?: unknown}): IDataset | undefined {

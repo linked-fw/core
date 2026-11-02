@@ -12,7 +12,7 @@ packages: [core]
 
 ## Problem
 
-Create Now's stores infer `rdf:type` through `rdfs:subClassOf` (CN plan 070): the class hierarchy
+A host app's stores infer `rdf:type` through `rdfs:subClassOf`: the class hierarchy
 from each package's ontology data is synced into every app dataset, and the store's RDFS view
 expands type patterns at query time. `rdfs:subPropertyOf` was deliberately left out. The sync
 writes only `rdfs:subClassOf`, and the store's module reads only `subClassOf` to build its
@@ -39,7 +39,7 @@ No feature needs property inference yet.
 
 ## Context
 
-- Source: CN plan 070 (store inference and ontology data), its §Ideation, decision on sync scope.
+- Source: the decision on sync scope when store inference and ontology data were planned.
 - Ontology sync: `syncOntologies` (core) keeps `rdfs:subClassOf` from the parsed Turtle; the
   hierarchy reader drops every other predicate.
 - The store side: the `linked-fw/fuseki-server` image (Jena's `DatasetGraphRDFS` view, rebuilt

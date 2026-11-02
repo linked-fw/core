@@ -8,7 +8,7 @@ packages: [core]
 
 # 091 — Writing one node through several shapes (`.as`)
 
-Source: Create Now's provenance discussion (owner, 2026-10-31).
+Source: a discussion of provenance in a host app (owner, 2026-10-31).
 
 An RDF node can hold properties of several shapes as long as the shapes are not closed. The idea:
 

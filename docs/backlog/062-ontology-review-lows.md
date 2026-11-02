@@ -8,7 +8,7 @@ packages: [core]
 
 # 062 — Ontology sync and shape check: review lows
 
-Source: CN plan 070, independent review of `store-inference` (reports 042-047). The fourth low
+Source: independent review of `store-inference` (reports 042-047). The fourth low
 (`registerInstalled` passed a native path to `importModule`) is fixed: report 081.
 
 ## 1. A registered package that stops passing `loadData` is never pruned

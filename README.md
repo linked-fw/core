@@ -164,8 +164,8 @@ the old graphs and records (`OntologyGraph.delete(iri)`, `ShapesGraph.delete(iri
 default-graph terms, then set the new mode and sync. The `'package'` and shared modes need a
 store with graph queries; the ontology sync refuses one without them.
 
-**CN-managed apps must use `'package'` for both.** Create Now reads package graphs (catalogs, the
-gateway's graph rules) and reports another mode as an error.
+**An app whose host reads package graphs must use `'package'` for both.** A host that reads them
+(catalogs, its gateway's graph rules) reports another mode as an error.
 
 **Which datasets the syncs write to.** `syncShapeGraphs(ds)` and `syncOntologies(ds)` write into the
 one dataset they are given. The routed syncs (`syncShapeGraphsRouted`, `syncOntologiesRouted`,
@@ -720,7 +720,7 @@ LinkedStorage.setDatasetForShapes(new InMemoryStore(), Person);
 
 ### Config-driven setup: `parseDatasetsConfig` + `loadStores`
 
-For apps that want to keep their storage wiring in JSON rather than code, `@_linked/core` ships two helpers that read a `linked.datasets.json`-style file (see [backlog 016](https://github.com/create-now/docs) for the canonical spec) and instantiate the stores per alias.
+For apps that want to keep their storage wiring in JSON rather than code, `@_linked/core` ships two helpers that read a `linked.datasets.json`-style file and instantiate the stores per alias.
 
 ```ts
 // @_linked/core/utils/parseDatasetsConfig — pure parser, browser-safe
@@ -1089,7 +1089,7 @@ const byFriendType = await Person.select((p) => p.name).orderBy((p) => p.bestFri
   path, say) sorts last, and a node with several types sorts by its lowest type IRI
   ascending and its highest descending.
 - **Stored and inferred types:** `$type()` answers what the store answers for `rdf:type`. On a
-  store that infers classes through `rdfs:subClassOf` (CN's Fuseki, the inferring test image),
+  store that infers classes through `rdfs:subClassOf` (an inferring Fuseki, such as the inferring test image),
   that is the stored types and every superclass; on a plain store, the stored ones only.
   `InMemoryDataset` answers `$type()` as a field with the stored types, and refuses it in a where,
   a group key or a sort key (as it refuses those on any path).

@@ -438,8 +438,8 @@ shape, see below), so the flag changes no generated query.
 **The registry cache.** A store reads its registry once per dataset and process (one `SELECT` on
 `graphs.registry`) and keeps it: its own graph queries update the cache in the same step, so its
 next read sees a new or dropped graph; `invalidateGraphRegistry(dataset?)` (on the store, and as a
-package export by cache key) drops it when another process changed the graphs (CN pushes this to
-the apps it runs); an entry older than 30 seconds (`GRAPH_REGISTRY_MAX_AGE_MS`) is re-read. A
+package export by cache key) drops it when another process changed the graphs (a host app pushes
+this to the apps it runs); an entry older than 30 seconds (`GRAPH_REGISTRY_MAX_AGE_MS`) is re-read. A
 store keys the cache with `graphRegistryKey()` (default: one key per instance; a store overrides
 it with its dataset's identity). Writes never depend on the cache.
 

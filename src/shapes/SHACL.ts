@@ -49,9 +49,9 @@ export {
 
 /**
  * Default identity root for shape & package IRIs. Public/first-party packages
- * publish under `linked.cm` (arch-02 §Domains). Packages may override per-package
- * via `linkedPackage(name, { baseUri })` — CN injects a workspace-scoped root
- * (`{workspaceSlug}.id.create.now`) for private packages; first-party packages
+ * publish under `linked.cm`. Packages may override per-package
+ * via `linkedPackage(name, { baseUri })` — a host app may inject a workspace-scoped root
+ * (`{workspaceSlug}.id.example.org`) for private packages; first-party packages
  * keep this default.
  */
 export const LINKED_DATA_ROOT: string = 'https://linked.cm/';
@@ -77,8 +77,8 @@ export function packageNameToSlug(packageName: string): string {
 /**
  * Where each package publishes its IRIs (the identity root). The slug is always
  * derived from the package name; only the root is configurable — `linkedPackage`
- * defaults it to `LINKED_DATA_ROOT` (linked.cm), and CN injects a workspace-scoped
- * root (`{workspaceSlug}.id.create.now`) for private packages. Shared by every copy of core,
+ * defaults it to `LINKED_DATA_ROOT` (linked.cm), and a host app may inject a workspace-scoped
+ * root (`{workspaceSlug}.id.example.org`) for private packages. Shared by every copy of core,
  * so a private package's root holds whichever copy derives its IRIs.
  */
 const packageBaseUri = sharedState('@_linked/core', 'SHACL.packageBaseUri', () => new Map<string, string>());

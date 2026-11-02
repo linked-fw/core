@@ -1,6 +1,6 @@
 ---
 summary: >
-  Core's sub-plan for CN plan 071 (named graphs and graph routing): K1 (`graphQuery`, the four
+  Core's sub-plan for a host app's master plan (named graphs and graph routing): K1 (`graphQuery`, the four
   graph kinds, the `IDataset` method changes, `NamedGraph`/`OntologyGraph`/`ShapesGraph`/
   `DraftGraph` with the graph API and automatic registry records, portable graph names, terms,
   `SparqlDataset.graphQuery`, typed refusals, the `deleteInsertPlanToSparql` graph fix), then K2
@@ -12,17 +12,16 @@ packages: [core]
 
 # 004 — Named graphs
 
-Sub-plan of CN plan 071, `create-now/docs/plans/071-named-graphs-and-graph-routing.md` (the
-**master plan**; locally `~/web/create_now/docs/plans/071-named-graphs-and-graph-routing.md` on
-the integration branch `named-graphs`). Its §Decisions are the design; this document does not
+Sub-plan of a host app's **master plan** (named graphs and graph routing), kept in the host
+app's repository on the integration branch `named-graphs`. Its §Decisions are the design; this document does not
 redesign them. Read the master's §Decisions, §Plan choices, §How to use, §Rules and this
 sub-plan; the contracts core provides are repeated below verbatim.
 
 Integration branch: `named-graphs` (this repository's main checkout
-`~/web/create_now/packages-local/_linked-core`). A step works in
-`~/web/wt/<step>/packages-local/_linked-core` on `named-graphs--<step>` (made by
-`npx linked worktree add <step> --with @_linked/core …` from CN's main checkout) and lands with
-`git rebase named-graphs`, the gate again, `git -C ~/web/create_now/packages-local/_linked-core
+`<host>/packages-local/_linked-core`, `<host>` being the host app's main checkout). A step works
+in `<step-wt>/packages-local/_linked-core` on `named-graphs--<step>` (made by
+`npx linked worktree add <step> --with @_linked/core …` from the host app's main checkout) and
+lands with `git rebase named-graphs`, the gate again, `git -C <host>/packages-local/_linked-core
 merge --ff-only named-graphs--<step>`, then `npx linked build` in that main checkout. No PR per
 step; one release PR per phase (master R1, R2).
 
@@ -38,8 +37,8 @@ contracts they provide or consume when their plan-mode detail is written.
 ### Graph IRIs and vocabulary (provider K1; consumers F1, K3, V1, C1, C2, B1, K5)
 
 - Package graph: `{package IRI}/graph/{kind}`; `kind` ∈ `ontology` (phase 1), `shapes` (phase 2).
-  Package IRI per arch-02: `https://linked.cm/pkg/{publicSlug}` or
-  `https://{ws}.id.create.now/pkg/{slug}`. `OntologyGraph.iriFor(packageName)` and
+  Package IRI: `https://linked.cm/pkg/{publicSlug}` or
+  `https://{ws}.id.example.org/pkg/{slug}`. `OntologyGraph.iriFor(packageName)` and
   `ShapesGraph.iriFor(packageName)` build them from the registered package.
 - Dataset-owned graph: `{DATA_ROOT}/graph/{kind}`: `drafts`, `shapes`, `import/{slug}`.
 - Registry: `https://linked.cm/pkg/core/graph/registry` (= `graphs.registry`).
@@ -164,12 +163,12 @@ await OntologyGraph.update(g).set({version: '1.7.0'}).replaceContent({mediaType:
     dataset the process reads;
   - **own writes:** a process that changes a graph (any `graphQuery` through its store) updates its
     own cache for that dataset in the same step, so its next read sees the change;
-  - **CN-managed apps:** every graph write of an app under CN passes through CN's gateway, so CN
-    pushes an invalidation for that dataset to the app over its control channel after the write
-    (arch-07 §Host Agent ↔ app control: the app's `/admin/*` routes with `CN_APP_ADMIN_SECRET`).
+  - **host-managed apps:** every graph write of an app under a host passes through the host's
+    gateway, so the host pushes an invalidation for that dataset to the app over its control
+    channel after the write (the app's `/admin/*` routes, guarded by a shared admin secret).
     C1 sends it, V1 adds the route and drops the cache; core exposes the drop as a public call
     on the store (`invalidateGraphRegistry(dataset?)`, K2) for V1 to use;
-  - **backstop:** an entry older than 30 seconds is re-read, for writes that bypass CN (scripts,
+  - **backstop:** an entry older than 30 seconds is re-read, for writes that bypass the host (scripts,
     standalone apps, and an app in a Docker container, which has no control channel yet);
   - writes never depend on the cache.
 - Test (core, `[fuseki]`): the same queries with `isolateLinkedTypeChecks` on and off return
@@ -219,7 +218,7 @@ Master §K1 is the scope; this is its plan-mode detail. Found in the code at `na
 - `static storedInGraph = graphs.registry` on `NamedGraph` (inherited): `select()` reads the
   registry (P2).
 - `static feedsHierarchy` is not on the shapes; the default per class is in `graphRecords.ts`,
-  so a store that only receives a `GraphQuery` (CN's gateway) knows it.
+  so a store that only receives a `GraphQuery` (the host's gateway) knows it.
 - Builders are thenables with `exec(target?: IDataset)`; `await` runs `exec()`. Each `exec` sends
   exactly one `GraphQuery`:
   - `X.create({id, ...own})` → `graph_create` (no content: an empty graph is registered);
@@ -273,10 +272,10 @@ Master §K1 is the scope; this is its plan-mode detail. Found in the code at `na
 ### Pitfalls
 
 - **Implementers outside core break on types** until their steps land: server's `RemoteDataset`
-  (V1), fuseki's `FusekiStore` (F2, through `SparqlDataset` it inherits `graphQuery`; check), CN's
-  `AppDataRouter`, `ExecutionGateway`, `withAccess` (C1) and webid.email. Core never calls a
+  (V1), fuseki's `FusekiStore` (F2, through `SparqlDataset` it inherits `graphQuery`; check), the host
+  app's `AppDataRouter`, `ExecutionGateway`, `withAccess` (C1) and webid.email. Core never calls a
   missing method: `resolveGraphQuery` and `resolveExistence` guard at runtime, and
-  `resolveMutationDispatch` keeps its check. CN's running dev server (`:4040`, main checkout on
+  `resolveMutationDispatch` keeps its check. The host app's running dev server (main checkout on
   the integration tip) must not crash at runtime after the landing: check it.
 - **Browser bundles.** `NamedGraph.ts` imports neither `n3` nor `crypto` (the hasher is pure JS
   and runs in the store); `graphQueryToSparql.ts` imports `n3` dynamically.
@@ -323,7 +322,7 @@ Master §K1 is the scope; this is its plan-mode detail. Found in the code at `na
 
 Landed (report [048](../reports/048-graph-query-and-the-graph-api.md)). Deviations from this
 section: the review added the store-reserved name hook (`isReservedGraphName`, master §Contracts
-updated at CN `d10d95b69`), made `feedsHierarchy` an `OntologyGraph` field only, and made replace
+updated), made `feedsHierarchy` an `OntologyGraph` field only, and made replace
 and patch through a subclass check the stored record's class. The registration check also
 refuses relative graph names and empty patches. Full gate: 2530 passed, 330/330 `[fuseki]`;
 `two-copies-built` still fails (backlog 060). Open note for K4: routing takes the first shape that
@@ -570,7 +569,7 @@ Master §K4 is the scope; this is its plan-mode detail, written against `named-g
   IRI to one graph IRI. `setDatasetForShapes(dataset, [shapes], {graph})` pins the shapes and
   records their graph; the old variadic form `setDatasetForShapes(dataset, ...shapes)` stays.
   `loadStores` records an alias's `graphs` for the store it builds. A store reads the routes of
-  its own instance; a composite dataset (CN's router, C3) registers routes on the store it
+  its own instance; a composite dataset (the host app's router, C3) registers routes on the store it
   forwards to with the exported `setShapeGraphs(dataset, {shape: graph})`.
 - **A shape's graph** is its own route, else its nearest routed super-shape's, else the default
   graph. **Its read set** is its graph plus the graph of every registered sub-shape (decision 9:
@@ -828,9 +827,9 @@ Master §K5 is the scope; this is its plan-mode detail, written against `named-g
   `SHAPE_HASH_VERSION`, update the golden, append to the ledger (never edit an entry).
 - **Two copies.** The shape enumeration reads the shared registry (`getAllShapeClasses`), as
   `syncShapes` does; nothing keyed by class objects.
-- **Readers in other repositories** (CN's catalogs, server) read the default graph until V2/C4;
-  inherited properties stored as copies disappear from what the default-graph sync writes. CN's
-  catalog follows `extends` through its registry (C4, CN backlog 131).
+- **Readers in other repositories** (the host app's catalogs, server) read the default graph until
+  V2/C4; inherited properties stored as copies disappear from what the default-graph sync writes.
+  The host app's catalog follows `extends` through its registry (C4).
 - **CBD deletes and inference.** The pattern's `rdf:type` triples could match by inference; the
   `DELETE` template only removes stored triples, so an inferred match deletes nothing extra.
 - **K4 shares `syncShapes.ts`/`irToAlgebra.ts`**: this step changes no routing code; it rebases
@@ -882,7 +881,7 @@ search for the symbol.
 
 ### Contract (provided; master §Contracts "Graph routing", as amended by open question 5)
 
-- Graph routing lives only in code (`linked.backend.storage.ts`, arch-04 Layer 1). The datasets
+- Graph routing lives only in code (`linked.backend.storage.ts`). The datasets
   config keeps endpoints and credentials; its per-alias `graphs` key is gone (it was never
   released).
 - A route states intent: `setDatasetForShapes(ds, shapes, {graph: 'own'})` →
@@ -895,25 +894,25 @@ search for the symbol.
 - **`DATA_ROOT` source.** The one a store already mints ids under (`generateEntityUri`):
   the store's `SparqlOptions.dataRoot`, else `process.env.DATA_ROOT`. A dataset exposes its own
   through a new optional `IDataset.dataRoot?()` (`SparqlDataset.dataRoot()` returns
-  `options.dataRoot`; CN's `AppDataFusekiStore` sets that option to the project's app data root
+  `options.dataRoot`; the host app's `AppDataFusekiStore` sets that option to the project's app data root
   once resolved); `dataRootOf(dataset)` falls back to the env, trims it and drops trailing
   slashes (as the server's `appShapesGraph` does). No `example.org` fallback: an intent route on a
   dataset with no root is refused when it is resolved, with an error naming the shape.
 - **When it resolves.** `setShapeGraphs` checks the route and, for `'own'`, derives the path
   under the root at once (the shape must be registered then); the root is joined in
   `graphRoutingFor(dataset)`, which every read, write, `.into()` check and live-query dependency
-  calls, so a root the store learns later (CN resolves it lazily) is the one used. The table keeps
+  calls, so a root the store learns later (the host app resolves it lazily) is the one used. The table keeps
   either an absolute IRI or a root-relative path.
 - **The `'own'` rule.** `{root}/graph/{packageNameToSlug(packageName)}/{shape name}`: the package is
   the one the shape class was registered by (`linkedPackage(name)`, the class's `packageName`), its
-  slug is arch-02's (scope dropped, runs of non-alphanumerics → `-`, trimmed, lower-cased:
+  slug is the package slug (scope dropped, runs of non-alphanumerics → `-`, trimmed, lower-cased:
   `@acme/news-site` → `news-site`); the shape name is the shape IRI's last path segment (the
   `@linkedShape({name})` or the class name, case kept: `Article`). A shape with no registered
   package is refused. A sub-shape without a route of its own inherits the routed super-shape's
   graph (unchanged rule), so `'own'` on `Article` puts an unrouted `NewsArticle` in `…/Article`.
 - **`dataGraph(slug)`** (in `ontologies/graphs.ts`, next to `graphs`, and the index): returns a
   frozen `{dataGraph: slug}`; the slug is one or more `/`-separated segments, each
-  `^[a-z0-9]+(?:-[a-z0-9]+)*$` (arch-02's slug rule); anything else throws (no silent
+  `^[a-z0-9]+(?:-[a-z0-9]+)*$` (the slug rule); anything else throws (no silent
   normalisation of a name the developer chose).
 - **The JSON key.** `parseDatasetsConfig` no longer knows `graphs` (unknown alias keys pass through,
   as before); `loadStores` no longer applies it and warns once per alias that has one, pointing to
@@ -938,7 +937,7 @@ search for the symbol.
 
 ### Pitfalls
 
-- **CN still reads the key.** CN's C3 `parseAppGraphRoutes` passes the clone's `graphs` through
+- **The host app still reads the key.** Its C3 `parseAppGraphRoutes` passes the clone's `graphs` through
   core's `parseDatasetsConfig` and reads it back; ignoring (not refusing) the key keeps that working
   at run time; its `DatasetEntry.graphs` type access is C6's to remove.
 - **The root is per store.** Never cache a resolved IRI in the table; resolve per routing object.
@@ -971,7 +970,7 @@ search for the symbol.
 
 ### Outcome
 
-Landed (report [053](../reports/053-graph-routing-forms.md)). Core as planned; no deviation. CN's
-`parseAppGraphRoutes` read `graphs` back through core's `DatasetEntry` type and relied on core's IRI
-check; CN `2004766be` fixed that before this landed. Backlog 069 records per-instance graph
+Landed (report [053](../reports/053-graph-routing-forms.md)). Core as planned; no deviation. The host
+app's `parseAppGraphRoutes` read `graphs` back through core's `DatasetEntry` type and relied on
+core's IRI check; the host app fixed that before this landed. Backlog 069 records per-instance graph
 functions. Full gate: 2664 passed, 353/353 `[fuseki]`; `two-copies-built` still fails (backlog 060).

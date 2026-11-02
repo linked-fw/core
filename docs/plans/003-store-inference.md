@@ -1,6 +1,6 @@
 ---
 summary: >
-  Core's sub-plan for CN plan 070 (the store infers; ontology data in every app dataset): K1
+  Core's sub-plan for a host app's master plan (the store infers; ontology data in every app dataset): K1
   (Turtle ontology data, the hierarchy reader, the ontology registry and sync with the built-in
   OntologySync shape, the shape check with `mirrors` and `sharedTargetClass`, tighten-only
   warnings, the SHACL metamodel's missing standard terms and PropertyGroup, the test store on the
@@ -11,18 +11,17 @@ packages: [core]
 
 # 003 — Store inference: ontology sync and the shape check
 
-Sub-plan of CN plan 070,
-`create-now/docs/plans/070-store-inference-and-ontology-data.md` (the **master plan**; locally
-`~/web/wt/070/docs/plans/070-store-inference-and-ontology-data.md`). Its §Decisions are the
-design; this document does not redesign them. Read the master's §Decisions, §How to use, §Rules
-and this sub-plan; the contracts core provides or consumes are repeated below verbatim.
+Sub-plan of a host app's **master plan** (store inference and ontology data), which is kept in
+the host app's repository. Its §Decisions are the design; this document does not redesign
+them. Read the master's §Decisions, §How to use, §Rules and this sub-plan; the contracts
+core provides or consumes are repeated below verbatim.
 
 Integration branch: `store-inference` (this repository's worktree
-`~/web/wt/070/packages-local/_linked-core`). A step works in
-`~/web/wt/070-<step>/packages-local/_linked-core` on `store-inference--<step>` and lands with
-`git -C ~/web/wt/070/packages-local/_linked-core merge --ff-only store-inference--<step>`, then
+`<master-wt>/packages-local/_linked-core`, `<master-wt>` being the master's worktree). A step
+works in `<master-wt>-<step>/packages-local/_linked-core` on `store-inference--<step>` and lands with
+`git -C <master-wt>/packages-local/_linked-core merge --ff-only store-inference--<step>`, then
 a rebuild there with the integration CLI
-(`node ~/web/wt/070/packages-local/_linked-cli/lib/esm/launch.js build`, master §Rules). No PR per step; one release PR at the end (master step R).
+(`node <master-wt>/packages-local/_linked-cli/lib/esm/launch.js build`, master §Rules). No PR per step; one release PR at the end (master step R).
 
 Records: K1 → report 042, K2 → report 043, K3 → report 044 (`docs/reports/`).
 
@@ -37,7 +36,7 @@ graph rule) are in the master only.
 
 - `ghcr.io/linked-fw/fuseki:<jena>-<n>` (first: `6.2.0-1`), `FROM secoresearch/fuseki:6.2.0`;
   until the release, built locally from `linked-fw/fuseki`'s `server/Dockerfile` (compose
-  `build:` pointing at `~/web/wt/070/packages-local/_linked-fuseki/server`, tag
+  `build:` pointing at `<master-wt>/packages-local/_linked-fuseki/server`, tag
   `linked-fuseki:dev`). Same env as the base image (`ADMIN_PASSWORD`, `ENABLE_DATA_WRITE`,
   `ENABLE_UPDATE`, `ENABLE_SHACL`, `QUERY_TIMEOUT`), `FUSEKI_BASE=/fuseki-base`, uid 9008.
 - Dataset type `lf:DatasetRDFSLive` (`PREFIX lf: <https://linked.cm/ont/fuseki#>`), declared in an
@@ -58,7 +57,7 @@ graph rule) are in the master only.
 - The module rewrites `$FUSEKI_BASE/templates/config-tdb2` at start when it is missing or
   different, with a warning (Fuseki copies its stock template only when the file is missing, so a
   persisted volume would otherwise create plain datasets silently).
-- `templates/config-tdb2` (baked in) declares the service with the endpoints CN uses today
+- `templates/config-tdb2` (baked in) declares the service with the endpoints the host app uses today
   (`""`/`sparql`/`query`, `""`/`update`, `""`/`data` GSP read-write, `upload`, `get`) over
   `lf:DatasetRDFSLive`, plus `stored` and `shacl` (store validation, decision 23). A form-created dataset (`POST $/datasets`,
   `dbName`, `dbType=tdb2`) gets it. **Only `dbType=tdb2` datasets infer**; `mem` (`config-mem`)
@@ -120,8 +119,8 @@ data `files`.
   of the built-in shape `OntologySync` (`rdf:type core:OntologySync`): `core:packageName`,
   `core:ontologyHash`, `core:ontologyTriples` (the kept triples as sorted N-Triples lines).
   `OntologySync` and `PropertyGroup` join `BUILT_IN_NAMES` (`src/utils/ShapeCatalog.ts:49-54`; 8
-  built-ins; core's test and CN's `projectShapeCatalogs.test.ts:148-153` assert the count, and
-  K1's landing updates CN's test). `PropertyShape.group` becomes a `PropertyGroup` IRI (a literal
+  built-ins; core's test and the host app's `projectShapeCatalogs.test.ts:148-153` assert the count, and
+  K1's landing updates the host app's test). `PropertyShape.group` becomes a `PropertyGroup` IRI (a literal
   today, `Package.ts:882`; no shape sets it).
 - Hash `sha256Hex('linked-ontology-sync/1\n' + ontologyTriples)`.
 - Algorithm: read every sync node's hash; per changed package (or `force`), one Linked Queries
@@ -153,7 +152,7 @@ Reads registered shapes, registered ontologies (parsed through the reader unless
 given) and `linkedPackage(..., {mirrors})`. `@linkedShape({sharedTargetClass: true})` exempts a
 shape from `borrowed-target-class`; shape sync stores it as `core:sharedTargetClass` so data-only
 shapes keep it. Boot and sync log findings; `npx linked build` fails on any
-`error` (L2); CN's builder refuses or offers the fix (C3).
+`error` (L2); the host app's builder refuses or offers the fix (C3).
 
 ### Tighten-only (provider K1 warns, K3 refuses; consumers every package, C3)
 
@@ -165,7 +164,7 @@ leaves out `datatype`, `class`, value shape or `contains` inherits it, as `minCo
 and `nodeKind` already do (`SHACL.ts:403-412`); report 042 lists the overrides whose generated
 SHACL changes. K3 makes the decorator cases errors; data-only shapes stay findings.
 
-### Validate by class (provider K2; consumers apps, CN)
+### Validate by class (provider K2; consumers apps, the host app)
 
 ```ts
 // @_linked/core/shapes/validation
@@ -218,7 +217,7 @@ These came out of reading the code. All eleven are **adopted in the master plan*
 4. **Parse errors cannot name the file from `texts` alone.** Proposed: the registry entry is
    `{packageName, prefix, ns, load, files}` (`files` = the `dataSource` list) and
    `hierarchyFromTurtle(texts: string[], sources?: string[])`; the caller catches per package.
-5. **`sharedTargetClass` must survive the round trip** for data-only shapes (CN's builder, C3):
+5. **`sharedTargetClass` must survive the round trip** for data-only shapes (the host app's builder, C3):
    `NodeShapeData.sharedTargetClass?: boolean`, persisted as `core:sharedTargetClass`
    (`xsd:boolean`) on the NodeShape, carried by the wire form automatically
    (`nodeShapeWire.ts:43-46`).
@@ -229,7 +228,7 @@ These came out of reading the code. All eleven are **adopted in the master plan*
    a fifth kind, `'override-not-tightened'` (severity `warning` in K1, `error` from K3). The same
    kind carries every tighten-only case of data-only shapes, so the shape check sees them too.
 7. **Data-only shapes get warnings for all seven cases, the existing three included**, in K1:
-   `registerRuntimeShape` runs on data read from a store at runtime (CN's catalogs), and throwing
+   `registerRuntimeShape` runs on data read from a store at runtime (the host app's catalogs), and throwing
    there stops a running app (decision 13's rule: a running app is never stopped by data). K3
    decides whether a data-only override is refused (not registered) or still warned.
 8. **The image's SHACL dataset.** K1's SHACL test validates through the base image's `ds`
@@ -244,7 +243,7 @@ These came out of reading the code. All eleven are **adopted in the master plan*
     with `\n`, no trailing newline; the empty package hashes the empty string.
 11. **PropertyShape `group` becomes an IRI** (`sh:group` → a `PropertyGroup` node, as SHACL
     defines it) with value shape `PropertyGroup`; today it is a literal
-    (`Package.ts:882`, `nodeShapeData.ts:29`). No shape in the framework or CN sets `group`
+    (`Package.ts:882`, `nodeShapeData.ts:29`). No shape in the framework or the host app sets `group`
     (searched), so nothing stored changes.
 
 ---
@@ -256,8 +255,8 @@ These came out of reading the code. All eleven are **adopted in the master plan*
 - Nothing for phases 1–4 (pure code, unit tests with the in-memory capture store).
 - **Phase 5 (the store phase) waits for F1's landing** on `linked-fw/fuseki`'s
   `store-inference`: the image built locally as `linked-fuseki:dev` from
-  `~/web/wt/070/packages-local/_linked-fuseki/server`
-  (`docker build -t linked-fuseki:dev ~/web/wt/070/packages-local/_linked-fuseki/server`), and
+  `<master-wt>/packages-local/_linked-fuseki/server`
+  (`docker build -t linked-fuseki:dev <master-wt>/packages-local/_linked-fuseki/server`), and
   the master's settled *pending F1* items (the one stored endpoint, `DELETE $/datasets` removing
   TDB2 files, the `ds` SHACL dataset).
 
@@ -271,7 +270,7 @@ queries changes yet (the workarounds go in K3).
 ### Scope
 
 1. **Dependency:** `n3` `^2.13.12` in `dependencies` (the version `@_linked/auth` already pulls
-   into CN's tree), `@types/n3` `^1.26.4` in `devDependencies`.
+   into the host app's tree), `@types/n3` `^1.26.4` in `devDependencies`.
 2. **New server-only subpaths** (files under `src/ontology/`, a new folder; `src/ontologies/` stays
    the vocabularies), none re-exported from `src/index.ts`:
    - `@_linked/core/ontology/hierarchy` — `RDFS_SUBCLASSOF`, `HierarchyTriple`,
@@ -287,7 +286,7 @@ queries changes yet (the workarounds go in K3).
    - `@_linked/core/ontology/syncOntologies` — `syncOntologies` (§Ontology sync).
    - `@_linked/core/shapes/checkShapeHierarchy` — `checkShapeHierarchy`, `ShapeCheckKind`,
      `ShapeCheckFinding` (§Shape check). Imports the reader's parse functions dynamically, so a
-     caller passing `hierarchy` (CN's builder) never loads `n3`.
+     caller passing `hierarchy` (the host app's builder) never loads `n3`.
    The `./*` export (`package.json` `exports["./*"]`) already serves these paths from
    `lib/esm/<path>.js`; no `exports` change. `sideEffects` needs no entry (`ontology/` modules
    have none; `shapes/OntologySync` is covered by `**/shapes/*.js`).
@@ -342,16 +341,16 @@ package's data (N1, N2, P1); the server boot and control route (V1).
 
 ### Verify
 
-Run in `~/web/wt/070-K1/packages-local/_linked-core` (the step's worktree).
+Run in `<master-wt>-K1/packages-local/_linked-core` (the step's worktree).
 
 **Build** (master §Rules): once L1 has landed and the cli is built in
-`~/web/wt/070/packages-local/_linked-cli`, build with the integration CLI,
-`node ~/web/wt/070/packages-local/_linked-cli/lib/esm/launch.js build` (in the layout `npx linked`
+`<master-wt>/packages-local/_linked-cli`, build with the integration CLI,
+`node <master-wt>/packages-local/_linked-cli/lib/esm/launch.js build` (in the layout `npx linked`
 runs the main checkout's CLI). Before L1 lands, `npx linked build` is acceptable for phases 1–4
 (core ships no Turtle of its own); the full gate and the landing rebuild use the integration CLI.
 
 ```bash
-node ~/web/wt/070/packages-local/_linked-cli/lib/esm/launch.js build   # see Build below; lib/esm/ontology/*.js present
+node <master-wt>/packages-local/_linked-cli/lib/esm/launch.js build   # see Build below; lib/esm/ontology/*.js present
 npm test                                           # jest (unit + live) + typecheck
 REQUIRE_FUSEKI=1 LINKED_FUSEKI_IMAGE=linked-fuseki:dev npm run test:fuseki
 npm run check:dts
@@ -454,7 +453,7 @@ per package; a rejected load or parse error warns naming package and file and sk
    registered: remove its triples except `listedElsewhere`, delete the node; → `pruned`.
 7. Runs outside any `withShapeCatalog` scope (`assertNoActiveCatalog`), like `syncShapes`.
 
-Triples already in a dataset before its first sync (CN's builder wrote `subClassOf` directly) are
+Triples already in a dataset before its first sync (the host app's builder wrote `subClassOf` directly) are
 never deleted by the sync: `old` is empty for a package never synced.
 
 **Shape check** (`checkShapeHierarchy({hierarchy?, dependencies?})`). Inputs: every registered
@@ -582,8 +581,8 @@ still `clearAllData()` after create, as they do now.
   `${LINKED_FUSEKI_IMAGE:-ghcr.io/linked-fw/fuseki:6.2.0-1}`; locally
   `LINKED_FUSEKI_IMAGE=linked-fuseki:dev`. CI at the release PR (R) needs the image published
   first: the fuseki repository releases before core.
-- **Own compose project** (`-p linked-core-test`), never 3030; the owner's Fuseki is
-  `create_now-fuseki-1` on 3030.
+- **Own compose project** (`-p linked-core-test`), never 3030; the owner's own Fuseki runs
+  on 3030.
 - **`n3` must not reach a browser bundle.** No static import of `n3`, `node:fs` or `node:url` in
   any module a browser can import: `loadOntologyFiles.ts` is imported by every package's
   ontology module. Use a variable specifier with `@vite-ignore`/`webpackIgnore`, as
@@ -604,12 +603,12 @@ still `clearAllData()` after create, as they do now.
   it from a module that imports `package.js` creates a cycle: class in `PropertyGroup.class.ts`,
   registered in `Package.ts`, as `List`.
 - **Every built-in is synced into every dataset** (`syncShapes.ts:342-351`): `OntologySync` and
-  `PropertyGroup` appear as NodeShapes in app datasets; CN's `deriveShapesOfInterest` filters by
+  `PropertyGroup` appear as NodeShapes in app datasets; the host app's `deriveShapesOfInterest` filters by
   `builtInShapeIris()`, so they stay hidden there.
-- **Cross-repository breakage:** CN's
+- **Cross-repository breakage:** the host app's
   `src/backend/shapes/projectShapeCatalogs.test.ts:148-153` asserts six built-ins; it fails in the
-  `~/web/wt/070` CN worktree the moment K1 lands (Vite resolves core to the nested checkout). K1's
-  landing updates CN's test (assert `builtInShapeIris().length` against the list, or 8) and the
+  host app's master worktree the moment K1 lands (Vite resolves core to the nested checkout). K1's
+  landing updates the host app's test (assert `builtInShapeIris().length` against the list, or 8) and the
   comment at `src/backend/shapes/shapesOfInterest.ts:27-29` (master §Ontology sync).
 - **Tighten-only inheritance of omitted fields** changes generated SHACL for existing overrides
   across packages; K1 lists every affected shape in report 042 (run the check over the localized
@@ -632,7 +631,7 @@ Full gate before landing (record counts and timings in report 042; baseline at 2
 per report 041 — record the exact baseline on the step's branch before phase 1):
 
 ```bash
-node ~/web/wt/070/packages-local/_linked-cli/lib/esm/launch.js build
+node <master-wt>/packages-local/_linked-cli/lib/esm/launch.js build
 npm test                                                                  # all suites + typecheck
 REQUIRE_FUSEKI=1 LINKED_FUSEKI_IMAGE=linked-fuseki:dev npm run test:fuseki # every [fuseki] test, none skipped
 npm run check:dts
@@ -784,8 +783,8 @@ shape → `conforms: true` and one `sh:Info` result saying nothing was validated
 shape in sA's package or a dependency), a missing B whose root sB is not a sub-shape of sA's
 nearest such ancestor (sB is off the chain: `extends` cannot reach both) is a warning naming the
 multiple inheritance; a sB that is a sub-shape of it stays an error (sA could extend sB instead).
-With no in-scope ancestor every in-scope B stays an error. Tests in `shape-check.test.ts`: CN's
-`Dataset` case (`createNow:Dataset ⊑ dcat:Dataset, schema:CreativeWork`; `CreativeWork ⊑ Thing`;
+With no in-scope ancestor every in-scope B stays an error. Tests in `shape-check.test.ts`: the
+host app's `Dataset` case (`app:Dataset ⊑ dcat:Dataset, schema:CreativeWork`; `CreativeWork ⊑ Thing`;
 `dcat:Dataset ⊑ dcat:Resource`; dcat ships a `Resource` shape and no `Dataset` shape, as it
 does; shapes in three packages with the dependency map; Dataset extends CreativeWork) → no error,
 one warning for dcat's `Resource`; Dataset extending nothing → errors for both; a sB that is a
@@ -812,7 +811,7 @@ Full gate before landing (quote counts and timings in report 043; `two-copies-bu
 `main`, backlog 060):
 
 ```bash
-node ~/web/wt/070/packages-local/_linked-cli/lib/esm/launch.js build
+node <master-wt>/packages-local/_linked-cli/lib/esm/launch.js build
 npm test
 npm run check:dts
 REQUIRE_FUSEKI=1 npm run test:fuseki    # on the test store K1's store phase set up, if landed
@@ -874,7 +873,7 @@ class inference and the ontology hierarchy synced"). Size: medium, **2 phases**.
 - `src/ontologies/xsd.ts` drops `Bytes`.
 - Metamodel: core's `NodeShape`/`PropertyShape` classes carry a typed accessor for every
   metamodel property (owner answer 2's terms included: `sh:name`, `targetSubjectsOf`, …), so a
-  select or a subclass (CN's `CatalogNodeShape`) reads them typed; registration unchanged.
+  select or a subclass (the host app's `CatalogNodeShape`) reads them typed; registration unchanged.
 - Docs: polymorphic bulk mutations (README, `owned-values.md`), README requirements (a store with
   RDFS class inference and the hierarchy synced), `ontologies.md`.
 - Report 044, changeset major, this Outcome.
@@ -889,8 +888,8 @@ that widened an inherited property (`Employee.name`'s path, nine `label` accesso
 predicate) now keep it. Changeset `core-044-store-inference-required.md`, **minor** (the owner's
 decision, overriding the master's "major"). Full gate: `npm test` 2454 passed / 120 skipped, only
 `two-copies-built` failing (backlog 060); `test:fuseki` 317 passed; `typecheck`, `check:dts`
-clean. Consumers: schema, server-utils (`test:calls`), server, CN `typecheck:gate` and vitest
-green. Found: webid.email's `Passkey.label` (own predicate) throws at load (report 044).
+clean. Consumers: schema, server-utils (`test:calls`), server, the host app's `typecheck:gate`
+and vitest green. Found: webid.email's `Passkey.label` (own predicate) throws at load (report 044).
 
 ### Gates
 
@@ -898,7 +897,7 @@ Quick gate after each phase: the touched suites plus `npm run typecheck`. Full g
 landing: `npm test`, `REQUIRE_FUSEKI=1 npm run test:fuseki` (with `LINKED_FUSEKI_IMAGE=linked-fuseki:dev`,
 `FUSEKI_BASE_URL=http://localhost:3988`, `LINKED_CORE_TEST_COMPOSE_PROJECT=linked-core-k3`),
 `npm run check:dts`; `two-copies-built` fails as on `main` (backlog 060). Consumers: server,
-server-utils and schema tests against this core; CN `typecheck:gate` and vitest.
+server-utils and schema tests against this core; the host app's `typecheck:gate` and vitest.
 
 ## Progress
 
@@ -934,7 +933,7 @@ server-utils and schema tests against this core; CN `typecheck:gate` and vitest.
 - [x] K2 — validate by class (report 043)
   - [x] Phase 1 — the class hierarchy in memory, `loadOntologyHierarchy`, called by the sync and the check
   - [x] Phase 2 — `validateByClass`
-  - [x] Phase 3 — direction I with multiple inheritance (CN's `Dataset` case)
+  - [x] Phase 3 — direction I with multiple inheritance (the host app's `Dataset` case)
 - [x] K3 — the workarounds go (report 044)
   - [x] Phase 1 — the workarounds go, the safety net, live fixtures load their hierarchy, one live
     test per inference feature

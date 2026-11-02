@@ -364,8 +364,8 @@ function shapeNamespace(iri: string): string {
  * **Shapes in the store but not registered in this process are left alone by default**
  * (`orphanScope: 'none'`). The registry only holds what this process happened to import, and
  * that is routinely a subset of what the dataset holds: shapes are deep-importable one file at a
- * time, and an app-data dataset also holds shapes other writers materialized (CN's
- * `bindShape` / `enableCapability`). "Not registered here" therefore does not mean "deleted from
+ * time, and an app-data dataset also holds shapes other writers materialized (e.g. a
+ * host app's `bindShape` / `enableCapability`). "Not registered here" therefore does not mean "deleted from
  * code". Measured against a dataset holding the 36 `@_linked/schema` shapes: a process that
  * imported only `@_linked/schema/shapes/Thing` (11 shapes registered) deleted the other 25 under
  * both `'all'` and `'ownedNamespaces'`, and a process that imported no shapes deleted all 36.
