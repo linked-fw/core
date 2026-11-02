@@ -5,9 +5,12 @@ import {resolveShape} from './resolveShape.js';
 import type {DeleteResponse} from './DeleteQuery.js';
 import type {NodeId} from './MutationQuery.js';
 import {MutationThenable} from './MutationThenable.js';
-import {resolveMutationDispatch} from './queryDispatch.js';
+import {assertQuerySupported, resolveMutationDispatch} from './queryDispatch.js';
+import type {QueryFeature} from './queryFeatures.js';
+import type {NodeReferenceValue} from './QueryFactory.js';
 import type {IDataset} from '../interfaces/IDataset.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
+import {refuseTxIdIn} from './transactionQuery.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import {type WhereClause, type WherePath, processWhereClause} from './SelectQuery.js';
 import {type DeleteMutationJSON, type InboundMutationOptions, readKeepIncoming} from './MutationSerialization.js';
@@ -18,7 +21,7 @@ import {encodeContextRef, isContextRefJSON} from './ContextRef.js';
 import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
 import {refuseSerializedInto} from './intoGraph.js';
 
-type DeleteMode = 'ids' | 'all' | 'where';
+type DeleteMode = 'ids' | 'all' | 'where' | 'shapeless';
 
 /** A node to delete: a concrete id, a `{id}` ref, or a live query-context reference. */
 export type DeleteId = NodeId | PendingQueryContext;
@@ -27,7 +30,8 @@ export type DeleteId = NodeId | PendingQueryContext;
  * Internal state bag for DeleteBuilder.
  */
 interface DeleteBuilderInit<S extends Shape> {
-  shape: ShapeConstructor<S>;
+  /** Absent for a shapeless delete (`mode: 'shapeless'`). */
+  shape?: ShapeConstructor<S>;
   /** The catalog the builder resolves in; absent = captured from the active one. */
   catalog?: ShapeCatalog;
   ids?: DeleteId[];
@@ -56,7 +60,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
   extends MutationThenable<R>
 {
   protected readonly _tag = 'DeleteBuilder';
-  private readonly _shape: ShapeConstructor<S>;
+  private readonly _shape: ShapeConstructor<S> | undefined;
   private readonly _ids?: DeleteId[];
   private readonly _mode?: DeleteMode;
   private readonly _whereFn?: WhereClause<S>;
@@ -69,7 +73,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
   private constructor(init: DeleteBuilderInit<S>) {
     super();
     this._shape = init.shape;
-    this._catalog = 'catalog' in init ? init.catalog : captureCatalog(init.shape);
+    this._catalog = 'catalog' in init ? init.catalog : captureCatalog(init.shape ?? null);
     this._ids = init.ids;
     this._mode = init.mode;
     this._whereFn = init.whereFn;
@@ -112,9 +116,39 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     return new DeleteBuilder<S>({shape: resolved});
   }
 
+  /**
+   * A shapeless delete (what `Shape.delete(ids)` on the base class builds): every triple whose
+   * subject is one of `ids`, and every link to one of them, in every data graph of the dataset
+   * (see `IRDeleteShapelessMutation`). The types of the nodes need not be known. Built in the
+   * active shape catalog (the one a receiver checks rights in).
+   */
+  static forNodes(ids: DeleteId | DeleteId[] | NodeReferenceValue[]): DeleteBuilder<Shape, DeleteResponse> {
+    const list = (Array.isArray(ids) ? ids : [ids]) as DeleteId[];
+    if (list.length === 0) {
+      throw new Error('Shape.delete(ids) needs at least one id.');
+    }
+    const idsArray = list.map((id) => asContextRef(id) ?? id);
+    return new DeleteBuilder<Shape>({ids: idsArray, mode: 'shapeless'});
+  }
+
   /** Reconstruct a DeleteBuilder from its DSL-JSON (inverse of `toJSON`). */
   static fromJSON(json: DeleteMutationJSON, options?: InboundMutationOptions): DeleteBuilder {
     assertWireVersion(json.v);
+    refuseTxIdIn(json, 'DeleteBuilder');
+    if (json.mode === 'shapeless') {
+      if ('shape' in json && (json as {shape?: unknown}).shape !== undefined) {
+        throw new Error('DeleteBuilder.fromJSON(): a shapeless delete names no shape.');
+      }
+      if (!Array.isArray(json.ids) || json.ids.length === 0) {
+        throw new Error('DeleteBuilder.fromJSON(): a shapeless delete needs a non-empty "ids" array.');
+      }
+      const ids: DeleteId[] = json.ids.map((id) => {
+        if (isContextRefJSON(id)) return new PendingQueryContext(id['@ctx']);
+        if (typeof id !== 'string') throw new Error('DeleteBuilder.fromJSON(): a shapeless delete\'s ids are IRI strings.');
+        return {id};
+      });
+      return new DeleteBuilder({ids, mode: 'shapeless', keepIncoming: readKeepIncoming(json, options)});
+    }
     const resolved = resolveShape(json.shape);
     if (json.mode === 'ids') {
       // A `{@ctx}` id rehydrates as a live context ref (resolved at lower).
@@ -139,11 +173,13 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
 
   /** Delete all instances of this shape type. Returns void. */
   all(): DeleteBuilder<S, void> {
+    this.refuseOnShapeless('.all()');
     return this.clone({mode: 'all', ids: undefined, whereFn: undefined}) as DeleteBuilder<S, void>;
   }
 
   /** Delete instances matching a condition. Returns void. */
   where(fn: WhereClause<S>): DeleteBuilder<S, void> {
+    this.refuseOnShapeless('.where()');
     return this.clone({mode: 'where', whereFn: fn, ids: undefined}) as DeleteBuilder<S, void>;
   }
 
@@ -154,9 +190,31 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
   /** Discriminator for the free `lower()` function and dataset routing. */
   readonly __queryKind = 'delete' as const;
 
-  /** The shape this query targets — the routing key datasets/`LinkedStorage` use. */
-  get shape(): NodeShapeData {
-    return this._shape.shape;
+  /**
+   * The shape this query targets — the routing key datasets/`LinkedStorage` use. `undefined` for
+   * a shapeless delete (`Shape.delete(ids)`).
+   */
+  get shape(): NodeShapeData | undefined {
+    return this._shape?.shape;
+  }
+
+  /** Whether this is a shapeless delete (`Shape.delete(ids)` on the base class). */
+  get isShapeless(): boolean {
+    return this._mode === 'shapeless';
+  }
+
+  /**
+   * The features beyond the baseline this delete needs (`'shapelessDelete'` for a shapeless one):
+   * checked against the dataset before it is sent.
+   */
+  requiredFeatures(): QueryFeature[] {
+    return this._mode === 'shapeless' ? ['shapelessDelete'] : [];
+  }
+
+  private refuseOnShapeless(method: string): void {
+    if (this._mode === 'shapeless') {
+      throw new Error(`${method} is not available on a shapeless delete (Shape.delete(ids)): it deletes by ids only.`);
+    }
   }
 
   /** The catalog this builder resolves shapes in (undefined = the global registry). */
@@ -172,6 +230,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
    * the shape's graph and its sub-shapes' graphs) with `GraphQueryError('graph-not-routed')`.
    */
   into(graph: string): DeleteBuilder<S, R> {
+    this.refuseOnShapeless('.into()');
     if (typeof graph !== 'string' || !graph) {
       throw new Error('.into() takes a graph IRI.');
     }
@@ -190,6 +249,13 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
 
   /** @internal The IR-free lowering spec consumed by `lower()`. Validates inputs. */
   _lowerSpec(): DeleteLowerSpec<S> {
+    if (this._mode === 'shapeless') {
+      return {
+        mode: 'shapeless',
+        ids: this._ids,
+        ...(this._keepIncoming ? {keepIncoming: true} : {}),
+      };
+    }
     let spec = this._lowerSpecWithoutGraph();
     if (this._into !== undefined) spec = {...spec, into: this._into};
     if (this._keepIncoming) {
@@ -199,7 +265,9 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     return spec;
   }
 
-  private _lowerSpecWithoutGraph(): DeleteLowerSpec<S> {
+  private _lowerSpecWithoutGraph(): DeleteLowerSpec<S> & {shapeClass: ShapeConstructor<S>} {
+    const shapeClass = this._shape;
+    if (!shapeClass) throw new Error('DeleteBuilder: a delete in this mode needs a shape.');
     const catalog = this._catalog;
     if (catalog !== getActiveShapeCatalog()) {
       return withShapeCatalog(catalog, () => this._lowerSpecWithoutGraph());
@@ -207,16 +275,16 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     const mode = this._mode || (this._ids ? 'ids' : undefined);
 
     if (mode === 'all') {
-      return {shapeClass: this._shape, mode: 'all'};
+      return {shapeClass, mode: 'all'};
     }
 
     if (mode === 'where') {
       const wherePath =
-        this._where ?? (this._whereFn ? processWhereClause(this._whereFn, this._shape) : undefined);
+        this._where ?? (this._whereFn ? processWhereClause(this._whereFn, shapeClass) : undefined);
       if (!wherePath) {
         throw new Error('DeleteBuilder.where() requires a condition callback.');
       }
-      return {shapeClass: this._shape, mode: 'where', wherePath};
+      return {shapeClass, mode: 'where', wherePath};
     }
 
     // Default: ID-based delete
@@ -225,7 +293,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
         'DeleteBuilder requires at least one ID to delete. Use DeleteBuilder.from(shape, ids), .all(), or .where().',
       );
     }
-    return {shapeClass: this._shape, mode: 'ids', ids: this._ids};
+    return {shapeClass, mode: 'ids', ids: this._ids};
   }
 
   /** Serialize this delete mutation to lightweight DSL-JSON. */
@@ -235,7 +303,10 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
       return withShapeCatalog(catalog, () => this.toJSON());
     }
     refuseSerializedInto('DeleteBuilder', this._into);
-    const shape = this._shape.shape.id;
+    if (this._mode === 'shapeless') return this.shapelessJSON();
+    const shapeClass = this._shape;
+    if (!shapeClass) throw new Error('DeleteBuilder: a delete in this mode needs a shape.');
+    const shape = shapeClass.shape.id;
     const mode = this._mode || (this._ids ? 'ids' : undefined);
     if (this._keepIncoming && mode !== 'ids') {
       throw new Error('DeleteBuilder: keeping incoming links needs a delete by ids.');
@@ -244,7 +315,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
       return {v: WIRE_VERSION, op: 'delete', shape, mode: 'all'};
     }
     if (mode === 'where') {
-      const wherePath = this._where ?? (this._whereFn ? processWhereClause(this._whereFn, this._shape) : undefined);
+      const wherePath = this._where ?? (this._whereFn ? processWhereClause(this._whereFn, shapeClass) : undefined);
       if (!wherePath) {
         throw new Error('DeleteBuilder.where() requires a condition callback.');
       }
@@ -253,7 +324,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
         op: 'delete',
         shape,
         mode: 'where',
-        where: serializeWherePath(wherePath, this._shape.shape),
+        where: serializeWherePath(wherePath, shapeClass.shape),
       };
     }
     if (!this._ids || this._ids.length === 0) {
@@ -279,6 +350,26 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     };
   }
 
+  /** The DSL-JSON of a shapeless delete: its ids and `keepIncoming`. */
+  private shapelessJSON(): DeleteMutationJSON {
+    if (!this._ids || this._ids.length === 0) {
+      throw new Error('DeleteBuilder: a shapeless delete needs at least one id before .toJSON().');
+    }
+    return {
+      v: WIRE_VERSION,
+      op: 'delete',
+      mode: 'shapeless',
+      ids: this._ids.map((id) =>
+        isLinkedInstance(id, PendingQueryContext)
+          ? encodeContextRef(id.contextName)
+          : typeof id === 'string'
+            ? id
+            : id.id,
+      ),
+      ...(this._keepIncoming ? {keepIncoming: true as const} : {}),
+    };
+  }
+
   /**
    * Execute the mutation.
    *
@@ -288,6 +379,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
    */
   async exec(target?: IDataset): Promise<R> {
     const mode = this._mode || (this._ids ? 'ids' : undefined);
+    if (target) assertQuerySupported(target, this);
     const result = resolveMutationDispatch('delete', target).deleteQuery(this);
     // Bulk (all/where) resolves to void; id-based resolves to the DeleteResponse.
     if (mode === 'all' || mode === 'where') {

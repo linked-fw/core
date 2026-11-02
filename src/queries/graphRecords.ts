@@ -15,6 +15,8 @@
  */
 import type {GraphQuery} from './IntermediateRepresentation.js';
 import {coreOntology} from '../ontologies/linked-core.js';
+import {prov} from '../ontologies/prov.js';
+import {isGraphIri} from './graphQuery.js';
 import {sd} from '../ontologies/sd.js';
 import {xsd} from '../ontologies/xsd.js';
 import {sha256Hex} from '../utils/sha256.js';
@@ -25,13 +27,28 @@ export const dcterms = {
   source: 'http://purl.org/dc/terms/source',
 } as const;
 
-/** One caller-settable field of a record class. */
-export type GraphRecordField = {
+/**
+ * One caller-settable field of a record class: a literal (`datatype`, `xsd:string` or
+ * `xsd:boolean`) or a node (`nodeKind: 'iri'`, its value `{id}` with an absolute IRI).
+ */
+export type GraphRecordField = GraphRecordLiteralField | GraphRecordNodeField;
+
+/** A literal field: its values are strings or booleans, written with `datatype`. */
+export type GraphRecordLiteralField = {
   /** The predicate IRI. */
   path: string;
   /** `xsd:string` or `xsd:boolean`. */
   datatype: string;
-  /** Several values allowed (a string or an array of strings). */
+  /** Several values allowed (a value or an array of values). */
+  many?: boolean;
+};
+
+/** A node field: its values are `{id}`, written as IRIs. */
+export type GraphRecordNodeField = {
+  /** The predicate IRI. */
+  path: string;
+  nodeKind: 'iri';
+  /** Several values allowed (a value or an array of values). */
   many?: boolean;
 };
 
@@ -45,6 +62,8 @@ export type GraphRecordClass = {
 
 const namedGraphFields: Record<string, GraphRecordField> = {
   sources: {path: dcterms.source, datatype: xsd.string.id, many: true},
+  /** Who the graph's content is attributed to (an agent IRI), e.g. a host's system actor. */
+  attributedTo: {path: prov.wasAttributedTo.id, nodeKind: 'iri'},
 };
 const packageGraphFields: Record<string, GraphRecordField> = {
   ...namedGraphFields,
@@ -52,6 +71,12 @@ const packageGraphFields: Record<string, GraphRecordField> = {
   version: {path: coreOntology.version.id, datatype: xsd.string.id},
   /** A shared graph's parts: `"{package} {hash}"` per package (see `utils/graphTargets.ts`). */
   packageHashes: {path: coreOntology.packageHash.id, datatype: xsd.string.id, many: true},
+};
+const componentsGraphFields: Record<string, GraphRecordField> = {
+  ...namedGraphFields,
+  package: {path: coreOntology.package.id, datatype: xsd.string.id},
+  version: {path: coreOntology.version.id, datatype: xsd.string.id},
+  commit: {path: coreOntology.commit.id, datatype: xsd.string.id},
 };
 // Only an ontology graph may opt out of feeding the hierarchy; every other kind never feeds it.
 const ontologyGraphFields: Record<string, GraphRecordField> = {
@@ -63,6 +88,7 @@ const recordClasses = new Map<string, GraphRecordClass>([
   [sd.NamedGraph.id, {feedsHierarchy: false, fields: namedGraphFields}],
   [coreOntology.OntologyGraph.id, {feedsHierarchy: true, fields: ontologyGraphFields}],
   [coreOntology.ShapesGraph.id, {feedsHierarchy: false, fields: packageGraphFields}],
+  [coreOntology.ComponentsGraph.id, {feedsHierarchy: false, fields: componentsGraphFields}],
   [coreOntology.DraftGraph.id, {feedsHierarchy: false, fields: namedGraphFields}],
 ]);
 
@@ -90,12 +116,20 @@ export function getGraphRecordClass(classIri: string): GraphRecordClass {
 /** A typed literal value of a record field. */
 export type GraphRecordLiteral = {value: string; datatype: string};
 
-/** The literal values of the caller's own fields, by predicate, checked against the class. */
+/** A value of a record field: a typed literal, or a node (`{id}`, an absolute IRI). */
+export type GraphRecordValue = GraphRecordLiteral | {id: string};
+
+/** Whether a record value is a node (`{id}`), else a literal. */
+export function isGraphRecordNode(value: GraphRecordValue): value is {id: string} {
+  return 'id' in value;
+}
+
+/** The values of the caller's own fields, by predicate, checked against the class. */
 export function graphRecordFieldValues(
   query: Pick<GraphQuery, 'recordClass' | 'record'>,
-): Map<string, GraphRecordLiteral[]> {
+): Map<string, GraphRecordValue[]> {
   const definition = getGraphRecordClass(query.recordClass);
-  const values = new Map<string, GraphRecordLiteral[]>();
+  const values = new Map<string, GraphRecordValue[]>();
   for (const [name, raw] of Object.entries(query.record ?? {})) {
     if (raw === undefined) continue;
     if (AUTOMATIC_FIELDS.has(name)) {
@@ -109,19 +143,34 @@ export function graphRecordFieldValues(
         ).join(', ')}.`,
       );
     }
+    // `null` clears the field: an update deletes its values and writes none; a create skips it.
+    if (raw === null) {
+      values.set(field.path, []);
+      continue;
+    }
     const list = Array.isArray(raw) ? raw : [raw];
     if (Array.isArray(raw) && !field.many) {
       throw new Error(`The record field "${name}" takes one value, not a list.`);
     }
     values.set(
       field.path,
-      list.map((value) => literalFor(name, field, value)),
+      list.map((value) => recordValueFor(name, field, value)),
     );
   }
   return values;
 }
 
-function literalFor(name: string, field: GraphRecordField, value: unknown): GraphRecordLiteral {
+function recordValueFor(name: string, field: GraphRecordField, value: unknown): GraphRecordValue {
+  if ('nodeKind' in field) {
+    const id = (value as {id?: unknown} | null)?.id;
+    if (!value || typeof value !== 'object' || Array.isArray(value) || id === undefined) {
+      throw new Error(`The record field "${name}" is a node: pass {id}; got ${JSON.stringify(value)}.`);
+    }
+    if (!isGraphIri(id)) {
+      throw new Error(`The record field "${name}" takes an absolute IRI as its id; got ${JSON.stringify(id)}.`);
+    }
+    return {id};
+  }
   if (field.datatype === xsd.boolean.id) {
     if (typeof value !== 'boolean') {
       throw new Error(`The record field "${name}" is a boolean; got ${JSON.stringify(value)}.`);

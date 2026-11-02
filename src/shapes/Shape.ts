@@ -18,6 +18,7 @@ import {CountBuilder} from '../queries/CountBuilder.js';
 import {resolveShape} from '../queries/resolveShape.js';
 import type {PendingQueryContext} from '../queries/QueryContext.js';
 import type {IDataset} from '../interfaces/IDataset.js';
+import type {ReadGraphsInput} from '../queries/readGraphs.js';
 import {CreateBuilder} from '../queries/CreateBuilder.js';
 import {UpdateBuilder} from '../queries/UpdateBuilder.js';
 import {DeleteBuilder, type DeleteId} from '../queries/DeleteBuilder.js';
@@ -85,6 +86,15 @@ export function createShapeTarget<S extends Shape>(
 export abstract class Shape {
   static targetClass: NodeReferenceValue = null;
   static shape: NodeShapeData;
+  /**
+   * The graphs a select, count or ask of this shape reads when it has no `.from()`, inherited by
+   * subclasses: a graph IRI or a list, portable names included. Unset (the default), a read uses
+   * the default graph, or the shape's routed graphs. Core's shape shapes (`NodeShape`,
+   * `PropertyShape`) declare `graphs.allShapes`, and the ontology term shapes of `@_linked/rdfs`
+   * and `@_linked/owl` `graphs.allOntologies`. An explicit `.from()` wins; writes are not
+   * affected. See docs/architecture/ontologies.md, "A shape's default read set".
+   */
+  static defaultReadGraphs?: ReadGraphsInput;
   static get typesToShapes(): Map<string, Set<typeof Shape>> {
     return shapeTypeState.typesToShapes;
   }
@@ -209,7 +219,7 @@ export abstract class Shape {
    * shapes themselves are described by `NodeShape` and `PropertyShape`, so
    * `Shape.exists` is not needed for "is this a shape?".) Because a shapeless ask
    * has no shape to route on, a router asks every dataset it knows — see
-   * `LinkedStorage.askQuery`.
+   * `LinkedStorage.readQuery`.
    *
    * ```typescript
    * if (await SourceDocument.exists({id})) {
@@ -403,11 +413,27 @@ export abstract class Shape {
     return builder as unknown as CreateBuilder<S, U>;
   }
 
+  /**
+   * Delete instances of this shape by id: each one's triples (behind its type guard), its blank
+   * values, its owned subtree and the links to it in every graph that may hold one.
+   *
+   * On the base class — `Shape.delete(ids)` — it is a **shapeless** delete: the nodes' types need
+   * not be known. Every triple whose subject is one of `ids`, and every triple that links to one
+   * of them, is deleted in the graphs the dataset routes (its graph routing's named graphs),
+   * never in the default graph or `graphs.union`. No type guard, no blank-value or owned cascade
+   * (there is no shape to read them from). A dataset without graph routing refuses it, and a
+   * dataset that does not declare `'shapelessDelete'` in `supports` is never sent one. Without a
+   * target it goes to every dataset `LinkedStorage` knows. `.where()`, `.all()` and `.into()`
+   * are refused on it.
+   */
   static delete<S extends Shape>(
-    this: ShapeConstructor<S>,
+    this: ShapeConstructor<S> | typeof Shape,
     id: DeleteId | DeleteId[] | NodeReferenceValue[],
   ): DeleteBuilder<S> {
-    return DeleteBuilder.from(this, id) as DeleteBuilder<S>;
+    if ((this as unknown) === Shape) {
+      return DeleteBuilder.forNodes(id) as unknown as DeleteBuilder<S>;
+    }
+    return DeleteBuilder.from(this as ShapeConstructor<S>, id) as DeleteBuilder<S>;
   }
 
   /** Delete all instances of this shape type. Returns void. */

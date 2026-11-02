@@ -9,8 +9,9 @@ import {walkPropertyPath} from '../queries/PropertyPath';
 import {FieldSet} from '../queries/FieldSet';
 import {setQueryContext, getQueryContext, PendingQueryContext, UnresolvedContextError} from '../queries/QueryContext';
 import {lower} from '../queries/lower';
-import {resolveExistence} from '../queries/queryDispatch';
 import {Shape} from '../shapes/Shape';
+import {readQueryOf} from '../test-helpers/read-double';
+import type {QueryFeature} from '../queries/queryFeatures';
 
 const personShape = Person.shape;
 
@@ -898,14 +899,17 @@ describe('undecorated property access in a query', () => {
 
 /**
  * A store that answers asks directly. `answer` may be a value or a thunk that
- * throws — a store with `askQuery` is never asked through a select, so what this
+ * throws — a store that declares the ask feature is never asked through a select, so what this
  * returns is the whole story.
  */
 const askStore = (answer: boolean | (() => never)): any => ({
-  selectQuery: async () => {
-    throw new Error('selectQuery must not be reached by an existence check');
-  },
-  askQuery: async () => (typeof answer === 'function' ? answer() : answer),
+  supports: ['ask'] as QueryFeature[],
+  readQuery: readQueryOf({
+    select: async () => {
+      throw new Error('a select must not be reached by an existence check');
+    },
+    ask: async () => (typeof answer === 'function' ? answer() : answer),
+  }),
 });
 
 describe('SelectBuilder — .exists()', () => {
@@ -973,7 +977,7 @@ describe('SelectBuilder — .exists()', () => {
     expect(ir.subjectId).toBeUndefined();
   });
 
-  test("resolves the store's boolean, both ways, without touching selectQuery", async () => {
+  test("resolves the store's boolean, both ways, without a select", async () => {
     await expect(Person.select().exists(askStore(true))).resolves.toBe(true);
     await expect(Person.select().exists(askStore(false))).resolves.toBe(false);
   });
@@ -1014,12 +1018,15 @@ describe('SelectBuilder — .exists()', () => {
     // reactive layer re-runs). exists() must not flatten that into a boolean:
     // "could not ask" is not "does not exist".
     const unresolving = {
-      askQuery: async () => {
-        throw new UnresolvedContextError('user');
-      },
-      selectQuery: async () => {
-        throw new UnresolvedContextError('user');
-      },
+      supports: ['ask'] as QueryFeature[],
+      readQuery: readQueryOf({
+        ask: async () => {
+          throw new UnresolvedContextError('user');
+        },
+        select: async () => {
+          throw new UnresolvedContextError('user');
+        },
+      }),
     };
     await expect(Person.select().exists(unresolving as any)).rejects.toThrow();
     // …while exec() keeps its existing, documented null behaviour.
@@ -1052,32 +1059,35 @@ describe('SelectBuilder — .exists()', () => {
 // .exists() → ASK dispatch
 // =============================================================================
 
-describe('SelectBuilder — .exists() prefers askQuery', () => {
+describe('SelectBuilder — .exists() prefers a native ask', () => {
   /** A store that answers booleans directly, recording what it was asked. */
   const askStore = (answer: boolean) => {
     const seen: {ask: number; select: number; query?: any} = {ask: 0, select: 0};
     const store = {
-      askQuery: async (q: any) => {
-        seen.ask += 1;
-        seen.query = q;
-        return answer;
-      },
-      selectQuery: async () => {
-        seen.select += 1;
-        return [] as any;
-      },
+      supports: ['ask'] as QueryFeature[],
+      readQuery: readQueryOf({
+        ask: async (q: any) => {
+          seen.ask += 1;
+          seen.query = q;
+          return answer;
+        },
+        select: async () => {
+          seen.select += 1;
+          return [] as any;
+        },
+      }),
     };
     return {store, seen};
   };
 
-  test('uses askQuery when the target has one, and does not also select', async () => {
+  test('asks natively when the target declares the ask feature, and does not also select', async () => {
     const {store, seen} = askStore(true);
     await expect(Person.exists(entity('p1'), store as any)).resolves.toBe(true);
     expect(seen.ask).toBe(1);
     expect(seen.select).toBe(0);
   });
 
-  test('askQuery returning FALSE resolves false — not "not null, therefore true"', async () => {
+  test('an ask answering FALSE resolves false — not "not null, therefore true"', async () => {
     // The conversion `.exists()` shipped on was `result != null`, which reads a
     // literal `false` from a store as "present". The boolean arm in exists()
     // exists for exactly this, and this test is what holds it in place.
@@ -1086,7 +1096,7 @@ describe('SelectBuilder — .exists() prefers askQuery', () => {
     expect(seen.ask).toBe(1);
   });
 
-  test('askQuery receives the normalised query, not the decorated chain', async () => {
+  test('the ask receives the normalised query, not the decorated chain', async () => {
     const {store, seen} = askStore(true);
     await Person.select((p) => p.name)
       .orderBy((p) => p.name)
@@ -1103,10 +1113,13 @@ describe('SelectBuilder — .exists() prefers askQuery', () => {
 
   test('a store failure on the ASK path REJECTS — same contract as the SELECT path', async () => {
     const broken = {
-      askQuery: async () => {
-        throw new Error('fuseki is down');
-      },
-      selectQuery: async () => [] as any,
+      supports: ['ask'] as QueryFeature[],
+      readQuery: readQueryOf({
+        ask: async () => {
+          throw new Error('fuseki is down');
+        },
+        select: async () => [] as any,
+      }),
     };
     await expect(Person.exists(entity('p1'), broken as any)).rejects.toThrow(
       /fuseki is down/,
@@ -1115,15 +1128,18 @@ describe('SelectBuilder — .exists() prefers askQuery', () => {
 
   test('an unresolved where-clause context still REJECTS on the ASK path', async () => {
     const unresolving = {
-      askQuery: async () => {
-        throw new UnresolvedContextError('user');
-      },
-      selectQuery: async () => [] as any,
+      supports: ['ask'] as QueryFeature[],
+      readQuery: readQueryOf({
+        ask: async () => {
+          throw new UnresolvedContextError('user');
+        },
+        select: async () => [] as any,
+      }),
     };
     await expect(Person.select().exists(unresolving as any)).rejects.toThrow();
   });
 
-  test('a null id short-circuits to false without reaching askQuery', async () => {
+  test('a null id short-circuits to false without asking', async () => {
     const {store, seen} = askStore(true);
     await expect(Person.exists(null, store as any)).resolves.toBe(false);
     expect(seen.ask).toBe(0);
@@ -1137,10 +1153,10 @@ describe('SelectBuilder — .exists() prefers askQuery', () => {
     expect(seen.select).toBe(1);
   });
 
-  test('a store without askQuery is asked with a select LIMIT 1', async () => {
+  test('a store without the ask feature is asked with a select LIMIT 1', async () => {
     const seen: any[] = [];
     const withRow = {
-      selectQuery: async (q: any) => {
+      readQuery: async (q: any) => {
         seen.push(q.toJSON());
         return [{id: entity('p1').id}];
       },
@@ -1149,13 +1165,13 @@ describe('SelectBuilder — .exists() prefers askQuery', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({shape: Person.shape.id, subject: entity('p1').id, limit: 1});
     expect(seen[0].op).toBeUndefined();
-    const empty = {selectQuery: async () => []};
+    const empty = {readQuery: async () => []};
     await expect(Person.exists(entity('p1'), empty as any)).resolves.toBe(false);
   });
 
-  test('a shapeless ask on a store without askQuery is refused', async () => {
+  test('a shapeless ask on a store without the ask feature is refused', async () => {
     await expect(
-      Shape.exists(entity('p1'), {selectQuery: async () => []} as any),
+      Shape.exists(entity('p1'), {readQuery: async () => []} as any),
     ).rejects.toThrow(/shapeless ask/);
   });
 });
@@ -1176,19 +1192,22 @@ describe('SelectBuilder — .exists() enforces the boolean contract', () => {
     ['undefined', undefined as any],
     ['null', null as any],
     ['a number', 1 as any],
-  ])('askQuery resolving %s REJECTS rather than coercing', async (_label, value) => {
+  ])('an ask resolving %s REJECTS rather than coercing', async (_label, value) => {
     const store = {
-      askQuery: async () => value,
-      selectQuery: async () => [] as any,
+      supports: ['ask'] as QueryFeature[],
+      readQuery: readQueryOf({
+        ask: async () => value,
+        select: async () => [] as any,
+      }),
     };
     await expect(Person.exists(entity('p1'), store as any)).rejects.toThrow(
-      /must resolve to a boolean/,
+      /must be answered with a boolean/,
     );
   });
 
   test('both real booleans pass the contract unchanged', async () => {
     for (const answer of [true, false]) {
-      const store = {askQuery: async () => answer, selectQuery: async () => [] as any};
+      const store = {supports: ['ask'] as QueryFeature[], readQuery: readQueryOf({ask: async () => answer, select: async () => [] as any})};
       await expect(Person.exists(entity('p1'), store as any)).resolves.toBe(answer);
     }
   });
@@ -1200,10 +1219,13 @@ describe('AskBuilder — pagination is unrepresentable, not guarded', () => {
   // left to guard: a chain carrying either still reduces to the same ask.
   test('a chain with offset and limit(0) still answers', async () => {
     const store = {
-      selectQuery: async () => {
-        throw new Error('not reached');
-      },
-      askQuery: async () => true,
+      supports: ['ask'] as QueryFeature[],
+      readQuery: readQueryOf({
+        select: async () => {
+          throw new Error('not reached');
+        },
+        ask: async () => true,
+      }),
     };
     await expect(
       Person.select().for(entity('p1')).offset(5).limit(0).exists(store as any),

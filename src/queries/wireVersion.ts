@@ -4,8 +4,23 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-/** Current DSL-JSON wire-format version, stamped onto every `toJSON` envelope as `v`. */
-export const WIRE_VERSION = '1.1';
+/**
+ * Current DSL-JSON wire-format version, stamped onto every `toJSON` envelope as `v`.
+ *
+ * 1.5: `txId` on every query envelope, the store transaction it runs in (see
+ * `queries/transactionQuery.ts`).
+ * 1.6: the `$type` path segment, a node's `rdf:type` values (`$type()` in the select DSL).
+ * 1.7: `sortBy` entries for a computed expression (`{value, direction}`) and a filtered path
+ * (`{path: {direction, where, whereIndex}}`); a quantifier as the condition of another
+ * (`{"friends.some": {"$type": …}}`).
+ * 1.8: a quantifier key carries its relation's cast (`pets.as(Dog).some`); condition and `sortBy`
+ * paths carry `as(X)` casts as fields do; a `sortBy` filter on any relation segment of its path.
+ * 1.9: a triples read lists `objects` or `predicates` (a terms read:
+ * which of the listed terms occur).
+ * 1.10: a terms read is `kind: 'triples_terms'` (a `kind: 'triples'` with `objects` or
+ * `predicates` is refused); every read goes to `readQuery`.
+ */
+export const WIRE_VERSION = '1.10';
 
 /**
  * Validate an incoming envelope's `v`. A missing `v` is tolerated (pre-versioned /

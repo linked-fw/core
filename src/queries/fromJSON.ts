@@ -22,6 +22,7 @@ import type {AskQueryJSON} from './AskQuery.js';
 import type {CountQueryJSON} from './CountQuery.js';
 import type {InboundMutationOptions, MutationJSON} from './MutationSerialization.js';
 import {assertWireVersion} from './wireVersion.js';
+import {inTransaction, splitTxId} from './transactionQuery.js';
 import {isGraphQueryKind} from './graphQuery.js';
 import {getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
@@ -68,8 +69,27 @@ export function fromJSON(
       'check it with parseGraphQuery() and pass it to IDataset.graphQuery().',
     );
   }
+  if (kind === 'triples' || kind === 'triples_terms') {
+    // A triples or terms read is plain data too: it goes to `IDataset.readQuery` as it is.
+    const parse = kind === 'triples' ? 'parseTriplesQuery' : 'parseTriplesTermsQuery';
+    throw new Error(
+      `"${kind}" is a ${kind === 'triples' ? 'triples' : 'terms'} read, not a query builder envelope: ` +
+      `check it with ${parse}() and pass it to IDataset.readQuery().`,
+    );
+  }
+  // A query of a store transaction (DSL-JSON 1.5): decoded without its txId, then returned as
+  // the transaction view, so the store it is sent to answers it inside that transaction.
+  if (json && typeof json === 'object') {
+    const {json: bare, txId} = splitTxId(json);
+    if (txId !== undefined) return inTransaction(fromJSON(bare, options), txId);
+  }
   if (json && typeof json === 'object' && 'op' in json) {
     switch (json.op) {
+      case 'select':
+        // A select that needs features beyond the baseline (grouping, min/max) carries
+        // `op: 'select'`: a build without this arm refuses it instead of answering it
+        // without those parts.
+        return SelectBuilder.fromJSON(json as QueryBuilderJSON);
       case 'ask':
         return AskBuilder.fromJSON(json as AskQueryJSON);
       case 'count':

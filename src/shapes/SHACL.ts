@@ -6,7 +6,9 @@
 import {type NodeReferenceValue, toNodeReference} from '../utils/NodeReference.js';
 import {Shape, type ShapeConstructor} from './Shape.js';
 import {shacl} from '../ontologies/shacl.js';
-import {warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
+import {graphs} from '../ontologies/graphs.js';
+import type {ReadGraphsInput} from '../queries/readGraphs.js';
+import {DSL_JSON_COMBINATOR_NAMES, warnOnReservedPropertyLabel} from '../queries/reservedQueryNames.js';
 import {getShapeClass, getSuperShapes} from '../utils/ShapeClass.js';
 import {sharedState} from '../utils/sharedState.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
@@ -357,6 +359,8 @@ export interface ParameterConfig {
  */
 export class NodeShape extends Shape {
   static targetClass = shacl.NodeShape;
+  /** Shape graphs hold the shape shapes: a read without `.from()` reads every one of them. */
+  static defaultReadGraphs: ReadGraphsInput = graphs.allShapes;
 
   // Typed accessors for the metamodel's property shapes (registered in `utils/Package.ts`), so a
   // select or a subclass reads them typed. Never called: a NodeShape is never instantiated.
@@ -490,6 +494,8 @@ export class NodeShape extends Shape {
  */
 export class PropertyShape extends Shape {
   static targetClass = shacl.PropertyShape;
+  /** Shape graphs hold the shape shapes: a read without `.from()` reads every one of them. */
+  static defaultReadGraphs: ReadGraphsInput = graphs.allShapes;
 
   // Typed accessors for the metamodel's property shapes (registered in `utils/Package.ts`).
   // Never called: a PropertyShape is never instantiated.
@@ -722,20 +728,27 @@ const connectValueShape = <
 };
 
 /**
- * The DSL-JSON where-clause combinators. A property may not be named after one,
- * because a condition key in those positions has no `{path}` escape (the key is a
- * bare string). See documentation/dsl-json.md (Reserved words).
+ * `$`-prefixed names and `and`/`or`/`not` throw; the other reserved names warn (see
+ * `warnOnReservedPropertyLabel`). In queries `$` names are facts about the node (`$type()`, and
+ * `$graph()` reserved), in the DSL, a label select and a DSL-JSON path alike, so such a property
+ * has no way in; no RDF label starts with `$` in practice. `and`/`or`/`not` are the DSL-JSON
+ * condition combinators. A shape loaded as data is not refused, only reported.
  */
-const RESERVED_PROPERTY_LABELS = new Set(['and', 'or', 'not']);
-
 export function registerPropertyShape(
   shape: NodeShapeData,
   propertyShape: PropertyShapeData,
 ) {
-  if (RESERVED_PROPERTY_LABELS.has(propertyShape.label)) {
+  if (propertyShape.label?.startsWith('$')) {
     throw new Error(
-      `Property label '${propertyShape.label}' is reserved (a DSL-JSON boolean combinator) ` +
-        `and cannot be used as a property name. See documentation/dsl-json.md (Reserved words).`,
+      `Property label '${propertyShape.label}' is reserved: \`$\`-prefixed names are node metadata ` +
+        `in queries (facts about the node, not shape fields). Rename the property; its RDF ` +
+        `predicate can stay the same.`,
+    );
+  }
+  if (propertyShape.label && DSL_JSON_COMBINATOR_NAMES.has(propertyShape.label)) {
+    throw new Error(
+      `Property label '${propertyShape.label}' is reserved: \`and\`, \`or\` and \`not\` are the ` +
+        `DSL-JSON condition combinators. Rename the property; its RDF predicate can stay the same.`,
     );
   }
   // Not fatal, but the author needs to hear it here rather than from the field tracer.

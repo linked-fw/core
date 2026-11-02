@@ -37,6 +37,7 @@ import type {CreateQuery} from '../queries/CreateQuery';
 import type {DeleteQuery} from '../queries/DeleteQuery';
 import type {GraphQuery} from '../queries/IntermediateRepresentation';
 import '../shapes/index';
+import type {ReadQuery, ReadResult} from '../queries/readQuery';
 
 const PKG = 'shape-graphs-live';
 const {linkedShape} = linkedPackage(PKG);
@@ -102,11 +103,9 @@ class ForwardingStore implements IDataset {
   dataRoot(): string | undefined {
     return this.inner.dataRoot?.();
   }
-  selectQuery(query: SelectQuery | CountQuery) {
-    return this.inner.selectQuery(this.decode(query));
-  }
-  askQuery(query: AskQuery) {
-    return this.inner.askQuery(this.decode(query));
+  readonly supports = ['ask'] as const;
+  readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    return this.inner.readQuery(this.decode(query as SelectQuery | CountQuery | AskQuery));
   }
   updateQuery(query: UpdateQuery) {
     return this.inner.updateQuery(this.decode(query));
@@ -176,6 +175,11 @@ describeFuseki('shape graphs on the inferring store', () => {
       }).exec(store)) ?? [];
       const ids = rows.map((r) => r.id);
       expect(ids).toEqual(expect.arrayContaining([SgPerson.shape.id, SgEmployee.shape.id, NodeShape.shape.id]));
+      // Without .from(), NodeShape reads the same graphs: its default read set is graphs.allShapes.
+      const byDefault = (await (QueryBuilder.from(NodeShape).select(['extends']) as unknown as {
+        exec: (ds: unknown) => Promise<Array<{id: string}>>;
+      }).exec(store)) ?? [];
+      expect(byDefault.map((r) => r.id).sort()).toEqual([...ids].sort());
 
       store.updates = 0;
       const second = await syncShapeGraphs(store, options);

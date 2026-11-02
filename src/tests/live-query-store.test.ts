@@ -18,6 +18,8 @@ import {Person, Team, ids} from '../test-helpers/live-fixtures';
 import {ShapeCatalog, withShapeCatalog} from '../utils/ShapeCatalog';
 import {toWire} from '../shapes/nodeShapeWire';
 import {unusedDatasetMethods} from '../test-helpers/test-utils';
+import {readQueryOf} from '../test-helpers/read-double';
+import type {QueryFeature} from '../queries/queryFeatures';
 
 /** A catalog holding the fixtures' Person and Team as data, as a project branch would. */
 const fixtureCatalog = () => ShapeCatalog.from([toWire(Person.shape), toWire(Team.shape)]);
@@ -52,7 +54,9 @@ class ScriptedDataset implements IDataset {
   createQuery = unusedDatasetMethods.createQuery;
   deleteQuery = unusedDatasetMethods.deleteQuery;
   graphQuery = unusedDatasetMethods.graphQuery;
-  async selectQuery(query: any): Promise<any> {
+  readonly supports: readonly QueryFeature[] = ['ask'];
+  readQuery = readQueryOf({select: (q) => this.select(q), ask: (q) => this.ask(q)});
+  async select(query: any): Promise<any> {
     this.selects++;
     if (this.failNext) {
       this.failNext = false;
@@ -73,7 +77,7 @@ class ScriptedDataset implements IDataset {
     return all.slice(offset, offset + limit);
   }
 
-  async askQuery(query: any): Promise<boolean> {
+  async ask(query: any): Promise<boolean> {
     const json = query.toJSON();
     return typeof json.subject === 'string' ? this.rows.has(json.subject) : this.rows.size > 0;
   }

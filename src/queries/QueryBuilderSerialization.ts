@@ -8,15 +8,20 @@
  */
 
 import type {NodeShapeData} from '../shapes/SHACL.js';
-import {PropertyPath, walkPropertyPath} from './PropertyPath.js';
-import type {WherePath, SortByPath} from './SelectQuery.js';
+import {PropertyPath} from './PropertyPath.js';
+import {pathToStringWithCasts, walkPathWithCasts} from './castPaths.js';
+import {relationMemberShape} from './DslJsonExpression.js';
+import type {WherePath, SortByPath, SortKey} from './SelectQuery.js';
 import type {RawMinusEntry, PropertyPathSegment} from './IRDesugar.js';
 import {
   encodeCondition,
   decodeCondition,
+  encodeValueExpr,
+  decodeValueExpr,
   type DslJsonCondition,
+  type DslJsonValue,
 } from './DslJsonExpression.js';
-import type {ExpressionNode, ExistsCondition} from '../expressions/ExpressionNode.js';
+import {ExpressionNode, type ExistsCondition} from '../expressions/ExpressionNode.js';
 
 // =============================================================================
 // JSON types
@@ -25,8 +30,18 @@ import type {ExpressionNode, ExistsCondition} from '../expressions/ExpressionNod
 /** A where-clause on the wire is a DSL-JSON condition (see documentation/dsl-json.md). */
 export type WherePathJSON = DslJsonCondition;
 
-/** An ordered list of `{path: direction}` — element order is sort precedence. */
-export type SortByPathJSON = Array<{[path: string]: 'ASC' | 'DESC'}>;
+type SortDirection = 'ASC' | 'DESC';
+
+/**
+ * An ordered list of sort keys — element order is sort precedence. A key is a path,
+ * `{path: direction}`, or a path whose segment `whereIndex` is filtered, `{path: {direction,
+ * where, whereIndex}}`, or a computed expression, `{value: <expr>, direction}` (two keys, so
+ * never read as a path).
+ */
+export type SortByPathJSON = Array<
+  | {[path: string]: SortDirection | {direction: SortDirection; where?: WherePathJSON; whereIndex?: number}}
+  | {value: DslJsonValue; direction: SortDirection}
+>;
 
 export type RawMinusEntryJSON = {
   shapeId?: string;
@@ -51,7 +66,43 @@ export function serializeWherePath(
 }
 
 export function serializeSortByPath(sort: SortByPath): SortByPathJSON {
-  return sort.paths.map((p, i) => ({[p.toString()]: sort.directions[i]}));
+  return sort.keys.map((key, i) => {
+    const direction = sort.directions[i];
+    if ('expression' in key) {
+      return {value: encodeValueExpr(key.expression.ir, key.expression._refs), direction};
+    }
+    const path = pathToStringWithCasts(key.path.rootShape, key.path.segments);
+    if (!key.where) return {[path]: direction};
+    const whereIndex = key.whereIndex ?? key.path.segments.length - 1;
+    return {
+      [path]: {
+        direction,
+        where: serializeWherePath(key.where, scopedShapeAt(key.path, whereIndex)),
+        whereIndex,
+      },
+    };
+  });
+}
+
+/**
+ * The shape a wire filter on segment `index` of a sort path or a field reads, as the encoder wrote
+ * it ({@link scopedShapeAt}): a relation's member shape, else (a filter on a literal,
+ * `p.hobby.where(…)`) the path's root. An index that names no segment is refused, never dropped.
+ */
+export function filteredSegmentShape(path: PropertyPath, index: unknown, pathKey: string): NodeShapeData {
+  if (!Number.isInteger(index) || (index as number) < 0 || (index as number) >= path.segments.length) {
+    throw new Error(
+      `Invalid filter on '${pathKey}': whereIndex ${JSON.stringify(index)} must name a segment of the path ` +
+        `(0 to ${path.segments.length - 1}).`,
+    );
+  }
+  return scopedShapeAt(path, index as number);
+}
+
+/** The shape an inline filter on segment `index` of `path` reads (that segment's value shape). */
+function scopedShapeAt(path: PropertyPath, index: number): NodeShapeData {
+  const segment = path.segments[index];
+  return (segment && relationMemberShape(segment)) || path.rootShape;
 }
 
 export function serializeRawMinusEntry(
@@ -85,15 +136,49 @@ export function deserializeSortByPath(
   shape: NodeShapeData,
   json: SortByPathJSON,
 ): SortByPath {
-  // Per-path directions: each `{path: dir}` entry keeps its own direction. The empty
-  // path is the subject itself (`orderBy((p) => p)` serializes to `{"": dir}`).
-  return {
-    paths: json.map((e) => {
-      const path = Object.keys(e)[0];
-      return path === '' ? new PropertyPath(shape, []) : walkPropertyPath(shape, path);
-    }),
-    directions: json.map((e) => Object.values(e)[0]) as ('ASC' | 'DESC')[],
-  };
+  // Per-key directions: each entry keeps its own direction. The empty path is the subject
+  // itself (`orderBy((p) => p)` serializes to `{"": dir}`).
+  const keys: SortKey[] = [];
+  const directions: SortDirection[] = [];
+  for (const entry of json) {
+    const names = Object.keys(entry);
+    if (names.length === 2 && 'value' in entry && 'direction' in entry) {
+      const {ir, refs} = decodeValueExpr(entry.value as DslJsonValue, shape);
+      keys.push({expression: new ExpressionNode(ir, refs)});
+      directions.push(checkDirection(entry.direction));
+      continue;
+    }
+    if (names.length !== 1) {
+      throw new Error(`Invalid sortBy entry ${JSON.stringify(entry)}: one {path: direction} or {value, direction}.`);
+    }
+    const pathKey = names[0];
+    const spec = (entry as Record<string, unknown>)[pathKey];
+    const path = pathKey === '' ? new PropertyPath(shape, []) : walkPathWithCasts(shape, pathKey);
+    if (spec && typeof spec === 'object') {
+      const opts = spec as {direction?: unknown; where?: WherePathJSON; whereIndex?: number};
+      const key: Extract<SortKey, {path: PropertyPath}> = {path};
+      if (opts.where) {
+        const whereIndex = opts.whereIndex ?? path.segments.length - 1;
+        key.where = deserializeWherePath(filteredSegmentShape(path, whereIndex, pathKey), opts.where);
+        key.whereIndex = whereIndex;
+      }
+      keys.push(key);
+      directions.push(checkDirection(opts.direction));
+    } else {
+      keys.push({path});
+      directions.push(checkDirection(spec));
+    }
+  }
+  return {keys, directions};
+}
+
+/** A sort direction from the wire, any case (SPARQL reads `asc`/`desc` too). */
+function checkDirection(direction: unknown): SortDirection {
+  const upper = typeof direction === 'string' ? direction.toUpperCase() : direction;
+  if (upper !== 'ASC' && upper !== 'DESC') {
+    throw new Error(`Invalid sort direction ${JSON.stringify(direction)}: 'ASC' or 'DESC'.`);
+  }
+  return upper;
 }
 
 export function deserializeRawMinusEntry(

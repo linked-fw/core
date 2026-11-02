@@ -1,5 +1,5 @@
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
-import {getUniquePropertyShapes} from '../shapes/nodeShapeData.js';
+import {getUniquePropertyShapes, NODE_TYPE_LABEL} from '../shapes/nodeShapeData.js';
 import {resolveShape} from './resolveShape.js';
 import {
   type QueryBuildFn,
@@ -14,7 +14,17 @@ import {
 import type {SortByPath, WherePath} from './SelectQuery.js';
 import type {PropertyPathSegment, RawMinusEntry, RawSelectInput} from './IRDesugar.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
-import {getQueryDispatch} from './queryDispatch.js';
+import {refuseTxIdIn} from './transactionQuery.js';
+import {featuresOfExpressions, parseRequires, type QueryFeature} from './queryFeatures.js';
+import {
+  GroupedSelectBuilder,
+  assertGroupable,
+  type GroupByResult,
+  type GroupedSelectJSON,
+} from './GroupedSelectBuilder.js';
+import type {IRExpression} from './IntermediateRepresentation.js';
+import {ExistsCondition, type ExpressionNode} from '../expressions/ExpressionNode.js';
+import {getQueryDispatch, assertQuerySupported, resolveRead} from './queryDispatch.js';
 import {AskBuilder} from './AskBuilder.js';
 import {CountBuilder} from './CountBuilder.js';
 import type {IDataset} from '../interfaces/IDataset.js';
@@ -47,6 +57,16 @@ import type {LiveListener, LiveQuery, LiveQueryOptions} from '../live/LiveQueryS
 export type QueryBuilderJSON = {
   /** DSL-JSON wire-format version. */
   v?: string;
+  /** The store transaction the query runs in (DSL-JSON 1.5); absent outside one. */
+  txId?: string;
+  /**
+   * Present (`'select'`) when the select needs features beyond the baseline (`requires`). A
+   * build that predates them has no `'select'` op and refuses the envelope ("Unknown query op")
+   * rather than answering it without them; a plain select leaves it out.
+   */
+  op?: 'select';
+  /** The features beyond the baseline the select uses (`queries/queryFeatures.ts`). */
+  requires?: QueryFeature[];
   shape: string;
   fields?: FieldSetFieldJSON[];
   limit?: number;
@@ -224,13 +244,14 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     if (isLinkedInstance(fnOrLabelsOrFieldSet, FieldSet)) {
       const labels = fnOrLabelsOrFieldSet.labels();
       const selectFn = ((p: any) =>
-        labels.map((label) => p[label])) as unknown as QueryBuildFn<S, any>;
+        labels.map((label) => (label === NODE_TYPE_LABEL ? p.$type() : p[label]))) as unknown as QueryBuildFn<S, any>;
       return this.clone<NewR, any>({selectFn, selectAllLabels: undefined, fieldSet: fnOrLabelsOrFieldSet});
     }
     if (Array.isArray(fnOrLabelsOrFieldSet)) {
       const labels = fnOrLabelsOrFieldSet;
+      // `$type` is a method on the proxy (the node's types), not a property label.
       const selectFn = ((p: any) =>
-        labels.map((label) => p[label])) as unknown as QueryBuildFn<S, any>;
+        labels.map((label) => (label === NODE_TYPE_LABEL ? p.$type() : p[label]))) as unknown as QueryBuildFn<S, any>;
       return this.clone<NewR, any>({selectFn, selectAllLabels: undefined, fieldSet: undefined});
     }
     return this.clone<NewR, any>({selectFn: fnOrLabelsOrFieldSet as any, selectAllLabels: undefined, fieldSet: undefined});
@@ -278,7 +299,11 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     return this.clone({minusEntries: [...existing, entry]});
   }
 
-  /** Set sort order. */
+  /**
+   * Set sort order. Sorting never drops an instance: one without a value for the path sorts
+   * after every instance with one, ascending and descending, for direct and nested paths. See
+   * the README, "Sorting, limiting, one".
+   */
   orderBy<OR>(fn: QueryBuildFn<S, OR>, direction: 'ASC' | 'DESC' = 'ASC'): SelectBuilder<S, R, Result> {
     return this.clone({sortByFn: fn as any, sortDirection: direction});
   }
@@ -290,22 +315,29 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     return this.orderBy(fn, direction);
   }
 
-  /** Set result limit. */
   /**
    * Read only these graphs: a graph IRI or a list of them, portable names included
    * (`graphs.allOntologies`, `graphs.default`, `graphs.union`, `graphs.registry`, from
    * `@_linked/core/ontologies/graphs`). The store expands the portable names. Without `.from()`
-   * a read uses the default graph. `.count()` and `.exists()` keep it.
+   * a read uses the shape's default read set (`static defaultReadGraphs`: `graphs.allShapes` for
+   * the shape shapes, `graphs.allOntologies` for the ontology term shapes), else the default
+   * graph. `.count()` and `.exists()` keep it.
    */
   from(graphs: ReadGraphsInput): SelectBuilder<S, R, Result> {
     return this.clone({graphs: normalizeReadGraphs(graphs)});
   }
 
+  /**
+   * At most `n` instances (root subjects), each with all its values: a multi-valued path does
+   * not make a page smaller. An `orderBy` on a multi-valued path sorts an instance by its lowest
+   * value ascending, its highest descending, ties by IRI; missing values last. See the README,
+   * "Sorting, limiting, one".
+   */
   limit(n: number): SelectBuilder<S, R, Result> {
     return this.clone({limit: n});
   }
 
-  /** Set result offset. */
+  /** Skip the first `n` instances (root subjects), in the select's order; see `limit`. */
   offset(n: number): SelectBuilder<S, R, Result> {
     return this.clone({offset: n});
   }
@@ -341,6 +373,110 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     }
     const subjects = ids.map((id) => typeof id === 'string' ? {id: resolveUriOrThrow(id)} : id);
     return this.clone({subject: undefined, subjects, singleResult: false, _pendingContextName: undefined});
+  }
+
+  /**
+   * Group the rows: each row becomes a group of the members that share the key fields, holding
+   * the keys and the select's aggregates. Name the keys by their field in the select's object:
+   *
+   * ```ts
+   * await Feedback.select((f) => ({type: f.feedbackType, n: Expr.count()}))
+   *   .where((f) => f.project.equals({id: projectId}))
+   *   .groupBy('type');
+   * // → Array<{type: string; n: number}>
+   * ```
+   *
+   * Every field that is not an aggregate must be a key (SQL's rule; a type error and a runtime
+   * error otherwise). The select's `where` filters the members before they are grouped; the
+   * returned {@link GroupedSelectBuilder} filters groups with `having` and sorts them with
+   * `orderBy`. Not after `.for(id)` or `.one()`, nor after an `orderBy` on the members.
+   */
+  groupBy<K extends keyof R & string>(...keys: K[]): GroupByResult<S, R, Result, K> {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.groupBy(...keys));
+    }
+    if (this._singleResult || this._subject || this._nullSubject || this._pendingContextName) {
+      throw new Error('groupBy groups many rows: it cannot follow .for(id) or .one().');
+    }
+    if (this._sortByFn || this._sortBy) {
+      throw new Error(
+        'groupBy: this select already sorts its members (orderBy before groupBy), which a grouped ' +
+        "query cannot do. Sort the groups after grouping: `.groupBy('type').orderBy('n', 'DESC')`.",
+      );
+    }
+    if (this._preloads && this._preloads.length > 0) {
+      throw new Error('groupBy: a select with preloads cannot be grouped; a grouped row holds keys and aggregates only.');
+    }
+    const fs = this.fields();
+    assertGroupable(fs ? fs.entries : [], keys, this.whereExpression());
+    return new GroupedSelectBuilder<S, any>({base: this, keys: [...keys]}) as unknown as GroupByResult<S, R, Result, K>;
+  }
+
+  /**
+   * The expression trees of this select (computed fields, the where clause), for the feature
+   * check. Builder-side and IR-free, so a query is checked before any store lowers it.
+   */
+  expressionTrees(): IRExpression[] {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.expressionTrees());
+    }
+    const trees: IRExpression[] = [];
+    const collect = (entries: readonly FieldSetEntry[] | undefined) => {
+      for (const entry of entries ?? []) {
+        if (entry.expressionNode) trees.push(entry.expressionNode.ir);
+        collect(entry.subSelect?.entries as FieldSetEntry[] | undefined);
+      }
+    };
+    collect(this._fieldsWithPreloads()?.entries as FieldSetEntry[] | undefined);
+    trees.push(...this.whereExpression());
+    return trees;
+  }
+
+  /**
+   * The where clause's expression trees: the expression, or for a quantifier (`some`/`every`)
+   * its predicate and every condition chained to it. For the checks that look for aggregates.
+   */
+  whereExpression(): IRExpression[] {
+    const catalog = this._catalog;
+    if (catalog !== getActiveShapeCatalog()) {
+      return withShapeCatalog(catalog, () => this.whereExpression());
+    }
+    const where = this._whereFn ? processWhereClause(this._whereFn, this._shape) : this._where;
+    if (!where) return [];
+    if ('expressionNode' in where) return [where.expressionNode.ir];
+    const trees: IRExpression[] = [];
+    const collect = (condition: ExpressionNode | ExistsCondition) => {
+      if (isLinkedInstance(condition, ExistsCondition)) {
+        collect(condition.predicate);
+        for (const link of condition.chain) collect(link.condition);
+      } else {
+        trees.push(condition.ir);
+      }
+    };
+    collect(where.existsCondition);
+    return trees;
+  }
+
+  /**
+   * The features beyond the baseline this select uses (`min`/`max`): what a dataset must declare
+   * in `IDataset.supports` to be sent it. Empty for a plain select.
+   *
+   * It evaluates the select and where callbacks through the proxy, as lowering does. When one of
+   * them throws (a method the path does not have, `instance[label].contains(…)` on a
+   * multi-valued label), the check cannot tell what the query uses and reports nothing: the
+   * error is the query's, and it surfaces where it always did — when the dataset lowers or
+   * serializes the query — instead of in a check before the dataset is asked.
+   */
+  requiredFeatures(): QueryFeature[] {
+    let trees: IRExpression[];
+    try {
+      trees = this.expressionTrees();
+    } catch {
+      return [];
+    }
+    return featuresOfExpressions(trees);
   }
 
   /** Limit to one result. Unwraps array Result type to single element. */
@@ -381,7 +517,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
    * A store, transport or lowering failure rejects the returned promise; it is never
    * reported as `false`. That includes an unresolved query-context reference in a
    * where clause, which `exec()` deliberately reports as `null` ("not ready") but
-   * which `exists()` must not flatten into a boolean — and a store whose `askQuery`
+   * which `exists()` must not flatten into a boolean — and a store whose ask
    * resolves to something that is not a boolean, which rejects rather than being
    * coerced into one.
    *
@@ -692,6 +828,13 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       v: WIRE_VERSION,
       shape: shapeId,
     };
+    const requires = this.requiredFeatures();
+    if (requires.length > 0) {
+      // An older build has no `'select'` op and refuses the envelope instead of reading the
+      // aggregates as bare paths.
+      json.op = 'select';
+      json.requires = requires;
+    }
 
     const fs = this._fieldsWithPreloads();
     if (fs) {
@@ -757,8 +900,31 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
    * Reconstruct a SelectBuilder from a JSON object.
    * Resolves shape IRI via getShapeClass() and field paths as label selections.
    */
-  static fromJSON<S extends Shape = Shape>(json: QueryBuilderJSON): SelectBuilder<S> {
+  static fromJSON<S extends Shape = Shape>(json: QueryBuilderJSON): SelectBuilder<S>;
+  static fromJSON<S extends Shape = Shape>(
+    json: QueryBuilderJSON & GroupedSelectJSON,
+  ): SelectBuilder<S> | GroupedSelectBuilder<S>;
+  static fromJSON<S extends Shape = Shape>(
+    json: QueryBuilderJSON & Partial<GroupedSelectJSON>,
+  ): SelectBuilder<S> | GroupedSelectBuilder<S> {
+    const select = SelectBuilder.selectFromJSON<S>(json);
+    if (json.groupBy === undefined) return select;
+    // What `groupBy` refuses on a builder, refused on an envelope too, rather than dropped.
+    for (const key of ['sortBy', 'subject', 'one', 'nullSubject'] as const) {
+      if (json[key] !== undefined) {
+        throw new Error(`DSL-JSON: a grouped select cannot carry "${key}" (groupBy refuses it: sort groups with "groupOrderBy").`);
+      }
+    }
+    return withShapeCatalog(select.catalog, () =>
+      GroupedSelectBuilder.fromJSON(select, json as GroupedSelectJSON),
+    );
+  }
+
+  /** The select part of an envelope (`fromJSON` adds a grouping when it carries one). */
+  private static selectFromJSON<S extends Shape = Shape>(json: QueryBuilderJSON): SelectBuilder<S> {
     assertWireVersion(json.v);
+    refuseTxIdIn(json, 'SelectBuilder');
+    parseRequires(json.requires);
     let builder = SelectBuilder.from<S>(json.shape as any);
 
     if (json.fields && json.fields.length > 0) {
@@ -786,7 +952,10 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     if (json.subjects && json.subjects.length > 0) {
       builder = builder.forAll(json.subjects) as SelectBuilder<S>;
     }
-    if (json.one && !json.subject) {
+    if (json.nullSubject && !json.subject) {
+      // As `.for(null)` built it: one result, no subject, no limit.
+      builder = builder.for(null) as SelectBuilder<S>;
+    } else if (json.one && !json.subject) {
       builder = builder.one() as SelectBuilder<S>;
     }
 
@@ -955,8 +1124,10 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     // Dispatch the live (closed) query; the dataset decides whether to lower it.
     // `async` ensures a missing global dispatch surfaces as a rejected promise, not a sync throw.
     const dispatch = target ?? getQueryDispatch();
+    // A select with min/max is refused by a dataset that does not declare them, before it is sent.
+    assertQuerySupported(dispatch, this);
     try {
-      return await dispatch.selectQuery(this);
+      return await resolveRead(dispatch, this);
     } catch (err) {
       // A where-clause context reference that hasn't resolved yet surfaces as
       // UnresolvedContextError when the dataset lowers the query. For SELECT this

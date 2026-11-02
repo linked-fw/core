@@ -19,6 +19,8 @@ import {WIRE_VERSION} from '../queries/wireVersion';
 
 import '../ontologies/rdf';
 import '../ontologies/xsd';
+import {readQueryOf} from '../test-helpers/read-double';
+import type {QueryFeature} from '../queries/queryFeatures';
 
 const entity = (s: string) => ({id: `${tmpEntityBase}${s}`});
 
@@ -128,13 +130,16 @@ describe('ask envelope — Shape.exists on the base class', () => {
     // shape?".
     const seen: any[] = [];
     const store: any = {
-      selectQuery: async () => {
-        throw new Error('not reached');
-      },
-      askQuery: async (q: any) => {
-        seen.push(q.toJSON());
-        return true;
-      },
+      supports: ['ask'] as QueryFeature[],
+      readQuery: readQueryOf({
+        select: async () => {
+          throw new Error('not reached');
+        },
+        ask: async (q: any) => {
+          seen.push(q.toJSON());
+          return true;
+        },
+      }),
     };
     await Shape.exists(entity('p1'), store);
     await Person.exists(entity('p1'), store);
@@ -166,13 +171,16 @@ describe('ask envelope — context references and null subjects', () => {
     // setQueryContext('user', …) ran in beforeAll, so exec sees a concrete id.
     const seen: any[] = [];
     const store: any = {
-      selectQuery: async () => {
-        throw new Error('not reached');
-      },
-      askQuery: async (q: any) => {
-        seen.push(lower(q));
-        return true;
-      },
+      supports: ['ask'] as QueryFeature[],
+      readQuery: readQueryOf({
+        select: async () => {
+          throw new Error('not reached');
+        },
+        ask: async (q: any) => {
+          seen.push(lower(q));
+          return true;
+        },
+      }),
     };
     await SelectBuilder.from(Person).for(new PendingQueryContext('user')).exists(store);
     expect(seen[0].subjectId).toBe('user-1');
@@ -180,12 +188,15 @@ describe('ask envelope — context references and null subjects', () => {
 
   test('an unresolved pending context answers false without querying', async () => {
     const store: any = {
-      selectQuery: async () => {
-        throw new Error('not reached');
-      },
-      askQuery: async () => {
-        throw new Error('askQuery must not be reached');
-      },
+      supports: ['ask'] as QueryFeature[],
+      readQuery: readQueryOf({
+        select: async () => {
+          throw new Error('not reached');
+        },
+        ask: async () => {
+          throw new Error('the ask must not be sent');
+        },
+      }),
     };
     await expect(
       SelectBuilder.from(Person)
@@ -204,12 +215,15 @@ describe('ask envelope — context references and null subjects', () => {
     // The normal path still answers false without ever reaching a store.
     await expect(
       builder.exec({
-        selectQuery: async () => {
-          throw new Error('not reached');
-        },
-        askQuery: async () => {
-          throw new Error('not reached');
-        },
+        supports: ['ask'] as QueryFeature[],
+        readQuery: readQueryOf({
+          select: async () => {
+            throw new Error('not reached');
+          },
+          ask: async () => {
+            throw new Error('not reached');
+          },
+        }),
       } as any),
     ).resolves.toBe(false);
   });

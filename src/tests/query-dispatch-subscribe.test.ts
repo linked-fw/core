@@ -16,6 +16,7 @@ import {
 import type {QueryDispatchEvent} from '../queries/queryDispatch';
 import type {IDataset} from '../interfaces/IDataset';
 import {unusedDatasetMethods} from '../test-helpers/test-utils';
+import {readQueryOf} from '../test-helpers/read-double';
 
 const {linkedShape} = linkedPackage('dispatch-subscribe-test');
 
@@ -43,14 +44,17 @@ const createStore = () => {
   const received: {update?: unknown} = {};
   const store: IDataset = {
     ...unusedDatasetMethods,
-    selectQuery: async () => {
-      calls.select += 1;
-      return [] as any;
-    },
-    askQuery: async () => {
-      calls.ask += 1;
-      return false;
-    },
+    supports: ['ask'],
+    readQuery: readQueryOf({
+      select: async () => {
+        calls.select += 1;
+        return [];
+      },
+      ask: async () => {
+        calls.ask += 1;
+        return false;
+      },
+    }),
     createQuery: async () => {
       calls.create += 1;
       return {id: 'mock'};

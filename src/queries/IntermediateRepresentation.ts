@@ -1,5 +1,6 @@
 import {NodeReferenceValue} from './QueryFactory.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
+import type {QueryFeature} from './queryFeatures.js';
 
 export type IRDirection = 'ASC' | 'DESC';
 export type IRAlias = string;
@@ -16,6 +17,7 @@ export type IRQuery =
   | IRDeleteMutation
   | IRDeleteAllMutation
   | IRDeleteWhereMutation
+  | IRDeleteShapelessMutation
   | IRUpdateWhereMutation;
 
 export type IRSelectQuery = {
@@ -36,6 +38,21 @@ export type IRSelectQuery = {
    * included; the store expands them before compiling. Absent = the default graph.
    */
   graphs?: string[];
+  /**
+   * A grouped select (`.groupBy(…)`): the group keys, each the expression of one projection item.
+   * When present the rows are groups, not entities: the root is not projected, every projection
+   * item is a key or an aggregate, and a row has no `id`. Absent = rows are the root's entities
+   * (an aggregate in the projection then counts per entity, as `.size()` does).
+   */
+  groupBy?: IRExpression[];
+  /** The group filter of a grouped select (`.having(…)`), over keys and aggregates. */
+  having?: IRExpression;
+  /**
+   * The features beyond the baseline this query uses (`queries/queryFeatures.ts`). A store that
+   * reads the IR and does not support one of them must refuse the query rather than answer it
+   * without that part. Absent or empty = baseline only.
+   */
+  requires?: QueryFeature[];
 };
 
 /**
@@ -290,6 +307,12 @@ export type IRFunctionExpression = {
   args: IRExpression[];
 };
 
+/**
+ * An aggregate over the rows of a group (a grouped select's group, or each root entity's rows).
+ * A `count` always counts **distinct** values: the values of one subject and property are a set
+ * in RDF, and a select that joins two multi-valued paths yields their cross product, so counting
+ * rows would multiply each count by the other path's size.
+ */
 export type IRAggregateExpression = {
   kind: 'aggregate_expr';
   name: 'count' | 'sum' | 'avg' | 'min' | 'max';
@@ -389,6 +412,20 @@ export type IRDeleteMutation = {
    * `keepIncoming` field. A store that builds its own deletes from the IR must honour it or
    * refuse the delete.
    */
+  keepIncoming?: boolean;
+};
+
+/**
+ * A shapeless delete (`Shape.delete(ids)` on the base class): every triple whose subject is one of
+ * `ids`, and every triple that links to one of them, in every data graph of the dataset: the
+ * default graph and each named graph (never by way of `graphs.union`), but never the graph
+ * registry or a graph it records as a shapes or ontology graph. No shape, so no type guard, no
+ * blank-value or owned cascade.
+ */
+export type IRDeleteShapelessMutation = {
+  kind: 'delete_shapeless';
+  ids: NodeReferenceValue[];
+  /** Delete only the subjects' own triples, not the links into them; carried as `keepIncoming`. */
   keepIncoming?: boolean;
 };
 
@@ -505,7 +542,7 @@ export type ResultFieldValue =
   | Date[];
 
 /**
- * What `selectQuery` should return.
+ * What a select (`IDataset.readQuery`) should return.
  *
  * - Array of rows for multi-result queries (the default).
  * - A single row when `query.singleResult` is true (`.one()` or subject-targeted query).

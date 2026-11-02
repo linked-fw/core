@@ -10,7 +10,7 @@
  * Every graph a dataset keeps on purpose (a package's ontology data, its shapes, ontology-editor
  * drafts) has a record in the graph registry (`graphs.registry`): its name, content hash, load
  * time, sources and whether it feeds the store's class hierarchy. The record's class is the
- * graph's kind: `OntologyGraph`, `ShapesGraph` and `DraftGraph` all extend `NamedGraph`
+ * graph's kind: `OntologyGraph`, `ShapesGraph`, `ComponentsGraph` and `DraftGraph` all extend `NamedGraph`
  * (`sd:NamedGraph`), so selecting `NamedGraph` returns every kind's records through the store's
  * inference.
  *
@@ -22,6 +22,7 @@
  * await OntologyGraph.create({id: g, package: '@_linked/schema', version: '1.7.0'}).withContent(c);
  * await OntologyGraph.update(g).set({version: '1.8.0'}).replaceContent(c2);
  * await NamedGraph.patchContent(g, {insert, delete: del});
+ * const triples = await OntologyGraph.readContent(g); // a read: every triple of the graph
  * await OntologyGraph.delete(g);
  * const records = await NamedGraph.select((r) => [r.name, r.contentHash]);
  * ```
@@ -34,6 +35,7 @@ import {linkedShape} from '../package.js';
 import {Shape} from './Shape.js';
 import {getPackageUri, literalProperty, objectProperty} from './SHACL.js';
 import {coreOntology} from '../ontologies/linked-core.js';
+import {prov} from '../ontologies/prov.js';
 import {sd} from '../ontologies/sd.js';
 import {shacl} from '../ontologies/shacl.js';
 import {xsd} from '../ontologies/xsd.js';
@@ -41,6 +43,7 @@ import {graphs} from '../ontologies/graphs.js';
 import {dcterms} from '../queries/graphRecords.js';
 import {assertGraphWritable} from '../queries/graphQuery.js';
 import {dispatchGraphQuery} from '../queries/queryDispatch.js';
+import {TriplesBuilder} from '../queries/TriplesBuilder.js';
 import type {
   GraphContent,
   GraphQuery,
@@ -182,7 +185,7 @@ export class NamedGraph extends GraphRecordBase {
   /** Records live in the graph registry; reads of this shape and its subclasses go there. */
   static storedInGraph: string = graphs.registry;
   /** The own record fields of this class, for typing the statics only. */
-  declare static readonly recordFields?: {sources?: string | string[]};
+  declare static readonly recordFields?: {sources?: string | string[]; attributedTo?: {id: string} | null};
 
   /** The graph's name (its IRI; the record's subject repeats it). */
   @objectProperty({path: sd.name, maxCount: 1, nodeKind: shacl.IRI})
@@ -211,6 +214,17 @@ export class NamedGraph extends GraphRecordBase {
   /** Where the content came from: data files, or the URL of an import. */
   @literalProperty({path: {id: dcterms.source}, datatype: xsd.string})
   get sources(): string[] {
+    return null;
+  }
+
+  /**
+   * Who the graph's content is attributed to (`prov:wasAttributedTo`, an agent IRI), for instance a
+   * host's system actor marking the graphs it writes. Set it with the content, in the same query:
+   * `ShapesGraph.update(g).set({attributedTo: {id}}).replaceContent(c)`; `set({attributedTo: null})`
+   * clears it.
+   */
+  @objectProperty({path: prov.wasAttributedTo, maxCount: 1, nodeKind: shacl.IRI})
+  get attributedTo(): {id: string} {
     return null;
   }
 
@@ -278,6 +292,15 @@ export class NamedGraph extends GraphRecordBase {
     );
   }
 
+  /**
+   * Read every triple of the graph (a triples read, `IDataset.readQuery`), registered or not.
+   * Routed like this class's graph queries, so `DraftGraph.readContent(g)` reads where
+   * `DraftGraph.replaceContent(g, c)` writes. `.limit(n)` bounds it.
+   */
+  static readContent(this: typeof NamedGraph, iri: string): TriplesBuilder {
+    return TriplesBuilder.of({kind: 'triples', graphs: [iri], recordClass: recordClassOf(this)});
+  }
+
   /** Drop the graph and its record. */
   static delete(this: typeof NamedGraph, iri: string): GraphQueryBuilder {
     return GraphQueryBuilder.of({kind: 'graph_drop', graph: iri, recordClass: recordClassOf(this)});
@@ -301,7 +324,7 @@ export class NamedGraph extends GraphRecordBase {
 registerGraphRecordShape(
   NamedGraph,
   'NamedGraph',
-  "A named graph's record in the graph registry: name, content hash, load time, sources, whether it feeds the class hierarchy. (graph registry, named graph)",
+  "A named graph's record in the graph registry: name, content hash, load time, sources, who it is attributed to, whether it feeds the class hierarchy. (graph registry, named graph)",
 );
 
 /** A graph holding one package's whole ontology data, at `{package IRI}/graph/ontology`. Feeds the hierarchy. */
@@ -311,6 +334,7 @@ export class OntologyGraph extends NamedGraph {
     package: string;
     version?: string;
     sources?: string | string[];
+    attributedTo?: {id: string} | null;
     feedsHierarchy?: boolean;
     packageHashes?: string | string[];
   };
@@ -354,6 +378,7 @@ export class ShapesGraph extends NamedGraph {
     package: string;
     version?: string;
     sources?: string | string[];
+    attributedTo?: {id: string} | null;
     packageHashes?: string | string[];
   };
 
@@ -387,6 +412,45 @@ registerGraphRecordShape(
   ShapesGraph,
   'ShapesGraph',
   "The registry record of a package's shapes graph. (graph registry, shapes graph)",
+);
+
+/**
+ * A graph holding one package's component index (the `lib/esm/data/components.ttl` its build
+ * writes) at one key: a published version, or a package branch with the commit it was built from.
+ * A host keeps these next to its package records; the graph IRI is the host's to choose.
+ */
+export class ComponentsGraph extends NamedGraph {
+  static targetClass = coreOntology.ComponentsGraph;
+  declare static readonly recordFields?: {
+    package: string;
+    version?: string;
+    commit?: string;
+    sources?: string | string[];
+    attributedTo?: {id: string} | null;
+  };
+
+  /** The npm name of the package. */
+  @literalProperty({path: coreOntology.package, datatype: xsd.string, maxCount: 1})
+  get package(): string {
+    return null;
+  }
+
+  /** The published version whose component index the graph holds (unset for a branch build). */
+  @literalProperty({path: coreOntology.version, datatype: xsd.string, maxCount: 1})
+  get version(): string {
+    return null;
+  }
+
+  /** The commit (40 hex) the indexed build was made from. */
+  @literalProperty({path: coreOntology.commit, datatype: xsd.string, maxCount: 1})
+  get commit(): string {
+    return null;
+  }
+}
+registerGraphRecordShape(
+  ComponentsGraph,
+  'ComponentsGraph',
+  "The registry record of a package's component index graph. (graph registry, components graph)",
 );
 
 /**

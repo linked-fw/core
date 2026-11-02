@@ -17,7 +17,7 @@ import {LinkedStorage} from '../utils/LinkedStorage';
 import {graphs} from '../ontologies/graphs';
 import type {IDataset} from '../interfaces/IDataset';
 import {graphCreateOutcomeAnswer, unusedDatasetMethods} from '../test-helpers/test-utils';
-import {DraftGraph, NamedGraph, OntologyGraph, ShapesGraph} from '../shapes/NamedGraph';
+import {ComponentsGraph, DraftGraph, NamedGraph, OntologyGraph, ShapesGraph} from '../shapes/NamedGraph';
 import {lower} from '../queries/lower';
 import {CountBuilder} from '../queries/CountBuilder';
 import {selectToSparql, countToSparql} from '../sparql/irToAlgebra';
@@ -25,6 +25,7 @@ import {builtInShapeIris} from '../utils/ShapeCatalog';
 import {getNodeShapeUri} from '../shapes/SHACL';
 import {SparqlDataset} from '../sparql/SparqlDataset';
 import {sha256Hex} from '../utils/sha256';
+import {ALL_QUERY_FEATURES} from '../queries/queryFeatures';
 
 const G = 'https://linked.cm/pkg/example/graph/ontology';
 const ONTOLOGY_GRAPH = 'https://linked.cm/ont/core/OntologyGraph';
@@ -34,7 +35,7 @@ function graphStore() {
   const received: GraphQuery[] = [];
   const store: IDataset = {
     ...unusedDatasetMethods,
-    selectQuery: async () => [] as any,
+    readQuery: async () => [] as never,
     graphQuery: async (q: GraphQuery): Promise<GraphResult> => {
       received.push(q);
       return {graph: q.graph, changed: true};
@@ -128,7 +129,7 @@ describe('the runtime guard and routing', () => {
   const q: GraphQuery = {kind: 'graph_drop', graph: G, recordClass: ONTOLOGY_GRAPH};
 
   test('a dataset without graphQuery is refused with unsupported-query-kind', async () => {
-    const old = {selectQuery: async () => []};
+    const old = {readQuery: async () => []};
     const err = await resolveGraphQuery(old as any, q).catch((e) => e);
     expect(err).toBeInstanceOf(GraphQueryError);
     expect(isGraphQueryError(err, 'unsupported-query-kind')).toBe(true);
@@ -136,7 +137,7 @@ describe('the runtime guard and routing', () => {
   });
 
   test('LinkedStorage applies the same guard to the routed dataset', async () => {
-    LinkedStorage.setDefaultDataset({selectQuery: async () => []} as any);
+    LinkedStorage.setDefaultDataset({readQuery: async () => []} as any);
     const err = await LinkedStorage.graphQuery(q).catch((e) => e);
     expect(isGraphQueryError(err, 'unsupported-query-kind')).toBe(true);
   });
@@ -176,6 +177,30 @@ describe('the graph API', () => {
         graph: G,
         recordClass: ONTOLOGY_GRAPH,
         record: {package: '@_linked/example', version: '1.0.0'},
+        content: nt,
+      },
+    ]);
+  });
+
+  test('a ComponentsGraph records its package, version and commit', async () => {
+    const commit = 'a'.repeat(40);
+    const queries = await sent(async (t) => {
+      await ComponentsGraph.create({id: G, package: '@_linked/example', version: '1.0.0'}).withContent(nt).exec(t);
+      await ComponentsGraph.update(G).set({commit}).replaceContent(nt).exec(t);
+    });
+    expect(queries).toEqual([
+      {
+        kind: 'graph_create',
+        graph: G,
+        recordClass: 'https://linked.cm/ont/core/ComponentsGraph',
+        record: {package: '@_linked/example', version: '1.0.0'},
+        content: nt,
+      },
+      {
+        kind: 'graph_replace',
+        graph: G,
+        recordClass: 'https://linked.cm/ont/core/ComponentsGraph',
+        record: {commit},
         content: nt,
       },
     ]);
@@ -270,8 +295,8 @@ describe('the graph API', () => {
     expect(() => OntologyGraph.deleteWhere()).toThrow(/graph queries/);
   });
 
-  test('the four graph-record shapes are built-ins', () => {
-    for (const name of ['NamedGraph', 'OntologyGraph', 'ShapesGraph', 'DraftGraph']) {
+  test('the five graph-record shapes are built-ins', () => {
+    for (const name of ['NamedGraph', 'OntologyGraph', 'ShapesGraph', 'ComponentsGraph', 'DraftGraph']) {
       expect(builtInShapeIris()).toContain(getNodeShapeUri('@_linked/core', name));
     }
   });
@@ -433,6 +458,21 @@ describe('SparqlDataset.graphQuery', () => {
     expect(result).toEqual({graph: G, changed: false});
   });
 
+  test('graph_create with an empty list field leaves the field out', async () => {
+    const ds = new RecordingSparql(false);
+    await OntologyGraph.create({id: G, package: 'p', sources: []}).withContent(ttl).exec(ds);
+    expect(ds.updates[0]).not.toContain('<http://purl.org/dc/terms/source>');
+    expect(ds.updates[0]).toContain('<https://linked.cm/ont/core/package> "p"');
+  });
+
+  test('graph_patch setting a list field to empty deletes its values and inserts nothing for it', async () => {
+    const ds = new RecordingSparql(true);
+    await OntologyGraph.update(G).set({sources: []}).exec(ds);
+    const rec = `GRAPH <${REG}> { <${G}> <http://www.w3.org/ns/sparql-service-description#name> <${G}> ; a <${ONTOLOGY_GRAPH}> }`;
+    const field = `GRAPH <${REG}> { <${G}> <http://purl.org/dc/terms/source> ?v0 }`;
+    expect(ds.updates).toEqual([`DELETE { ${field} } WHERE { ${rec} ${field} }`]);
+  });
+
   test('graph_drop: the graph and its record, no registry check', async () => {
     const ds = new RecordingSparql(false);
     await OntologyGraph.delete(G).exec(ds);
@@ -513,6 +553,69 @@ describe('SparqlDataset.graphQuery', () => {
     const auto = await OntologyGraph.create({id: G, package: 'p', contentHash: 'x'} as any).exec(ds).catch((e) => e);
     expect(String(auto)).toMatch(/filled in by core/);
   });
+
+  describe('attributedTo, an IRI-valued field (prov:wasAttributedTo)', () => {
+    const PROV = 'http://www.w3.org/ns/prov#wasAttributedTo';
+    const ACTOR = 'https://example.org/actor/system';
+    const SHAPES = 'https://linked.cm/pkg/example/graph/shapes';
+
+    test('create writes it as an IRI object in the record', async () => {
+      const ds = new RecordingSparql(false);
+      await ShapesGraph.create({id: SHAPES, package: 'p', attributedTo: {id: ACTOR}}).withContent(ttl).exec(ds);
+      expect(ds.updates[0]).toContain(`<${PROV}> <${ACTOR}>`);
+    });
+
+    test('update().set({attributedTo}).replaceContent(c): the mark in the same update as the content', async () => {
+      const ds = new RecordingSparql(true);
+      await ShapesGraph.update(SHAPES).set({attributedTo: {id: ACTOR}}).replaceContent(nt).exec(ds);
+      expect(ds.updates).toHaveLength(1);
+      const ops = ds.updates[0].split(' ;\n');
+      const field = `GRAPH <${REG}> { <${SHAPES}> <${PROV}> ?v2 }`;
+      expect(ops).toContain(`DELETE { ${field} } WHERE { GRAPH <${REG}> { <${SHAPES}> <http://www.w3.org/ns/sparql-service-description#name> <${SHAPES}> ; a <https://linked.cm/ont/core/ShapesGraph> } ${field} }`);
+      expect(ops[ops.length - 1]).toContain(`<${PROV}> <${ACTOR}>`);
+      expect(ops.join('\n')).toContain('<urn:a> <urn:b>');
+    });
+
+    test('every record class takes it (NamedGraph, OntologyGraph, ComponentsGraph, DraftGraph)', async () => {
+      const ds = new RecordingSparql(true);
+      await NamedGraph.update(G).set({attributedTo: {id: ACTOR}}).exec(ds);
+      await OntologyGraph.update(G).set({attributedTo: {id: ACTOR}}).exec(ds);
+      await ComponentsGraph.update(G).set({attributedTo: {id: ACTOR}}).exec(ds);
+      await DraftGraph.update(G).set({attributedTo: {id: ACTOR}}).exec(ds);
+      expect(ds.updates.filter((u) => u.includes(`<${PROV}> <${ACTOR}>`))).toHaveLength(4);
+    });
+
+    test('refused: a string, a blank label, a relative IRI, a list, and {id} on a literal field', async () => {
+      const ds = new RecordingSparql(true);
+      const err = (fields: object) =>
+        ShapesGraph.update(SHAPES).set(fields as any).exec(ds).then(() => 'sent', (e) => String(e));
+      expect(await err({attributedTo: ACTOR})).toMatch(/"attributedTo" is a node: pass \{id\}/);
+      expect(await err({attributedTo: {id: '_:b0'}})).toMatch(/absolute IRI/);
+      expect(await err({attributedTo: {id: 'relative'}})).toMatch(/absolute IRI/);
+      expect(await err({attributedTo: [{id: ACTOR}]})).toMatch(/takes one value, not a list/);
+      expect(await err({version: {id: ACTOR}})).toMatch(/"version" is a string/);
+      expect(ds.updates).toEqual([]);
+    });
+
+    test('null clears it: the update deletes the value and writes none; a create leaves it out', async () => {
+      const ds = new RecordingSparql(true);
+      await ShapesGraph.update(SHAPES).set({attributedTo: null}).exec(ds);
+      const field = `GRAPH <${REG}> { <${SHAPES}> <${PROV}> ?v0 }`;
+      expect(ds.updates).toHaveLength(1);
+      expect(ds.updates[0]).toContain(`DELETE { ${field} }`);
+      expect(ds.updates[0]).not.toContain('INSERT');
+      const created = new RecordingSparql(false);
+      await ShapesGraph.create({id: SHAPES, package: 'p', attributedTo: null}).exec(created);
+      expect(created.updates[0]).not.toContain(PROV);
+    });
+
+    test('the shape reads it as {id}: a select of attributedTo', () => {
+      const sparql = selectToSparql(lower(ShapesGraph.select((g) => [g.package, g.contentHash, g.attributedTo]) as any) as any);
+      expect(sparql).toContain('PREFIX prov: <http://www.w3.org/ns/prov#>');
+      expect(sparql).toContain('prov:wasAttributedTo');
+      expect(sparql).toContain(`GRAPH <${REG}>`);
+    });
+  });
 });
 
 describe('store-reserved names, feedsHierarchy, record classes', () => {
@@ -573,6 +676,13 @@ describe('store-reserved names, feedsHierarchy, record classes', () => {
     expect(ds.updates[2]).toContain('feedsHierarchy> "false"');
   });
 
+  test('a ComponentsGraph writes its commit as core:commit and never feeds the hierarchy', async () => {
+    const ds = new ScriptedSparql(false);
+    await ComponentsGraph.create({id: G, package: 'p', version: '1.0.0', commit: 'b'.repeat(40)}).exec(ds);
+    expect(ds.updates[0]).toContain(`<https://linked.cm/ont/core/commit> "${'b'.repeat(40)}"`);
+    expect(ds.updates[0]).toContain('feedsHierarchy> "false"');
+  });
+
   test('replace and patch through a subclass ask for a record of that class; NamedGraph does not', async () => {
     const ds = new ScriptedSparql(true);
     await OntologyGraph.update(G).set({version: '2'}).exec(ds);
@@ -587,8 +697,9 @@ describe('store-reserved names, feedsHierarchy, record classes', () => {
 });
 
 describe('review fixes', () => {
-  /** A SPARQL dataset without askQuery: asks go through its selectQuery and core's result mapping. */
+  /** A SPARQL dataset without 'ask': asks go through its selects and core's result mapping. */
   class NoAskSparql extends SparqlDataset {
+    override readonly supports = ALL_QUERY_FEATURES.filter((feature) => feature !== 'ask');
     selects: string[] = [];
     constructor(private ids: string[]) {
       super();
@@ -599,13 +710,9 @@ describe('review fixes', () => {
     }
     protected async executeSparqlUpdate(): Promise<void> {}
   }
-  const noAsk = (ids: string[]) => {
-    const ds = new NoAskSparql(ids);
-    (ds as {askQuery?: unknown}).askQuery = undefined;
-    return ds;
-  };
+  const noAsk = (ids: string[]) => new NoAskSparql(ids);
 
-  test('a subject ask on a store without askQuery answers through the single-result select', async () => {
+  test('a subject ask on a store without ask support answers through the single-result select', async () => {
     await expect(OntologyGraph.exists(G, noAsk([G]))).resolves.toBe(true);
     await expect(OntologyGraph.exists(G, noAsk([]))).resolves.toBe(false);
     const ds = noAsk([G]);
@@ -615,9 +722,12 @@ describe('review fixes', () => {
 
   test('an ask without a subject (nullSubject) is false without a select', async () => {
     const ds = noAsk([G]);
-    const {resolveExistence} = await import('../queries/queryDispatch');
-    const ask = {toJSON: () => ({op: 'ask', shape: OntologyGraph.shape.id, nullSubject: true})} as any;
-    await expect(resolveExistence(ds, ask)).resolves.toBe(false);
+    const {resolveRead} = await import('../queries/queryDispatch');
+    const ask = {
+      __queryKind: 'ask',
+      toJSON: () => ({op: 'ask', shape: OntologyGraph.shape.id, nullSubject: true}),
+    } as any;
+    await expect(resolveRead(ds, ask)).resolves.toBe(false);
     expect(ds.selects).toEqual([]);
   });
 

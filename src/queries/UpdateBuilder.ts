@@ -5,9 +5,10 @@ import {resolveShape} from './resolveShape.js';
 import {type AddId, type UpdatePartial, NodeReferenceValue} from './QueryFactory.js';
 import {MutationQueryFactory} from './MutationQuery.js';
 import {MutationThenable} from './MutationThenable.js';
-import {resolveMutationDispatch} from './queryDispatch.js';
+import {assertQuerySupported, resolveMutationDispatch} from './queryDispatch.js';
 import type {IDataset} from '../interfaces/IDataset.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
+import {refuseTxIdIn} from './transactionQuery.js';
 import {PendingQueryContext, getQueryContext, UnresolvedContextError} from './QueryContext.js';
 import {encodeContextRef, isContextRefJSON} from './ContextRef.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
@@ -128,6 +129,7 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
   /** Reconstruct an UpdateBuilder from its DSL-JSON (inverse of `toJSON`). */
   static fromJSON(json: UpdateMutationJSON | UpsertMutationJSON): UpdateBuilder {
     assertWireVersion(json.v);
+    refuseTxIdIn(json, 'UpdateBuilder');
     const resolved = resolveShape(json.shape);
     const data = decodeNodeDataToRaw(json.data, resolved.shape) as any;
 
@@ -383,6 +385,8 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
    */
   async exec(target?: IDataset): Promise<R> {
     const mode = this._mode || (this._targetId ? 'for' : undefined);
+    // Refused before it is sent: a feature the target lacks, or a txId it would ignore.
+    if (target) assertQuerySupported(target, this);
     const result = resolveMutationDispatch('update', target).updateQuery(this);
     // Bulk (forAll/where) resolves to void; id-based resolves to the updated node.
     if (mode === 'forAll' || mode === 'where') {

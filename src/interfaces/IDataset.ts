@@ -1,18 +1,20 @@
 import type {SelectQuery} from '../queries/SelectQuery.js';
 import type {AskQuery} from '../queries/AskQuery.js';
 import type {CountQuery} from '../queries/CountQuery.js';
+import type {TriplesQuery, TriplesTermsQuery} from '../queries/triplesQuery.js';
 import type {CreateQuery} from '../queries/CreateQuery.js';
 import type {UpdateQuery} from '../queries/UpdateQuery.js';
 import type {DeleteQuery, DeleteResponse} from '../queries/DeleteQuery.js';
 import type {
-  SelectResult,
   CreateResult,
   UpdateResult,
   GraphQuery,
   GraphResult,
 } from '../queries/IntermediateRepresentation.js';
+import type {ReadQuery, ReadResult} from '../queries/readQuery.js';
 import type {ChangeEvent} from '../live/changes.js';
 import type {DefaultGraphTermsReplace} from '../queries/defaultGraphTerms.js';
+import type {QueryFeature} from '../queries/queryFeatures.js';
 
 /**
  * Universal dataset interface. Every dataset in the Linked framework accepts
@@ -39,49 +41,84 @@ export interface IDataset {
   dataRoot?(): string | undefined;
 
   /**
-   * Answer a select query — **and a count query**, which arrives here too.
+   * Answer a read — every query that answers without changing anything, told apart by its kind
+   * (`readKindOf(query)`: `__queryKind` of a live query, `kind` of a plain-data read; see
+   * `queries/readQuery.ts`):
    *
-   * A count is not a query form of its own the way an ask is. An ask is
-   * `ASK WHERE { … }`; a count is `SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE { … }`
-   * — a select with an aggregate projection, over the same transport, answered with
-   * the same result-set response. Giving it a method of its own meant every router
-   * had to grow an arm for it, and any that did not silently could not count.
+   * - **`select`** ({@link SelectQuery}) → `SelectResult`. The baseline: every dataset answers it.
+   * - **`count`** ({@link CountQuery}) → a finite, non-negative integer. Also baseline. A count is
+   *   a select with an aggregate projection (`SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE { … }`),
+   *   so a store branches on the lowered IR: `lower(query).kind === 'count'` (see
+   *   `SparqlDataset`). There is deliberately **no path in this package that rewrites a count as
+   *   a row query** and measures the array: that would hide an unbounded read behind a call that
+   *   looks cheap. Reporting an unreachable store as `0` renders an empty table that is
+   *   indistinguishable from real data; the dispatch refuses anything but an integer.
+   * - **`ask`** ({@link AskQuery}) → a real boolean, sent only to a dataset that declares `'ask'`
+   *   in {@link supports}. A SPARQL-backed store emits `ASK WHERE { … }`. A dataset without it is
+   *   still asked: the dispatch (`resolveRead`) sends the same pattern as a select with `LIMIT 1`
+   *   and answers `true` when a row comes back; a **shapeless** ask (no shape, so no select to
+   *   write) is refused on such a dataset. `query.shape` is optional: absent means no `rdf:type`
+   *   constraint at all ("does a node with this IRI exist"), `ASK { <iri> ?p ?o }`.
+   * - **`triples`** ({@link TriplesQuery}) → `Triple[]`, sent only to a dataset that declares
+   *   `'triples'`: every triple of a graph (`NamedGraph.readContent(g)`), one subject's triples
+   *   (`TriplesBuilder.forNode({id})`), the triples that point at a node (`toNode({id})`) or those
+   *   of one predicate (`withPredicate({id})`), shapeless, optionally `.from(graphs)`. Terms come
+   *   back as core's values: IRIs as `{id}`, literals as `{value, datatype, language?}`. A read that
+   *   fixes the predicate or the object also needs `'triplesPattern'`.
+   * - **`triples_terms`** ({@link TriplesTermsQuery}) → `string[]`, sent only to a dataset that
+   *   declares `'triplesTerms'` and `'triplesPattern'`: the IRIs of the read's list (`objects` or
+   *   `predicates`, from `toNode([…])` / `withPredicate([…])` then `.whichExist()`) that some triple
+   *   of the read has in that position, in its graphs or, for a list of objects without them,
+   *   where a node read looks. The dispatch keeps only the list's own.
    *
-   * So a store that wants to answer counts branches on the lowered IR:
-   * `lower(query).kind === 'count'` (see {@link CountQuery} and `SparqlDataset`).
-   * A store that does not is no worse off than before — it will fail loudly at the
-   * dispatch (`resolveCount`), which refuses anything but a non-negative integer.
-   * There is deliberately **no path in this package that rewrites a count as a row
-   * query** and measures the array: that would hide an unbounded read behind a call
-   * that looks cheap.
+   * A kind a dataset does not declare is refused before it is sent (`resolveRead`), so a dataset
+   * handed one anyway may reject it. A router forwards a read to the dataset that holds the data
+   * (never to a writable fork it would have to create), through `resolveRead`. A shapeless read
+   * (a shapeless ask, a node read, a terms read) means "anywhere I can reach", not "in my default
+   * store".
    *
-   * A count must be answered with a real, non-negative integer, and must reject on
-   * failure: reporting an unreachable store as `0` renders an empty table that is
-   * indistinguishable from real data, which is the failure mode this API was built
-   * to remove.
+   * Must reject on failure: an unreachable store is never an empty answer, `false` or `0`.
    */
-  selectQuery(query: SelectQuery | CountQuery): Promise<SelectResult | number>;
+  readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>>;
   /**
-   * Answer an ask query — a boolean, not a result set.
+   * The query features beyond the baseline this dataset answers (`'groupBy'`, `'min'`, `'max'`,
+   * `'ask'`, `'triples'`, `'triplesTerms'`, …; see `queries/queryFeatures.ts`). A query that uses a
+   * feature the dataset does not list is **refused before it is sent** (`resolveRead`,
+   * `assertQuerySupported`), because a store that ignored, say, the grouping would still answer
+   * rows, and they would look like a real answer. The one exception is `'ask'`: an ask to a
+   * dataset without it is answered as a select (see {@link readQuery}).
    *
-   * **The one optional query method.** An {@link AskQuery} carries a pattern and nothing else:
-   * no projection, no sorting, no pagination. A SPARQL-backed store emits `ASK WHERE { … }`;
-   * another backend answers it however it can.
+   * Optional. Absent = the baseline only: a dataset written before features existed keeps
+   * answering everything it answered before, and fails loudly on anything new. `SparqlDataset`
+   * lists every feature. A router lists what it forwards and checks each target itself.
    *
-   * A dataset without it is still asked: `resolveExistence` (which `LinkedStorage` and
-   * `AskBuilder.exec` go through) sends the same pattern to {@link selectQuery} as a select with
-   * `LIMIT 1` and answers `true` when a row comes back. A **shapeless** ask (no shape, so no
-   * select to write) is refused on such a dataset.
-   *
-   * `query.shape` is optional: absent means no `rdf:type` constraint at all
-   * ("does a node with this IRI exist"), which lowers to `ASK { <iri> ?p ?o }`.
-   *
-   * Must resolve to a real boolean — a non-boolean is rejected, not coerced,
-   * since a truthy value would silently read as "exists". Must reject on
-   * failure: reporting an unreachable store as `false` is the failure mode this
-   * API was built to remove.
+   * `'transactions'` declares that the dataset holds transactions: it implements
+   * {@link beginTransaction}, {@link commit} and {@link rollback}, and answers every query that
+   * carries a `txId` inside that transaction. A query with a `txId` is refused before it is sent
+   * to a dataset that does not declare it.
    */
-  askQuery?(query: AskQuery): Promise<boolean>;
+  readonly supports?: readonly QueryFeature[];
+  /**
+   * Open a transaction and answer its id (only with `'transactions'` in {@link supports}).
+   * `LinkedStorage.begin()` calls it when the first query of a transaction is routed here.
+   *
+   * The store holds the transaction: every later query carrying that `txId` (`query.txId`, and
+   * `txId` in its DSL-JSON) is answered inside it — its writes applied there, its reads seeing
+   * them — and resolves once that is done. Nothing of it is visible outside before
+   * {@link commit}.
+   *
+   * **Expiry.** The store rolls back a transaction left idle for longer than a timeout of its own
+   * choosing (`InMemoryDataset`: 30 seconds since its last query), so an abandoned one never holds
+   * anything for good. A query or commit with an expired or unknown txId rejects.
+   */
+  beginTransaction?(): Promise<string>;
+  /**
+   * Apply the transaction's writes, all of them or none, and end it. Rejects when the
+   * transaction is unknown or expired, or cannot be applied (the store then rolls it back).
+   */
+  commit?(txId: string): Promise<void>;
+  /** Drop the transaction's writes and end it. An unknown or expired txId is a no-op. */
+  rollback?(txId: string): Promise<void>;
   /**
    * Receives update AND upsert mutations — `lower(query)` yields `kind: 'update'`,
    * `'update_where'` or `'upsert'`. An implementation that does not handle `'upsert'`
@@ -98,7 +135,9 @@ export interface IDataset {
   /**
    * Run a whole-graph operation and keep the graph's registry record in step with it, in one
    * transaction: `graph_create`, `graph_replace`, `graph_patch`, `graph_drop` (see
-   * {@link GraphQuery}). The graph statics on `NamedGraph` and its subclasses build these.
+   * {@link GraphQuery}). The graph statics on `NamedGraph` and its subclasses build these. A
+   * graph query is a write, not a read: routers fork for it and report it as a write, and a
+   * transaction refuses it.
    *
    * **Required.** A dataset without graph support implements it by throwing
    * `GraphQueryError('unsupported-query-kind')` (`unsupportedGraphQuery(query)`), and callers

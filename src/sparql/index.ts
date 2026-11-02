@@ -20,6 +20,7 @@ export {
   updateToAlgebra,
   upsertToAlgebra,
   deleteToAlgebra,
+  deleteShapelessToAlgebra,
   mintNestedIds,
 } from './irToAlgebra.js';
 
@@ -32,6 +33,7 @@ export {
   updateToSparql,
   upsertToSparql,
   deleteToSparql,
+  deleteShapelessToSparql,
 } from './irToAlgebra.js';
 
 // Algebra → SPARQL string serialization (layer 3)
@@ -45,6 +47,17 @@ export {
   deleteInsertPlanToSparql,
   deleteWherePlanToSparql,
 } from './algebraToString.js';
+
+// Triples reads (graph, node and predicate reads)
+export {
+  triplesToAlgebra,
+  triplesToSparql,
+  mapSparqlTriplesResult,
+  triplesTermsToAlgebra,
+  triplesTermsToSparql,
+  mapSparqlTriplesTermsResult,
+} from './triplesToSparql.js';
+export type {TriplesGraph, TriplesPlan} from './triplesToSparql.js';
 
 // Result mapping
 export {

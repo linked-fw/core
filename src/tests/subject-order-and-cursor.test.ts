@@ -49,7 +49,7 @@ describe('ordering by the subject', () => {
     const json = q.toJSON();
     expect(json.sortBy).toEqual([{name: 'ASC'}, {'': 'ASC'}]);
     const sparql = sparqlOf(SelectBuilder.fromJSON(json));
-    expect(sparql).toMatch(/ORDER BY ASC\(\?a0_name\) ASC\(\?a0\)/);
+    expect(sparql).toMatch(/ORDER BY DESC\(BOUND\(\?a0_name\)\) ASC\(\?a0_name\) ASC\(\?a0\)$/);
   });
 });
 

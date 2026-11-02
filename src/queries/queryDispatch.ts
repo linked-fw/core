@@ -6,8 +6,18 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import type {AskQuery} from './AskQuery.js';
 import type {CountQuery} from './CountQuery.js';
 import type {GraphQuery, GraphResult} from './IntermediateRepresentation.js';
+import {
+  triplesQueryFeatures,
+  triplesTermsOf,
+  type Triple,
+  type TriplesQuery,
+  type TriplesTermsQuery,
+} from './triplesQuery.js';
 import {unsupportedGraphQuery} from './graphQuery.js';
+import {readKindOf, type ReadQuery, type ReadResult} from './readQuery.js';
 import {catalogOf, withShapeCatalog} from '../utils/ShapeClass.js';
+import type {QueryFeature} from './queryFeatures.js';
+import {inTransaction, txIdOf} from './transactionQuery.js';
 
 /**
  * Abstraction boundary between the DSL layer (Shape) and the storage layer
@@ -20,93 +30,248 @@ import {catalogOf, withShapeCatalog} from '../utils/ShapeClass.js';
  */
 export interface QueryDispatch {
   /**
-   * Answer a select query — **and a count**, which travels this channel too: a
-   * count is a select with an aggregate projection, not a query form of its own, so
-   * it needs no method here and no router has to grow an arm for it. It arrives as a
-   * {@link CountQuery} and resolves to a `number`; see {@link resolveCount}.
+   * Answer a read: a select, a count, an ask, a triples read or a terms read (see
+   * `queries/readQuery.ts`). Callers send it through {@link resolveRead}, which checks the features
+   * the read needs against {@link supports} and checks the answer.
    */
-  selectQuery<R = any>(query: SelectQuery | CountQuery): Promise<R>;
-  /** Answer an ask query — a boolean, not a result set. */
-  askQuery(query: AskQuery): Promise<boolean>;
+  readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>>;
   createQuery<R = any>(query: CreateQuery): Promise<R>;
   updateQuery<R = any>(query: UpdateQuery): Promise<R>;
   deleteQuery(query: DeleteQuery): Promise<DeleteResponse>;
   /**
-   * Run a graph query (`IDataset.graphQuery`). Optional here because a dispatch installed by an
-   * older copy of core has no such method; {@link resolveGraphQuery} treats a missing one as a
-   * dataset without graph support.
+   * Run a graph query (`IDataset.graphQuery`), a write. Optional here because a dispatch installed
+   * by an older copy of core has no such method; {@link resolveGraphQuery} treats a missing one as
+   * a dataset without graph support.
    */
   graphQuery?(query: GraphQuery): Promise<GraphResult>;
+  /**
+   * The query features this dispatch answers (as `IDataset.supports`). A router that checks each
+   * routed dataset itself (`LinkedStorage`) lists every feature; absent = the baseline only.
+   */
+  readonly supports?: readonly QueryFeature[];
 }
 
-/** A target that can answer an ask query, or a select (the fallback). */
-type ExistenceTarget = {
-  askQuery?(query: AskQuery): Promise<boolean>;
-  selectQuery?(query: any): Promise<any>;
-};
+/** Something a select is sent to: a dataset, a router, or the global dispatch. */
+type FeatureTarget = {readonly supports?: readonly QueryFeature[]} | undefined | null;
+
+/** A query that may use features beyond the baseline (a select builder has `requiredFeatures`). */
+type FeatureQuery = object & {requiredFeatures?(): readonly QueryFeature[]};
 
 /**
- * Answer an ask query against `target` — the single entry point for every
- * boolean-answered query in the library. `AskBuilder.exec()` and
- * `LinkedStorage.askQuery` both come here rather than calling `askQuery`
- * directly, so the contract below is enforced once for every store.
+ * Refuse a select whose features `target` does not declare (`IDataset.supports`).
  *
- * An ask goes to `IDataset.askQuery`, and a SPARQL-backed store turns it into
- * `ASK`. `askQuery` is the one optional dataset method: when `target` has none,
- * the same pattern is sent to `selectQuery` as a select with `LIMIT 1`, and the
- * answer is `true` when a row comes back. A shapeless ask has no select to send,
- * so on such a target it is refused.
+ * The check runs where a query is handed to a store: the select builder's `exec` on its target
+ * (or the global dispatch), and `LinkedStorage` on the dataset it routed to. It is the reason a
+ * grouped select needs no query kind of its own: a store that does not know grouping is never
+ * asked, rather than asked and trusted to notice.
  *
- * `askQuery` must resolve to a real boolean: anything else rejects rather than
- * being coerced, since a truthy non-boolean would read as "exists". Errors
- * propagate for the same reason — "could not ask" is never `false`.
+ * A query that runs in a store transaction (it carries a `txId`) needs `'transactions'`: a store
+ * that does not hold transactions would run it directly, outside the transaction it belongs to.
  */
-export async function resolveExistence(
-  target: ExistenceTarget,
-  query: AskQuery,
-): Promise<boolean> {
-  if (typeof target?.askQuery !== 'function') {
-    return existenceBySelect(target, query);
-  }
-  const answer = await target.askQuery(query);
-  if (typeof answer !== 'boolean') {
+export function assertQuerySupported(target: FeatureTarget, query: object): void {
+  const txId = txIdOf(query);
+  if (txId !== undefined && !(target?.supports ?? []).includes('transactions')) {
+    const name = (target as {constructor?: {name?: string}} | null)?.constructor?.name;
     throw new Error(
-      `askQuery must resolve to a boolean; got ${answer === null ? 'null' : typeof answer}. ` +
-      'An ask query will not coerce a non-boolean into an answer — a truthy ' +
-      'value would silently read as "exists".',
+      `This query runs in transaction "${txId}", and the dataset it was sent ` +
+        `to${name && name !== 'Object' ? ` (${name})` : ''} does not declare 'transactions' in ` +
+        '`supports`. It is refused rather than run outside its transaction.',
+    );
+  }
+  const {requiredFeatures} = query as FeatureQuery;
+  assertFeaturesSupported(target, typeof requiredFeatures === 'function' ? requiredFeatures.call(query) : []);
+}
+
+/** Refuse `required` features that `target` does not declare (see {@link assertQuerySupported}). */
+function assertFeaturesSupported(target: FeatureTarget, required: readonly QueryFeature[]): void {
+  if (required.length === 0) return;
+  const supported = new Set(target?.supports ?? []);
+  const missing = required.filter((feature) => !supported.has(feature));
+  if (missing.length === 0) return;
+  const name = (target as {constructor?: {name?: string}} | null)?.constructor?.name;
+  throw new Error(
+    `This query uses ${missing.map((f) => `'${f}'`).join(', ')}, which the dataset it was sent ` +
+    `to${name && name !== 'Object' ? ` (${name})` : ''} does not declare in \`supports\`. ` +
+    'It is refused rather than sent: a store that does not know the feature would answer ' +
+    'without it (ungrouped rows, no aggregate), and the answer would look real. Send it to a ' +
+    'dataset that supports it (SparqlDataset does), or declare `supports` on the dataset once ' +
+    'it implements the feature.',
+  );
+}
+
+/** Something a read is sent to: a dataset, a router, or the global dispatch. */
+export type ReadTarget = Pick<IDataset, 'readQuery' | 'supports'>;
+
+/** A target's class name for a message, when it has one. */
+function targetName(target: unknown): string {
+  const name = (target as {constructor?: {name?: string}} | null | undefined)?.constructor?.name;
+  return name && name !== 'Object' ? ` (${name})` : '';
+}
+
+/**
+ * Refuse a read that `target` cannot answer, before anything is sent: a select, count or ask whose
+ * features or transaction it does not declare ({@link assertQuerySupported}; an ask without `ask`
+ * is not refused, it is answered as a select), a triples read without `triples`, a terms read
+ * without `triplesTerms`, and either without `triplesPattern` when it fixes or lists the predicate
+ * or the object. A router that sends one read to several datasets checks each of them before it
+ * asks the first.
+ */
+export function assertReadSupported(target: FeatureTarget, query: ReadQuery): void {
+  const kind = readKindOf(query);
+  if (kind !== 'triples' && kind !== 'triples_terms') {
+    assertQuerySupported(target, query);
+    return;
+  }
+  const supported = new Set(target?.supports ?? []);
+  if (kind === 'triples' && !supported.has('triples')) {
+    throw new Error(
+      `The dataset this triples read was sent to${targetName(target)} does not declare 'triples' ` +
+        'in `supports`, so a triples read (a graph, node or predicate read) cannot be answered. ' +
+        'SparqlDataset answers it; a router forwards it to the dataset that holds the data.',
+    );
+  }
+  if (kind === 'triples_terms' && !supported.has('triplesTerms')) {
+    throw new Error(
+      `The dataset this terms read was sent to${targetName(target)} does not declare ` +
+        "'triplesTerms' in `supports`, so a terms read (TriplesBuilder.whichExist()) cannot be " +
+        'answered. SparqlDataset answers it; a router forwards it to the dataset that holds the data.',
+    );
+  }
+  assertFeaturesSupported(target, triplesQueryFeatures(query as TriplesQuery | TriplesTermsQuery));
+}
+
+/**
+ * Send a read to `target` — the one entry point for every read in the library: the builders
+ * (`exec()`, `.exists()`, `.whichExist()`), `LinkedStorage.readQuery` on each dataset it routes
+ * to, and the observing wrapper of the dispatch all come here rather than calling
+ * `readQuery` directly, so every store is held to the same contract:
+ *
+ * - **refused before it is sent** when `target` does not declare what the read needs
+ *   ({@link assertReadSupported});
+ * - a **select** answers what the store answers;
+ * - a **count** must answer a finite, non-negative integer (see {@link CountQuery}): anything else
+ *   rejects rather than being coerced, since `0` is a plausible count and an unreachable store
+ *   reported as `0` renders an empty table that looks real;
+ * - an **ask** goes to a store that declares `ask` and must answer a real boolean (a truthy
+ *   non-boolean would read as "exists"). A store without `ask` is sent the ask's pattern as a
+ *   select of ids with `LIMIT 1`, `true` when a row comes back; a shapeless ask has no select to
+ *   write, so on such a store it is refused;
+ * - a **triples read** must answer an array of triples;
+ * - a **terms read** must answer an array of IRIs, of which only the list's own are kept (each
+ *   once, in the list's order); an empty list answers `[]` without asking.
+ *
+ * Errors propagate: "could not read" is never an empty answer, `false` or `0`.
+ */
+export async function resolveRead<Q extends ReadQuery>(
+  target: ReadTarget | undefined | null,
+  query: Q,
+): Promise<ReadResult<Q>> {
+  assertReadSupported(target, query);
+  const kind = readKindOf(query);
+  if (kind === 'ask' && !(target?.supports ?? []).includes('ask')) {
+    return existenceBySelect(target, query as AskQuery) as Promise<ReadResult<Q>>;
+  }
+  if (kind === 'triples_terms' && triplesTermsOf(query as TriplesTermsQuery).length === 0) {
+    return [] as string[] as ReadResult<Q>;
+  }
+  if (typeof target?.readQuery !== 'function') {
+    throw new Error(
+      `The dataset this ${kind === 'triples_terms' ? 'terms' : kind} read was sent to does not implement ` +
+        'IDataset.readQuery(query), so it cannot be answered.',
+    );
+  }
+  const answer: unknown = await target.readQuery(query);
+  switch (kind) {
+    case 'count':
+      return checkCount(answer) as ReadResult<Q>;
+    case 'ask':
+      if (typeof answer !== 'boolean') {
+        throw new Error(
+          `An ask must be answered with a boolean; got ${answer === null ? 'null' : typeof answer}. ` +
+            'An ask query will not coerce a non-boolean into an answer — a truthy ' +
+            'value would silently read as "exists".',
+        );
+      }
+      return answer as ReadResult<Q>;
+    case 'triples':
+      if (!Array.isArray(answer)) {
+        throw new Error(
+          `A triples read must be answered with an array of triples; got ${answer === null ? 'null' : typeof answer}.`,
+        );
+      }
+      return answer as ReadResult<Q>;
+    case 'triples_terms': {
+      if (!Array.isArray(answer)) {
+        throw new Error(
+          `A terms read must be answered with an array of IRIs; got ${answer === null ? 'null' : typeof answer}.`,
+        );
+      }
+      const found = new Set(answer);
+      return triplesTermsOf(query as TriplesTermsQuery).filter((term) => found.has(term)) as ReadResult<Q>;
+    }
+    default:
+      return answer as ReadResult<Q>;
+  }
+}
+
+/**
+ * The answer to a count, checked: a finite, non-negative integer. A store that ran the pattern as a
+ * row query answered rows instead; it must branch on the lowered IR's `kind === 'count'` and emit
+ * an aggregate (`SELECT (COUNT(DISTINCT ?s) AS ?count)`). There is deliberately no translation of
+ * a count into a row query anywhere in this package: that would hide an unbounded read behind a
+ * call that looks cheap.
+ */
+function checkCount(answer: unknown): number {
+  if (typeof answer !== 'number' || !Number.isInteger(answer) || answer < 0) {
+    throw new Error(
+      `A count query must be answered with a non-negative integer; got ${
+        answer === null
+          ? 'null'
+          : typeof answer === 'number'
+            ? String(answer)
+            : Array.isArray(answer)
+              ? 'an array of rows'
+              : typeof answer
+      }. It is not coerced — a NaN or a missing value that fell through as 0 would ` +
+        'silently read as "no matches". A store that answered with rows ran the ' +
+        'pattern as a row query instead of counting it: it must branch on the lowered ' +
+        "IR's `kind === 'count'` and emit an aggregate.",
     );
   }
   return answer;
 }
 
 /**
- * Answer an ask on a dataset without `askQuery`: the ask's pattern as a select of ids with
- * `LIMIT 1`. The select builder is imported on demand (it imports this module).
+ * Answer an ask on a dataset without `ask`: the ask's pattern as a select of ids with `LIMIT 1`.
+ * The select builder is imported on demand (it imports this module).
  */
-async function existenceBySelect(target: ExistenceTarget, query: AskQuery): Promise<boolean> {
-  if (typeof target?.selectQuery !== 'function') {
+async function existenceBySelect(target: ReadTarget | undefined | null, query: AskQuery): Promise<boolean> {
+  if (typeof target?.readQuery !== 'function') {
     throw new Error(
-      'This dataset implements neither IDataset.askQuery nor IDataset.selectQuery, so an ' +
-      'ask query cannot be answered.',
+      'The dataset this ask was sent to does not implement IDataset.readQuery(query), so the ask ' +
+        'cannot be answered.',
     );
   }
-  const {op: _op, nullSubject, ...pattern} = query.toJSON();
+  const {op: _op, nullSubject, txId, ...pattern} = query.toJSON();
   // `.for(null)`: no subject to ask about. AskBuilder.exec answers false before this, but a
   // rehydrated ask can arrive here directly, and without a subject the select would match any
   // instance.
   if (nullSubject) return false;
   if (!pattern.shape) {
     throw new Error(
-      'This dataset does not implement IDataset.askQuery, and a shapeless ask ' +
-      '("does a node with this IRI exist at all") has no shape to select by. ' +
-      'Implement askQuery on the dataset, or ask through a shape.',
+      "This dataset does not declare 'ask' in `supports`, and a shapeless ask " +
+        '("does a node with this IRI exist at all") has no shape to select by. ' +
+        'Answer asks on the dataset (and declare it), or ask through a shape.',
     );
   }
   const {SelectBuilder} = await import('./QueryBuilder.js');
-  const select = withShapeCatalog(catalogOf(query), () =>
+  const bare = withShapeCatalog(catalogOf(query), () =>
     SelectBuilder.fromJSON({...pattern, shape: pattern.shape as string, limit: 1}),
   );
-  const answer = await target.selectQuery(select);
+  // In a transaction, the select answers inside it, as the ask would have.
+  const select = txId === undefined ? bare : inTransaction(bare, txId);
+  assertQuerySupported(target, select);
+  const answer: unknown = await target.readQuery(select);
   // A select with one subject is a single-result query: a row or null. Otherwise rows.
   if (answer === null || answer === undefined) return false;
   if (Array.isArray(answer)) return answer.length > 0;
@@ -133,74 +298,6 @@ export async function resolveGraphQuery(
     throw unsupportedGraphQuery(query, 'it has no graphQuery method');
   }
   return target.graphQuery(query);
-}
-
-/**
- * A target that can answer a count query — which is to say, any target that can
- * answer a select. There is no count-specific member to look for.
- */
-type CountTarget = {selectQuery?(query: any): Promise<any>};
-
-/**
- * Answer a count query against `target` — the single entry point for every
- * number-answered query in the library, as {@link resolveExistence} is for boolean
- * ones. `CountBuilder.exec()` comes here rather than calling the store directly, so
- * the contract below is enforced once for every store.
- *
- * **A count is dispatched over the SELECT channel.** It is not a separate query
- * form: `SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE { … }` is a select with an
- * aggregate projection, run over the same transport and answered with the same
- * result-set response — which is exactly why an ask, which really is a different
- * form (`ASK WHERE { … }`), has its own `IDataset.askQuery` and a count does not.
- * Riding `selectQuery` is what lets a count reach a store through every router that
- * already forwards a select, rather than needing a new arm in each of them (the
- * arm `LinkedStorage` never grew, which is how a count came to fail on every
- * application path while passing against a store held directly).
- *
- * There is still deliberately **no translation to a row query anywhere in this
- * package.** A store receives the count query itself and decides how to answer it;
- * one extending `SparqlDataset` branches on the lowered IR and emits the aggregate.
- * Nothing here fetches every row and measures the array — that would hide an
- * unbounded read behind a call that looks cheap.
- *
- * The answer must be a **finite, non-negative integer**: anything else rejects
- * rather than being coerced. That validation lives here, at the dispatch, because
- * this is where the count result is read — and it is load-bearing. Errors propagate
- * for the same reason a failed ask is never `false`, and more sharply, because `0`
- * is a *plausible* count: a count that reported an unreachable store as `0` would
- * render an empty table that looks exactly like real data. A store that ignored the
- * count and answered with rows is caught by the same check.
- */
-export async function resolveCount(
-  target: CountTarget,
-  query: CountQuery,
-): Promise<number> {
-  if (typeof target?.selectQuery !== 'function') {
-    throw new Error(
-      'This dataset does not implement IDataset.selectQuery(query), which is how a ' +
-      'count query is dispatched: a count is a select with an aggregate projection ' +
-      '(a SPARQL store emits SELECT (COUNT(DISTINCT ?s) AS ?count)), not a query ' +
-      'form of its own.',
-    );
-  }
-  const answer = await target.selectQuery(query);
-  if (typeof answer !== 'number' || !Number.isInteger(answer) || answer < 0) {
-    throw new Error(
-      `A count query must be answered with a non-negative integer; got ${
-        answer === null
-          ? 'null'
-          : typeof answer === 'number'
-            ? String(answer)
-            : Array.isArray(answer)
-              ? 'an array of rows'
-              : typeof answer
-      }. It is not coerced — a NaN or a missing value that fell through as 0 would ` +
-      'silently read as "no matches". A store that answered with rows ran the ' +
-      'pattern as a row query instead of counting it: it must branch on the lowered ' +
-      "IR's `kind === 'count'` and emit an aggregate.",
-    );
-  }
-  return answer;
 }
 
 // Global-backed so it is SHARED across duplicate copies of this module. In dev,
@@ -233,6 +330,8 @@ export type QueryDispatchEvent = (
   | {kind: 'update'; query: UpdateQuery; result: Promise<unknown>}
   | {kind: 'delete'; query: DeleteQuery; result: Promise<DeleteResponse>}
   | {kind: 'graph'; query: GraphQuery; result: Promise<GraphResult>}
+  | {kind: 'triples'; query: TriplesQuery; result: Promise<Triple[]>}
+  | {kind: 'triplesTerms'; query: TriplesTermsQuery; result: Promise<string[]>}
 ) & {
   /** The explicit dataset of an `exec(target)` call; absent for the global dispatch. */
   target?: IDataset;
@@ -250,6 +349,10 @@ export type QueryDispatchListener = (event: QueryDispatchEvent) => void;
  * the promise the caller receives is the store's own, whatever any listener does
  * with it. A listener that throws is logged (`console.error`) and isolated — it
  * neither rejects the query nor stops later listeners.
+ *
+ * A write in a store transaction is reported twice: when it runs (`target` is the transaction,
+ * which declares `authoritativeChanges`) and when the transaction commits (`target` is the store;
+ * see {@link notifyCommittedWrites}). A listener that acts on changed data acts on the second.
  *
  * The listener set lives on `globalThis`, beside `current`, for the same reason the
  * dispatch itself does: core can be evaluated twice in dev, and a subscription made
@@ -276,6 +379,39 @@ function notifyDispatch(event: QueryDispatchEvent): void {
   }
 }
 
+/** A write that ran in a store transaction, as reported when that transaction commits. */
+export type CommittedWrite =
+  | {kind: 'create'; query: CreateQuery; result: unknown}
+  | {kind: 'update'; query: UpdateQuery; result: unknown}
+  | {kind: 'delete'; query: DeleteQuery; result: DeleteResponse};
+
+/**
+ * Report the writes of a committed transaction to the dispatch listeners, each with the store it
+ * was written to as `target`. A transaction's writes are not visible outside it before the
+ * commit, so the live-query store (which refetches on a write) hears of them only now: the
+ * transaction declares `authoritativeChanges`, and its exec-time events are not acted on.
+ * @internal `utils/Transaction.ts` calls it.
+ */
+export function notifyCommittedWrites(writes: ReadonlyArray<CommittedWrite & {target: IDataset}>): void {
+  for (const write of writes) {
+    notifyDispatch({...write, result: Promise.resolve(write.result)} as QueryDispatchEvent);
+  }
+}
+
+/** The event of a read, by its kind: a count is reported as a select, as it always was. */
+function readEventOf(query: ReadQuery, result: Promise<unknown>): QueryDispatchEvent {
+  switch (readKindOf(query)) {
+    case 'ask':
+      return {kind: 'ask', query: query as AskQuery, result: result as Promise<boolean>};
+    case 'triples':
+      return {kind: 'triples', query: query as TriplesQuery, result: result as Promise<Triple[]>};
+    case 'triples_terms':
+      return {kind: 'triplesTerms', query: query as TriplesTermsQuery, result: result as Promise<string[]>};
+    default:
+      return {kind: 'select', query: query as SelectQuery | CountQuery, result};
+  }
+}
+
 /** Marker on a dispatch object that is already wrapped by {@link instrumentDispatch}. */
 const INSTRUMENTED = '__instrumented';
 
@@ -290,14 +426,9 @@ function instrumentDispatch(d: QueryDispatch, target?: IDataset): QueryDispatch 
   // `target` is only set for an explicit `exec(target)`: the wrapper is created
   // per call and the user's dataset object is never marked or mutated.
   const wrapped: QueryDispatch = {
-    selectQuery<R = any>(query: SelectQuery | CountQuery): Promise<R> {
-      const result = Promise.resolve(d.selectQuery<R>(query));
-      notifyDispatch({kind: 'select', query, result, target});
-      return result;
-    },
-    askQuery(query: AskQuery): Promise<boolean> {
-      const result = Promise.resolve(d.askQuery(query));
-      notifyDispatch({kind: 'ask', query, result, target});
+    readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+      const result = resolveRead(d, query);
+      notifyDispatch({...readEventOf(query, result), target});
       return result;
     },
     createQuery<R = any>(query: CreateQuery): Promise<R> {
@@ -320,6 +451,8 @@ function instrumentDispatch(d: QueryDispatch, target?: IDataset): QueryDispatch 
       notifyDispatch({kind: 'graph', query, result, target});
       return result;
     },
+    // The wrapped dispatch answers what it forwards to, no more and no less.
+    ...(d.supports ? {supports: d.supports} : {}),
   };
   Object.defineProperty(wrapped, INSTRUMENTED, {value: true, enumerable: false});
   return wrapped;
@@ -335,6 +468,19 @@ export function dispatchGraphQuery(query: GraphQuery, target?: IDataset): Promis
     ? instrumentDispatch(target as unknown as QueryDispatch, target)
     : getQueryDispatch();
   return resolveGraphQuery(dispatch, query);
+}
+
+/**
+ * Send a read through the explicit `target` dataset (observed like the global path), or through
+ * the global dispatch, by {@link resolveRead}. An explicit target is checked itself first, so a
+ * refusal names it (the observing wrapper is a plain object).
+ */
+export async function dispatchRead<Q extends ReadQuery>(query: Q, target?: IDataset): Promise<ReadResult<Q>> {
+  if (target) assertReadSupported(target, query);
+  const dispatch = target
+    ? instrumentDispatch(target as unknown as QueryDispatch, target)
+    : getQueryDispatch();
+  return resolveRead(dispatch, query);
 }
 
 export function setQueryDispatch(d: QueryDispatch): void {

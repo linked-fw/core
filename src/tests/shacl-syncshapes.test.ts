@@ -15,6 +15,7 @@ import type {IDataset} from '../interfaces/IDataset';
 import '../shapes/List';
 import '../shapes/PathNode';
 import {unusedDatasetMethods} from '../test-helpers/test-utils';
+import {readQueryOf} from '../test-helpers/read-double';
 
 const {linkedShape} = linkedPackage('syncshapes-test');
 const ex = (n: string) => ({id: `https://example.org/u#${n}`});
@@ -53,8 +54,11 @@ let calls: Call[];
 function installMock(existingIds: string[]) {
   calls = [];
   setQueryDispatch({
-    selectQuery: async () => existingIds.map((id) => ({id})) as any,
-    askQuery: async () => existingIds.length > 0,
+    readQuery: readQueryOf({
+      select: async () => existingIds.map((id) => ({id})),
+      ask: async () => existingIds.length > 0,
+    }),
+    supports: ['ask'],
     createQuery: async (q: any) => {
       calls.push({kind: 'create', id: (lower(q) as any)?.data?.id});
       return {} as any;
@@ -275,14 +279,17 @@ describe('syncShape (single)', () => {
   });
 });
 
-// A recording IDataset used as an explicit target. Its selectQuery returns the seeded
+// A recording IDataset used as an explicit target. Its selects answer the seeded
 // existing shape ids (for orphan detection); create/delete record what they receive.
 function makeTargetStore(existingIds: string[]) {
   const storeCalls: Call[] = [];
   const store: IDataset = {
     ...unusedDatasetMethods,
-    askQuery: async () => false,
-    selectQuery: async () => existingIds.map((id) => ({id})) as any,
+    readQuery: readQueryOf({
+      ask: async () => false,
+      select: async () => existingIds.map((id) => ({id})),
+    }),
+    supports: ['ask'],
     createQuery: async (q: any) => {
       storeCalls.push({kind: 'create', id: (lower(q) as any)?.data?.id});
       return {} as any;

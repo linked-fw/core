@@ -5,6 +5,9 @@ import {LinkedStorage} from '../utils/LinkedStorage';
 import type {IDataset} from '../interfaces/IDataset';
 import type {NodeReferenceValue} from '../utils/NodeReference';
 import {unusedDatasetMethods} from '../test-helpers/test-utils';
+import {readQueryOf} from '../test-helpers/read-double';
+import type {QueryFeature} from '../queries/queryFeatures';
+import {AskBuilder} from '../queries/AskBuilder';
 
 const {linkedShape} = linkedPackage('store-routing-test');
 
@@ -39,14 +42,17 @@ const createStore = () => {
   const calls: StoreCalls = {select: 0, ask: 0, update: 0, create: 0, delete: 0};
   const store: IDataset = {
     ...unusedDatasetMethods,
-    selectQuery: async () => {
-      calls.select += 1;
-      return [];
-    },
-    askQuery: async () => {
-      calls.ask += 1;
-      return false;
-    },
+    supports: ['ask'] as QueryFeature[],
+    readQuery: readQueryOf({
+      select: async () => {
+        calls.select += 1;
+        return [];
+      },
+      ask: async () => {
+        calls.ask += 1;
+        return false;
+      },
+    }),
     updateQuery: async () => {
       calls.update += 1;
       return {id: 'mock'};
@@ -70,7 +76,7 @@ describe('LinkedStorage store routing', () => {
     LinkedStorage.setDefaultDataset(defaultStore.store);
     LinkedStorage.setDatasetForShapes(personStore.store, RoutedPerson);
 
-    await LinkedStorage.selectQuery(RoutedPerson.select() as any);
+    await LinkedStorage.readQuery(RoutedPerson.select() as any);
 
     expect(personStore.calls.select).toBe(1);
     expect(defaultStore.calls.select).toBe(0);
@@ -80,7 +86,7 @@ describe('LinkedStorage store routing', () => {
     const defaultStore = createStore();
     LinkedStorage.setDefaultDataset(defaultStore.store);
 
-    await LinkedStorage.selectQuery(RoutedPet.select() as any);
+    await LinkedStorage.readQuery(RoutedPet.select() as any);
 
     expect(defaultStore.calls.select).toBe(1);
   });
@@ -91,7 +97,7 @@ describe('LinkedStorage store routing', () => {
     LinkedStorage.setDefaultDataset(defaultStore.store);
     LinkedStorage.setDatasetForShapes(personStore.store, RoutedPerson);
 
-    await LinkedStorage.selectQuery(RoutedEmployee.select() as any);
+    await LinkedStorage.readQuery(RoutedEmployee.select() as any);
 
     expect(personStore.calls.select).toBe(1);
     expect(defaultStore.calls.select).toBe(0);
@@ -118,7 +124,11 @@ describe('LinkedStorage store routing', () => {
 // Existence checks route like everything else — and degrade in one place
 // =============================================================================
 
-describe('LinkedStorage.askQuery routing', () => {
+/** The ask a shape's `.exists()` sends (a select reduced to its pattern). */
+const askOf = (shape: {select(): unknown}): AskBuilder =>
+  (shape.select() as unknown as {_toAsk(): AskBuilder})._toAsk();
+
+describe('LinkedStorage.readQuery routing of an ask', () => {
   // Shape pins are static and accumulate across tests. Fan-out asks *every*
   // known dataset and short-circuits on the first `true`, so a pin left by an
   // earlier test would make these order-dependent.
@@ -131,14 +141,17 @@ describe('LinkedStorage.askQuery routing', () => {
     const calls = {ask: 0, select: 0};
     const store: IDataset = {
       ...unusedDatasetMethods,
-      selectQuery: async () => {
-        calls.select += 1;
-        return [] as any;
-      },
-      askQuery: async () => {
-        calls.ask += 1;
-        return answer;
-      },
+      supports: ['ask'] as QueryFeature[],
+      readQuery: readQueryOf({
+        select: async () => {
+          calls.select += 1;
+          return [] as any;
+        },
+        ask: async () => {
+          calls.ask += 1;
+          return answer;
+        },
+      }),
     };
     return {store, calls};
   };
@@ -150,19 +163,19 @@ describe('LinkedStorage.askQuery routing', () => {
     LinkedStorage.setDatasetForShapes(personStore.store, RoutedPerson);
 
     await expect(
-      LinkedStorage.askQuery(RoutedPerson.select() as any),
+      LinkedStorage.readQuery(askOf(RoutedPerson)),
     ).resolves.toBe(true);
     expect(personStore.calls.ask).toBe(1);
     expect(defaultStore.calls.ask).toBe(0);
   });
 
-  test('the routed dataset is asked, and its selectQuery is never touched', async () => {
+  test('the routed dataset is asked, and never sent a select', async () => {
     const store = createStore();
     LinkedStorage.setDefaultDataset(store.store);
     LinkedStorage.setDatasetForShapes(store.store, RoutedPet);
 
     await expect(
-      LinkedStorage.askQuery(RoutedPet.select() as any),
+      LinkedStorage.readQuery(askOf(RoutedPet)),
     ).resolves.toBe(false);
     expect(store.calls.ask).toBe(1);
     expect(store.calls.select).toBe(0);
@@ -171,18 +184,21 @@ describe('LinkedStorage.askQuery routing', () => {
   test('a store failure propagates — it is never routed into a false', async () => {
     const broken: IDataset = {
       ...unusedDatasetMethods,
-      selectQuery: async () => {
-        throw new Error('store unreachable');
-      },
-      askQuery: async () => {
-        throw new Error('store unreachable');
-      },
+      supports: ['ask'] as QueryFeature[],
+      readQuery: readQueryOf({
+        select: async () => {
+          throw new Error('store unreachable');
+        },
+        ask: async () => {
+          throw new Error('store unreachable');
+        },
+      }),
     };
     LinkedStorage.setDefaultDataset(broken);
     LinkedStorage.setDatasetForShapes(broken, RoutedPet);
 
     await expect(
-      LinkedStorage.askQuery(RoutedPet.select() as any),
+      LinkedStorage.readQuery(askOf(RoutedPet)),
     ).rejects.toThrow(/store unreachable/);
   });
 
@@ -194,7 +210,7 @@ describe('LinkedStorage.askQuery routing', () => {
     LinkedStorage.setDefaultDataset(defaultStore.store);
     LinkedStorage.setDatasetForShapes(pinned.store, RoutedPerson);
 
-    await expect(LinkedStorage.askQuery({} as any)).resolves.toBe(true);
+    await expect(LinkedStorage.readQuery(AskBuilder.forNode('https://example.org/node'))).resolves.toBe(true);
     expect(defaultStore.calls.ask + pinned.calls.ask).toBeGreaterThan(0);
   });
 
@@ -204,7 +220,7 @@ describe('LinkedStorage.askQuery routing', () => {
     LinkedStorage.setDefaultDataset(a.store);
     LinkedStorage.setDatasetForShapes(b.store, RoutedPerson);
 
-    await expect(LinkedStorage.askQuery({} as any)).resolves.toBe(false);
+    await expect(LinkedStorage.readQuery(AskBuilder.forNode('https://example.org/node'))).resolves.toBe(false);
     expect(a.calls.ask).toBe(1);
     expect(b.calls.ask).toBe(1);
   });
@@ -212,13 +228,16 @@ describe('LinkedStorage.askQuery routing', () => {
   test('a failure during fan-out propagates — unknown is not false', async () => {
     const broken: IDataset = {
       ...unusedDatasetMethods,
-      selectQuery: async () => [],
-      askQuery: async () => {
-        throw new Error('one store unreachable');
-      },
+      supports: ['ask'] as QueryFeature[],
+      readQuery: readQueryOf({
+        select: async () => [],
+        ask: async () => {
+          throw new Error('one store unreachable');
+        },
+      }),
     };
     LinkedStorage.setDefaultDataset(broken);
-    await expect(LinkedStorage.askQuery({} as any)).rejects.toThrow(
+    await expect(LinkedStorage.readQuery(AskBuilder.forNode('https://example.org/node'))).rejects.toThrow(
       /one store unreachable/,
     );
   });

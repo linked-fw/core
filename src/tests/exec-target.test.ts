@@ -11,6 +11,7 @@ import {UpdateBuilder} from '../queries/UpdateBuilder';
 import {DeleteBuilder} from '../queries/DeleteBuilder';
 import {setQueryDispatch} from '../queries/queryDispatch';
 import type {IDataset} from '../interfaces/IDataset';
+import {readQueryOf} from '../test-helpers/read-double';
 
 /** Records which store received each kind of query. */
 type Hit = {kind: string; on: 'global' | 'target'};
@@ -26,8 +27,8 @@ function makeStore(on: 'global' | 'target', supports: Set<string>): IDataset {
   // Partial on purpose: a dataset class built against an older core may lack the mutation
   // methods, and exec(target) must refuse such a target.
   const store: Partial<IDataset> = {
-    askQuery: async () => false,
-    selectQuery: async () => record('select'),
+    readQuery: readQueryOf({ask: async () => false, select: async () => record('select')}),
+    supports: ['ask'],
   };
   if (supports.has('create')) store.createQuery = async () => record('create');
   if (supports.has('update')) store.updateQuery = async () => record('update');

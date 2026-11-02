@@ -39,10 +39,11 @@ export interface UpdateLowerSpec<S extends Shape = Shape> {
 }
 
 export interface DeleteLowerSpec<S extends Shape = Shape> {
-  shapeClass: ShapeConstructor<S>;
+  /** The shape deleted from; absent for a shapeless delete (`mode: 'shapeless'`). */
+  shapeClass?: ShapeConstructor<S>;
   /** Ids to delete: concrete ids/`{id}` refs, or unresolved context refs (resolved at lower). */
   ids?: (NodeId | PendingQueryContext)[];
-  mode: 'ids' | 'all' | 'where';
+  mode: 'ids' | 'all' | 'where' | 'shapeless';
   wherePath?: WherePath;
   /** The graph `.into()` names (server-side only; never serialized). */
   into?: string;

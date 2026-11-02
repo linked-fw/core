@@ -1,5 +1,5 @@
 import type {PropertyShapeData, NodeShapeData} from '../shapes/SHACL.js';
-import {getPropertyShape} from '../shapes/nodeShapeData.js';
+import {getQueryPropertyShape} from '../shapes/nodeShapeData.js';
 import {getQueryShapeClass} from '../utils/ShapeClass.js';
 import {unresolvedValueShapeError} from '../utils/unresolvedShape.js';
 import {brandLinkedClass} from '../utils/linkedError.js';
@@ -67,7 +67,7 @@ export function walkPropertyPath(shape: NodeShapeData, path: string): PropertyPa
   let currentShape = shape;
 
   for (const label of labels) {
-    const propertyShape = getPropertyShape(currentShape, label);
+    const propertyShape = getQueryPropertyShape(currentShape, label);
     if (!propertyShape) {
       throw new Error(
         `Property '${label}' not found on shape '${currentShape.label || currentShape.id}' while resolving path '${path}'`,

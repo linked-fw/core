@@ -11,6 +11,7 @@ import type {
   IRAskQuery,
   IRCreateMutation,
   IRUpdateMutation,
+  IRDeleteShapelessMutation,
   IRUpdateWhereMutation,
   IRUpsertMutation,
   SelectResult,
@@ -41,6 +42,24 @@ import {
 } from './graphQueryToSparql.js';
 import type {SparqlQueryResults} from './resultMapping.js';
 import {
+  triplesQueryOf,
+  triplesTermsOf,
+  triplesTermsQueryOf,
+  type Triple,
+  type TriplesQuery,
+  type TriplesTermsQuery,
+} from '../queries/triplesQuery.js';
+import {readKindOf, type ReadQuery, type ReadResult} from '../queries/readQuery.js';
+import {
+  mapSparqlTriplesResult,
+  mapSparqlTriplesTermsResult,
+  triplesTermsToAlgebra,
+  triplesToAlgebra,
+} from './triplesToSparql.js';
+
+/** The most terms one query of a terms read lists; a longer list is sent in parts this long. */
+export const TRIPLES_TERMS_PER_QUERY = 400;
+import {
   selectToSparql,
   askToSparql,
   countToSparql,
@@ -50,6 +69,7 @@ import {
   upsertToSparql,
   updateWhereToSparql,
   deleteToSparql,
+  deleteShapelessToSparql,
   deleteAllToSparql,
   deleteWhereToSparql,
   mintNestedIds,
@@ -67,7 +87,7 @@ import {
   type SparqlCompileOptions,
   type SparqlOptions,
 } from './sparqlUtils.js';
-import {graphRoutingFor, type ShapeGraphRouting} from '../utils/graphRouting.js';
+import {graphRoutingFor, sortGraphSet, type ShapeGraphRouting} from '../utils/graphRouting.js';
 import {askToAlgebra, countToAlgebra, selectToAlgebra} from './irToAlgebra.js';
 import {askPlanToSparql, selectPlanToSparql} from './algebraToString.js';
 import type {SparqlAskPlan, SparqlSelectPlan} from './SparqlAlgebra.js';
@@ -79,6 +99,7 @@ import {graphs} from '../ontologies/graphs.js';
 import {sharedState} from '../utils/sharedState.js';
 import type {DefaultGraphTermsReplace} from '../queries/defaultGraphTerms.js';
 import {defaultGraphTermsToSparql} from './defaultGraphTerms.js';
+import {ALL_QUERY_FEATURES, type QueryFeature} from '../queries/queryFeatures.js';
 import {
   expandReadGraphs,
   invalidateGraphRegistry,
@@ -144,6 +165,9 @@ export abstract class SparqlDataset implements IDataset {
   constructor(options?: SparqlOptions) {
     this.options = options;
   }
+
+  /** SPARQL expresses every query feature: grouping (GROUP BY/HAVING), MIN and MAX. */
+  readonly supports: readonly QueryFeature[] = ALL_QUERY_FEATURES;
 
   /**
    * Replace terms in the default graph in one update (the ontology sync's `'default'` mode): see
@@ -327,6 +351,25 @@ export abstract class SparqlDataset implements IDataset {
   protected abstract executeSparqlUpdate(sparql: string): Promise<void>;
 
   /**
+   * Answer a read (`IDataset.readQuery`), by its kind: a select or a count ({@link selectRead}),
+   * an ask ({@link askRead}), a triples read ({@link triplesRead}) or a terms read
+   * ({@link termsRead}). Every kind is answered (`supports` lists them all). Errors reject.
+   */
+  async readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    switch (readKindOf(query)) {
+      case 'select':
+      case 'count':
+        return (await this.selectRead(query as SelectQuery | CountQuery)) as ReadResult<Q>;
+      case 'ask':
+        return (await this.askRead(query as AskQuery)) as ReadResult<Q>;
+      case 'triples':
+        return (await this.triplesRead(query as TriplesQuery)) as ReadResult<Q>;
+      case 'triples_terms':
+        return (await this.termsRead(query as TriplesTermsQuery)) as ReadResult<Q>;
+    }
+  }
+
+  /**
    * Answer a select query — **and a count, which is a select.**
    *
    * A count is not a distinct query form the way an ask is. An ask really is
@@ -339,7 +382,7 @@ export abstract class SparqlDataset implements IDataset {
    *
    * So a count rides this channel rather than a method of its own. That is not
    * tidiness: it is what lets a count reach a store through every router that
-   * already forwards a select — `LinkedStorage.selectQuery`, a backend API store —
+   * already forwards a select — `LinkedStorage.readQuery`, a backend API store —
    * with no per-kind plumbing to add in each of them, and no optional `IDataset`
    * member that a third-party store silently lacks.
    *
@@ -352,9 +395,7 @@ export abstract class SparqlDataset implements IDataset {
    * the builder dropped before the query ever reached the IR. Errors reject; a count
    * failure is never reported as `0`.
    */
-  selectQuery(query: SelectQuery): Promise<SelectResult>;
-  selectQuery(query: CountQuery): Promise<number>;
-  async selectQuery(
+  private async selectRead(
     query: SelectQuery | CountQuery,
   ): Promise<SelectResult | number> {
     // Cast once for the call rather than lowering in each branch: `lower` is
@@ -392,12 +433,73 @@ export abstract class SparqlDataset implements IDataset {
    * away here. A query with no shape lowers to `ASK { <iri> ?p ?o }` — existence
    * of the node under any type or none. Errors reject; never reported as `false`.
    */
-  async askQuery(query: AskQuery): Promise<boolean> {
+  private async askRead(query: AskQuery): Promise<boolean> {
     const lowered = lower(query);
     const ir = await this.resolveReadGraphs(lowered);
     if (!ir) return false;
     const json = await this.sendRead(ir, this.readOptions(lowered));
     return mapSparqlAskResult(json);
+  }
+
+  /**
+   * Answer a triples read (`NamedGraph.readContent(g)`, `TriplesBuilder.forNode({id})`,
+   * `toNode({id})`, `withPredicate({id})`) with one SELECT (see `triplesToSparql.ts`). Its graphs are
+   * expanded like a `.from()` set (portable names, the registry kinds); a set that expands to no
+   * graph answers `[]` without querying. A node read without graphs follows the store's routing
+   * like a shapeless ask. Errors reject.
+   */
+  private async triplesRead(query: TriplesQuery): Promise<Triple[]> {
+    const checked = triplesQueryOf(query);
+    const read = await this.expandTriplesGraphs(checked);
+    if (!read) return [];
+    const options = this.readOptions(checked);
+    const {plan, graph} = triplesToAlgebra(read, options);
+    return mapSparqlTriplesResult(await this.sendTriplesPlan(plan, options), read, graph, options);
+  }
+
+  /**
+   * Answer a terms read (`TriplesBuilder.toNode([…])` / `withPredicate([…])`, `.whichExist()`): the
+   * terms of its list some triple of the read has, with one SELECT per
+   * {@link TRIPLES_TERMS_PER_QUERY} terms (`VALUES ?t` under `FILTER EXISTS`, see
+   * `triplesToSparql.ts`). Graphs are expanded as {@link triplesRead} expands them; an empty list
+   * or a set that expands to no graph answers `[]` without querying. Errors reject.
+   */
+  private async termsRead(query: TriplesTermsQuery): Promise<string[]> {
+    const checked = triplesTermsQueryOf(query);
+    const terms = triplesTermsOf(checked);
+    if (terms.length === 0) return [];
+    const read = await this.expandTriplesGraphs(checked);
+    if (!read) return [];
+    const options = this.readOptions(checked);
+    const listed = checked.objects !== undefined ? 'objects' : 'predicates';
+    const found: string[] = [];
+    for (let i = 0; i < terms.length; i += TRIPLES_TERMS_PER_QUERY) {
+      const part = {...read, [listed]: terms.slice(i, i + TRIPLES_TERMS_PER_QUERY)};
+      found.push(...mapSparqlTriplesTermsResult(await this.sendTriplesPlan(triplesTermsToAlgebra(part, options), options)));
+    }
+    return found;
+  }
+
+  /** A triples read with its graphs expanded like a `.from()` set; `null` when they expand to none. */
+  private async expandTriplesGraphs<T extends TriplesQuery | TriplesTermsQuery>(checked: T): Promise<T | null> {
+    if (!checked.graphs) return checked;
+    const expanded = await expandReadGraphs(checked.graphs, {
+      registry: () => readGraphRegistry(this.graphRegistryKey(), () => this.loadGraphRegistry()),
+      mapGraphName: this.options?.mapGraphName,
+    });
+    const names = 'graphs' in expanded ? expanded.graphs : [graphs.default];
+    if (names.length === 0) return null;
+    return {...checked, graphs: names};
+  }
+
+  /** Send a triples plan, its `FROM NAMED` set as parameters when the store takes them that way. */
+  private async sendTriplesPlan(plan: SparqlSelectPlan, options: SparqlCompileOptions | undefined): Promise<SparqlQueryResults> {
+    const named = this.options?.namedGraphUriParameter ? plan.dataset?.fromNamed : undefined;
+    if (named && named.length > 0) {
+      const {dataset: _dataset, ...withoutDataset} = plan;
+      return this.executeSparqlSelectWithNamedGraphs(selectPlanToSparql(withoutDataset, options), named);
+    }
+    return this.executeSparqlSelect(selectPlanToSparql(plan, options));
   }
 
   /**
@@ -590,7 +692,9 @@ export abstract class SparqlDataset implements IDataset {
 
 
   async deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
-    const ir = this.resolveWriteGraph(lower(query));
+    const lowered = lower(query);
+    if (lowered.kind === 'delete_shapeless') return this.deleteShapeless(lowered);
+    const ir = this.resolveWriteGraph(lowered);
     // Compiled with the routing (when there is one): a where clause reads a linked node in its own
     // shape's graphs, and a delete by id removes the links to its subject in every graph that may
     // hold one.
@@ -611,6 +715,18 @@ export abstract class SparqlDataset implements IDataset {
       deleted: ir.ids,
       count: ir.ids.length,
     };
+  }
+
+  /**
+   * A shapeless delete (`Shape.delete(ids)`): every triple of each id, and every link to one, in
+   * every data graph of the dataset (the default graph and each named graph but the registry and
+   * the shapes and ontology graphs it records; see `deleteShapelessToSparql`). One SPARQL update. Answers every id as deleted, as a delete by id
+   * does.
+   */
+  protected async deleteShapeless(ir: IRDeleteShapelessMutation): Promise<DeleteResponse> {
+    const sparql = deleteShapelessToSparql(ir, this.writeOptions());
+    await this.executeSparqlUpdate(sparql);
+    return {deleted: ir.ids, count: ir.ids.length};
   }
 
   /**

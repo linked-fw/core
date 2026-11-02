@@ -223,6 +223,32 @@ DSL: `Person.select((p) => p.friends.size())`
 }
 ```
 
+A `count` always counts distinct values (`COUNT(DISTINCT …)` in SPARQL): a select that joins two
+multi-valued paths yields their cross product, and counting rows would multiply each count by
+the other path's size. `min` and `max` are aggregates too (`p.birthDate.max()`).
+
+### Grouped select (`groupBy`)
+
+DSL: `Person.select((p) => ({hobby: p.hobby, n: Expr.count()})).groupBy('hobby').having('n', (n) => n.gt(1))`
+
+```ts
+{
+  kind: 'select',
+  projection: [
+    {alias: 'a1', expression: {kind: 'property_expr', sourceAlias: 'a0', property: 'prop:hobby'}},
+    {alias: 'a2', expression: {kind: 'aggregate_expr', name: 'count', args: [{kind: 'alias_expr', alias: 'a0'}]}},
+  ],
+  groupBy: [{kind: 'property_expr', sourceAlias: 'a0', property: 'prop:hobby'}],
+  having: {kind: 'binary_expr', operator: '>', left: {kind: 'aggregate_expr', name: 'count', args: [/* a0 */]}, right: {kind: 'literal_expr', value: 1}},
+  requires: ['groupBy'],
+}
+```
+
+With `groupBy` the rows are groups: the root is not projected, each projection item is a key
+(its expression is in `groupBy`) or an aggregate, and a row has no `id`. `orderBy` items are the
+projection expressions of the fields they name. `requires` lists the features beyond the
+baseline the query uses (`'groupBy'`, `'min'`, `'max'`); see the implementer guide.
+
 ### Sub-select with custom result object
 
 DSL: `Person.select((p) => p.friends.select((f) => ({name: f.name, hobby: f.hobby})))`
@@ -305,7 +331,7 @@ DSL: `Person.select({id: 'node:1'}, (p) => p.name)`
 | Kind | Fields | Description |
 |---|---|---|
 | `literal_expr` | `value` | String, number, boolean, or null literal |
-| `property_expr` | `sourceAlias`, `property` | Property access on an aliased node |
+| `property_expr` | `sourceAlias`, `property` | Property access on an aliased node. `property` is a property shape IRI; for the DSL's `$type()` it is `NODE_TYPE_PROPERTY_ID` (`…/shape/core/Shape/$type`, path `rdf:type`, found by `findPropertyShapeById`), in a `traverse` too |
 | `alias_expr` | `alias` | Reference to an alias |
 | `binary_expr` | `operator`, `left`, `right` | Comparison (`=`, `!=`, `>`, `>=`, `<`, `<=`) |
 | `logical_expr` | `operator`, `expressions[]` | Boolean combination (`and`, `or`) |
@@ -379,6 +405,21 @@ DSL: `Person.delete({id: 'node:1'})`
 }
 ```
 
+DSL: `Shape.delete([{id: 'node:1'}])` (on the base class: a shapeless delete)
+
+```ts
+{
+  kind: 'delete_shapeless',
+  ids: [{id: 'node:1'}],
+  // keepIncoming?: true          (carried in DSL-JSON)
+}
+```
+
+No shape: every triple of each id, and every link to it, in every data graph of the dataset (the
+default graph and each named graph but the registry and the graphs it records as shapes or
+ontology graphs). A store
+lists `'shapelessDelete'` in `supports` to be sent one.
+
 ## Store (dataset) implementer guide
 
 This section is for developers building a backend — a **dataset** — that executes Linked queries
@@ -396,27 +437,44 @@ wants:
 
 ```ts
 import type {IDataset} from '@_linked/core/interfaces/IDataset';
-import type {SelectQuery} from '@_linked/core/queries/SelectQuery';
 import type {CreateQuery} from '@_linked/core/queries/CreateQuery';
 import type {UpdateQuery} from '@_linked/core/queries/UpdateQuery';
 import type {DeleteQuery, DeleteResponse} from '@_linked/core/queries/DeleteQuery';
+import {readKindOf, type ReadQuery, type ReadResult} from '@_linked/core/queries/readQuery';
 import {lower} from '@_linked/core';
 
 interface IDataset {
   init?(): Promise<any>;
-  selectQuery(query: SelectQuery): Promise<SelectResult>;
-  updateQuery?(query: UpdateQuery): Promise<UpdateResult>;
-  createQuery?(query: CreateQuery): Promise<CreateResult>;
-  deleteQuery?(query: DeleteQuery): Promise<DeleteResponse>;
+  // Every read: a select, a count, an ask, a triples or a terms read (by its kind).
+  readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>>;
+  updateQuery(query: UpdateQuery): Promise<UpdateResult>;
+  createQuery(query: CreateQuery): Promise<CreateResult>;
+  deleteQuery(query: DeleteQuery): Promise<DeleteResponse>;
+  graphQuery(query: GraphQuery): Promise<GraphResult>;
+  readonly supports?: readonly QueryFeature[];
 }
 
 class MyStore implements IDataset {
-  async selectQuery(query: SelectQuery) {
-    const ir = lower(query);       // opt into the IR only if you want it
-    return this.runMyEngine(ir);
+  async readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    if (readKindOf(query) !== 'select') throw new Error('MyStore answers selects only');
+    const ir = lower(query as SelectQuery);   // opt into the IR only if you want it
+    return this.runMyEngine(ir) as ReadResult<Q>;
   }
 }
 ```
+
+A select and a count are the baseline every dataset answers; an ask, a triples read and a terms
+read are sent only to a dataset that lists `'ask'`, `'triples'` or `'triplesTerms'` in
+`supports` (an ask to one without `'ask'` is sent as a select `LIMIT 1` instead).
+
+**Features a dataset declares.** A select can need features beyond the baseline: grouping
+(`'groupBy'`) and `'min'`/`'max'`. A dataset lists the ones it answers in `supports`
+(`readonly supports?: readonly QueryFeature[]`); a select that needs one the dataset does not
+list is refused before it is sent (`assertQuerySupported`, which `exec` and `LinkedStorage`
+call), so a dataset written without them fails loudly instead of answering ungrouped rows.
+`SparqlDataset` lists all (`ALL_QUERY_FEATURES`). A store that reads the IR finds the same list
+in `IRSelectQuery.requires`. A router lists what it forwards and checks each target itself, as
+`LinkedStorage` does.
 
 `SelectQuery`/`CreateQuery`/`UpdateQuery`/`DeleteQuery` are the **closed query interfaces** (the live
 query). The corresponding lowered IR types are `IRSelectQuery`/`IRCreateMutation`/`IRUpdateMutation`/`IRUpsertMutation`/
@@ -597,11 +655,13 @@ import type {CreateQuery} from '@_linked/core/queries/CreateQuery';
 import type {UpdateQuery} from '@_linked/core/queries/UpdateQuery';
 import type {DeleteQuery, DeleteResponse} from '@_linked/core/queries/DeleteQuery';
 import type {SelectResult, CreateResult, UpdateResult} from '@_linked/core/queries/IntermediateRepresentation';
+import {readKindOf, type ReadQuery, type ReadResult} from '@_linked/core/queries/readQuery';
 import {lower} from '@_linked/core';
 
 export class MyStore implements IDataset {
-  async selectQuery(query: SelectQuery): Promise<SelectResult> {
-    const ir = lower(query);  // opt into the IR
+  async readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    if (readKindOf(query) !== 'select') throw new Error('MyStore answers selects only');
+    const ir = lower(query as SelectQuery);  // opt into the IR
     // 1. Read ir.root.shape to identify the target shape
     // 2. Walk ir.patterns to build joins/traversals
     // 3. Compile ir.where into a filter

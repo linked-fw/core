@@ -10,8 +10,9 @@
  * `QueryShape`/`QueryShapeSet` resolve a key against their own surface (`key in
  * queryShape`) before they look for a property shape with that label, so a property
  * named after one of these is unreachable through the builder: the caller gets the DSL
- * method, and the field tracer then fails on a native function. Registration warns about
- * such a label (see `warnOnReservedPropertyLabel`).
+ * method, and the field tracer then fails on a native function. `$`-prefixed names and
+ * `and`/`or`/`not` throw at registration; the other reserved names warn (see
+ * `warnOnReservedPropertyLabel`).
  *
  * Deliberately a literal, not derived from the classes: the shape registry must not
  * import the query builder (that edge would close an import cycle through `SHACL.ts`).
@@ -19,6 +20,10 @@
  * so a DSL method added later cannot drift out of it unnoticed.
  */
 export const RESERVED_QUERY_DSL_NAMES: ReadonlySet<string> = new Set([
+  // node metadata (`$`-prefixed: facts about the node, not shape fields); `$graph` is reserved
+  // ahead of its method
+  '$graph',
+  '$type',
   // prototype surface of QueryShape / QueryShapeSet (and their base)
   'add',
   'as',
@@ -26,12 +31,15 @@ export const RESERVED_QUERY_DSL_NAMES: ReadonlySet<string> = new Set([
   'callPropertyShapeAccessor',
   'concat',
   'constructor',
+  'countDistinct',
   'equals',
   'every',
   'getOriginalValue',
   'getPropertyPath',
   'getPropertyStep',
   'id',
+  'isDefined',
+  'isNotDefined',
   'limit',
   'none',
   'notOneOf',
@@ -75,6 +83,14 @@ export const SET_CONTEXT_ONLY_NAMES: ReadonlySet<string> = new Set([
   'where',
 ]);
 
+/**
+ * The DSL-JSON condition combinators. A condition key is a bare string, so a property with one of
+ * these labels cannot be keyed in a condition. Registering such a property throws (like a
+ * `$`-prefixed name); a shape loaded as data is only reported, and the encoder writes a condition
+ * on it in the S-expr form (`["=", {"@path": "and"}, …]`), which has no key to collide with.
+ */
+export const DSL_JSON_COMBINATOR_NAMES: ReadonlySet<string> = new Set(['and', 'or', 'not']);
+
 export function isReservedQueryDslName(label: string | undefined): boolean {
   return !!label && RESERVED_QUERY_DSL_NAMES.has(label);
 }
@@ -90,11 +106,12 @@ const reported = new Set<string>();
 /**
  * Tell the model author about a colliding label while they can still rename it.
  *
- * A warning rather than a throw, on purpose. `size`, `id` and `some` are legitimate
- * names for a domain property, and the property still works everywhere except the
- * proxy-traced builder. Throwing here would break existing apps on upgrade over a property
- * they may never select through the builder. (Contrast `RESERVED_PROPERTY_LABELS` in
- * `SHACL.ts`, which does throw: a DSL-JSON combinator name has no escape hatch at all.)
+ * `$`-prefixed names and `and`/`or`/`not` throw; the other reserved names warn. `size`, `id`
+ * and `some` are legitimate names for a domain property, and the property still works
+ * everywhere except the proxy-traced builder, so throwing would break existing apps on upgrade
+ * over a property they may never select through the builder. The throw is in
+ * `registerPropertyShape`; a shape loaded as data that has a `$`-prefixed or combinator label is
+ * reported here instead.
  *
  * Two messages, because the two cases are genuinely different: a `QueryShape` member is
  * always shadowed, while a set-only member is fine until the shape is reached through a
@@ -110,11 +127,32 @@ export function warnOnReservedPropertyLabel(
   shapeLabel: string | undefined,
   shapeId?: string,
 ): void {
-  if (!isReservedQueryDslName(label)) return;
+  if (!label) return;
+  const metadata = label.startsWith('$');
+  const combinator = DSL_JSON_COMBINATOR_NAMES.has(label);
+  if (!metadata && !combinator && !isReservedQueryDslName(label)) return;
   const key = `${shapeId ?? shapeLabel ?? ''}#${label}`;
   if (reported.has(key)) return;
   reported.add(key);
   const owner = shapeLabel ?? shapeId ?? 'shape';
+  if (combinator) {
+    console.warn(
+      `[linked] ${owner}.${label} is named after a DSL-JSON combinator ('${label}'). It works in ` +
+        `the DSL and in fields; a DSL-JSON condition on it is written in the S-expr form ` +
+        `(\`["=", {"@path": "${label}"}, …]\`), which the serializer does for you. Renaming the ` +
+        `property avoids that; the RDF predicate can stay the same.`,
+    );
+    return;
+  }
+  if (metadata) {
+    // A shape loaded as data is not refused (see `registerPropertyShape`), only reported.
+    console.warn(
+      `[linked] ${owner}.${label} cannot be read in queries: '${label}' is node metadata ` +
+        `(\`$\`-prefixed names are facts about the node, not shape fields), in the DSL, a label ` +
+        `select and DSL-JSON alike. Rename the property; the RDF predicate can stay the same.`,
+    );
+    return;
+  }
   const escape = `Use \`select(['${label}'])\`, which takes the label as a string and never touches the proxy. Renaming the property also works; the RDF predicate can stay the same.`;
 
   if (isSetContextOnlyName(label)) {

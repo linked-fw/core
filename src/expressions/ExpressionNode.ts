@@ -372,8 +372,56 @@ export class ExpressionNode {
   md5(): ExpressionNode { return this._wrap(fnExpr('MD5', this.ir)); }
   sha256(): ExpressionNode { return this._wrap(fnExpr('SHA256', this.ir)); }
   sha512(): ExpressionNode { return this._wrap(fnExpr('SHA512', this.ir)); }
+
+  // ---------------------------------------------------------------------------
+  // Aggregates (a select's projection; per group in a grouped select, else per row)
+  // ---------------------------------------------------------------------------
+
+  /** How many distinct values (SPARQL `COUNT(DISTINCT …)`). */
+  countDistinct(): AggregateExpression<number> {
+    return new AggregateExpression<number>({kind: 'aggregate_expr', name: 'count', args: [this.ir]}, this._refs);
+  }
+
+  /** The smallest value (SPARQL `MIN`). */
+  min(): AggregateExpression<unknown> {
+    return new AggregateExpression({kind: 'aggregate_expr', name: 'min', args: [this.ir]}, this._refs);
+  }
+
+  /** The largest value (SPARQL `MAX`). */
+  max(): AggregateExpression<unknown> {
+    return new AggregateExpression({kind: 'aggregate_expr', name: 'max', args: [this.ir]}, this._refs);
+  }
 }
 brandLinkedClass(ExpressionNode, '@_linked/core', 'ExpressionNode');
+
+/**
+ * An aggregate in a select's projection: `Expr.count()`, `p.age.max()`, `p.tags.size()`'s
+ * siblings. `T` is the value the aggregate answers (`number` for a count, the value type for
+ * `min`/`max`), which is what a select's row type reads. Its comparison methods (`gt`, …) build
+ * a group filter (`.having('n', (n) => n.gt(1))`).
+ */
+export class AggregateExpression<T = unknown> extends ExpressionNode {
+  /** Type-level only: the value this aggregate answers. Never set. */
+  declare readonly __aggregateValue: T;
+
+  // Arithmetic on a numeric aggregate is still an aggregate (`Expr.count().plus(1)`), so a
+  // grouped select reads it as one. Its operand is a number or another numeric aggregate: a
+  // member's own value would not be one value per group. On a date or string aggregate these
+  // are not available (SPARQL has no `dateTime + 1`).
+  plus(this: AggregateExpression<number>, n: number | AggregateExpression<number>): AggregateExpression<number> { return this.asAggregate(super.plus(n)); }
+  minus(this: AggregateExpression<number>, n: number | AggregateExpression<number>): AggregateExpression<number> { return this.asAggregate(super.minus(n)); }
+  times(this: AggregateExpression<number>, n: number | AggregateExpression<number>): AggregateExpression<number> { return this.asAggregate(super.times(n)); }
+  divide(this: AggregateExpression<number>, n: number | AggregateExpression<number>): AggregateExpression<number> { return this.asAggregate(super.divide(n)); }
+  abs(this: AggregateExpression<number>): AggregateExpression<number> { return this.asAggregate(super.abs()); }
+  round(this: AggregateExpression<number>): AggregateExpression<number> { return this.asAggregate(super.round()); }
+  ceil(this: AggregateExpression<number>): AggregateExpression<number> { return this.asAggregate(super.ceil()); }
+  floor(this: AggregateExpression<number>): AggregateExpression<number> { return this.asAggregate(super.floor()); }
+
+  private asAggregate(node: ExpressionNode): AggregateExpression<number> {
+    return new AggregateExpression<number>(node.ir, node._refs);
+  }
+}
+brandLinkedClass(AggregateExpression, '@_linked/core', 'AggregateExpression');
 
 
 // ---------------------------------------------------------------------------
@@ -500,30 +548,50 @@ export class ExistsCondition {
   constructor(
     /** PropertyShapeData IDs forming the path from root to the collection. */
     public readonly pathSegmentIds: readonly string[],
-    /** The inner predicate ExpressionNode. */
-    public readonly predicate: ExpressionNode,
+    /**
+     * The condition on a member: an expression, or another quantifier on the member's own path
+     * (`p.friends.some((f) => f.$type().equals(C))`), lowered as an EXISTS inside this one.
+     */
+    public readonly predicate: ExpressionNode | ExistsCondition,
     /** Whether the EXISTS is negated (NOT EXISTS). */
     public readonly negated: boolean = false,
     /** Optional chained and/or conditions. */
     private readonly _chain: Array<{op: 'and' | 'or'; condition: ExpressionNode | ExistsCondition}> = [],
+    /**
+     * The shape the predicate reads its members as: the relation's own shape, or the shape it
+     * was cast to (`p.pets.as(Dog).some(…)`), which the wire writes as `pets.as(Dog).some`.
+     */
+    public readonly memberShapeId?: string,
   ) {}
 
+  /**
+   * The negation of the whole condition, chain included. The chain folds left
+   * (`((A op B) op C)`), so by De Morgan every part is negated and every `and`/`or` swapped:
+   * `not(A and B)` is `not A or not B`, never `(not A) and B`.
+   */
   not(): ExistsCondition {
-    return new ExistsCondition(this.pathSegmentIds, this.predicate, !this.negated, this._chain);
+    return new ExistsCondition(
+      this.pathSegmentIds,
+      this.predicate,
+      !this.negated,
+      this._chain.map(({op, condition}) => ({op: op === 'and' ? 'or' : 'and', condition: negate(condition)})),
+      this.memberShapeId,
+    );
   }
 
   and(other: ExpressionInput | ExistsCondition): ExistsCondition {
-    return new ExistsCondition(this.pathSegmentIds, this.predicate, this.negated, [
-      ...this._chain,
-      {op: 'and', condition: isLinkedInstance(other, ExistsCondition) ? other : isLinkedInstance(other, ExpressionNode) ? other : new ExpressionNode(toIRExpression(other))},
-    ]);
+    return this.chained('and', other);
   }
 
   or(other: ExpressionInput | ExistsCondition): ExistsCondition {
-    return new ExistsCondition(this.pathSegmentIds, this.predicate, this.negated, [
-      ...this._chain,
-      {op: 'or', condition: isLinkedInstance(other, ExistsCondition) ? other : isLinkedInstance(other, ExpressionNode) ? other : new ExpressionNode(toIRExpression(other))},
-    ]);
+    return this.chained('or', other);
+  }
+
+  private chained(op: 'and' | 'or', other: ExpressionInput | ExistsCondition): ExistsCondition {
+    const condition = isLinkedInstance(other, ExistsCondition) || isLinkedInstance(other, ExpressionNode)
+      ? other
+      : new ExpressionNode(toIRExpression(other));
+    return new ExistsCondition(this.pathSegmentIds, this.predicate, this.negated, [...this._chain, {op, condition}], this.memberShapeId);
   }
 
   get chain(): ReadonlyArray<{op: 'and' | 'or'; condition: ExpressionNode | ExistsCondition}> {
@@ -531,6 +599,14 @@ export class ExistsCondition {
   }
 }
 brandLinkedClass(ExistsCondition, '@_linked/core', 'ExistsCondition');
+
+/** The negation of a chained condition; a negated expression is unwrapped, so `not().not()` is the condition again. */
+function negate(condition: ExpressionNode | ExistsCondition): ExpressionNode | ExistsCondition {
+  if (isLinkedInstance(condition, ExpressionNode) && condition.ir.kind === 'not_expr') {
+    return new ExpressionNode(condition.ir.expression, condition._refs);
+  }
+  return condition.not();
+}
 
 
 export function isExistsCondition(value: unknown): value is ExistsCondition {

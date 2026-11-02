@@ -76,3 +76,56 @@ describe('a plural relation to a data-only shape', () => {
     expect(sparql(query)).toContain(`<${NS}vocab#name>`);
   });
 });
+
+describe('sub-queries on a set of data-only members', () => {
+  test('.select() on a data-only sh:node', () => {
+    const query = SelectBuilder.from(TEAM).select((t: any) => [t.members.select((m: any) => [m.name])]);
+    const text = sparql(query);
+    expect(text).toContain(`<${NS}vocab#member>`);
+    expect(text).toContain(`<${NS}vocab#name>`);
+  });
+
+  test('.select() on a relation declared with sh:class only', () => {
+    const query = SelectBuilder.from(TEAM).select((t: any) => [t.leads.select((m: any) => [m.name])]);
+    expect(sparql(query)).toContain(`<${NS}vocab#name>`);
+  });
+
+  test('.selectAll() on a data-only sh:node', () => {
+    const query = SelectBuilder.from(TEAM).select((t: any) => [t.members.selectAll()]);
+    expect(sparql(query)).toContain(`<${NS}vocab#name>`);
+  });
+
+  test('.selectAll() on a relation declared with sh:class only', () => {
+    const query = SelectBuilder.from(TEAM).select((t: any) => [t.leads.selectAll()]);
+    expect(sparql(query)).toContain(`<${NS}vocab#name>`);
+  });
+
+  test('.selectAll() on a sh:class with no shape targeting it says to declare sh:node', () => {
+    expect(() => sparql(SelectBuilder.from(TEAM).select((t: any) => [t.sponsors.selectAll()]))).toThrow(
+      /selectAll\(\) on 'sponsors'.*Declare sh:node/,
+    );
+  });
+
+  test('.where() on a data-only sh:node', () => {
+    const query = SelectBuilder.from(TEAM).select((t: any) => [
+      t.members.where((m: any) => m.name.equals('Ada')),
+    ]);
+    const text = sparql(query);
+    expect(text).toContain(`<${NS}vocab#name>`);
+    expect(text).toContain(`"Ada"`);
+  });
+
+  test('.where() on a relation declared with sh:class only', () => {
+    const query = SelectBuilder.from(TEAM).select((t: any) => [
+      t.leads.where((m: any) => m.name.equals('Ada')),
+    ]);
+    expect(sparql(query)).toContain(`"Ada"`);
+  });
+
+  test('a sh:class with no shape targeting it still allows .where() on equals', () => {
+    const query = SelectBuilder.from(TEAM).select((t: any) => [
+      t.sponsors.where((m: any) => m.equals(m1)),
+    ]);
+    expect(sparql(query)).toContain(`<${m1.id}>`);
+  });
+});

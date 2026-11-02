@@ -1,6 +1,7 @@
 import type {
   IRCreateMutation,
   IRExpression,
+  IRGraphPattern,
   IRFieldValue,
   IRNodeData,
   IRCountQuery,
@@ -96,6 +97,34 @@ function localName(uri: string): string {
   return slashIdx >= 0 ? uri.substring(slashIdx + 1) : uri;
 }
 
+const traverseKey = (alias: string, property: string): string => `${alias}::${property}`;
+
+/**
+ * Every traverse of the query, at any depth, as (from, property) → target alias: the bindings
+ * `irToAlgebra`'s variable registry makes for them (a later traverse of the same pair wins, as
+ * it does there).
+ */
+function collectTraverseVars(patterns: readonly IRGraphPattern[], out = new Map<string, string>()): Map<string, string> {
+  for (const pattern of patterns) {
+    switch (pattern.kind) {
+      case 'traverse':
+        out.set(traverseKey(pattern.from, pattern.property), pattern.to);
+        break;
+      case 'join':
+        collectTraverseVars(pattern.patterns, out);
+        break;
+      case 'union':
+        collectTraverseVars(pattern.branches, out);
+        break;
+      case 'optional':
+      case 'exists':
+        collectTraverseVars([pattern.pattern], out);
+        break;
+    }
+  }
+  return out;
+}
+
 /**
  * Derives the SPARQL variable name that will appear in the result bindings
  * for a given projection expression.
@@ -106,9 +135,18 @@ function localName(uri: string): string {
  * - `aggregate_expr` → uses the projection alias directly
  * - Anything else → falls back to the projection alias
  */
-function sparqlVarName(expression: IRExpression, projectionAlias: string): string {
+function sparqlVarName(
+  expression: IRExpression,
+  projectionAlias: string,
+  traverseVars: ReadonlyMap<string, string>,
+): string {
   switch (expression.kind) {
-    case 'property_expr':
+    case 'property_expr': {
+      // A relation the query also traverses (`[u.ofKey]` with `.where(u => u.ofKey.key…)`)
+      // is read from the traversal's variable: `irToAlgebra` binds (alias, property) to the
+      // traverse target and projects that variable, not `{alias}_{local name}`.
+      const traversed = traverseVars.get(traverseKey(expression.sourceAlias, expression.property));
+      if (traversed) return traversed;
       // SANITIZED, because `algebraToString` sanitizes when it WRITES the variable and this
       // reads the same variable back. A SPARQL variable may hold only letters, digits and `_`,
       // so a property named by a person — "Volume share", "Avg. basket" — is emitted as
@@ -117,6 +155,7 @@ function sparqlVarName(expression: IRExpression, projectionAlias: string): strin
       // with an empty cell and no error anywhere. Single-word names were unaffected, which is
       // what made it look like missing data rather than a naming mismatch.
       return sanitizeVarName(`${expression.sourceAlias}_${localName(expression.property)}`);
+    }
     case 'alias_expr':
       return expression.alias;
     case 'aggregate_expr':
@@ -259,6 +298,8 @@ function buildNestingDescriptor(query: IRSelectQuery): NestingDescriptor {
     }
   }
 
+  const traverseVars = collectTraverseVars(query.patterns);
+
   const descriptor: NestingDescriptor = {
     rootVar: rootAlias,
     flatFields: [],
@@ -290,7 +331,7 @@ function buildNestingDescriptor(query: IRSelectQuery): NestingDescriptor {
     }
 
     const expression = projItem.expression;
-    const sparqlVar = sparqlVarName(expression, entry.alias);
+    const sparqlVar = sparqlVarName(expression, entry.alias, traverseVars);
     const resultKey = localName(entry.key);
 
     // Determine which entity this field belongs to
@@ -363,6 +404,11 @@ export function mapSparqlSelectResult(
 ): SelectResult {
   const bindings = json.results.bindings;
 
+  // A grouped select: one row per group, its keys and aggregates, no id.
+  if (query.groupBy && query.groupBy.length > 0) {
+    return mapGroupedRows(bindings, query);
+  }
+
   // If no resultMap, just return entity references
   if (!query.resultMap || query.resultMap.length === 0) {
     const rootVar = query.root.alias;
@@ -391,6 +437,31 @@ export function mapSparqlSelectResult(
 
   // Otherwise, group and nest
   return mapNestedRows(bindings, descriptor, query);
+}
+
+/**
+ * The rows of a grouped select: one per binding, each the select's fields by result key. A key
+ * that is a node is `{id}`; an unbound key (the group of members without that value) is `null`.
+ * Read through the result map, whose aliases `irToAlgebra` renames on collisions.
+ */
+function mapGroupedRows(bindings: SparqlBinding[], query: IRSelectQuery): ResultRow[] {
+  const traverseVars = collectTraverseVars(query.patterns);
+  const projectionByAlias = new Map(query.projection.map((p) => [p.alias, p]));
+  const fields = (query.resultMap ?? []).map((entry) => {
+    const item = projectionByAlias.get(entry.alias);
+    // No projection item under the alias: an aggregate or expression renamed to avoid a
+    // traversal variable, read under its new name.
+    const sparqlVar = item ? sparqlVarName(item.expression, entry.alias, traverseVars) : entry.alias;
+    return {key: localName(entry.key), sparqlVar};
+  });
+  return bindings.map((binding) => {
+    const row: Record<string, ResultFieldValue> = {};
+    for (const field of fields) {
+      const val = binding[field.sparqlVar];
+      row[field.key] = !val ? null : val.type === 'uri' ? ({id: val.value} as ResultRow) : coerceValue(val);
+    }
+    return row as ResultRow;
+  });
 }
 
 /**
@@ -496,16 +567,6 @@ function mapFlatRows(
 }
 
 /**
- * Populates fields on a ResultRow from a single SPARQL binding.
- * Used inside nested groups where each entity is populated once per binding.
- */
-function populateFields(row: ResultRow, fields: FieldDescriptor[], binding: SparqlBinding): void {
-  for (const field of fields) {
-    row[field.key] = extractFieldValue(field, binding);
-  }
-}
-
-/**
  * Scans bindings to identify which nested groups represent literal property
  * traversals (e.g. `p.hobby.where(h => h.equals('Jogging'))`) vs entity
  * traversals. Returns a set of traverse aliases that resolve to literals.
@@ -593,12 +654,16 @@ function collectNestedGroup(
 
     let entry = entityMap.get(entityId);
     if (!entry) {
-      const nestedRow: ResultRow = {id: entityId};
-      populateFields(nestedRow, nestedGroup.flatFields, binding);
-      entry = {row: nestedRow, bindings: []};
+      entry = {row: {id: entityId}, bindings: []};
       entityMap.set(entityId, entry);
     }
     entry.bindings.push(binding);
+  }
+
+  // Fields from all of the entity's bindings: a multi-valued field collects its values across
+  // them, as on the root entity.
+  for (const entry of entityMap.values()) {
+    populateFlatFields(entry.row, nestedGroup.flatFields, entry.bindings);
   }
 
   // Recurse into deeper nested groups
@@ -799,8 +864,8 @@ export function mapSparqlCountResult(
       `A count result bound ?${variable} to ${JSON.stringify(binding.value)}, which ` +
       'is not a non-negative integer. It is not coerced — a count that silently reads ' +
       'as 0 hides a broken query behind an empty table. (These checks are repeated ' +
-      'here rather than left to `resolveCount`, because a caller may hold a store and ' +
-      'pass a count query to `selectQuery` on it directly, which does not go through ' +
+      'here rather than left to `resolveRead`, because a caller may hold a store and ' +
+      'pass a count query to `readQuery` on it directly, which does not go through ' +
       'that helper.)',
     );
   }

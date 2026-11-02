@@ -15,6 +15,8 @@ import type {UpdateLowerSpec} from './mutationLowerSpec.js';
  */
 export interface UpdateQuery {
   readonly __queryKind: 'update';
+  /** The store transaction this query runs in (`LinkedStorage.begin()`); absent outside one. */
+  readonly txId?: string;
   readonly shape: NodeShapeData;
   toJSON(): UpdateMutationJSON | UpsertMutationJSON;
   /** @internal IR-free lowering spec consumed by `lower()`. */

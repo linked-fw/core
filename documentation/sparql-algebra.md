@@ -69,7 +69,7 @@ Structural building blocks for WHERE clauses, aligned with SPARQL 1.2 algebra:
 | `minus` | `left`, `right` | MINUS (set difference) |
 | `extend` | `inner`, `variable`, `expression` | BIND (expression AS ?var) |
 | `graph` | `iri`, `inner` | GRAPH (named graph) |
-| `subselect` | `projection[]`, `inner`, `orderBy?`, `limit?`, `offset?` | `{ SELECT … WHERE { … } ORDER BY … LIMIT … OFFSET … }` (a nested sub-SELECT used as a group graph pattern) |
+| `subselect` | `projection[]`, `expressions?`, `inner`, `groupBy?`, `having?`, `orderBy?`, `limit?`, `offset?` | `{ SELECT … WHERE { … } GROUP BY … HAVING … ORDER BY … LIMIT … OFFSET … }` (a nested sub-SELECT used as a group graph pattern) |
 
 ```ts
 type SparqlAlgebraNode =
@@ -87,7 +87,9 @@ type SparqlAlgebraNode =
 `subselect` is emitted for **nested-select inner pagination** (`p.friends.select(...).limit(n)`): the
 root→child traverse is wrapped in a sub-SELECT so a related collection can be bounded per parent. It is only
 produced when the outer query targets a single subject (a plain sub-SELECT `LIMIT` is uncorrelated and would
-bound globally otherwise); `irToAlgebra` throws if that precondition does not hold.
+bound globally otherwise); `irToAlgebra` throws if that precondition does not hold. It is also emitted to
+page a select over its root subjects (see ORDER BY / LIMIT / OFFSET below), with `expressions`, `groupBy` and
+`having`.
 
 ### Expressions
 
@@ -195,7 +197,9 @@ Converts an `IRSelectQuery` to a `SparqlSelectPlan`. The algorithm:
 7. **Projection** — root alias + property variables + aggregate/expression projections.
 8. **Traversal aliases** — traversal target variables (`?a1`, `?a2`, etc.) are auto-included in the SELECT for result grouping.
 9. **GROUP BY inference** — if any aggregate is present, all non-aggregate projected variables become GROUP BY targets.
-10. **ORDER BY / LIMIT / OFFSET** — passed through from the IR, with one exception: `.one()` lowers to `limit: 1` + `singleResult`, but a SPARQL `LIMIT` bounds *result rows*, not entities — an entity reached via a traversal or a plural property projection spans one row per related value. Emitting `LIMIT 1` there would truncate that entity's own nested/multi-valued data to a single row instead of picking one entity. So when `singleResult && limit === 1` and the query yields multiple rows per root entity, the `LIMIT` is omitted; the result mapper (which already groups bindings by root id) returns the single entity with its data intact. A flat single-valued `.one()` query keeps its `LIMIT 1`.
+10. **ORDER BY / LIMIT / OFFSET** — `limit`/`offset` page over root subjects, not rows. When one subject can span several rows (a multi-valued traversal, or a multi-valued path in the projection or the order) and the select is not grouped, the page is a sub-SELECT joined to the select's own pattern: `{ SELECT ?a0 (MIN(?a0_x) AS ?page_order_0) WHERE { … } GROUP BY ?a0 [HAVING(…)] ORDER BY DESC(BOUND(?page_order_0)) ASC(?page_order_0) ASC(?a0) LIMIT n OFFSET m }`. Its pattern is the select's, without the OPTIONAL blocks that bind nothing the page reads (the subject, the where, the sort values, HAVING), since an OPTIONAL never drops a subject. Each sort key becomes one value per subject: `MIN` ascending, `MAX` descending (a key that is the subject itself is used as is), preceded by its bound-first key; the subject is the last key (ties). A key read through a multi-valued traversal (`p.friends.hobby`) may be bound on some of a subject's rows and not on others, and a store may answer `MIN` over such a group as unbound (Jena does), so that key is computed by a sub-SELECT of its own over the rows that bind it, joined OPTIONAL to the page and added to its projection and GROUP BY: `OPTIONAL { SELECT ?a0 (MIN(?page_value_0) AS ?page_order_0) WHERE { … BIND(?a1_hobby AS ?page_value_0) FILTER(BOUND(?page_value_0)) } GROUP BY ?a0 }`. The outer query orders its rows by the same keys (then, when it does not group, by the select's own order expressions, which order each subject's values), has no LIMIT and no HAVING (the page applied it per subject), and groups only for the aggregates it projects, adding the keys to its GROUP BY. The outer `SELECT DISTINCT` orders by the page keys without projecting them, which SPARQL 1.1 allows. `.one()` is `limit: 1` and pages the same way; a select of one subject (`subjectId`) drops the LIMIT. A select with one row per subject, and a grouped select (one row per group), keep a plain `LIMIT`/`OFFSET`. A where-aggregate over subjects that can span several rows uses the same sub-SELECT without LIMIT/OFFSET, paged or not, so its HAVING counts per subject (the outer GROUP BY would be per subject and values).
+
+    **Sorting never drops a subject; missing values sort last.** A sort path's traversal is OPTIONAL (like a projected one; only the where makes a traversal required), and every key is preceded by `DESC(BOUND(?k))`: `BOUND` is true for a row with the value, and DESC puts it first in both directions. A grouped select's key that is an aggregate is tested through its projection alias (`DESC(BOUND(?last)) DESC(MAX(?a0_birthDate))`); the subject and a `COUNT` are always bound and get none. An unpaged key that is an expression (`STRLEN(?a0_hobby)`) is bound to a variable of its own at the end of the pattern, `BIND(STRLEN(?a0_hobby) AS ?order_0)`, and sorted by it, bound first. A sort path with a filtered segment gets that segment's traversal of its own, in a filtered OPTIONAL block as a filtered projection's is; so does a sort path whose traversal a filtered projection holds. A filtered block on a later segment (`p.bestFriend.friends.where(…).hobby`, a sort key or a projection) is nested inside the OPTIONAL subtree of the hop above it (`OPTIONAL { ?a0 :bestFriend ?a1 . OPTIONAL { ?a1 :hasFriend ?a2 … FILTER(…) } }`): the hops above a filter are never required, so a subject without a best friend is kept, and sorts last.
 
 #### Example: flat select
 
@@ -613,7 +617,7 @@ export class MyEndpointStore extends SparqlStore {
 }
 ```
 
-The base class implements all four `IDataset` methods (`selectQuery`, `createQuery`, `updateQuery`, `deleteQuery`) — each calls `lower(query)` internally to obtain the IR, then orchestrates the conversion layers:
+The base class implements the `IDataset` methods (`readQuery` for every read kind, `createQuery`, `updateQuery`, `deleteQuery`, `graphQuery`) — each query method calls `lower(query)` internally to obtain the IR, then orchestrates the conversion layers:
 
 1. Convert IR to SPARQL algebra plan (`irToAlgebra`)
 2. Serialize the algebra plan to a SPARQL string (`algebraToString`)

@@ -1,5 +1,5 @@
 import {Shape, createShapeTarget, type ShapeConstructor} from '../shapes/Shape.js';
-import {getPropertyShapes, getUniquePropertyShapes, nodeShapeEquals} from '../shapes/nodeShapeData.js';
+import {getPropertyShapes, getUniquePropertyShapes, nodeShapeEquals, nodeTypePropertyShape} from '../shapes/nodeShapeData.js';
 import type {NodeShapeData, PropertyShapeData} from '../shapes/SHACL.js';
 import type {RawSelectInput} from './IRDesugar.js';
 import {ShapeSet} from '../collections/ShapeSet.js';
@@ -13,15 +13,24 @@ import {
 import {NodeReferenceValue,type Prettify,type ShapeReferenceValue} from './QueryFactory.js';
 import {xsd} from '../ontologies/xsd.js';
 import type {IRSelectQuery} from './IntermediateRepresentation.js';
+import type {QueryFeature} from './queryFeatures.js';
 import {createProxiedPathBuilder} from './ProxiedPathBuilder.js';
 import {FieldSet} from './FieldSet.js';
 import {PropertyPath} from './PropertyPath.js';
 import type {QueryBuilder, QueryBuilderJSON} from './QueryBuilder.js';
-import {ExpressionNode, ExistsCondition, isExpressionNode, isExistsCondition, tracedPropertyExpression, tracedAliasExpression} from '../expressions/ExpressionNode.js';
+import {AggregateExpression, ExpressionNode, ExistsCondition, isExpressionNode, isExistsCondition, tracedPropertyExpression, tracedAliasExpression} from '../expressions/ExpressionNode.js';
 import {PendingQueryContext} from './QueryContext.js';
+import type {
+  AggregateMethods,
+  BooleanExpressionMethods,
+  DateExpressionMethods,
+  NumericExpressionMethods,
+  StringExpressionMethods,
+} from '../expressions/ExpressionMethods.js';
 import {unresolvedValueShapeError} from '../utils/unresolvedShape.js';
 import {resolveRelationShape} from '../shapes/relationShape.js';
 import {brandLinkedClass, isLinkedInstance} from '../utils/linkedError.js';
+import {containsAggregate} from './irExpressions.js';
 
 /**
  * String keys the query-shape proxy must let through *without* treating them as
@@ -49,9 +58,16 @@ const INTEROP_PASSTHROUGH_KEYS = new Set<string>([
  */
 export interface SelectQuery {
   readonly __queryKind: 'select';
+  /** The store transaction this query runs in (`LinkedStorage.begin()`); absent outside one. */
+  readonly txId?: string;
   readonly shape: NodeShapeData;
   toJSON(): QueryBuilderJSON;
   toRawInput(): RawSelectInput;
+  /**
+   * The features beyond the baseline this select uses (grouping, min/max): what a dataset must
+   * declare in `IDataset.supports` to be sent it. Optional for selects built by an older core.
+   */
+  requiredFeatures?(): QueryFeature[];
 }
 
 /**
@@ -104,13 +120,31 @@ export type WhereClause<S extends Shape | AccessorReturnValue> =
   | ExistsCondition
   | ((s: ToQueryBuilderObject<S>) => ExpressionNode | ExistsCondition);
 
+/**
+ * The inline `.where()` of a primitive (`p.hobby.where(h => h.equals('Jogging'))`): its callback
+ * gets the value itself, which answers `equals` only (`InlineWhereProxy`).
+ */
+export type InlinePrimitiveWhere =
+  | ExpressionNode
+  | ExistsCondition
+  | ((value: {equals(otherValue: ComparisonValue): ExpressionNode}) => ExpressionNode | ExistsCondition);
+
 export type QueryBuildFn<T extends Shape, ResponseType> = (
   p: ToQueryBuilderObject<T>,
 ) => ResponseType;
 
+/**
+ * One sort key of a select: a property path, with the inline filter of one of its segments
+ * (`p.friends.where(…).hobby`, the filter on segment `whereIndex`), or a computed expression
+ * (`p.hobby.strlen()`).
+ */
+export type SortKey =
+  | {path: PropertyPath; where?: WherePath; whereIndex?: number}
+  | {expression: ExpressionNode};
+
 export type SortByPath = {
-  paths: PropertyPath[];
-  /** Per-path sort direction (parallel to `paths`). */
+  keys: SortKey[];
+  /** Per-key sort direction (parallel to `keys`). */
   directions: ('ASC' | 'DESC')[];
 };
 
@@ -212,18 +246,24 @@ export type ToQueryBuilderObject<
             ? QShape<Shape, Source, Property>
             : QueryBuilderObject<T, Source, Property>;
 
+/**
+ * A single-valued literal on a query path, with the expression methods its value type has
+ * (`p.name.strlen().gt(3)`, `p.hobby.isDefined()`). The proxy `generatePathValue` wraps every
+ * single-valued literal in answers them (`wrapWithExpressionProxy`), so the type states what the
+ * runtime does.
+ */
 export type ToQueryPrimitive<
   T extends string | number | Date | boolean,
   Source,
   Property extends string | number | symbol = '',
 > = T extends string
-  ? QueryPrimitive<string, Source, Property>
+  ? QueryPrimitive<string, Source, Property> & StringExpressionMethods & AggregateMethods<string>
   : T extends number
-    ? QueryPrimitive<number, Source, Property>
+    ? QueryPrimitive<number, Source, Property> & NumericExpressionMethods & AggregateMethods<number>
     : T extends Date
-      ? QueryPrimitive<Date, Source, Property>
+      ? QueryPrimitive<Date, Source, Property> & DateExpressionMethods & AggregateMethods<Date>
       : T extends boolean
-        ? QueryPrimitive<boolean, Source, Property>
+        ? QueryPrimitive<boolean, Source, Property> & BooleanExpressionMethods & Pick<AggregateMethods<boolean>, 'countDistinct'>
         : never & {__error: 'ToQueryPrimitive: no matching primitive type'};
 
 export type WhereExpressionPath = {
@@ -286,7 +326,9 @@ export type QueryResponseToResultType<
     ? GetNestedQueryResultType<Response, Source>
     : T extends Array<infer Type>
       ? UnionToIntersection<QueryResponseToResultType<Type>>
-      : T extends ExpressionNode
+      : T extends AggregateExpression<infer V>
+        ? V
+        : T extends ExpressionNode
         ? boolean
         : T extends Object
           ? QResult<QShapeType, Prettify<ObjectToPlainResult<T>>>
@@ -339,7 +381,7 @@ export type GetQueryObjectResultType<
             : QV extends QueryPrimitiveSet<
                   infer QPrim extends QueryPrimitive<any>
                 >
-              ? GetQueryObjectResultType<QPrim, null, null, true>
+              ? GetQueryObjectResultType<QPrim, {}, true, HasName>
               : QV extends Array<infer Type>
                 ? UnionToIntersection<QueryResponseToResultType<Type>>
                 : QV extends QueryPrimitive<boolean, any, any>
@@ -753,6 +795,7 @@ const EXPRESSION_METHODS = new Set([
   'isDefined', 'isNotDefined', 'defaultTo',
   'lang', 'datatype', 'str', 'iri', 'isIri', 'isLiteral', 'isBlank', 'isNumeric',
   'md5', 'sha256', 'sha512',
+  'countDistinct', 'min', 'max',
 ]);
 
 /**
@@ -784,6 +827,27 @@ function toExpressionNode(qbo: QueryBuilderObject): ExpressionNode {
   }
   const segmentIds = segments.map((s) => s.id);
   return tracedPropertyExpression(segmentIds);
+}
+
+/** `node = value` for a relation (single- or multi-valued) or the subject itself. */
+function nodeEquals(
+  qbo: QueryBuilderObject,
+  otherValue: NodeReferenceValue | QShape<any> | PendingQueryContext,
+): ExpressionNode {
+  const self = toExpressionNode(qbo);
+  // An unresolved query-context reference (`getQueryContext('user')` before it
+  // is set) carries no `.id` yet — keep it as a `{@ctx}` ref, resolved at lower.
+  if (isLinkedInstance(otherValue, PendingQueryContext)) {
+    return self.eq(otherValue as any);
+  }
+  //validate the value is formed correctly
+  if (!otherValue?.id) {
+    throw Error(`Invalid value for .equals(). ${JSON.stringify(otherValue)}`);
+  }
+  const arg = isLinkedInstance(otherValue, QueryBuilderObject)
+    ? toExpressionNode(otherValue)
+    : otherValue;
+  return self.eq(arg as any);
 }
 
 /** Walk up the QueryBuilderObject chain to find a query context *name* (for `{@ctx}`). */
@@ -857,21 +921,49 @@ export const evaluateSortCallback = <S extends Shape>(
 ): SortByPath => {
   const proxy = createProxiedPathBuilder(shape);
   const response = sortFn(proxy);
-  const nodeShape = shape.shape;
-  const paths: PropertyPath[] = [];
-  if (isLinkedInstance(response, QueryBuilderObject) || isLinkedInstance(response, QueryPrimitiveSet)) {
-    paths.push(new PropertyPath(nodeShape, FieldSet.collectPropertySegments(response)));
-  } else if (Array.isArray(response)) {
-    for (const item of response) {
-      if (isLinkedInstance(item, QueryBuilderObject)) {
-        paths.push(new PropertyPath(nodeShape, FieldSet.collectPropertySegments(item)));
+  const keys = (Array.isArray(response) ? response : [response]).map((item) => sortKeyOf(shape.shape, item));
+  // The DSL callback carries a single direction for all its keys; per-key directions come
+  // from the wire form (deserializeSortByPath).
+  return {keys, directions: keys.map(() => direction)};
+};
+
+const AGGREGATE_SORT_REFUSAL =
+  'orderBy() on a select sorts by property paths and expressions; it cannot sort by an aggregate ' +
+  '(`.size()`, `.max()`, `Expr.count()`, …), which it would read as the path itself. ' +
+  'Group the select and sort the groups: ' +
+  "`Shape.select((s) => ({node: s, n: s.items.size()})).groupBy('node').orderBy('n', 'DESC')`.";
+
+/** One item an orderBy callback returned, as a sort key. Anything else is refused, never dropped. */
+function sortKeyOf(nodeShape: NodeShapeData, item: unknown): SortKey {
+  if (isLinkedInstance(item, SetSize) || isLinkedInstance(item, AggregateExpression)) {
+    // A SetSize is a QueryPrimitive over the counted path, so it used to be read as that path:
+    // `orderBy(p => p.friends.size())` sorted by the friends' ids, not by how many there are.
+    throw new Error(AGGREGATE_SORT_REFUSAL);
+  }
+  if (isLinkedInstance(item, QueryBuilderObject)) {
+    const segments = FieldSet.collectPropertySegments(item);
+    const key: Extract<SortKey, {path: PropertyPath}> = {path: new PropertyPath(nodeShape, segments)};
+    // The inline filter of a segment (`p.friends.where(…).hobby`), found walking leaf to root.
+    // A path holds one at most: `where()` refuses a second.
+    let current: QueryBuilderObject | undefined = item;
+    for (let distance = 0; current; distance++, current = current.subject as QueryBuilderObject | undefined) {
+      if (current.wherePath) {
+        key.where = current.wherePath;
+        key.whereIndex = segments.length - 1 - distance;
+        break;
       }
     }
+    return key;
   }
-  // The DSL callback carries a single direction for all its paths; per-path
-  // directions come from the wire form (deserializeSortByPath).
-  return {paths, directions: paths.map(() => direction)};
-};
+  if (isExpressionNode(item)) {
+    if (containsAggregate(item.ir)) throw new Error(AGGREGATE_SORT_REFUSAL);
+    return {expression: item};
+  }
+  throw new Error(
+    'orderBy(): the callback must return a property path, an expression (`p.name.strlen()`) or ' +
+    `an array of them; it returned ${item === null ? 'null' : typeof item}.`,
+  );
+}
 
 /**
  * The shape class of a query set's members: the least specific authored class, else the shape the
@@ -887,6 +979,23 @@ function memberShapeClass(set: QueryShapeSet<any>): ShapeConstructor | undefined
   }
   const shapeId = set.property ? resolveRelationShape(set.property).shapeId : undefined;
   return shapeId ? resolveShapeConstructor(shapeId) : undefined;
+}
+
+/**
+ * A quantifier over a set's members, read as the set's member shape (its cast, if any:
+ * `p.pets.as(Dog).some(…)`). A function, not a member, so it reserves no name on the query proxies.
+ */
+function quantified(set: QueryShapeSet<any>, predicate: ExpressionNode | ExistsCondition, negated: boolean): ExistsCondition {
+  const pathSegmentIds = FieldSet.collectPropertySegments(set).map((s) => s.id);
+  return new ExistsCondition(pathSegmentIds, predicate, negated, [], memberShapeClass(set)?.shape?.id);
+}
+
+/**
+ * `memberShapeClass`, else the base Shape: a relation with no resolvable shape (`sh:class` only,
+ * no shape targeting the class) still allows `equals` and `id` on its members.
+ */
+function memberShapeClassOrBase(set: QueryShapeSet<any>): ShapeConstructor {
+  return memberShapeClass(set) ?? (Shape as unknown as ShapeConstructor);
 }
 
 export class QueryShapeSet<
@@ -1003,11 +1112,10 @@ export class QueryShapeSet<
           createShapeTarget(shape as any, existing?.id),
         ),
       );
-      return QueryShapeSet.create(
-        newOriginal,
-        this.property,
-        this.subject as any,
-      );
+      const cast = QueryShapeSet.create(newOriginal, this.property, this.subject as any);
+      // An inline filter before the cast (`p.friends.where(…).as(Employee)`) stays on the segment.
+      cast.wherePath = this.wherePath;
+      return cast;
     }
     // else return this
     return this as any as QShapeSet<InstanceType<ShapeClass>, Source, Property>;
@@ -1065,6 +1173,10 @@ export class QueryShapeSet<
       if (shapeQueryValue) {
         if (expectSingleValues) {
           (result as any).add(shapeQueryValue);
+        } else if (isLinkedInstance(result, QueryPrimitiveSet)) {
+          // A multi-valued literal (`p.friends.nickNames`): each member answers a set of
+          // primitives; merge their contents.
+          for (const value of (shapeQueryValue as QueryPrimitiveSet<any>).values()) result.add(value);
         } else {
           //if each of the shapes in a set return a new shapeset for the request accessor
           //then we merge all the returned values into a single shapeset
@@ -1073,6 +1185,29 @@ export class QueryShapeSet<
       }
     });
     return result;
+  }
+
+  /**
+   * The types of the set's members (`p.friends.$type()`): see {@link QueryShape.$type}.
+   */
+  $type<Self>(this: Self): QShapeSet<Shape, Self, '$type'> {
+    return QueryShapeSet.create(
+      new ShapeSet([createShapeTarget(Shape)]),
+      nodeTypePropertyShape(),
+      this as unknown as QueryShapeSet<any>,
+    ) as unknown as QShapeSet<Shape, Self, '$type'>;
+  }
+
+  /**
+   * Some member of the set is `value`: `t.$type().equals({id: C})`, `p.friends.equals({id})`. The
+   * same as `some((m) => m.equals(value))`: an EXISTS of its own, so it leaves the set's values in
+   * the projection alone and two of them combine (`t.$type().equals(A).and(t.$type().equals(B))`
+   * holds for a node of both types). `.not()` is "no member is `value`", as `none(…)` is.
+   * Inside another set's `some`/`every`/`none` callback it is an EXISTS inside that one
+   * (`p.friends.some((f) => f.$type().equals({id: C}))`).
+   */
+  equals(value: NodeReferenceValue | QShape<any> | PendingQueryContext): ExistsCondition {
+    return this.some(((member: QShape<any>) => member.equals(value as NodeReferenceValue)) as unknown as WhereClause<S>);
   }
 
   //countable?, resultKey?: string
@@ -1092,8 +1227,7 @@ export class QueryShapeSet<
         'You cannot call where() from within a where() clause. Consider using some() or every() instead',
       );
     }
-    let leastSpecificShape = this.getOriginalValue().getLeastSpecificShape();
-    this.wherePath = processWhereClause(validation, leastSpecificShape);
+    this.wherePath = processWhereClause(validation, memberShapeClassOrBase(this));
     //return this.proxy because after Shape.friends.where() we can call other methods of Shape.friends
     //and for that we need the proxy
     return this.proxy;
@@ -1102,10 +1236,9 @@ export class QueryShapeSet<
   select<QF = unknown>(
     subQueryFn: QueryBuildFn<S, QF>,
   ): FieldSet<QF, QueryShapeSet<S, Source, Property>> {
-    const leastSpecificShape = this.getOriginalValue().getLeastSpecificShape();
     const parentSegments = FieldSet.collectPropertySegments(this);
     const fs = FieldSet.forSubSelect<QF, QueryShapeSet<S, Source, Property>>(
-      leastSpecificShape,
+      memberShapeClassOrBase(this),
       subQueryFn as any,
       parentSegments,
       this,
@@ -1117,8 +1250,14 @@ export class QueryShapeSet<
     SelectAllQueryResponse<S>,
     QueryShapeSet<S, Source, Property>
   > {
-    let leastSpecificShape = this.getOriginalValue().getLeastSpecificShape();
-    const propertyLabels = getUniquePropertyShapes(leastSpecificShape.shape)
+    const memberClass = memberShapeClass(this);
+    if (!memberClass?.shape) {
+      throw new Error(
+        `selectAll() on '${this.property?.label}': its members have no shape to list properties from ` +
+          `(a sh:class no shape targets). Declare sh:node on the property, or select fields with select().`,
+      );
+    }
+    const propertyLabels = getUniquePropertyShapes(memberClass.shape)
       .map((propertyShape) => propertyShape.label);
     return this.select((shape) =>
       propertyLabels.map((label) => (shape as any)[label]),
@@ -1126,38 +1265,31 @@ export class QueryShapeSet<
   }
 
   some(validation: WhereClause<S>): ExistsCondition {
-    const predicate = this.buildPredicateExpression(validation);
-    const pathSegmentIds = FieldSet.collectPropertySegments(this).map(s => s.id);
-    return new ExistsCondition(pathSegmentIds, predicate, false);
+    return quantified(this, this.buildPredicateExpression(validation), false);
   }
 
   every(validation: WhereClause<S>): ExistsCondition {
     // every(fn) = NOT EXISTS(path WHERE NOT(fn))
-    const predicate = this.buildPredicateExpression(validation);
-    const pathSegmentIds = FieldSet.collectPropertySegments(this).map(s => s.id);
-    return new ExistsCondition(pathSegmentIds, predicate.not(), true);
+    return quantified(this, this.buildPredicateExpression(validation).not(), true);
   }
 
   none(validation: WhereClause<S>): ExistsCondition {
     // none(fn) = NOT EXISTS(path WHERE fn) = some(fn).not()
-    const predicate = this.buildPredicateExpression(validation);
-    const pathSegmentIds = FieldSet.collectPropertySegments(this).map(s => s.id);
-    return new ExistsCondition(pathSegmentIds, predicate, true);
+    return quantified(this, this.buildPredicateExpression(validation), true);
   }
 
-  private buildPredicateExpression(validation: WhereClause<S>): ExpressionNode {
+  private buildPredicateExpression(validation: WhereClause<S>): ExpressionNode | ExistsCondition {
     if (validation instanceof Function) {
-      // A relation with no resolvable shape (`sh:class` only, no shape targeting the class)
-      // still allows `equals` and `id` on its members, through the base Shape.
-      const memberClass = memberShapeClass(this) ?? (Shape as unknown as ShapeConstructor);
-      const proxy = createProxiedPathBuilder(memberClass) as any;
+      const proxy = createProxiedPathBuilder(memberShapeClassOrBase(this)) as any;
       const result = validation(proxy);
-      if (isExpressionNode(result)) {
+      // A quantifier on the member's own path (`f.$type().equals(C)`, `f.friends.some(…)`) is an
+      // EXISTS inside this one.
+      if (isExpressionNode(result) || isExistsCondition(result)) {
         return result;
       }
       throw new Error('Validation callback must return an ExpressionNode or ExistsCondition');
     }
-    if (isExpressionNode(validation)) {
+    if (isExpressionNode(validation) || isExistsCondition(validation)) {
       return validation;
     }
     throw new Error('Expected a callback or ExpressionNode for some/every/none');
@@ -1248,26 +1380,37 @@ export class QueryShape<
     //if the shape is not the same as the original value, then we need to create a new query shape
     if (!nodeShapeEquals(shape.shape, this.originalValue.nodeShape)) {
       const newOriginal = createShapeTarget(shape as any, this.originalValue.id);
-      return QueryShape.create(newOriginal, this.property, this.subject as any);
+      const cast = QueryShape.create(newOriginal, this.property, this.subject as any);
+      // An inline filter before the cast (`p.bestFriend.where(…).as(Employee)`) stays on the segment.
+      cast.wherePath = this.wherePath;
+      return cast;
     }
     return this as any as QShape<InstanceType<ShapeClass>, Source, Property>;
   }
 
   equals(otherValue: NodeReferenceValue | QShape<any> | PendingQueryContext): ExpressionNode {
-    const self = toExpressionNode(this);
-    // An unresolved query-context reference (`getQueryContext('user')` before it
-    // is set) carries no `.id` yet — keep it as a `{@ctx}` ref, resolved at lower.
-    if (isLinkedInstance(otherValue, PendingQueryContext)) {
-      return self.eq(otherValue as any);
-    }
-    //validate the value is formed correctly
-    if(!otherValue.id) {
-      throw Error(`Invalid value for .equals(). ${JSON.stringify(otherValue)}`);
-    }
-    const arg = isLinkedInstance(otherValue, QueryBuilderObject)
-      ? toExpressionNode(otherValue)
-      : otherValue;
-    return self.eq(arg as any);
+    return nodeEquals(this, otherValue);
+  }
+
+  /**
+   * The node's types: its `rdf:type` values, IRI nodes (`{id}`), multi-valued. `$`-prefixed members
+   * are facts about the node, not shape fields, so no property of the shape can shadow them.
+   *
+   * - a field: `Thing.select((t) => [t.name, t.$type()])` gives `{id, name, $type: [{id}, …]}`;
+   * - a group key: `.select((t) => ({kind: t.$type(), n: Expr.count()})).groupBy('kind')` makes one
+   *   group per type, so a node with two types is in two groups (the counts add up to more than
+   *   the number of nodes);
+   * - a filter: `.where((t) => t.$type().equals({id: C}))` (some type is C), `.some(…)`, `.none(…)`;
+   * - a sort key, and on nested paths (`p.bestFriend.$type()`).
+   *
+   * The types are what the store answers for `rdf:type`: on a store that infers classes (CN's
+   * Fuseki, through `rdfs:subClassOf`) the stored and the inferred types.
+   */
+  $type<Self>(this: Self): QShapeSet<Shape, Self, '$type'> {
+    return QueryBuilderObject.generatePathValue(
+      nodeTypePropertyShape(),
+      this as unknown as QueryShape<any>,
+    ) as unknown as QShapeSet<Shape, Self, '$type'>;
   }
 
   /**
@@ -1277,6 +1420,25 @@ export class QueryShape<
    */
   str(): ExpressionNode {
     return toExpressionNode(this).str();
+  }
+
+  /** The relation has a value (SPARQL `BOUND`): `.where((k) => k.ofShape.isDefined())`. */
+  isDefined(): ExpressionNode {
+    return toExpressionNode(this).isDefined();
+  }
+
+  /** The relation has no value (SPARQL `!BOUND`). */
+  isNotDefined(): ExpressionNode {
+    return toExpressionNode(this).isNotDefined();
+  }
+
+  /**
+   * How many distinct nodes the relation points to, over a group of a grouped select
+   * (`.groupBy(…)`), else per row (SPARQL `COUNT(DISTINCT …)`). A multi-valued relation counts
+   * its values with `.size()`.
+   */
+  countDistinct(): AggregateExpression<number> {
+    return toExpressionNode(this).countDistinct();
   }
 
   oneOf(values: (NodeReferenceValue | QShape<any>)[]): ExpressionNode {
@@ -1380,12 +1542,14 @@ export class QueryPrimitive<
     );
   }
 
-  where(validation: WhereClause<string>): this {
+  where(validation: InlinePrimitiveWhere): this {
     // For inline where on a primitive (p.hobby.where(h => h.equals(...))),
     // pass a clone that produces alias expressions (the bound value itself)
     // rather than property traversals
     const selfAsAlias = new InlineWhereProxy(this);
-    this.wherePath = processWhereClause(validation, selfAsAlias as any);
+    // The callback is typed by what `InlineWhereProxy` answers (`equals`), narrower than the
+    // shape-path callback `processWhereClause` takes; it is called with that proxy only.
+    this.wherePath = processWhereClause(validation as WhereClause<any>, selfAsAlias as any);
     //return this because after Shape.friends.where() we can call other methods of Shape.friends
     return this as any;
   }
@@ -1468,8 +1632,26 @@ export class QueryPrimitiveSet<
     return new SetSize(this as QueryPrimitiveSet);
     //countable, resultKey
   }
+
+  /** The smallest of the values (SPARQL `MIN`): per row, or over a group of a grouped select. */
+  min(): AggregateExpression<PrimitiveSetValue<QPrimitive>> {
+    return this.valuesExpression().min() as AggregateExpression<PrimitiveSetValue<QPrimitive>>;
+  }
+
+  /** The largest of the values (SPARQL `MAX`): per row, or over a group of a grouped select. */
+  max(): AggregateExpression<PrimitiveSetValue<QPrimitive>> {
+    return this.valuesExpression().max() as AggregateExpression<PrimitiveSetValue<QPrimitive>>;
+  }
+
+  /** The values as one traced expression (the property, reached through the path). */
+  private valuesExpression(): ExpressionNode {
+    return tracedPropertyExpression(FieldSet.collectPropertySegments(this).map((s) => s.id));
+  }
 }
 brandLinkedClass(QueryPrimitiveSet, '@_linked/core', 'QueryPrimitiveSet');
+
+/** The value type of a multi-valued literal path's members. */
+type PrimitiveSetValue<QPrimitive> = QPrimitive extends QueryPrimitive<infer V> ? V : unknown;
 
 
 export class SetSize<Source = null> extends QueryPrimitive<number, Source> {

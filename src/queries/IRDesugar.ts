@@ -8,6 +8,7 @@ import type {
 } from './SelectQuery.js';
 import {NodeReferenceValue, type ShapeReferenceValue} from './QueryFactory.js';
 import type {FieldSetEntry} from './FieldSet.js';
+import type {RawGroupInput} from './GroupedSelectBuilder.js';
 import {ExpressionNode, ExistsCondition} from '../expressions/ExpressionNode.js';
 import type {PropertyShapeData} from '../shapes/SHACL.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
@@ -41,6 +42,8 @@ export type RawSelectInput = {
   minusEntries?: RawMinusEntry[];
   /** `.from()`: the graphs the read is restricted to (checked, as the caller named them). */
   graphs?: string[];
+  /** A grouped select (`GroupedSelectBuilder`): keys by result field name, group filter, order. */
+  group?: RawGroupInput;
 };
 
 export type DesugaredPropertyStep = {
@@ -124,9 +127,10 @@ export type DesugaredExistsWhere = {
 export type DesugaredWhere = DesugaredExpressionWhere | DesugaredExistsWhere;
 
 export type DesugaredSortBy = {
-  /** Per-path sort direction (parallel to `paths`). */
+  /** Per-key sort direction (parallel to `keys`). */
   directions: ('ASC' | 'DESC')[];
-  paths: DesugaredSelectionPath[];
+  /** A path (a step may carry its inline filter) or a computed expression. */
+  keys: Array<DesugaredSelectionPath | DesugaredExpressionSelect>;
 };
 
 /** A desugared MINUS entry. */
@@ -136,8 +140,16 @@ export type DesugaredMinusEntry = {
   propertyPaths?: PropertyPathSegment[][];
 };
 
+/** The grouping of a desugared select: keys and order by result key, the group filter. */
+export type DesugaredGroup = {
+  keys: string[];
+  having?: DesugaredWhere;
+  orderBy?: {key: string; direction: 'ASC' | 'DESC'}[];
+};
+
 export type DesugaredSelectQuery = {
   kind: 'desugared_select';
+  group?: DesugaredGroup;
   shapeId?: string;
   subjectId?: string;
   subjectIds?: string[];
@@ -372,19 +384,26 @@ const toSortBy = (query: RawSelectInput): DesugaredSortBy | undefined => {
 
   return {
     directions: query.sortBy.directions,
-    paths: query.sortBy.paths.map((path) => ({
-      kind: 'selection_path' as const,
-      steps: path.segments.map((seg) => {
-        const step: DesugaredPropertyStep = {
-          kind: 'property_step' as const,
-          propertyShapeId: seg.id,
-        };
-        if (seg.path && isComplexPathExpr(seg.path)) {
-          step.pathExpr = seg.path;
-        }
-        return step;
-      }),
-    })),
+    keys: query.sortBy.keys.map((key) => {
+      if ('expression' in key) return {kind: 'expression_select' as const, expressionNode: key.expression};
+      const whereIndex = key.whereIndex ?? key.path.segments.length - 1;
+      return {
+        kind: 'selection_path' as const,
+        steps: key.path.segments.map((seg, i) => {
+          const step: DesugaredPropertyStep = {
+            kind: 'property_step' as const,
+            propertyShapeId: seg.id,
+          };
+          if (seg.path && isComplexPathExpr(seg.path)) {
+            step.pathExpr = seg.path;
+          }
+          if (key.where && i === whereIndex) {
+            step.where = toWhere(key.where);
+          }
+          return step;
+        }),
+      };
+    }),
   };
 };
 
@@ -426,5 +445,14 @@ export const desugarSelectQuery = (query: RawSelectInput): DesugaredSelectQuery 
       where: entry.where ? toWhere(entry.where) : undefined,
       propertyPaths: entry.propertyPaths,
     })),
+    ...(query.group
+      ? {
+          group: {
+            keys: [...query.group.keys],
+            ...(query.group.having ? {having: toWhere(query.group.having)} : {}),
+            ...(query.group.orderBy ? {orderBy: query.group.orderBy.map((o) => ({...o}))} : {}),
+          },
+        }
+      : {}),
   };
 };

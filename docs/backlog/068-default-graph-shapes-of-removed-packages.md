@@ -31,3 +31,15 @@ are left:
   existing orphan scope.
 - Or is a one-off script (CN's reset, `scripts/…`) the better home, once every writer is on shape
   graphs?
+
+## Also: ontology terms in the `'default'` mode when routing moves a package
+
+Source: CN plan 282 (M10), core report 084 (sync follows routing).
+
+The routed ontology sync (`syncOntologiesRouted`) runs the `'default'` mode per dataset with the
+packages routed there. That mode keeps one combined hash per dataset and sweeps only the namespaces
+of the packages it syncs, so when routing moves a package's ontology away from a dataset, the terms
+an earlier sync wrote into that dataset's default graph stay. Today the sync warns once per dataset
+and process. The same question as above: record the swept namespaces with the combined hash (so a
+later run can sweep a namespace that left), or leave it to a clearing step. Only open-source apps
+in the `'default'` ontology mode with pins are affected; hosted apps write no graphs.

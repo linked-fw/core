@@ -192,8 +192,10 @@ WHERE {
     {
       SELECT ?a1 WHERE {
         <${ENT}pp1> <${PROP}hasFriend> ?a1 .
-        ?a1 <${PROP}name> ?a1_name .
-      } ORDER BY DESC(?a1_name) LIMIT 2
+        OPTIONAL {
+          ?a1 <${PROP}name> ?a1_name .
+        }
+      } ORDER BY DESC(BOUND(?a1_name)) DESC(?a1_name) LIMIT 2
     }
     OPTIONAL {
       ?a1 <${PROP}name> ?a1_name .

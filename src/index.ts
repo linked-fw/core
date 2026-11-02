@@ -32,6 +32,10 @@ export type {
   ValidatableShape,
 } from './shapes/validation.js';
 export {LinkedStorage} from './utils/LinkedStorage.js';
+// Store transactions: `LinkedStorage.begin()` / `LinkedStorage.transaction(fn)`.
+export {Transaction, TransactionEndedError} from './utils/Transaction.js';
+export type {TransactionState} from './utils/Transaction.js';
+export {inTransaction, txIdOf} from './queries/transactionQuery.js';
 // Where the ontology and shape syncs write, one global setting the host sets at boot.
 export {setGraphTargets, getGraphTargets} from './utils/graphTargets.js';
 export type {GraphTarget, GraphTargets, GraphTargetOptions} from './utils/graphTargets.js';
@@ -59,7 +63,9 @@ export {
   PendingQueryContext,
   UnresolvedContextError,
 } from './queries/QueryContext.js';
-export {subscribeQueryDispatch} from './queries/queryDispatch.js';
+export {subscribeQueryDispatch, assertQuerySupported} from './queries/queryDispatch.js';
+export {ALL_QUERY_FEATURES} from './queries/queryFeatures.js';
+export type {QueryFeature} from './queries/queryFeatures.js';
 export type {QueryDispatchEvent, QueryDispatchListener} from './queries/queryDispatch.js';
 export {
   GraphQueryError,
@@ -76,6 +82,17 @@ export type {
   GraphQueryKind,
   GraphResult,
 } from './queries/graphQuery.js';
+export {TriplesBuilder} from './queries/TriplesBuilder.js';
+export {
+  isLiteralTerm,
+  isTriplesQuery,
+  isTriplesTermsQuery,
+  parseTriplesQuery,
+  parseTriplesTermsQuery,
+} from './queries/triplesQuery.js';
+export type {LiteralTerm, Triple, TripleObject, TriplesQuery, TriplesTermsQuery} from './queries/triplesQuery.js';
+export {readKindOf} from './queries/readQuery.js';
+export type {ReadKind, ReadQuery, ReadResult} from './queries/readQuery.js';
 export {graphs, dataGraph, OWN_GRAPH} from './ontologies/graphs.js';
 export type {DataGraphRoute, GraphRoute} from './ontologies/graphs.js';
 export {
@@ -120,7 +137,7 @@ export {DeleteBuilder} from './queries/DeleteBuilder.js';
 export type {DeleteId} from './queries/DeleteBuilder.js';
 
 // Expressions — computed fields and functions
-export {ExpressionNode} from './expressions/ExpressionNode.js';
+export {ExpressionNode, AggregateExpression} from './expressions/ExpressionNode.js';
 export type {ExpressionInput, PropertyRefMap} from './expressions/ExpressionNode.js';
 export {Expr} from './expressions/Expr.js';
 export type {
@@ -131,6 +148,7 @@ export type {
   StringExpressionMethods,
   DateExpressionMethods,
   BooleanExpressionMethods,
+  AggregateMethods,
 } from './expressions/ExpressionMethods.js';
 
 // Phase 5 — Component query integration
@@ -160,7 +178,12 @@ export type {
 // Live-query dependency helpers — what a query reads and a mutation writes, as predicates
 export {queryDependencies, mutationEffects} from './queries/queryDependencies.js';
 export type {QueryDependencies, MutationEffects} from './queries/queryDependencies.js';
-export {findPropertyShapeById} from './shapes/nodeShapeData.js';
+export {
+  findPropertyShapeById,
+  nodeTypePropertyShape,
+  NODE_TYPE_LABEL,
+  NODE_TYPE_PROPERTY_ID,
+} from './shapes/nodeShapeData.js';
 
 // Live queries — see documentation/live-queries.md
 export {LiveQueryStore, getLiveQueryStore, resetLiveQueryStore, publishChange, invalidate} from './live/LiveQueryStore.js';

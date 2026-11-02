@@ -17,6 +17,7 @@ import {captureQuery} from '../test-helpers/query-capture-store';
 import {selectToSparql} from '../sparql/irToAlgebra';
 import {setQueryContext} from '../queries/QueryContext';
 import {Person} from '../test-helpers/query-fixtures';
+import {Expr} from '../expressions/Expr';
 
 import '../ontologies/rdf';
 import '../ontologies/xsd';
@@ -786,7 +787,7 @@ describe('SPARQL golden — aggregates', () => {
     const sparql = await goldenSelect(queryFactories.countFriends);
     expect(sparql).toBe(
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-SELECT ?a0 (COUNT(?a0_friends) AS ?a1)
+SELECT ?a0 (COUNT(DISTINCT ?a0_friends) AS ?a1)
 WHERE {
   ?a0 rdf:type <${PT}> .
   OPTIONAL {
@@ -800,7 +801,7 @@ GROUP BY ?a0`);
     const sparql = await goldenSelect(queryFactories.countNestedFriends);
     expect(sparql).toBe(
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-SELECT ?a0 (COUNT(?a1_friends) AS ?a1_agg)
+SELECT ?a0 (COUNT(DISTINCT ?a1_friends) AS ?a1_agg)
 WHERE {
   ?a0 rdf:type <${PT}> .
   ?a0 <${PROP}hasFriend> ?a1 .
@@ -815,7 +816,7 @@ GROUP BY ?a0`);
     const sparql = await goldenSelect(queryFactories.countLabel);
     expect(sparql).toBe(
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-SELECT ?a0 (COUNT(?a1_friends) AS ?a1_agg)
+SELECT ?a0 (COUNT(DISTINCT ?a1_friends) AS ?a1_agg)
 WHERE {
   ?a0 rdf:type <${PT}> .
   ?a0 <${PROP}hasFriend> ?a1 .
@@ -830,7 +831,7 @@ GROUP BY ?a0`);
     const sparql = await goldenSelect(queryFactories.customResultNumFriends);
     expect(sparql).toBe(
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-SELECT ?a0 (COUNT(?a0_friends) AS ?a1)
+SELECT ?a0 (COUNT(DISTINCT ?a0_friends) AS ?a1)
 WHERE {
   ?a0 rdf:type <${PT}> .
   OPTIONAL {
@@ -853,7 +854,7 @@ WHERE {
   }
 }
 GROUP BY ?a0
-HAVING(COUNT(?a0_friends) = "2"^^xsd:integer)`);
+HAVING(COUNT(DISTINCT ?a0_friends) = "2"^^xsd:integer)`);
   });
 
   test('customResultEqualsBoolean', async () => {
@@ -886,7 +887,7 @@ WHERE {
     ?a0 <${PROP}name> ?a0_name .
   }
 }
-ORDER BY ASC(?a0_name)`);
+ORDER BY DESC(BOUND(?a0_name)) ASC(?a0_name)`);
   });
 
   test('sortByDesc', async () => {
@@ -900,7 +901,97 @@ WHERE {
     ?a0 <${PROP}name> ?a0_name .
   }
 }
-ORDER BY DESC(?a0_name)`);
+ORDER BY DESC(BOUND(?a0_name)) DESC(?a0_name)`);
+  });
+});
+
+describe('SPARQL golden — sorting keeps instances, missing values last', () => {
+  test('a nested sort path is OPTIONAL, with a bound-first key', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => [p.name, p.bestFriend.name]).orderBy((p) => p.bestFriend.name) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name ?a1_name ?a1
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}bestFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+  }
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+}
+ORDER BY DESC(BOUND(?a1_name)) ASC(?a1_name)`);
+  });
+
+  test('a page sorts by bound-first, then MAX descending, then the subject', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => [p.name, p.nickNames]).orderBy((p) => p.bestFriend.name, 'DESC').limit(2) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name ?a0_nickNames ?a1
+WHERE {
+  {
+    SELECT ?a0 (MAX(?a1_name) AS ?page_order_0) WHERE {
+      ?a0 rdf:type <${PT}> .
+      OPTIONAL {
+        ?a0 <${PROP}bestFriend> ?a1 .
+        OPTIONAL {
+          ?a1 <${PROP}name> ?a1_name .
+        }
+      }
+    } GROUP BY ?a0 ORDER BY DESC(BOUND(?page_order_0)) DESC(?page_order_0) ASC(?a0) LIMIT 2
+  }
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}bestFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+  }
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  OPTIONAL {
+    ?a0 <${PROP}nickName> ?a0_nickNames .
+  }
+}
+ORDER BY DESC(BOUND(?page_order_0)) DESC(?page_order_0) ASC(?a0) DESC(BOUND(?a1_name)) DESC(?a1_name)`);
+  });
+
+  test('an unpaged where-aggregate with multi-valued rows filters in a sub-SELECT of subjects', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => [p.name, p.friends.name]).where((p) => p.friends.size().equals(2)) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT DISTINCT ?a0 ?a0_name ?a1_name ?a1
+WHERE {
+  {
+    SELECT ?a0 WHERE {
+      ?a0 rdf:type <${PT}> .
+      OPTIONAL {
+        ?a0 <${PROP}hasFriend> ?a1 .
+      }
+    } GROUP BY ?a0 HAVING(COUNT(DISTINCT ?a1) = "2"^^xsd:integer)
+  }
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+  }
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+}`);
   });
 });
 
@@ -1501,5 +1592,152 @@ describe('SPARQL golden — expression WHERE filters', () => {
     // Expression projection may be inlined in SELECT or use BIND
     expect(sparql).toContain('STRLEN');
     expect(sparql).toContain('FILTER');
+  });
+});
+
+describe('SPARQL golden — $type(), the node\'s rdf:type values', () => {
+  test('as a field next to a literal', async () => {
+    const sparql = await goldenSelect(() => Person.select((p) => [p.name, p.$type()]) as never);
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name ?a0__type
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  OPTIONAL {
+    ?a0 rdf:type ?a0__type .
+  }
+}`);
+  });
+
+  test('as a group key, counting the members of each type', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => ({kind: p.$type(), n: Expr.count()})).groupBy('kind') as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT ?a0__type (COUNT(DISTINCT ?a0) AS ?a2)
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 rdf:type ?a0__type .
+  }
+}
+GROUP BY ?a0__type`);
+  });
+
+  test('in a where: equals is an EXISTS of its own', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.name).where((p) => p.$type().equals({id: ET})) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  FILTER(EXISTS {
+    ?a0 rdf:type ?a1 .
+    FILTER(?a1 = <${ET}>)
+  })
+}`);
+  });
+});
+
+describe('sort keys and nested quantifiers', () => {
+  test('a computed sort key is bound, then sorted bound first', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.name).orderBy((p) => p.hobby.strlen(), 'DESC') as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  OPTIONAL {
+    ?a0 <${PROP}hobby> ?a0_hobby .
+  }
+  BIND(STRLEN(?a0_hobby) AS ?order_0)
+}
+ORDER BY DESC(BOUND(?order_0)) DESC(?order_0)`);
+  });
+
+  test('paged, a key through a multi-valued traversal is computed over the rows that bind it', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.name).orderBy((p) => p.friends.where((f) => f.name.equals('Moa')).hobby).limit(10) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name ?a1
+WHERE {
+  {
+    SELECT ?a0 ?page_order_0 WHERE {
+      ?a0 rdf:type <${PT}> .
+      OPTIONAL {
+        {
+          SELECT ?a0 (MIN(?page_value_0) AS ?page_order_0) WHERE {
+            ?a0 rdf:type <${PT}> .
+            OPTIONAL {
+              ?a0 <${PROP}hasFriend> ?a1 .
+              OPTIONAL {
+                ?a1 <${PROP}name> ?a1_name .
+              }
+              OPTIONAL {
+                ?a1 <${PROP}hobby> ?a1_hobby .
+              }
+              FILTER(?a1_name = "Moa")
+            }
+            BIND(?a1_hobby AS ?page_value_0)
+            FILTER(BOUND(?page_value_0))
+          } GROUP BY ?a0
+        }
+      }
+    } GROUP BY ?a0 ?page_order_0 ORDER BY DESC(BOUND(?page_order_0)) ASC(?page_order_0) ASC(?a0) LIMIT 10
+  }
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+    OPTIONAL {
+      ?a1 <${PROP}hobby> ?a1_hobby .
+    }
+    FILTER(?a1_name = "Moa")
+  }
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+}
+ORDER BY DESC(BOUND(?page_order_0)) ASC(?page_order_0) ASC(?a0) DESC(BOUND(?a1_hobby)) ASC(?a1_hobby)`);
+  });
+
+  test('a quantifier inside a quantifier is an EXISTS inside an EXISTS', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.name).where((p) => p.friends.some((f) => f.$type().equals({id: PT}))) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  FILTER(EXISTS {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    FILTER(EXISTS {
+      ?a1 rdf:type ?a2 .
+      FILTER(?a2 = <${PT}>)
+    })
+  })
+}`);
   });
 });

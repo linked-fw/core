@@ -27,7 +27,9 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import {PendingQueryContext} from './QueryContext.js';
 import {encodeContextRef, isContextRefJSON} from './ContextRef.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
-import {getQueryDispatch, resolveCount} from './queryDispatch.js';
+import {refuseTxIdIn} from './transactionQuery.js';
+import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
+import {getQueryDispatch, resolveRead} from './queryDispatch.js';
 import {
   serializeWherePath,
   serializeRawMinusEntry,
@@ -91,6 +93,15 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
 
   /** Discriminator for the free `lower()` function and dataset routing. */
   readonly __queryKind = 'count' as const;
+
+  /**
+   * The features beyond the baseline its where clause uses (`min`/`max`): checked against the
+   * dataset before it is sent, as for a select.
+   */
+  requiredFeatures(): QueryFeature[] {
+    const where = this._spec.where;
+    return featuresOfExpressions(where && 'expressionNode' in where ? [where.expressionNode.ir] : []);
+  }
 
   /** The shape whose matching instances are counted — also the routing key. */
   get shape(): NodeShapeData {
@@ -170,6 +181,7 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
 
   static fromJSON(json: CountQueryJSON): CountBuilder {
     assertWireVersion(json.v);
+    refuseTxIdIn(json, 'CountBuilder');
     if (!json.shape) {
       throw new Error(
         'A count envelope must name a `shape`. A shapeless count would count every ' +
@@ -221,10 +233,9 @@ export class CountBuilder implements PromiseLike<number>, Promise<number> {
     // `async` ensures a missing global dispatch rejects rather than throwing
     // synchronously past the caller's `.catch()`.
     const dispatch = target ?? getQueryDispatch();
-    // `resolveCount` dispatches over the SELECT channel — a count is a select with
-    // an aggregate projection, not a query form of its own — and checks the answer
-    // is a real non-negative integer before it reaches the caller.
-    return resolveCount(dispatch as any, this);
+    // `resolveRead` checks the answer is a real non-negative integer before it
+    // reaches the caller.
+    return resolveRead(dispatch, this);
   }
 
 

@@ -21,7 +21,7 @@ import {
 } from '../test-helpers/fuseki-test-store';
 import {describeFuseki} from '../test-helpers/fuseki-live';
 import {FusekiStore} from '../test-helpers/FusekiStore';
-import {DraftGraph, NamedGraph, OntologyGraph} from '../shapes/NamedGraph';
+import {DraftGraph, NamedGraph, OntologyGraph, ShapesGraph} from '../shapes/NamedGraph';
 import {graphs} from '../ontologies/graphs';
 import {isGraphQueryError} from '../queries/graphQuery';
 import type {GraphContent} from '../queries/IntermediateRepresentation';
@@ -317,4 +317,26 @@ describeFuseki('graph queries on the inferring store', () => {
     );
     await OntologyGraph.delete(big).exec(store);
   }, 120000);
+  test('attributedTo: the mark rides in the same update as the content and reads back as {id}', async () => {
+    const shapes = ShapesGraph.iriFor('@_linked/graph-query-attributed');
+    const actor = 'https://example.org/actor/system';
+    const other = 'https://example.org/actor/person';
+    await ShapesGraph.create({id: shapes, package: '@_linked/graph-query-attributed', attributedTo: {id: other}}).exec(store);
+    store.updates = 0;
+    const content = nt(['<http://example.org/S> <http://www.w3.org/ns/shacl#path> <http://example.org/p> .']);
+    await ShapesGraph.update(shapes).set({attributedTo: {id: actor}}).replaceContent(content).exec(store);
+    expect(store.updates).toBe(1);
+    expect((await record(shapes))['http://www.w3.org/ns/prov#wasAttributedTo']).toEqual([actor]);
+    const rows = (await ShapesGraph.select((g) => [g.package, g.contentHash, g.attributedTo]).exec(store)) as Array<{
+      id: string;
+      package?: string;
+      contentHash?: string;
+      attributedTo?: {id: string};
+    }>;
+    expect(rows).toEqual([
+      {id: shapes, package: '@_linked/graph-query-attributed', contentHash: sha256Hex(content.text), attributedTo: {id: actor}},
+    ]);
+    await ShapesGraph.delete(shapes).exec(store);
+    expect(await record(shapes)).toEqual({});
+  });
 });

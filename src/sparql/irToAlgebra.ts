@@ -8,6 +8,7 @@ import type {
   IRDeleteMutation,
   IRDeleteAllMutation,
   IRDeleteWhereMutation,
+  IRDeleteShapelessMutation,
   IRUpdateWhereMutation,
   IRGraphPattern,
   IRExpression,
@@ -67,6 +68,7 @@ import {
   withShapeCatalog,
 } from '../utils/ShapeClass.js';
 import {UnresolvedContextError} from '../queries/QueryContext.js';
+import {containsAggregate as irContainsAggregate} from '../queries/irExpressions.js';
 import {
   scopeAlgebraToGraphs,
   scopeMutationWhere,
@@ -74,6 +76,7 @@ import {
   type ReadGraphScope,
 } from './graphScope.js';
 import {graphs} from '../ontologies/graphs.js';
+import {coreOntology} from '../ontologies/linked-core.js';
 import {GraphQueryError} from '../queries/graphQuery.js';
 
 // The `*ToAlgebra` / `*ToSparql` exports compile in the catalog the IR was lowered in (its
@@ -479,6 +482,12 @@ function markAliasAndAncestors(
   }
 }
 
+/**
+ * The traversals a row needs: those the where reads. A sort path's traversal is not one of them:
+ * sorting never drops an instance (see `orderWithBoundFirst`). Nor are the hops above an inline
+ * filter (`p.bestFriend.friends.where(…)`): its block nests in their OPTIONAL subtree, so an
+ * instance without them is kept.
+ */
 function collectRequiredTraversalAliases(
   query: IRSelectQuery,
   traversePatternMap: ReadonlyMap<string, IRTraversePattern>,
@@ -489,61 +498,11 @@ function collectRequiredTraversalAliases(
     collectExpressionAliases(query.where, directAliases);
   }
 
-  if (query.orderBy) {
-    for (const item of query.orderBy) {
-      collectExpressionAliases(item.expression, directAliases);
-    }
-  }
-
-  for (const pattern of traversePatternMap.values()) {
-    if (pattern.filter) {
-      directAliases.add(pattern.to);
-    }
-  }
-
   const requiredAliases = new Set<string>();
   for (const alias of directAliases) {
     markAliasAndAncestors(alias, traversePatternMap, requiredAliases);
   }
   return requiredAliases;
-}
-
-function buildOptionalTraversalSubtree(
-  alias: string,
-  traversePatternMap: ReadonlyMap<string, IRTraversePattern>,
-  childOptionalAliasesByParent: ReadonlyMap<string, string[]>,
-  propertyTriplesByAlias: ReadonlyMap<string, SparqlTriple[]>,
-): SparqlAlgebraNode {
-  const pattern = traversePatternMap.get(alias);
-  if (!pattern) {
-    throw new Error(`Missing traverse pattern for alias "${alias}"`);
-  }
-
-  let subtree: SparqlAlgebraNode = {
-    type: 'bgp',
-    triples: [buildTraverseTriple(pattern)],
-  };
-
-  for (const propTriple of propertyTriplesByAlias.get(alias) ?? []) {
-    subtree = wrapOptional(subtree, {
-      type: 'bgp',
-      triples: [propTriple],
-    });
-  }
-
-  for (const childAlias of childOptionalAliasesByParent.get(alias) ?? []) {
-    subtree = wrapOptional(
-      subtree,
-      buildOptionalTraversalSubtree(
-        childAlias,
-        traversePatternMap,
-        childOptionalAliasesByParent,
-        propertyTriplesByAlias,
-      ),
-    );
-  }
-
-  return subtree;
 }
 
 // ---------------------------------------------------------------------------
@@ -772,6 +731,10 @@ export function selectToAlgebra(
   }
   const registry = new VariableRegistry();
 
+  // A grouped select (`groupBy`): its rows are groups. The root is not projected, GROUP BY is
+  // the key variables (not inferred), and HAVING is its group filter.
+  const grouped = !!query.groupBy && query.groupBy.length > 0;
+
   // Promote bindings only when the top-level WHERE would reject rows without
   // them. This keeps human-like SPARQL for null-rejecting filters without
   // over-constraining OR cases that can still match through other branches.
@@ -900,6 +863,16 @@ export function selectToAlgebra(
     );
   }
 
+  if (query.having) {
+    processExpressionForProperties(
+      query.having,
+      registry,
+      optionalPropertyTriples,
+      requiredPropertyTriples,
+      requiredPropertyKeys,
+    );
+  }
+
   if (query.orderBy) {
     for (const orderItem of query.orderBy) {
       processExpressionForProperties(
@@ -914,14 +887,30 @@ export function selectToAlgebra(
 
   const projectedTraversalAliases = new Set<string>();
   const directProjectionAliases = collectDirectProjectionAliases(query, rootAlias);
+  if (grouped) {
+    // The paths an aggregate reads (`p.bestFriend.birthDate.max()`) are optional too: a member
+    // without them is still a member of its group, and is still counted by `Expr.count()`.
+    for (const item of query.projection) {
+      if (item.expression.kind === 'property_expr' || item.expression.kind === 'alias_expr') continue;
+      const aliases = new Set<string>();
+      collectExpressionAliases(item.expression, aliases);
+      for (const alias of aliases) if (alias !== rootAlias) directProjectionAliases.add(alias);
+    }
+  }
+  // A sort path's traversal is OPTIONAL like a projected one: an instance without it is kept
+  // and sorts last. (A grouped select sorts by its fields, which the projection covers.)
+  if (!grouped) {
+    for (const item of query.orderBy ?? []) {
+      const aliases = new Set<string>();
+      collectExpressionAliases(item.expression, aliases);
+      for (const alias of aliases) if (alias !== rootAlias) directProjectionAliases.add(alias);
+    }
+  }
   for (const alias of directProjectionAliases) {
     markAliasAndAncestors(alias, traversePatternMap, projectedTraversalAliases);
   }
 
-  const requiredTraversalAliases = collectRequiredTraversalAliases(
-    query,
-    traversePatternMap,
-  );
+  const requiredTraversalAliases = collectRequiredTraversalAliases(query, traversePatternMap);
 
   const optionalTraversalAliases = new Set(
     [...projectedTraversalAliases].filter((alias) => {
@@ -932,7 +921,7 @@ export function selectToAlgebra(
       // result grouper already collects multiple child bindings into an array.
       //
       // Excluded:
-      //  - filtered traversals (`.where(...)`) — the filter makes the child required
+      //  - filtered traversals (`.where(...)`) — each is a filtered OPTIONAL block of its own (5b)
       //  - aliases otherwise required by the query (e.g. used in a top-level filter)
       //  - paginated traversals — emitted separately as a sub-SELECT (section 5a),
       //    so lowering them here too would double-emit the traverse triple
@@ -994,8 +983,10 @@ export function selectToAlgebra(
     .filter((pattern) =>
       optionalTraversalAliases.has(pattern.to) &&
       !optionalTraversalAliases.has(pattern.from) &&
-      // Children of a filtered traversal nest inside its filtered block (5b)
-      !filteredTraverseAliases.has(pattern.from),
+      // Children of a filtered traversal nest inside its filtered block (5b), children of a
+      // paginated one inside its sub-SELECT block (5a): an empty parent leaves them unbound
+      !filteredTraverseAliases.has(pattern.from) &&
+      !subSelectAliases.has(pattern.from),
     )
     .map((pattern) => pattern.to);
 
@@ -1016,6 +1007,9 @@ export function selectToAlgebra(
   //     so the flat-row structure and result mapping are unchanged.
   // Every pattern here is a root→child paginated traversal (the deep-pagination
   // guard above rejected anything else), so each maps 1:1 to a sub-SELECT.
+  // Each block is attached after 5b's builders exist, so its own OPTIONAL and filtered children
+  // nest inside it.
+  const subSelectBlocks: {alias: string; block: SparqlAlgebraNode}[] = [];
   for (const pattern of paginatedTraversePatterns) {
     const predicate = buildPredicateTerm(pattern);
     const innerTriple = tripleOf(
@@ -1025,20 +1019,22 @@ export function selectToAlgebra(
     );
     // Default ORDER BY ?childVar for a deterministic window, unless the nested
     // select supplied its own ordering. When it did, each ordered property must
-    // also be bound inside the sub-SELECT so the ORDER BY variable resolves.
+    // also be bound inside the sub-SELECT so the ORDER BY variable resolves. It is
+    // OPTIONAL there, and a bound-first key precedes it: sorting never drops a child,
+    // and a child without the value sorts last.
     let orderBy: SparqlOrderCondition[];
     let innerNode: SparqlAlgebraNode = {type: 'bgp', triples: [innerTriple]};
     if (pattern.innerOrderBy && pattern.innerOrderBy.length > 0) {
-      orderBy = pattern.innerOrderBy.map((o) => {
+      orderBy = pattern.innerOrderBy.flatMap((o) => {
         const orderVar = registry.getOrCreate(pattern.to, o.property);
-        innerNode = joinNodes(innerNode, {
+        innerNode = wrapOptional(innerNode, {
           type: 'bgp',
           triples: [tripleOf(varTerm(pattern.to), resolvePropertyPredicateTerm(o.property), varTerm(orderVar))],
         });
-        return {
+        return [boundFirst(orderVar), {
           expression: {kind: 'variable_expr' as const, name: orderVar},
           direction: o.direction,
-        };
+        }];
       });
     } else {
       orderBy = [{
@@ -1064,27 +1060,69 @@ export function selectToAlgebra(
     // OPTIONAL so a parent with an empty (or fully-windowed-out) child set is
     // still returned — the sub-SELECT yields no ?a1 binding, but the parent row
     // survives (mirrors the plain nested-traverse OPTIONAL behaviour).
-    algebra = wrapOptional(algebra, childBlock);
+    subSelectBlocks.push({alias: pattern.to, block: childBlock});
   }
 
   // 5b. Build filtered OPTIONAL blocks for inline where traversals.
   //     Each block contains: traverse triple + OPTIONAL property triples + FILTER.
   //     Filter property triples are nested as OPTIONALs so that OR filters work
   //     even when some entities lack certain properties.
-  // First pass: build each filtered block's inner group and filter expression.
-  const filteredBlockInners: SparqlAlgebraNode[] = [];
-  const filteredBlockExprs: SparqlExpression[] = [];
+  // The filter expressions first, in block order (they register variables).
+  const filteredBlockExprs = filteredTraverseBlocks.map((block, i) =>
+    convertExpression(block.filter, registry, filterPropertyTriplesMap.get(i) || []),
+  );
+  // Where each block goes: inside its parent's filtered block, or inside its parent's OPTIONAL
+  // traversal subtree (`p.bestFriend.friends.where(…)`: the best-friend hop stays OPTIONAL), so an
+  // empty parent leaves the block unbound instead of cross-producting it over the whole graph;
+  // else at the top level.
   const filteredBlockIdxByAlias = new Map<string, number>(
     filteredTraverseBlocks.map((block, i) => [block.toAlias, i]),
   );
-  for (let i = 0; i < filteredTraverseBlocks.length; i++) {
+  const filteredChildrenByParent = new Map<string, number[]>();
+  const rootFilteredBlockIdx: number[] = [];
+  for (let i = filteredTraverseBlocks.length - 1; i >= 0; i--) {
+    const subject = filteredTraverseBlocks[i].traverseTriple.subject;
+    const parent = subject.kind === 'variable' ? subject.name : undefined;
+    const parentIdx = parent !== undefined ? filteredBlockIdxByAlias.get(parent) : undefined;
+    if (
+      parent !== undefined &&
+      ((parentIdx !== undefined && parentIdx !== i) || optionalTraversalAliases.has(parent) || subSelectAliases.has(parent))
+    ) {
+      const children = filteredChildrenByParent.get(parent) ?? [];
+      children.push(i);
+      filteredChildrenByParent.set(parent, children);
+    } else {
+      rootFilteredBlockIdx.unshift(i);
+    }
+  }
+
+  const wrapFilteredChildren = (node: SparqlAlgebraNode, alias: string): SparqlAlgebraNode => {
+    let wrapped = node;
+    for (const i of filteredChildrenByParent.get(alias) ?? []) wrapped = wrapOptional(wrapped, buildFilteredBlock(i));
+    return wrapped;
+  };
+
+  const buildOptionalTraversalSubtree = (alias: string): SparqlAlgebraNode => {
+    const pattern = traversePatternMap.get(alias);
+    if (!pattern) {
+      throw new Error(`Missing traverse pattern for alias "${alias}"`);
+    }
+    let subtree: SparqlAlgebraNode = {type: 'bgp', triples: [buildTraverseTriple(pattern)]};
+    for (const propTriple of nestedOptionalPropertyTriplesByAlias.get(alias) ?? []) {
+      subtree = wrapOptional(subtree, {type: 'bgp', triples: [propTriple]});
+    }
+    for (const childAlias of childOptionalAliasesByParent.get(alias) ?? []) {
+      subtree = wrapOptional(subtree, buildOptionalTraversalSubtree(childAlias));
+    }
+    return wrapFilteredChildren(subtree, alias);
+  };
+
+  function buildFilteredBlock(i: number): SparqlFilter {
     const block = filteredTraverseBlocks[i];
-    const filterPropertyTriples = filterPropertyTriplesMap.get(i) || [];
-    const filterExpr = convertExpression(block.filter, registry, filterPropertyTriples);
     // Start with the traverse triple as the required BGP
     let blockInner: SparqlAlgebraNode = {type: 'bgp', triples: [block.traverseTriple]};
     // Wrap each filter property triple in its own nested OPTIONAL
-    for (const propTriple of filterPropertyTriples) {
+    for (const propTriple of filterPropertyTriplesMap.get(i) || []) {
       blockInner = wrapOptional(blockInner, {type: 'bgp', triples: [propTriple]});
     }
     // Projected property triples on the filtered alias that aren't part of the
@@ -1095,56 +1133,25 @@ export function selectToAlgebra(
     // Optional child traversal subtrees (nested sub-selects below the filtered
     // alias) — kept inside the block so an empty filter match leaves them unbound
     for (const childAlias of childOptionalAliasesByParent.get(block.toAlias) ?? []) {
-      blockInner = wrapOptional(
-        blockInner,
-        buildOptionalTraversalSubtree(
-          childAlias,
-          traversePatternMap,
-          childOptionalAliasesByParent,
-          nestedOptionalPropertyTriplesByAlias,
-        ),
-      );
+      blockInner = wrapOptional(blockInner, buildOptionalTraversalSubtree(childAlias));
     }
-    filteredBlockInners.push(blockInner);
-    filteredBlockExprs.push(filterExpr);
+    return {type: 'filter', expression: filteredBlockExprs[i], inner: wrapFilteredChildren(blockInner, block.toAlias)};
   }
-  // Second pass, children first (blocks are created parent-before-child):
-  // finish each block and either nest it inside its parent's filtered block —
-  // a filtered sub-select inside another filtered sub-select must stay scoped
-  // to the parent alias, or an empty parent match leaves the alias unbound and
-  // the block cross-products over the whole graph — or attach it at top level.
-  const rootFilteredBlocks: SparqlAlgebraNode[] = [];
-  for (let i = filteredTraverseBlocks.length - 1; i >= 0; i--) {
-    const block = filteredTraverseBlocks[i];
-    const finished: SparqlFilter = {
-      type: 'filter',
-      expression: filteredBlockExprs[i],
-      inner: filteredBlockInners[i],
-    };
-    const subject = block.traverseTriple.subject;
-    const parentIdx = subject.kind === 'variable'
-      ? filteredBlockIdxByAlias.get(subject.name)
-      : undefined;
-    if (parentIdx !== undefined && parentIdx !== i) {
-      filteredBlockInners[parentIdx] = wrapOptional(filteredBlockInners[parentIdx], finished);
-    } else {
-      rootFilteredBlocks.unshift(finished);
+
+  for (const {alias, block} of subSelectBlocks) {
+    let wrapped = block;
+    for (const childAlias of childOptionalAliasesByParent.get(alias) ?? []) {
+      wrapped = wrapOptional(wrapped, buildOptionalTraversalSubtree(childAlias));
     }
+    algebra = wrapOptional(algebra, wrapFilteredChildren(wrapped, alias));
   }
-  for (const filteredBlock of rootFilteredBlocks) {
-    algebra = wrapOptional(algebra, filteredBlock);
+
+  for (const i of rootFilteredBlockIdx) {
+    algebra = wrapOptional(algebra, buildFilteredBlock(i));
   }
 
   for (const alias of rootOptionalTraversalAliases) {
-    algebra = wrapOptional(
-      algebra,
-      buildOptionalTraversalSubtree(
-        alias,
-        traversePatternMap,
-        childOptionalAliasesByParent,
-        nestedOptionalPropertyTriplesByAlias,
-      ),
-    );
+    algebra = wrapOptional(algebra, buildOptionalTraversalSubtree(alias));
   }
 
   // Wrap each optional property triple in its own OPTIONAL (LeftJoin)
@@ -1214,8 +1221,9 @@ export function selectToAlgebra(
   const aggregates: SparqlAggregateBinding[] = [];
   let hasAggregates = false;
 
-  // Always include root alias as first projection variable
-  projection.push({kind: 'variable', name: rootAlias});
+  // Include the root alias as the first projection variable: each row is an entity. Not in a
+  // grouped select, whose rows are groups (the root would become a key of every group).
+  if (!grouped) projection.push({kind: 'variable', name: rootAlias});
 
   // Collect traversal aliases upfront to detect aggregate alias collisions
   const traversalAliasSet = new Set(collectTraversalAliases(query.patterns));
@@ -1251,7 +1259,9 @@ export function selectToAlgebra(
     } else {
       // For property_expr, the variable is the resolved name from registry
       const varName = resolveExpressionVariable(item.expression, registry);
-      if (varName && varName !== rootAlias) {
+      if (varName && (varName !== rootAlias || grouped)) {
+        // Two fields over one path (`{a: p.hobby, b: p.hobby}`) read one variable: project it once.
+        if (grouped && projection.some((p) => p.kind === 'variable' && p.name === varName)) continue;
         projection.push({kind: 'variable', name: varName});
       } else if (!varName) {
         // Non-variable expression (binary_expr, function_expr, etc.)
@@ -1282,19 +1292,39 @@ export function selectToAlgebra(
     if (p.kind === 'variable') projectedNames.add(p.name);
     else if (p.kind === 'aggregate' || p.kind === 'expression') projectedNames.add(p.alias);
   }
-  for (const alias of collectTraversalAliases(query.patterns)) {
+  for (const alias of grouped ? [] : collectTraversalAliases(query.patterns)) {
     if (!projectedNames.has(alias) && !aggregateRenamedAliases.has(alias)) {
       projection.push({kind: 'variable', name: alias});
       projectedNames.add(alias);
     }
   }
 
-  // 8. GROUP BY inference
+  // 8. GROUP BY: the keys of a grouped select, else inferred
   let groupBy: string[] | undefined;
-  if (havingExpr) {
+  if (grouped) {
+    hasAggregates = true;
+    groupBy = query.groupBy!.map((key) => {
+      const name = resolveExpressionVariable(key, registry);
+      if (!name) {
+        throw new Error('selectToAlgebra: a group key must be a path (a variable), not a computed expression.');
+      }
+      return name;
+    }).filter((name, i, all) => all.indexOf(name) === i);
+    if (havingExpr) {
+      // An aggregate in the where clause of a grouped select would filter the groups, not the
+      // members (`where` filters members). The builder refuses it; an IR built elsewhere too.
+      throw new Error(
+        'A grouped select cannot have an aggregate in its where clause: where filters the members ' +
+        "before grouping. Filter the groups with having (`.having('n', (n) => n.gt(1))`).",
+      );
+    }
+    if (query.having) {
+      havingExpr = convertExpression(query.having, registry, optionalPropertyTriples);
+    }
+  } else if (havingExpr) {
     hasAggregates = true;
   }
-  if (hasAggregates) {
+  if (hasAggregates && !grouped) {
     // All non-aggregate projected variables become GROUP BY targets
     groupBy = projection
       .filter((p): p is {kind: 'variable'; name: string} => p.kind === 'variable')
@@ -1310,21 +1340,27 @@ export function selectToAlgebra(
     }));
   }
 
-  // `.one()` lowers to limit=1 + singleResult, but LIMIT bounds ROWS, not
-  // entities. When the query yields multiple rows per root entity (traversals
-  // or plural properties), a row-level LIMIT would truncate the entity's own
-  // nested data — omit it and let the result mapper pick the single entity.
-  const multiRowPerEntity =
-    query.patterns.some((p) => p.kind === 'traverse') ||
-    query.projection.some(
-      (item) =>
-        item.expression.kind === 'property_expr' &&
-        !(typeof item.expression.maxCount === 'number' && item.expression.maxCount <= 1),
-    );
-  const limit =
-    query.singleResult && query.limit === 1 && multiRowPerEntity
-      ? undefined
-      : query.limit;
+  // LIMIT/OFFSET page over root subjects, not solution rows. A subject reached through a
+  // traversal, or with a multi-valued path in the projection or the order, spans one row per
+  // value; such a select is paged by a sub-SELECT of subjects (`pageBySubject`, below). A select
+  // of one subject (`.for(id)`) needs no LIMIT at all: a row LIMIT would cut its values.
+  const multiRowPerSubject = !grouped && rowsPerSubjectMayExceedOne(query);
+  const oneSubjectRead =
+    multiRowPerSubject && !!query.subjectId && !query.offset && query.limit !== 0;
+  const pageSubjects =
+    multiRowPerSubject && !oneSubjectRead && (query.limit !== undefined || query.offset !== undefined);
+  // A where-aggregate (HAVING) counts per subject. Over rows that can be several per subject the
+  // outer GROUP BY would be per subject and values, so the same sub-SELECT of subjects applies
+  // it, without LIMIT/OFFSET when the select is not paged.
+  // An ungrouped select that projects an aggregate groups its rows by subject and values, and a
+  // sort path outside those is out of scope after GROUP BY: the sub-SELECT's one key per subject
+  // sorts it instead.
+  const subjectSubSelect =
+    pageSubjects ||
+    (multiRowPerSubject && !!havingExpr) ||
+    (!grouped &&
+      aggregates.length > 0 &&
+      (orderBy ?? []).some((o) => !(o.expression.kind === 'variable_expr' && o.expression.name === rootAlias)));
 
   // `.from()` scopes the read to its graphs (expanded by the store); without it, a shape whose
   // instances live in one named graph (the graph-registry records, `NamedGraph.storedInGraph`)
@@ -1344,18 +1380,404 @@ export function selectToAlgebra(
     query.graphs ?? routed ?? (storedIn ? [storedIn] : undefined),
     _options,
   );
+  const paged = subjectSubSelect
+    ? pageBySubject(
+      scoped.algebra,
+      rootAlias,
+      orderBy,
+      havingExpr,
+      pageSubjects ? query.limit : undefined,
+      pageSubjects ? query.offset : undefined,
+      (query.orderBy ?? []).map((item) => readsThroughMultiValuedTraversal(item.expression, traversePatternMap)),
+    )
+    : undefined;
+  // Unpaged, a sort key that is an expression (`p.hobby.strlen()`) is bound to a variable of its
+  // own, so a row without its value can be told apart and sorted last (BOUND takes a variable).
+  let unpagedAlgebra = scoped.algebra;
+  let unpagedOrderBy = orderBy;
+  if (!paged && !grouped && orderBy) {
+    unpagedOrderBy = orderBy.map((condition, i) => {
+      const e = condition.expression;
+      if (e.kind === 'variable_expr' || e.kind === 'aggregate_expr') return condition;
+      const variable = `order_${i}`;
+      unpagedAlgebra = {type: 'extend', inner: unpagedAlgebra, variable, expression: e};
+      return {expression: {kind: 'variable_expr', name: variable}, direction: condition.direction};
+    });
+  }
+  // A paged select's where-aggregate (HAVING) is applied by the page, per subject; the outer
+  // query reads the page's subjects and does not repeat it (its groups are per subject and
+  // values, where the HAVING would count something else). It groups only for the aggregates
+  // it projects.
+  const outerGrouped = paged ? aggregates.length > 0 : hasAggregates;
   return {
     type: 'select',
-    algebra: scoped.algebra,
+    algebra: paged ? paged.algebra : unpagedAlgebra,
     ...(scoped.dataset ? {dataset: scoped.dataset} : {}),
     projection,
-    distinct: !hasAggregates ? true : undefined,
-    orderBy,
-    limit,
-    offset: query.offset,
-    groupBy,
-    having: havingExpr,
+    distinct: !outerGrouped ? true : undefined,
+    // The outer rows follow the page's order; without grouping, the select's own order
+    // expressions then order each subject's values as before.
+    orderBy: paged
+      ? paged.orderBy && [
+        ...paged.orderBy,
+        ...(outerGrouped ? [] : orderWithBoundFirst(orderBy, rootAlias) ?? []).filter(
+          (o) => !paged.orderBy!.some((k) => JSON.stringify(k) === JSON.stringify(o)),
+        ),
+      ]
+      : orderWithBoundFirst(unpagedOrderBy, rootAlias, grouped ? projection : undefined),
+    limit: pageSubjects || oneSubjectRead ? undefined : query.limit,
+    offset: pageSubjects ? undefined : query.offset,
+    // An ungrouped select with an aggregate groups its rows by subject and values; the page's
+    // sort keys are one per subject, so grouping by them too changes nothing and lets the outer
+    // ORDER BY read them.
+    groupBy: paged ? (outerGrouped && groupBy ? [...groupBy, ...paged.keys] : undefined) : groupBy,
+    having: paged ? undefined : havingExpr,
     aggregates: aggregates.length > 0 ? aggregates : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Paging over subjects
+// ---------------------------------------------------------------------------
+
+/** The traversals that bind values in the rows: not those inside an exists or a minus. */
+function collectRowTraversals(patterns: IRGraphPattern[], out: IRTraversePattern[] = []): IRTraversePattern[] {
+  for (const p of patterns) {
+    if (p.kind === 'traverse') out.push(p);
+    else if (p.kind === 'join') collectRowTraversals(p.patterns, out);
+    else if (p.kind === 'optional') collectRowTraversals([p.pattern], out);
+    else if (p.kind === 'union') collectRowTraversals(p.branches, out);
+  }
+  return out;
+}
+
+/** Whether an expression reads a multi-valued path of the row (not inside an aggregate). */
+function readsMultiValuedPath(expr: IRExpression): boolean {
+  switch (expr.kind) {
+    case 'property_expr': {
+      // A projected path carries its maxCount; an order or where path is looked up.
+      const maxCount = expr.maxCount ?? findPropertyShapeById(expr.property)?.maxCount;
+      return !(typeof maxCount === 'number' && maxCount <= 1);
+    }
+    case 'binary_expr':
+      return readsMultiValuedPath(expr.left) || readsMultiValuedPath(expr.right);
+    case 'logical_expr':
+      return expr.expressions.some(readsMultiValuedPath);
+    case 'not_expr':
+      return readsMultiValuedPath(expr.expression);
+    case 'function_expr':
+      return expr.args.some(readsMultiValuedPath);
+    case 'in_expr':
+      return readsMultiValuedPath(expr.value);
+    // An aggregate collapses its values into one per subject; an exists binds nothing.
+    default:
+      return false;
+  }
+}
+
+/**
+ * Whether one subject of an ungrouped select can span several solution rows: a multi-valued
+ * traversal (not inside an exists or minus), or a multi-valued path in the projection or the
+ * order. A single-valued traversal (`bestFriend`) adds no rows; what it reads is checked as a path.
+ */
+function rowsPerSubjectMayExceedOne(query: IRSelectQuery): boolean {
+  return (
+    collectRowTraversals(query.patterns).some((t) => !(typeof t.maxCount === 'number' && t.maxCount <= 1)) ||
+    query.projection.some((item) => readsMultiValuedPath(item.expression)) ||
+    (query.orderBy ?? []).some((item) => readsMultiValuedPath(item.expression))
+  );
+}
+
+/** The variables an expression reads, including those of an EXISTS pattern. */
+function expressionVariables(expr: SparqlExpression | undefined, out: Set<string> = new Set()): Set<string> {
+  if (!expr) return out;
+  switch (expr.kind) {
+    case 'variable_expr':
+      out.add(expr.name);
+      break;
+    case 'bound_expr':
+      out.add(expr.variable);
+      break;
+    case 'binary_expr':
+      expressionVariables(expr.left, out);
+      expressionVariables(expr.right, out);
+      break;
+    case 'logical_expr':
+      for (const e of expr.exprs) expressionVariables(e, out);
+      break;
+    case 'not_expr':
+      expressionVariables(expr.inner, out);
+      break;
+    case 'function_expr':
+    case 'aggregate_expr':
+      for (const e of expr.args) expressionVariables(e, out);
+      break;
+    case 'in_expr':
+      expressionVariables(expr.value, out);
+      for (const e of expr.list) expressionVariables(e, out);
+      break;
+    case 'exists_expr':
+      for (const v of nodeVariables(expr.pattern)) out.add(v);
+      break;
+    case 'iri_expr':
+    case 'literal_expr':
+      break;
+  }
+  return out;
+}
+
+function termVariable(term: SparqlTerm, out: Set<string>): void {
+  if (term.kind === 'variable') out.add(term.name);
+}
+
+/** Every variable a pattern mentions (an over-approximation of what it binds). */
+function nodeVariables(node: SparqlAlgebraNode, out: Set<string> = new Set()): Set<string> {
+  switch (node.type) {
+    case 'bgp':
+      for (const t of node.triples) {
+        termVariable(t.subject, out);
+        termVariable(t.predicate, out);
+        termVariable(t.object, out);
+      }
+      break;
+    case 'join':
+    case 'union':
+    case 'minus':
+      nodeVariables(node.left, out);
+      nodeVariables(node.right, out);
+      break;
+    case 'left_join':
+      nodeVariables(node.left, out);
+      nodeVariables(node.right, out);
+      expressionVariables(node.condition, out);
+      break;
+    case 'filter':
+      nodeVariables(node.inner, out);
+      expressionVariables(node.expression, out);
+      break;
+    case 'extend':
+      nodeVariables(node.inner, out);
+      expressionVariables(node.expression, out);
+      out.add(node.variable);
+      break;
+    case 'graph':
+      if (node.variable !== undefined) out.add(node.variable);
+      nodeVariables(node.inner, out);
+      break;
+    case 'values':
+      out.add(node.variable);
+      break;
+    case 'subselect':
+      for (const v of node.projection) out.add(v);
+      for (const e of node.expressions ?? []) out.add(e.alias);
+      break;
+  }
+  return out;
+}
+
+const union = (a: ReadonlySet<string>, b: Iterable<string>): Set<string> => {
+  const out = new Set(a);
+  for (const v of b) out.add(v);
+  return out;
+};
+
+/**
+ * The pattern that selects a page's subjects: `node` without the OPTIONAL blocks that only bind
+ * variables nothing in `needed` reads. An OPTIONAL never removes a row of its left side, so
+ * dropping it leaves the set of matching subjects as it was; it only drops the row fan-out of
+ * the values the outer query reads anyway. A kept block's variables become needed on its other
+ * side, since they are what joins the two.
+ */
+function prunePagePattern(node: SparqlAlgebraNode, needed: ReadonlySet<string>): SparqlAlgebraNode {
+  switch (node.type) {
+    case 'left_join': {
+      const leftVars = nodeVariables(node.left);
+      const rightVars = nodeVariables(node.right);
+      expressionVariables(node.condition, rightVars);
+      const rightOnly = [...rightVars].filter((v) => !leftVars.has(v));
+      if (!rightOnly.some((v) => needed.has(v))) return prunePagePattern(node.left, needed);
+      return {
+        ...node,
+        left: prunePagePattern(node.left, union(needed, rightVars)),
+        right: prunePagePattern(node.right, union(needed, leftVars)),
+      };
+    }
+    case 'join':
+      return {
+        ...node,
+        left: prunePagePattern(node.left, union(needed, nodeVariables(node.right))),
+        right: prunePagePattern(node.right, union(needed, nodeVariables(node.left))),
+      };
+    case 'union':
+      return {...node, left: prunePagePattern(node.left, needed), right: prunePagePattern(node.right, needed)};
+    case 'minus':
+      return {...node, left: prunePagePattern(node.left, union(needed, nodeVariables(node.right)))};
+    case 'filter':
+      return {...node, inner: prunePagePattern(node.inner, union(needed, expressionVariables(node.expression)))};
+    case 'extend':
+      return {
+        ...node,
+        inner: prunePagePattern(node.inner, union(needed, [...expressionVariables(node.expression), node.variable])),
+      };
+    case 'graph':
+      return {
+        ...node,
+        inner: prunePagePattern(node.inner, node.variable !== undefined ? union(needed, [node.variable]) : needed),
+      };
+    case 'bgp':
+    case 'values':
+    case 'subselect':
+      return node;
+  }
+}
+
+/** The key that sorts the rows binding `variable` before those that leave it unbound. */
+function boundFirst(variable: string): SparqlOrderCondition {
+  return {expression: {kind: 'bound_expr', variable}, direction: 'DESC'};
+}
+
+/**
+ * The ORDER BY of a select: each key preceded by a bound-first key, so a row without a value for
+ * a key sorts after every row with one, ascending and descending. The subject itself and a
+ * count are always bound and need none. A grouped select's key that is not a variable (an
+ * aggregate field) is tested through the alias its projection gives it.
+ */
+function orderWithBoundFirst(
+  orderBy: SparqlOrderCondition[] | undefined,
+  rootAlias: string,
+  groupedProjection?: readonly SparqlProjectionItem[],
+): SparqlOrderCondition[] | undefined {
+  return orderBy?.flatMap((condition) => {
+    const e = condition.expression;
+    let variable: string | undefined;
+    if (e.kind === 'variable_expr') {
+      if (e.name === rootAlias) return [condition];
+      variable = e.name;
+    } else if (!(e.kind === 'aggregate_expr' && e.name === 'count')) {
+      const key = JSON.stringify(e);
+      const item = groupedProjection?.find(
+        (p) => p.kind !== 'variable' && JSON.stringify(p.expression) === key,
+      );
+      variable = item && item.kind !== 'variable' ? item.alias : undefined;
+    }
+    return variable ? [boundFirst(variable), condition] : [condition];
+  });
+}
+
+/**
+ * Whether a sort expression reads through a multi-valued traversal (`p.friends.hobby`): then a
+ * subject has a row per member, and some rows may lack the value while others have it.
+ */
+function readsThroughMultiValuedTraversal(
+  expr: IRExpression,
+  traversePatternMap: ReadonlyMap<string, IRTraversePattern>,
+): boolean {
+  const aliases = new Set<string>();
+  collectExpressionAliases(expr, aliases);
+  for (const alias of aliases) {
+    for (let t = traversePatternMap.get(alias); t; t = traversePatternMap.get(t.from)) {
+      const maxCount = t.maxCount ?? findPropertyShapeById(t.property)?.maxCount;
+      if (!(typeof maxCount === 'number' && maxCount <= 1)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Page an ungrouped select over its root subjects. A sub-SELECT picks the page:
+ *
+ *   { SELECT ?a0 (MIN(?a0_x) AS ?page_order_0) WHERE { <where part> }
+ *     GROUP BY ?a0 [HAVING(…)] ORDER BY ASC(?page_order_0) LIMIT n OFFSET m }
+ *
+ * and is joined to the select's own pattern, which reads every value of those subjects. The
+ * outer query orders its rows by the same keys, so the result keeps the page's order.
+ *
+ * Each sort key is one value per subject: the subject's first value in that key's direction —
+ * the lowest ascending (`MIN`), the highest descending (`MAX`). A key that is the subject itself
+ * sorts as is. A subject without the value sorts after every subject with one, in both
+ * directions (a bound-first key precedes each key). Ties are broken by the subject IRI,
+ * ascending.
+ *
+ * A key read through a multi-valued traversal (`p.friends.hobby`) can be bound on some of a subject's rows
+ * and not on others (a friend without a hobby), and a store may answer `MIN` over such a group
+ * as unbound (Jena does: an aggregate over an error is an error). Such a key is computed by a
+ * sub-SELECT of its own over the rows that bind it, joined OPTIONAL to the page:
+ *
+ *   OPTIONAL { SELECT ?a0 (MIN(?page_value_0) AS ?page_order_0)
+ *              WHERE { <pattern> BIND(<key> AS ?page_value_0) FILTER(BOUND(?page_value_0)) }
+ *              GROUP BY ?a0 }
+ */
+function pageBySubject(
+  algebra: SparqlAlgebraNode,
+  rootAlias: string,
+  orderBy: SparqlOrderCondition[] | undefined,
+  having: SparqlExpression | undefined,
+  limit: number | undefined,
+  offset: number | undefined,
+  ownKeyPage: readonly boolean[] = [],
+): {algebra: SparqlAlgebraNode; orderBy: SparqlOrderCondition[] | undefined; keys: string[]} {
+  const expressions: Array<{alias: string; expression: SparqlExpression}> = [];
+  const keyPages: Array<{alias: string; page: SparqlAlgebraNode}> = [];
+  const needed = new Set<string>([rootAlias]);
+  expressionVariables(having, needed);
+  const keys: SparqlOrderCondition[] = (orderBy ?? []).flatMap((condition, i) => {
+    const e = condition.expression;
+    if (e.kind === 'variable_expr' && e.name === rootAlias) return [condition];
+    const alias = `page_order_${i}`;
+    const aggregate = (arg: SparqlExpression): SparqlExpression => ({
+      kind: 'aggregate_expr',
+      name: condition.direction === 'DESC' ? 'max' : 'min',
+      args: [arg],
+    });
+    if (ownKeyPage[i]) {
+      const value = `page_value_${i}`;
+      const keyNeeded = new Set<string>([rootAlias]);
+      expressionVariables(e, keyNeeded);
+      keyPages.push({
+        alias,
+        page: {
+          type: 'subselect',
+          projection: [rootAlias],
+          expressions: [{alias, expression: aggregate({kind: 'variable_expr', name: value})}],
+          inner: {
+            type: 'filter',
+            expression: {kind: 'bound_expr', variable: value},
+            inner: {type: 'extend', inner: prunePagePattern(algebra, keyNeeded), variable: value, expression: e},
+          },
+          groupBy: [rootAlias],
+        },
+      });
+    } else {
+      expressionVariables(e, needed);
+      expressions.push({alias, expression: aggregate(e)});
+    }
+    return [boundFirst(alias), {expression: {kind: 'variable_expr', name: alias}, direction: condition.direction}];
+  });
+  // Ties are broken by the subject, so that consecutive pages neither repeat nor skip one.
+  if (keys.length > 0 && !keys.some((k) => k.expression.kind === 'variable_expr' && k.expression.name === rootAlias)) {
+    keys.push({expression: {kind: 'variable_expr', name: rootAlias}, direction: 'ASC'});
+  }
+  // A key computed by its own sub-SELECT is one value per subject: grouping by it changes nothing.
+  const keyAliases = keyPages.map((k) => k.alias);
+  const inner = keyPages.reduce<SparqlAlgebraNode>(
+    (left, {page}) => ({type: 'left_join', left, right: page}),
+    prunePagePattern(algebra, needed),
+  );
+  const page: SparqlAlgebraNode = {
+    type: 'subselect',
+    projection: [rootAlias, ...keyAliases],
+    ...(expressions.length > 0 ? {expressions} : {}),
+    inner,
+    groupBy: [rootAlias, ...keyAliases],
+    ...(having ? {having} : {}),
+    ...(keys.length > 0 ? {orderBy: keys} : {}),
+    ...(limit !== undefined ? {limit} : {}),
+    ...(offset !== undefined ? {offset} : {}),
+  };
+  return {
+    algebra: {type: 'join', left: page, right: algebra},
+    orderBy: keys.length > 0 ? keys : undefined,
+    keys: [...keyAliases, ...expressions.map((e) => e.alias)],
   };
 }
 
@@ -1755,6 +2177,9 @@ function convertExpression(
         args: expr.args.map((a) =>
           convertExpression(a, registry, optionalPropertyTriples),
         ),
+        // A count counts distinct values (see IRAggregateExpression): a select that joins two
+        // multi-valued paths yields their cross product, and COUNT(?x) would count its rows.
+        ...(expr.name === 'count' ? {distinct: true} : {}),
       };
 
     case 'exists_expr': {
@@ -4319,15 +4744,14 @@ export function askToAlgebra(
     ),
     options,
   );
-  if (inner.having) {
+  if (irContainsAggregate(query.where)) {
     // Same trap as in `countToAlgebra`: an aggregate in the WHERE clause (e.g.
-    // `p.friends.size().gt(2)`) lowers to HAVING + GROUP BY on the select plan, and
-    // only `algebra` is carried over here — so the HAVING would vanish and the ASK
-    // would answer the UNFILTERED question, `true` for any store holding one
+    // `p.friends.size().gt(2)`) lowers to HAVING, on the select plan or on its sub-SELECT
+    // of subjects, and this ask is not built to carry either — the HAVING would vanish
+    // and the ASK would answer the UNFILTERED question, `true` for any store holding one
     // instance of the shape. A boolean of the right type for the wrong question is
-    // worse than an error: nothing downstream can tell. Asking it properly needs
-    // `ASK { SELECT ?a0 WHERE { … } GROUP BY ?a0 HAVING(…) }`, and `SparqlSubSelect`
-    // carries no groupBy/having today. Refuse it rather than answer it wrongly.
+    // worse than an error: nothing downstream can tell. Refuse it rather than answer it
+    // wrongly.
     throw new Error(
       'Cannot ask a query whose where clause contains an aggregate (e.g. ' +
       '`.where(p => p.friends.size().gt(2))`). That filter lowers to HAVING over a ' +
@@ -4398,14 +4822,12 @@ export function countToAlgebra(
     ),
     options,
   );
-  if (inner.having) {
+  if (irContainsAggregate(query.where)) {
     // An aggregate in the WHERE clause (e.g. `p.friends.size().gt(2)`) lowers to
-    // HAVING + GROUP BY on the select plan. Only `algebra` is carried over here, so
-    // the HAVING would vanish and the count would be of the UNFILTERED match set —
-    // a plausible-looking wrong number. Counting a HAVING-filtered group set needs
-    // `SELECT (COUNT(DISTINCT ?a0) AS ?count) WHERE { SELECT ?a0 WHERE { … }
-    // GROUP BY ?a0 HAVING(…) }`, and `SparqlSubSelect` carries no groupBy/having
-    // today. Refuse it rather than answer it wrongly.
+    // HAVING, on the select plan or on its sub-SELECT of subjects. This count is not
+    // built to carry either, so the HAVING would vanish and the count would be of the
+    // UNFILTERED match set — a plausible-looking wrong number. Refuse it rather than
+    // answer it wrongly.
     throw new Error(
       'Cannot count a query whose where clause contains an aggregate (e.g. ' +
       '`.where(p => p.friends.size().gt(2))`). That filter lowers to HAVING over a ' +
@@ -4604,6 +5026,106 @@ export function deleteWhereToSparql(
   }
   const plan = deleteWhereToAlgebra(query, options);
   return deleteInsertPlanToSparql(plan, options);
+}
+
+/**
+ * Converts an IRDeleteShapelessMutation to a SparqlDeleteInsertPlan: in every graph of the
+ * dataset (each named graph and the default graph), every triple of each id and, unless
+ * `keepIncoming`, every triple that links to one. One operation for all ids and graphs:
+ *
+ * ```sparql
+ * DELETE {
+ *   ?x_del ?pd_del ?od_del . ?sd_del ?p2d_del ?x_del .
+ *   GRAPH ?g_del { ?x_del ?p_del ?o_del . ?s_del ?p2_del ?x_del }
+ * }
+ * WHERE {
+ *   VALUES ?x_del { <a> <b> }
+ *   {
+ *     { { ?x_del ?pd_del ?od_del } UNION { ?sd_del ?p2d_del ?x_del } }
+ *   } UNION {
+ *     GRAPH ?g_del { { ?x_del ?p_del ?o_del } UNION { ?s_del ?p2_del ?x_del } }
+ *   }
+ * }
+ * ```
+ *
+ * The default-graph side and the named-graph side bind their own variables, so a solution of one
+ * leaves the other's template triples unbound, and a DELETE template triple a solution leaves
+ * unbound is skipped. The sides of each are a UNION, so their matches add up instead of
+ * multiplying. `GRAPH ?g` never binds `graphs.union` or a store's own name for the default graph.
+ *
+ * Structure is never touched: the named-graph side skips the graph registry (`graphs.registry`)
+ * and every graph the registry records as a shapes or an ontology graph (`core:ShapesGraph`,
+ * `core:OntologyGraph`), which only graph queries write.
+ */
+export function deleteShapelessToAlgebra(
+  query: IRDeleteShapelessMutation,
+  _options?: SparqlCompileOptions,
+): SparqlDeleteInsertPlan {
+  if (!query.ids?.length) throw new Error('deleteShapelessToAlgebra: a shapeless delete needs at least one id.');
+  const ids = query.ids.map(({id}) => {
+    assertSafeIri(id);
+    return id;
+  });
+  const node = varTerm('x_del');
+  const sidesOf = (own: SparqlTriple, incoming: SparqlTriple): {triples: SparqlTriple[]; where: SparqlAlgebraNode} => ({
+    triples: query.keepIncoming ? [own] : [own, incoming],
+    where: query.keepIncoming
+      ? {type: 'bgp', triples: [own]}
+      : unionOf([{type: 'bgp', triples: [own]}, {type: 'bgp', triples: [incoming]}]),
+  });
+  const inDefault = sidesOf(
+    tripleOf(node, varTerm('pd_del'), varTerm('od_del')),
+    tripleOf(varTerm('sd_del'), varTerm('p2d_del'), node),
+  );
+  const inNamed = sidesOf(
+    tripleOf(node, varTerm('p_del'), varTerm('o_del')),
+    tripleOf(varTerm('s_del'), varTerm('p2_del'), node),
+  );
+  return {
+    type: 'delete_insert',
+    deletePatterns: inDefault.triples,
+    deleteInGraphs: [{variable: 'g_del', triples: inNamed.triples}],
+    insertPatterns: [],
+    whereAlgebra: {
+      type: 'join',
+      left: {type: 'values', variable: 'x_del', iris: ids},
+      right: unionOf([inDefault.where, dataGraphsOnly({type: 'graph', variable: 'g_del', inner: inNamed.where})]),
+    },
+  };
+}
+
+/**
+ * `inner` (a `GRAPH ?g_del` pattern) kept to data graphs: `?g_del` is not the registry, and the
+ * registry records it as no shapes or ontology graph.
+ */
+function dataGraphsOnly(inner: SparqlAlgebraNode): SparqlAlgebraNode {
+  const g = varTerm('g_del');
+  const structureRecord: SparqlAlgebraNode = {
+    type: 'join',
+    left: {type: 'values', variable: 'structure_del', iris: [coreOntology.ShapesGraph.id, coreOntology.OntologyGraph.id]},
+    right: {
+      type: 'graph',
+      iri: graphs.registry,
+      inner: {type: 'bgp', triples: [tripleOf(g, iriTerm(RDF_TYPE), varTerm('structure_del'))]},
+    },
+  };
+  return {
+    type: 'filter',
+    expression: {kind: 'exists_expr', negated: true, pattern: structureRecord},
+    inner: {
+      type: 'filter',
+      expression: {kind: 'in_expr', negated: true, value: {kind: 'variable_expr', name: 'g_del'}, list: [{kind: 'iri_expr', value: graphs.registry}]},
+      inner,
+    },
+  };
+}
+
+/** Converts an IRDeleteShapelessMutation to a SPARQL string (see {@link deleteShapelessToAlgebra}). */
+export function deleteShapelessToSparql(
+  query: IRDeleteShapelessMutation,
+  options?: SparqlCompileOptions,
+): string {
+  return deleteInsertPlanToSparql(deleteShapelessToAlgebra(query, options), options);
 }
 
 /**

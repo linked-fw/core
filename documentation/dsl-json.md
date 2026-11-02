@@ -51,13 +51,49 @@ Every envelope carries a wire-format version under `v`:
 
 `fromJSON` checks it with `assertWireVersion`: a mismatched **major** is rejected; a missing
 `v` is tolerated (treated as the current major). Bump the major only for breaking wire changes.
+The current version is 1.10 (a terms read is `kind: "triples_terms"`, and every read goes to
+`readQuery`; see [Triples reads](#triples-reads)); 1.9 let a triples read list `objects` or
+`predicates` (the terms read, now its own kind); 1.8 carried a quantifier key's relation cast, `pets.as(Dog).some`,
+`as(X)` casts in condition and `sortBy` paths as fields carry them, and a `sortBy` filter on any
+relation segment; 1.7 added `sortBy` entries for a computed expression and a filtered path, and a quantifier
+as the condition of another; 1.6 added the `$type` path segment (see Paths), 1.5 `txId` (see [Transactions](#transactions-txid)), 1.4 triples reads by object and predicate.
 
 ## Envelopes
 
 Two families, distinguished structurally:
 
 - **Mutations** carry an `op` discriminator: `"create"`, `"update"`, `"upsert"`, or `"delete"`.
-- **Selects** carry no `op`.
+- **Selects** carry no `op`, unless they need a feature beyond the baseline (grouping, `min`,
+  `max`): then `"op": "select"` and `"requires": ["groupBy", "max"]`. A reader that predates
+  those features and reads envelopes through `fromJSON` has no `"select"` op and refuses the
+  envelope instead of answering without them (one that calls `SelectBuilder.fromJSON` directly
+  bypasses the `op` and would not notice); a current reader refuses a `requires` entry it does
+  not know.
+
+`limit`/`offset` page over the root subjects, not over result rows: a page is `limit`
+subjects after the first `offset`, each with all its values. On a grouped select they count
+groups.
+
+`sortBy` (and `groupOrderBy`) never removes a subject or a group, and one without a value for a
+key sorts after every one with a value, in both directions, whether the path is direct
+(`name`) or nested (`bestFriend.name`). A `sortBy` on a multi-valued or nested path sorts each
+subject by its first value in that direction (lowest `ASC`, highest `DESC`), of the values it
+has; keys are taken one by one, and ties are broken by the subject IRI when paging.
+
+A `sortBy` entry is a path, `{ "bestFriend.name": "ASC" }`; a path with a filtered segment, written
+as a field's is (`where` on segment `whereIndex`; an index that names no segment of the path is
+refused, in a field too):
+`{ "friends.hobby": { "direction": "ASC", "where": { "name": "Anna" }, "whereIndex": 0 } }`, which
+sorts each subject by the hobbies of the friends the filter keeps and keeps the others, last. The
+filter may sit further down (`"bestFriend.friends.hobby"` with `"whereIndex": 1`, since 1.8): a
+subject without a best friend, or whose best friend has no friend the filter keeps, is kept and
+sorts last; or a
+computed expression, `{ "value": ["STRLEN", { "@path": "hobby" }], "direction": "DESC" }` (two keys,
+so never read as a path; an expression holding an aggregate is refused). A key reads its path on its
+own: a filter elsewhere in the select does not narrow it. A reader before 1.7 does not take the two
+newer forms. A `where`
+holding an aggregate (`[">", ["count", …], 2]`) holds or fails per subject. A store that
+answers envelopes itself must sort, filter and page the same way.
 
 `fromJSON(json)` routes on `op` (and throws on an unrecognized `op` rather than silently
 treating it as a select). Only `v` and `shape` are always present; everything else is optional.
@@ -77,6 +113,32 @@ treating it as a select). Only `v` and `shape` are always present; everything el
   "nullSubject": true                               // .for(null) — resolves to no results
 }
 ```
+
+### Grouped selects
+
+A grouped select (`.groupBy(…)`, see the README) is a select envelope with `op`/`requires`, its
+fields in object form (every field named), and three more keys:
+
+```jsonc
+{
+  "v": "1.2", "op": "select", "requires": ["groupBy", "max"],
+  "shape": "https://linked.cm/shape/core/Person",
+  "fields": [
+    { "bestFriend": { "customKey": "friend" } },               // a key
+    { "customKey": "last", "value": ["max", { "@path": "birthDate" }] },  // an aggregate
+    { "customKey": "n", "value": ["count", { "@path": "" }] }  // Expr.count(): the members
+  ],
+  "where": { "hobby": "Reading" },                             // filters the members
+  "groupBy": ["friend"],                                       // key fields, by name
+  "having": [">", ["count", { "@path": "" }], 1],              // filters the groups
+  "groupOrderBy": [ { "field": "last", "direction": "DESC" } ]
+}
+```
+
+A grouped envelope cannot also carry `sortBy`, `subject`, `one` or `nullSubject`.
+Aggregates are computed fields: `["count", x]` (a count always counts distinct values),
+`["min", x]`, `["max", x]`. `.size()` on a relation stays `{ "<path>": { "aggregation": "count" } }`;
+any other `aggregation` value is refused.
 
 ## Paths
 
@@ -100,6 +162,25 @@ subject IRI (`.orderBy((p) => p)`), and `{ "@path": "" }` is the subject as an o
 `[">", ["STR", { "@path": "" }], "https://ex.org/p2"]` is `.where((p) => p.str().gt(…))`, the
 cursor of a list paged by subject.
 
+**`$`-prefixed segments are facts about the node, not shape fields** (version 1.6). `$type` is the
+node's `rdf:type` values: multi-valued IRI nodes, each answered as `{id}` like any relation. It
+resolves the same on every shape, never against a property of the shape, and may end a
+path or sit inside one:
+
+```jsonc
+"fields": ["name", "$type", "bestFriend.$type"]          // t.$type(), t.bestFriend.$type()
+"fields": [{ "$type": { "customKey": "kind" } },          // a group key: one group per type
+           { "customKey": "n", "value": ["count", { "@path": "" }] }], "groupBy": ["kind"]
+"where":  { "$type": { "@id": "https://ex.org/Robot" } }  // some type is Robot (implicit some)
+"where":  { "$type.none": { "": { "@id": "https://ex.org/Robot" } } }
+"sortBy": [ { "$type": "ASC" } ]
+```
+
+The types are whatever the store answers for `rdf:type`: on a store that infers classes, the
+stored and the inferred ones. A node with two types is in two groups of a `groupBy` on `$type`.
+A reader before 1.6 does not know the segment and refuses the path. `$graph` is reserved for a
+node's named graphs.
+
 A path that crosses a **plural** relation in a condition is an **implicit `some`** (existential):
 `{ "friends.name": "Moa" }` means *"has some friend named Moa"*. Use an explicit quantifier for
 compound predicates or for `every`/`none` (see Conditions).
@@ -108,7 +189,9 @@ A path segment may also **narrow type** with `as(<ShapeLabel>)`, mirroring the D
 `"pets.as(Dog).guardDogLevel"`. The shape is given by its short **label**, not its IRI, to keep
 the path readable. (This is the one place an argument-bearing call rides inside a path string;
 it is allowed because a cast is a path operation. The same inline `as(...)` form is used in a
-projection key — `{ "pets.as(Dog)": ["guardDogLevel"] }`.)
+projection key — `{ "pets.as(Dog)": ["guardDogLevel"] }` — and, since 1.8, in condition and `sortBy`
+paths and at the end of a quantifier's relation, `{ "pets.as(Dog).some": { "guardDogLevel": 2 } }`.)
+An unknown shape label is refused.
 
 ## Projection (`fields`)
 
@@ -177,7 +260,19 @@ nothing, an empty `notOneOf` matches everything. Everything else without a symbo
 { "friends.none":  { "hobby": "Chess" } }
 { "friends.some":  { "name": "Moa", "hobby": "Chess" } }        // compound predicate
 { "friends.some":  { "friends.some": { "name": "Moa" } } }      // nested
+{ "friends.some":  { "$type": { "@id": "https://ex.org/Robot" } } }  // a member's type
+{ "pets.as(Dog).some": { "guardDogLevel": 2 } }                 // members read as a cast shape
 ```
+
+The sub-condition reads the member's shape: the relation's `sh:node`, the shape targeting its
+`sh:class`, or the cast (`pets.as(Dog)`, version 1.8). A relation with none of them reads core's root
+`Shape`, so the member itself (`""`) and `$type` can be tested and any other path is refused, never
+read on the outer shape. An empty condition `{}` is refused (in a where, a quantifier or a filter).
+In an `and`/`or`, a quantifier may be any operand.
+
+A quantifier's condition may itself be a quantifier on the member's paths (an EXISTS inside the
+EXISTS; version 1.7). `every` of a quantifier is written as `none` of its negation, which holds for
+the same subjects.
 
 **Functions / aggregates in the key** (no-arg, trailing the path):
 
@@ -413,6 +508,72 @@ is then refused; without the option the flag is accepted.
   "keepIncoming": true }
 ```
 
+A **shapeless delete** (`Shape.delete(ids)`, version 1.3) names no shape: `"mode": "shapeless"`
+and its ids (absolute IRIs, or `{@ctx}`). The receiving store deletes every triple of each id and
+every link to it in every data graph of the dataset, the default graph included (never the graph
+registry or a graph it records as a shapes or ontology graph). `keepIncoming` keeps the
+links, under the same receiver rule as above. A `shape` on it is refused, and a reader before 1.3
+refuses the envelope (it has no shape). A receiver that executes it for a client decides who may
+send it; a store sent it must list `shapelessDelete` in `supports`.
+
+```jsonc
+{ "v":"1.3", "op":"delete", "mode":"shapeless", "ids": [ "https://ex.org/a", "https://ex.org/b" ] }
+```
+
+## Triples reads
+
+A triples read (`TriplesBuilder`, `NamedGraph.readContent`) is plain data, not a builder envelope:
+its wire form is the read itself, checked with `parseTriplesQuery` and sent to
+`IDataset.readQuery` (`fromJSON` refuses it and names `parseTriplesQuery`).
+
+```json
+{ "v": "1.4", "kind": "triples", "object": "https://ex.org/ont/Term", "graphs": ["https://ex.org/graph/ontology"] }
+{ "v": "1.4", "kind": "triples", "predicate": "https://ex.org/ont/p", "graphs": ["https://ex.org/graph/data"], "limit": 1 }
+```
+
+| Field | Meaning |
+|---|---|
+| `subject`, `predicate`, `object` | The pattern's fixed positions, absolute IRIs (the object is a node, never a literal). Absent = open. |
+| `graphs` | The graphs read, as `.from()` takes them (portable names included). |
+| `limit` | At most this many triples; no order. |
+| `recordClass` | A graph read's routing key (`DraftGraph.readContent(g)`). |
+
+A read needs a node (`subject` or `object`) or `graphs`; a `predicate` without a node needs
+`graphs`; all three positions fixed is refused. `predicate` and `object` arrived in **1.4**: a read
+that uses one needs the `triplesPattern` feature on the dataset it is sent to, because a reader
+before 1.4 keeps only the fields it knows and would answer a wider read.
+
+A **terms read** (`TriplesBuilder.toNode([…])` or `withPredicate([…])`, then `.whichExist()`) is
+its own kind, `"triples_terms"` (1.10), checked with `parseTriplesTermsQuery`. It lists the terms
+of one position (`objects` or `predicates`, a list of absolute IRIs, one list per read, in place of
+`object` or `predicate`) and asks which of them occur; its answer is a JSON array of the listed
+IRIs some triple of the read has. A list of `objects` is a node read (graphs optional); a list of
+`predicates` needs `graphs` unless the subject is fixed. It has no `limit` or `recordClass`, and
+needs the `triplesTerms` and `triplesPattern` features on the dataset it is sent to. A
+`"triples"` read with `objects` or `predicates` (the 1.9 form) is refused.
+
+```json
+{ "v": "1.10", "kind": "triples_terms", "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "objects": ["https://ex.org/ont/A", "https://ex.org/ont/B"], "graphs": ["https://ex.org/graph/data"] }
+{ "v": "1.10", "kind": "triples_terms", "predicates": ["https://ex.org/ont/p", "https://ex.org/ont/q"], "graphs": ["https://ex.org/graph/data"] }
+```
+
+## Transactions (`txId`)
+
+From version 1.5, any query envelope (select, count, ask, create, update, upsert, delete) may
+carry `"txId"`: the id of the store transaction it runs in, as the store answered
+`beginTransaction()` (see the README, "Transactions"). It is a non-empty string; anything else is
+refused.
+
+```jsonc
+{ "v":"1.5", "op":"create", "txId":"mem-a#tx-1", "shape":"https://ex.org/shape/AppConfig", "data": { "name":"x" } }
+```
+
+`fromJSON()` decodes the envelope and returns the query with `txId` set (`query.txId`), so the
+store it is routed to answers it inside that transaction. A builder's own `fromJSON` (e.g.
+`CreateBuilder.fromJSON`) refuses an envelope with a `txId` rather than drop it, and a store that
+does not declare `'transactions'` in `supports` is never sent one. Graph-query and triples-read
+envelopes carry no `txId`.
+
 ## Reserved words
 
 The **value-tags** are all `@`-sigiled — `@path`, `@id`, `@ctx`, `@date`, `@list`, `@add`,
@@ -420,17 +581,22 @@ The **value-tags** are all `@`-sigiled — `@path`, `@id`, `@ctx`, `@date`, `@li
 point of the sigil: a property literally named `path`, `id`, `date`, `list`, `add`, `remove`,
 `unset`, or `ctx` round-trips as its own bare key without any escape.
 
+The **node-metadata segments** are `$`-sigiled — `$type` (and `$graph`, reserved) — and are path
+segments, not value-tags: they name a fact about the node on every shape (see Paths). Registration
+refuses a property whose label starts with `$`. `$`-prefixed names and `and`/`or`/`not` throw; the
+other reserved names warn.
+
 The remaining reserved keys are the **structural / grammar** words, not value-tags: `and`, `or`,
 `not`, `as`, `value`, `where`, `fields`, `cast`, `one`, `call`, `args`, `some`, `every`, `none`,
 `minus`, `sortBy`, `subject`, `subjects`, `op`, `shape`, `data`, `mode`, `targetId`, `ids`, `keepIncoming`, `v`,
 and the operator symbols.
 
-**Key** position (a condition key) has no wrapper, so the three boolean **combinators `and` / `or`
-/ `not` are globally reserved** — a NodeShape may not declare a property with one of those labels
-(enforced at shape registration). The other structural words only matter as path suffixes, envelope
-fields, or option keys and do not collide with bare property labels. In **value / operand** position
-a property is always written `{ "@path": "<label>" }`, so even a label matching a structural word is
-unambiguous there.
+**Key** position (a condition key) has no wrapper, so a property labelled after one of the three
+boolean **combinators `and` / `or` / `not`** cannot be keyed: registration throws for such a label
+(a shape loaded as data is only reported, and the serializer writes a condition on it as an S-expr, `["=", { "@path": "and" }, "x"]`). The
+other structural words only matter as path suffixes, envelope fields, or option keys and do not
+collide with bare property labels. In **value / operand** position a property is always written
+`{ "@path": "<label>" }`, so even a label matching a structural word is unambiguous there.
 
 ## Producing and consuming DSL-JSON
 

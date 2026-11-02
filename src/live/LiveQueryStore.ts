@@ -17,6 +17,7 @@ import {
 import {
   catalogOf,
   getActiveShapeCatalog,
+  getAllNodeShapes,
   getShapeClass,
   withShapeCatalog,
 } from '../utils/ShapeClass.js';
@@ -502,6 +503,12 @@ export class LiveQueryStore {
     for (const catalog of this._catalogTemplates.keys()) {
       try {
         const effects = normalizeChange(event, {catalog});
+        if (effects.shape === '') {
+          // A shapeless delete names no shape: any of this catalog's shapes may have lost nodes.
+          const membership = new Set(withShapeCatalog(catalog, () => [...getAllNodeShapes().keys()]));
+          out.push([catalog, {...effects, membership}]);
+          continue;
+        }
         if ('effects' in event && !catalog.has(effects.shape)) continue;
         out.push([catalog, effects]);
       } catch {

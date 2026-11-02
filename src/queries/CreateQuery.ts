@@ -11,6 +11,8 @@ import type {CreateLowerSpec} from './mutationLowerSpec.js';
  */
 export interface CreateQuery {
   readonly __queryKind: 'create';
+  /** The store transaction this query runs in (`LinkedStorage.begin()`); absent outside one. */
+  readonly txId?: string;
   readonly shape: NodeShapeData;
   toJSON(): CreateMutationJSON;
   /** @internal IR-free lowering spec consumed by `lower()`. */

@@ -23,7 +23,9 @@ import type {IDataset} from '../interfaces/IDataset.js';
 import {PendingQueryContext} from './QueryContext.js';
 import {encodeContextRef, isContextRefJSON} from './ContextRef.js';
 import {WIRE_VERSION, assertWireVersion} from './wireVersion.js';
-import {getQueryDispatch, resolveExistence} from './queryDispatch.js';
+import {refuseTxIdIn} from './transactionQuery.js';
+import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
+import {getQueryDispatch, resolveRead} from './queryDispatch.js';
 import {resolveUriOrThrow} from '../utils/NodeReference.js';
 import {
   serializeWherePath,
@@ -103,6 +105,15 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
   /** Discriminator for the free `lower()` function and dataset routing. */
   readonly __queryKind = 'ask' as const;
 
+  /**
+   * The features beyond the baseline its where clause uses (`min`/`max`): checked against the
+   * dataset before it is sent, as for a select.
+   */
+  requiredFeatures(): QueryFeature[] {
+    const where = this._spec.where;
+    return featuresOfExpressions(where && 'expressionNode' in where ? [where.expressionNode.ir] : []);
+  }
+
   /** The shape asked about — `undefined` for a shapeless ask. */
   get shape(): NodeShapeData | undefined {
     return this._spec.shapeClass?.shape;
@@ -173,6 +184,7 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
 
   static fromJSON(json: AskQueryJSON): AskBuilder {
     assertWireVersion(json.v);
+    refuseTxIdIn(json, 'AskBuilder');
     const shapeClass = json.shape
       ? (resolveShape(json.shape as any) as ShapeConstructor<any>)
       : undefined;
@@ -228,7 +240,7 @@ export class AskBuilder implements PromiseLike<boolean>, Promise<boolean> {
     // `async` ensures a missing global dispatch rejects rather than throwing
     // synchronously past the caller's `.catch()`.
     const dispatch = target ?? getQueryDispatch();
-    return resolveExistence(dispatch as any, this);
+    return resolveRead(dispatch, this);
   }
 
 

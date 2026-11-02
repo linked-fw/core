@@ -19,6 +19,8 @@ import {packageShapesTurtle, singleOwnerShapesTurtle, packageShapes, packagesWit
 import {SHAPE_GRAPH_HASH_PREFIX, shapeGraphHash, syncShapeGraphs} from '../shapes/syncShapeGraphs';
 import type {IDataset} from '../interfaces/IDataset';
 import '../shapes/index';
+import {isSelectRead} from '../test-helpers/read-double';
+import type {ReadQuery, ReadResult} from '../queries/readQuery';
 
 const PKG = 'shape-graphs-unit';
 const {linkedShape} = linkedPackage(PKG);
@@ -65,11 +67,12 @@ class Recording extends SparqlDataset {
   records: Array<{id: string; package?: string; contentHash?: string}> = [];
   stale: Array<{id: string; shapeHash: string}> = [];
   refuseGraphs = false;
-  override async selectQuery(query: any): Promise<any> {
+  override async readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    if (!isSelectRead(query)) return super.readQuery(query);
     const shape = shapeOf(query);
-    if (shape === ShapesGraph.shape.id) return this.records.map((r) => ({...r}));
-    if (shape === NodeShape.shape.id) return this.stale.map((r) => ({...r}));
-    return [];
+    if (shape === ShapesGraph.shape.id) return this.records.map((r) => ({...r})) as unknown as ReadResult<Q>;
+    if (shape === NodeShape.shape.id) return this.stale.map((r) => ({...r})) as unknown as ReadResult<Q>;
+    return [] as unknown as ReadResult<Q>;
   }
   override async graphQuery(query: GraphQuery): Promise<GraphResult> {
     if (this.refuseGraphs) throw unsupportedGraphQuery(query);

@@ -44,6 +44,10 @@ product or version.
   `update().forAll()` / `.where()`), the owned-link class check, the owned walk's cycle hops and
   the single-owner SHACL constraint rely on it. Only classes are inferred: `rdfs:subPropertyOf`,
   `rdfs:domain` and `rdfs:range` are not needed.
+- **The hierarchy where the instances are.** A store infers from the ontology graphs it holds. The
+  routed ontology sync writes a package's ontology into every dataset the shapes using its classes
+  are pinned to (see [Ontology and shape graphs](#ontology-and-shape-graphs)), so a store holding
+  instances also holds their hierarchy.
 - **No graph-target setting.** A store takes no ontology or shape graph setting: where the syncs
   write is the process's one global setting (see [Ontology and shape graphs](#ontology-and-shape-graphs)),
   and every store's readers follow it.
@@ -162,6 +166,36 @@ store with graph queries; the ontology sync refuses one without them.
 
 **CN-managed apps must use `'package'` for both.** Create Now reads package graphs (catalogs, the
 gateway's graph rules) and reports another mode as an error.
+
+**Which datasets the syncs write to.** `syncShapeGraphs(ds)` and `syncOntologies(ds)` write into the
+one dataset they are given. The routed syncs (`syncShapeGraphsRouted`, `syncOntologiesRouted`,
+`@_linked/core/shapes/syncTargets`; what `@_linked/server`'s boot runs) follow the storage routing
+instead, and `graphSyncTargets()` tells where each graph goes:
+
+| Graph | Goes to |
+|---|---|
+| a package's shape graph | every dataset one of the package's shapes routes to, and the dataset(s) the shapes of `sh:NodeShape` / `sh:PropertyShape` route to |
+| a package's ontology graph | every dataset one of the package's shapes routes to, every dataset a shape targeting one of its classes (a class in its namespace) routes to, and the dataset(s) the ontology term shapes (`rdfs:Class`, `owl:Class`, `rdf:Property`, …) route to; so an ontology-only package follows the shapes that use it, and the hierarchy is where the instances are |
+| the app's shape graph | every dataset a shape it constrains routes to (the shapes that declare `contains` properties and their sub-shapes), and those of `sh:NodeShape` / `sh:PropertyShape` |
+
+A sub-shape follows its parent's pin; shapes the routing does not pin go to the default dataset,
+so an app without pins writes everything into the default dataset, exactly as before. Each package's
+text is read or generated once and every target gets the same bytes and hash. In the shared and
+`'default'` modes a dataset's graph holds the packages routed to it. A dataset that cannot be read
+or written fails alone: the routed sync reports it (`failed`) and syncs the others.
+
+When routing no longer sends a package's graph to a dataset (a pin moved), the routed sync drops
+it **only in the default dataset**. In another dataset it leaves the graph and reports it
+(`leftovers`, one warning): a store several apps share may hold another app's copy there. Drop
+those by hand once nothing reads them. The routed sync reads only the datasets the router knows, so
+a dataset nothing is pinned to any more is not looked at. In the `'default'` ontology mode the sync
+keeps one combined state per dataset and sweeps only the namespaces of the packages routed to it,
+so the terms of a package routed away stay in that dataset's default graph (it warns once).
+
+`graphContent()` (same module) answers what the `'package'`-mode syncs would write for each
+package (shape graph Turtle, ontology graph N-Triples, the hash each record gets, its sources) and
+for the app's graph, writing nothing. A host that writes an app's graphs itself reads them through
+`@_linked/server`'s `POST /admin/graph-content`.
 
 ## Repository setup (contributors)
 
@@ -834,6 +868,8 @@ The query DSL is schema-parameterized: you define your own SHACL shapes, and Lin
 - Set filtering with `some(...)` / `every(...)` (and implicit `some`)
 - Outer `where(...)` chaining
 - Counting: `.count()` for how many instances match, `.size()` for a property's value count
+- Grouping: `.groupBy('key')` with `Expr.count()`, `.countDistinct()`, `.min()`, `.max()`, `having`
+- A node's types with `$type()`: as a field, a group key, a filter, a sort key
 - Custom result formats (object mapping)
 - Computed values — derive new fields with arithmetic, string, date, and comparison methods
 - Expression-based WHERE filters (`p.name.strlen().gt(5)`)
@@ -966,6 +1002,184 @@ A count resolves to a real number and **rejects on failure** — it never report
 as `0`. `.toCount()` gives you the count query itself, for a router that forwards
 (`builder.toCount().toJSON()`) rather than executes.
 
+A count is always of distinct values, so two counted paths in one select do not inflate each
+other (`{friends: p.friends.size(), nicks: p.nickNames.size()}`).
+
+#### Grouping and aggregates
+
+Select the keys and the aggregates, filter the members with `where`, then group by the key
+fields, named as in the select's object:
+
+```typescript
+import {Expr} from '@_linked/core';
+
+/* Result: Array<{hobby: string; n: number}> */
+const perHobby = await Person.select((p) => ({hobby: p.hobby, n: Expr.count()}))
+  .where((p) => p.name.isDefined())
+  .groupBy('hobby');
+
+/* Result: Array<{friend: {id: string}; last: Date}> */
+const latest = await Person.select((p) => ({friend: p.bestFriend, last: p.birthDate.max()}))
+  .groupBy('friend')
+  .having('last', (last) => last.gt(new Date('2000-01-01')))
+  .orderBy('last', 'DESC')
+  .limit(10);
+
+// Lowers to: SELECT ?a0_bestFriend (MAX(?a0_birthDate) AS ?a2) WHERE { … }
+//            GROUP BY ?a0_bestFriend HAVING(MAX(?a0_birthDate) > "2000-01-01T00:00:00.000Z"^^xsd:dateTime)
+//            ORDER BY DESC(MAX(?a0_birthDate)) LIMIT 10
+```
+
+- **Aggregates:** `Expr.count()` (the members of the group), `.countDistinct()` on a
+  single-valued path, `.size()` on a multi-valued one, `.min()` / `.max()` on literal paths. Each
+  is typed: a count is a `number`, `min`/`max` the value's type.
+- **Keys:** `groupBy('a', 'b')` names one or more fields; every field that is not an aggregate
+  must be a key (a type error and a runtime error otherwise). A key can be a nested path
+  (`p.bestFriend.hobby`), a relation (its value is `{id}`), the subject itself (`{person: p}`), or
+  a multi-valued path, where each value is its own group. Members without the key form a group
+  whose key is `null`.
+- **The grouped builder** has `having(field, condition)` (several calls must all hold),
+  `orderBy(field | fields, direction)`, `limit`, `offset`, `from` and `exec`. It has no `where`
+  (filter the members before grouping), no `.for`/`.one`, and its rows have no `id`.
+- `groupBy` needs the object form of select, and is refused after `.for(id)`, `.one()`, an
+  `orderBy` on the members, or a `where` that holds an aggregate (filter groups with `having`).
+  A field is a key or an aggregate: arithmetic on aggregates (`Expr.count().plus(1)`) is one,
+  an aggregate mixed with a member's own value is refused. `orderBy` on a plain select sorts by
+  paths and refuses an aggregate. The grouped `orderBy` puts the group without a value for that
+  field last, in both directions (see "Sorting, limiting, one"). Aggregates are refused as update values.
+- Outside a grouped select, an aggregate is per row, like `.size()`:
+  `Person.select((p) => ({first: p.nickNames.min()}))`.
+
+A grouped select is still a select: a dataset receives it through `readQuery` and lowers it to
+an `IRSelectQuery` with `groupBy`. It needs the `'groupBy'` feature (`min`/`max` need theirs), and
+a dataset that does not list it in `supports` is refused before it is asked. `SparqlDataset`
+supports all of them.
+
+#### Node types (`$type()`)
+
+`$`-prefixed members are facts about the node, not shape fields. No property of a shape can
+shadow them, and they read the same on every shape. `$type()` is the node's `rdf:type` values:
+multi-valued IRI nodes, each typed `{id}`.
+
+```typescript
+/* Result: Array<{id: string; name: string; $type: {id: string}[]}> */
+const things = await Thing.select((t) => [t.name, t.$type()]);
+
+/* Result: Array<{kind: {id: string}; n: number}>: how many terms of each type a graph holds */
+const perType = await Term.select((t) => ({kind: t.$type(), n: Expr.count()}))
+  .from(graph)
+  .groupBy('kind');
+
+const hasClass = await Thing.select().where((t) => t.$type().equals({id: C})).exists();
+const notOfClass = await Thing.select((t) => t.name).where((t) => t.$type().none((c) => c.equals({id: C})));
+const byFriendType = await Person.select((p) => p.name).orderBy((p) => p.bestFriend.$type());
+```
+
+- **Where:** `equals(x)` holds when some type is `x` (as on any multi-valued relation:
+  `p.friends.equals({id})`). It is an EXISTS of its own, so a projected `$type()` keeps every
+  type and `t.$type().equals(A).and(t.$type().equals(B))` finds the nodes of both types; `.not()`
+  is "no type is `x`". `some(…)` and `none(…)` take a callback on the type node. A member's types
+  can be tested inside a quantifier, `p.friends.some((f) => f.$type().equals({id: C}).and(…))`,
+  or from the outside, `p.friends.$type().equals({id: C})` (some friend has type `C`). A
+  `some`/`every`/`none` callback takes any quantifier on the member's own paths
+  (`p.friends.some((f) => f.friends.some(…))`).
+- **Group key:** one group per type value. A node with two types is in two groups, so the counts
+  of a `groupBy` on `$type()` can add up to more than the number of nodes.
+- **Sorting** follows the rules in "Sorting, limiting, one": a node without a type (on a nested
+  path, say) sorts last, and a node with several types sorts by its lowest type IRI
+  ascending and its highest descending.
+- **Stored and inferred types:** `$type()` answers what the store answers for `rdf:type`. On a
+  store that infers classes through `rdfs:subClassOf` (CN's Fuseki, the inferring test image),
+  that is the stored types and every superclass; on a plain store, the stored ones only.
+  `InMemoryDataset` answers `$type()` as a field with the stored types, and refuses it in a where,
+  a group key or a sort key (as it refuses those on any path).
+- **DSL-JSON:** the path segment `$type` (`"fields": ["$type"]`, `"bestFriend.$type"`,
+  `"where": {"$type": {"@id": "…"}}`), wire version 1.6. A label select takes it too
+  (`select(['name', '$type'])`). **Reserved names:** `$`-prefixed names and `and`/`or`/`not` throw;
+  the other reserved names warn (a query builder member such as `size`), so an existing shape
+  keeps loading. A shape loaded as data is only reported. `$graph()` (a node's named graphs) is planned.
+
+#### Triples reads (no shape)
+
+Triples reads answer triples rather than rows, for data no shape describes (a draft graph, an
+import's staging graph, a node of unknown type, the references to a term):
+
+```typescript
+import {DraftGraph, TriplesBuilder} from '@_linked/core';
+import {graphs} from '@_linked/core/ontologies/graphs';
+import {rdf} from '@_linked/core/ontologies/rdf';
+
+// Every triple of one graph, registered or not. Routed like DraftGraph's graph queries, so it
+// reads where DraftGraph.replaceContent(graph, body) writes.
+const draft = await DraftGraph.readContent(graph).limit(1001);
+
+// One subject's triples (as a subject), under any type or none: in these graphs, or where a
+// shapeless ask of it looks (the default graph, or every graph the store's routing knows).
+const staged = await TriplesBuilder.forNode({id: instanceId}).from(importGraph).exec(dataset);
+const types = staged.filter((t) => t.predicate.id === rdf.type.id).map((t) => t.object);
+
+// The triples that point at a node (as their object), in the same graphs or the same fallback.
+const refs = await TriplesBuilder.toNode({id: term}).from(graphs.allOntologies).exec(dataset);
+
+// The triples of one predicate: it needs .from(), a predicate read names the graphs it reads.
+// .withPredicate(p) also narrows a node read; .exists() asks whether the read finds any triple.
+const used = await TriplesBuilder.withPredicate({id: property}).from(dataGraphs).exists(dataset);
+
+// A list of terms is a terms read: which of them occur, in one query (a Set of IRIs).
+const instantiated = await TriplesBuilder.toNode(classes).withPredicate(rdf.type).from(dataGraphs).whichExist(dataset);
+const usedProperties = await TriplesBuilder.withPredicate(properties).from(dataGraphs).whichExist(dataset);
+```
+
+Each answer is a `Triple[]`: `{subject, predicate, object, graph?}`. An IRI is `{id}`, a blank node
+`{id: '_:label'}` (the label holds within that answer only), and a literal `{value, datatype,
+language?}` with its lexical form and its datatype as `{id}` (`xsd:string` for a plain literal,
+`rdf:langString` for a tagged one), so a read writes back unchanged. `graph` is the named graph
+the triple was read in, absent for the default graph. `.limit(n)` bounds a read; no order is
+implied. `.from()` takes what select's `.from()` takes, portable names included. A read with
+no node (a subject or an object) and no graph is refused, and so is a predicate read without
+graphs. `.exists()` sends the read with `limit: 1` (a SPARQL store stops at the first match).
+
+`toNode` and `withPredicate` take a list of terms too (`[{id}, …]`, one list per read): a terms
+read. `.whichExist()` answers the `Set` of the listed IRIs that some triple of the read has in
+that position, sent to `IDataset.readQuery` as a terms read (`kind: 'triples_terms'`,
+`toTriplesTermsQuery()`, `parseTriplesTermsQuery()` at a wire boundary) to a dataset that lists
+`'triplesTerms'` and `'triplesPattern'` in `supports`; `SparqlDataset` answers it with
+`SELECT DISTINCT ?t WHERE { VALUES ?t { … } FILTER EXISTS { … } }`, one query per 400 terms, each
+term stopping at its first match. It has no `exec()` (it answers terms, not triples);
+`.exists()` asks whether any term occurs.
+
+A triples read is plain data (`toTriplesQuery()`, `parseTriplesQuery()` at a wire boundary) sent to
+`IDataset.readQuery`, only to a dataset that lists `'triples'` in `supports`. `SparqlDataset`
+answers it with one `SELECT`; a dataset that does not list it is refused. A read that fixes the predicate or the object (`toNode`,
+`withPredicate`) needs the `'triplesPattern'` feature in the dataset's `supports`: a dataset that
+predates it is refused rather than sent fields it would drop. `LinkedStorage` sends a graph read
+where its record class's graph queries go, and any other read (no shape, no routing key) to every
+dataset it knows, joining the answers up to the limit, as it asks a shapeless ask; `.exists()`
+stops at the first dataset that answers a triple. A router forwards it as a read.
+
+#### Shapeless reads across datasets
+
+A read with no shape has no routing key. `LinkedStorage` therefore sends a shapeless read that
+names no dataset to every dataset it knows: a node read (`TriplesBuilder.forNode({id})`,
+`toNode({id})`) or a predicate read is read in each and the answers joined, a shapeless ask (`Shape.exists(iri)` on the base class,
+`AskBuilder.forNode(iri)`) asks each in turn until one answers `true`. The answer is right, but it
+costs a query per dataset, so with more than one dataset configured it logs a notice
+(`console.warn`, `[linked] … sent it to all 2 datasets it knows …`) once per call site, naming the
+fix:
+
+```typescript
+await Shape.exists(iri, dataset);                          // ask one dataset
+await AskBuilder.forNode(iri).exec(dataset);
+await TriplesBuilder.forNode({id}).exec(dataset);          // read one dataset
+await TriplesBuilder.forNode({id}).from(importGraph);      // read only these graphs
+```
+
+There is no notice with one dataset, with an explicit dataset, for a shaped read (it routes by its
+shape), or for a triples read with `.from()` graphs, which still reads every dataset, in those
+graphs only. The call site is the first stack frame outside core. A builder awaited without
+`.exec()` (`await TriplesBuilder.forNode({id})`) runs from a microtask with its caller off the
+stack, so all such reads share one notice per kind of read.
+
 #### Custom result formats
 ```typescript
 /* Result: Array<{id: string; nameIsMoa: boolean; numFriends: number}> */
@@ -1017,6 +1231,10 @@ const birthYear = await Person.select((p) => ({
 | **Null-handling** | `isDefined`, `isNotDefined`, `defaultTo` |
 | **Type** | `str`, `iri`, `isIri`, `isLiteral`, `isBlank`, `isNumeric`, `lang`, `datatype` |
 | **Hash** | `md5`, `sha256`, `sha512` |
+
+Every single-valued literal on a query path has the methods of its type, in `select`, `where` and
+`update` callbacks alike. A relation (an object property) has `equals`, `oneOf`, `notOneOf`,
+`str`, `isDefined` and `isNotDefined`: `.where((k) => k.ofShape.isDefined())`.
 
 #### Expression-based WHERE filters
 
@@ -1093,7 +1311,50 @@ const noChess = await Person.select((p) => p.name).minus((p) => p.hobby.equals('
 const sorted = await Person.select((p) => p.name).orderBy((p) => p.name, 'ASC');
 const limited = await Person.select((p) => p.name).limit(1);
 const single = await Person.select((p) => p.name).one();
+const page3 = await Person.select((p) => [p.name, p.nickNames]).orderBy((p) => p).limit(20).offset(40);
 ```
+
+`limit(n)` and `offset(m)` page over the selected **instances** (the root subjects), not over
+the rows a store returns: a page holds `n` instances after the first `m`, and each has every
+value of every selected path, as without paging. An instance is never split across two pages,
+however many values its multi-valued paths have. `.one()` is the first instance, with all its
+values; `.for(id)` reads one instance and needs no limit.
+
+**Sorting never drops an instance, and missing values sort last**, ascending and descending,
+for direct and nested paths alike. With Anna (best friend Bob), Carl (best friend Ada) and Dirk
+(no best friend), `Person.select((p) => [p.name, p.bestFriend.name]).orderBy((p) =>
+p.bestFriend.name)` returns Carl, Anna, Dirk; with `'DESC'`, Anna, Carl, Dirk. The same holds
+for a direct path (`orderBy((p) => p.hobby)`: the instances without a hobby come last), paged
+or not, for `.one()` (the first instance that has the value, if any has it), and for a grouped
+select's `orderBy` (the group without the key's value, or whose aggregate has no value, comes
+last).
+
+An `orderBy` on a multi-valued or nested path (`p.nickNames`, `p.friends.name`) gives each
+instance one sort value: its first value in that direction, the lowest ascending and the
+highest descending, of the values it has. Each `orderBy` key is taken this way on its own, and
+on a page ties are broken by the instance's IRI, so consecutive pages neither repeat nor skip
+an instance. Without an `orderBy` the order of the instances, and so which ones a page holds,
+is the store's.
+
+A sort key can be a **computed expression** (`orderBy((p) => p.hobby.strlen())`), sorted by the
+same rules: an instance whose expression has no value (no hobby) comes last. A key holding an
+aggregate (`p.friends.size()`, `Expr.count()`) is refused; group the select and sort the groups
+instead. A sort path can **filter** a segment, `orderBy((p) => p.friends.where((f) =>
+f.name.equals('Anna')).hobby)`: each instance sorts by the hobbies of its friends named Anna, and
+an instance without such a friend is kept and comes last. The filter may sit on any relation of
+the path: with `orderBy((p) => p.bestFriend.friends.where(…).hobby)` an instance without a best
+friend, or whose best friend has no friend the filter keeps, is kept and comes last. A projection
+keeps those instances too (`select((p) => p.bestFriend.friends.where(…).name)`). A sort key reads
+its path on its own:
+a filter in the projection (`select((p) => p.friends.where(…).name)`) does not filter the
+friends an `orderBy((p) => p.friends.hobby)` reads. An `orderBy` callback that returns anything
+else (a string, `undefined`) is refused, never ignored.
+
+A `where` that holds an aggregate (`.where((p) => p.friends.size().equals(2))`) is tested per
+instance, paged or not, whatever the select reads next to it.
+
+A grouped select (`groupBy`, below) pages over its **groups**: `limit(10)` is ten groups.
+`count()` and `exists()` drop `limit` and `offset`.
 
 #### Query context
 Query context lets you inject request-scoped values (like the current user) into filters without threading them through every call.
@@ -1229,6 +1490,80 @@ await Person.deleteAll();
 // Conditional delete
 await Person.deleteWhere(p => p.status.equals('inactive'));
 ```
+
+A delete by id removes each node's triples, its blank values, its owned (`contains`) subtree and
+the links other nodes hold to it, in every graph that may hold one.
+
+**Shapeless delete.** On the base class, `Shape.delete(ids)` deletes nodes whose types the caller
+does not know: every triple whose subject is one of the ids, and every triple that links to one,
+in every data graph of the dataset: the default graph and each named graph, routed or not (never by
+way of `graphs.union`). Structure stays: the graph registry and the graphs it records as shapes or
+ontology graphs (`core:ShapesGraph`, `core:OntologyGraph`), which only graph queries write. One
+SPARQL update does it. There is no type guard and no cascade (no shape to read one from), and
+`.where()`, `.all()` and `.into()` are refused on it.
+
+```typescript
+await Shape.delete([{id: a}, {id: b}]);                    // LinkedStorage's one dataset
+await Shape.delete([{id: a}]).exec(dataset);               // a named dataset
+```
+
+A dataset is sent one only when it lists `'shapelessDelete'` in `supports` (`SparqlDataset`
+does); otherwise the delete is refused before it is sent. It is never fanned out: without a
+target, `LinkedStorage` sends it to the one dataset it knows, and refuses it when it knows several
+(name the dataset). It reaches every data graph, so a receiver that runs it for a client decides
+who may send it.
+
+#### Transactions
+
+`LinkedStorage.begin()` opens a store transaction; pass it to `exec(tx)`. No dataset is named: the
+transaction binds to a store when shape routing first sends one of its queries there, and calls
+that store's `beginTransaction()`. Every later query to that store carries the txId and is sent at
+once (nothing is buffered); reads in the transaction see its own writes, and nothing of it shows
+outside before the commit.
+
+```typescript
+import {LinkedStorage} from '@_linked/core';
+
+const tx = LinkedStorage.begin();             // nothing is sent yet
+await AppConfig.delete(oldId).exec(tx);       // routed to store X: X.beginTransaction() → t1
+await AppConfig.create(cfg).exec(tx);         // sent at once, with t1
+const c = await AppConfig.select().exec(tx);  // X answers with t1's own writes
+await tx.commit();                            // X.commit(t1)
+
+// The convenient form: commit on return, rollback on a throw.
+await LinkedStorage.transaction(async (tx) => {
+  await AppConfig.delete(oldId).exec(tx);
+  await AppConfig.create(cfg).exec(tx);
+});
+```
+
+- `exec(tx)` resolves when the store has applied the query inside the transaction.
+- A failed (or refused) query fails the transaction: it is rolled back in every store it reached,
+  and the error is passed on.
+- After the end, a query, a second `commit()` or a `rollback()` after a commit throws
+  `TransactionEndedError`; a `rollback()` of a rolled back transaction does nothing, so a `catch`
+  that rolls back never hides the error.
+- `tx.begin()` is refused (no nesting). Core has no async context, so pass `tx` on to the code that
+  should run in it.
+- An `update().for(id)` of a missing node writes nothing and resolves with its fields, as outside a
+  transaction.
+- Graph queries and triples reads do not run in a transaction.
+- Live queries hear of a transaction's writes when it commits.
+
+**Stores.** A store declares `'transactions'` in `supports` and implements `beginTransaction()`,
+`commit(txId)` and `rollback(txId)`; it reads the txId as `query.txId` (on DSL-JSON, from 1.5,
+as `txId`, which `fromJSON()` restores). It holds the transaction and rolls it back after an idle
+timeout of its own. A store without support (`SparqlDataset`, so Fuseki) is warned about once,
+loudly ("store X does not support transactions; these writes are not atomic"), and the queries run
+on it directly: core does not emulate transactions in SPARQL. A second store in one transaction
+gets a transaction of its own, with a warning that the stores together are not atomic. A query
+with a txId is refused by a store that does not declare `'transactions'`.
+
+`InMemoryDataset` (`@_linked/core/memory/InMemoryDataset`) keeps its data in memory and holds
+transactions for real: a snapshot at begin, swapped in at commit (refused when the store was
+written since), dropped at rollback, expired after 30 seconds idle (`transactionTimeoutMs`). It
+answers a subset of queries (creates, updates and deletes by id, selects, counts and asks of one
+shape with its own properties) and refuses the rest.
 
 
 ## Extending shapes
@@ -1626,6 +1961,17 @@ routes each query to a dataset by its target shape. A dataset can:
 - **execute it directly** against an in-memory graph,
 - **forward it** as [DSL-JSON](./documentation/dsl-json.md) (`query.toJSON()`) to another service, or
 - **lower it to an algebra** for a query engine, via the free `lower(query)` function.
+
+Every read reaches a dataset through one method, `readQuery(query)`, told apart by the query's
+kind (`readKindOf(query)`, `@_linked/core/queries/readQuery`): a select (`SelectResult`), a count
+(a `number`), an ask (a `boolean`), a triples read (`Triple[]`) or a terms read (`string[]`); the
+answer type follows the kind (`ReadResult<Q>`). Selects and counts are the baseline. A dataset
+declares the other reads it answers in `supports` (`'ask'`, `'triples'`, `'triplesTerms'`, next to
+`'groupBy'`, `'min'`, `'max'`, `'triplesPattern'`, …), and a read it does not declare is refused
+before it is sent; an ask to a dataset without `'ask'` is sent as a select `LIMIT 1` instead.
+Writes have their own methods (`createQuery`, `updateQuery`, `deleteQuery`, and `graphQuery` for
+a whole named graph). A router sends each read on with `resolveRead(dataset, query)`
+(`@_linked/core/queries/queryDispatch`), which makes those checks and checks the answer.
 
 **SPARQL is built in.** This package ships a `SparqlStore` base class (`@_linked/core/sparql`) — extend
 it for any SPARQL endpoint. Internally it calls `lower(query)` to obtain a normalized

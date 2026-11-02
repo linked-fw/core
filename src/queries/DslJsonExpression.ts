@@ -29,7 +29,11 @@ import {
 } from '../expressions/ExpressionNode.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import type {WherePath} from './SelectQuery.js';
-import {walkPropertyPath} from './PropertyPath.js';
+import type {PropertyPath} from './PropertyPath.js';
+import {castLabelOf, segmentIdsToStringWithCasts, walkPathWithCasts, walkRelationWithCast} from './castPaths.js';
+import {findPropertyShapeById, ROOT_SHAPE_IRI} from '../shapes/nodeShapeData.js';
+import {resolveRelationShape} from '../shapes/relationShape.js';
+import {getNodeShape, getQueryShapeClass} from '../utils/ShapeClass.js';
 import {isLinkedInstance} from '../utils/linkedError.js';
 
 // ---------------------------------------------------------------------------
@@ -100,9 +104,14 @@ export function segmentsToPath(segmentIds: readonly string[]): string {
   return segmentIds.map(labelOf).join('.');
 }
 
-/** A dotted label path → its property-shape IRIs, resolved against `shape`. */
+/** A dotted label path (casts allowed: `pets.as(Dog).guardDogLevel`) → its property-shape IRIs. */
 export function pathToSegmentIds(shape: NodeShapeData, path: string): string[] {
-  return walkPropertyPath(shape, path).segments.map((s) => s.id);
+  return walkPathWithCasts(shape, path).segments.map((s) => s.id);
+}
+
+/** Property-shape IRIs → a dotted path, with `as(X)` casts when `shape` (the path's root) is known. */
+function pathOfSegments(segmentIds: readonly string[], shape: NodeShapeData | undefined): string {
+  return shape ? segmentIdsToStringWithCasts(shape, segmentIds) : segmentsToPath(segmentIds);
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +130,10 @@ function mergeRefs(into: Map<string, readonly string[]>, from: PropertyRefMap): 
 export function encodeValueExpr(
   ir: IRExpression,
   refs: PropertyRefMap,
+  /** The root of the expression's paths; given, a path through a cast writes it (`as(Dog)`). */
+  shape?: NodeShapeData,
 ): DslJsonValue {
+  const value = (e: IRExpression) => encodeValueExpr(e, refs, shape);
   switch (ir.kind) {
     case 'literal_expr': {
       const v = ir.value as unknown;
@@ -135,33 +147,25 @@ export function encodeValueExpr(
       return {'@ctx': ir.contextName as string, '@path': labelOf(ir.property)};
     case 'property_expr': {
       const segs = refs.get(ir.sourceAlias);
-      return {'@path': segs ? segmentsToPath(segs) : labelOf(ir.property)};
+      return {'@path': segs ? pathOfSegments(segs, shape) : labelOf(ir.property)};
     }
     case 'alias_expr': {
       const segs = refs.get(ir.alias);
       // A bare alias_expr as a value is the node at the end of the traversal.
-      return {'@path': segs ? segmentsToPath(segs) : ir.alias};
+      return {'@path': segs ? pathOfSegments(segs, shape) : ir.alias};
     }
     case 'in_expr':
-      return [
-        ir.negated ? 'not-in' : 'in',
-        encodeValueExpr(ir.value, refs),
-        ...ir.source.list.map((e) => encodeValueExpr(e, refs)),
-      ];
+      return [ir.negated ? 'not-in' : 'in', value(ir.value), ...ir.source.list.map(value)];
     case 'binary_expr':
-      return [
-        ir.operator,
-        encodeValueExpr(ir.left, refs),
-        encodeValueExpr(ir.right, refs),
-      ];
+      return [ir.operator, value(ir.left), value(ir.right)];
     case 'logical_expr':
-      return [ir.operator, ...ir.expressions.map((e) => encodeValueExpr(e, refs))];
+      return [ir.operator, ...ir.expressions.map(value)];
     case 'not_expr':
-      return ['not', encodeValueExpr(ir.expression, refs)];
+      return ['not', value(ir.expression)];
     case 'function_expr':
-      return [ir.name, ...ir.args.map((a) => encodeValueExpr(a, refs))];
+      return [ir.name, ...ir.args.map(value)];
     case 'aggregate_expr':
-      return [ir.name, ...ir.args.map((a) => encodeValueExpr(a, refs))];
+      return [ir.name, ...ir.args.map(value)];
     default:
       throw new Error(`Cannot encode expression of kind '${(ir as {kind: string}).kind}'`);
   }
@@ -290,22 +294,36 @@ export function encodeCondition(
 }
 
 function encodeExists(ec: ExistsCondition, shape: NodeShapeData): DslJsonCondition {
-  const rel = segmentsToPath(ec.pathSegmentIds);
-  let quantifier: 'some' | 'none' | 'every';
-  let predIr = ec.predicate.ir;
-  const predRefs = ec.predicate._refs;
-  if (!ec.negated) {
-    quantifier = 'some';
-  } else if (predIr.kind === 'not_expr') {
-    // every(fn) was built as NOT EXISTS(NOT fn) — unwrap the inner predicate.
-    quantifier = 'every';
-    predIr = predIr.expression;
+  // The relation, then its cast when the members are read as another shape than the relation's
+  // own (`p.pets.as(Dog).some(…)` → `pets.as(Dog).some`); the condition's paths start there.
+  let rel = pathOfSegments(ec.pathSegmentIds, shape);
+  const relation = ec.pathSegmentIds.length ? findPropertyShapeById(ec.pathSegmentIds[ec.pathSegmentIds.length - 1]) : undefined;
+  const natural = relation ? relationMemberShape(relation) : undefined;
+  const cast = ec.memberShapeId && ec.memberShapeId !== natural?.id ? shapeOfId(ec.memberShapeId) : undefined;
+  if (cast) rel = `${rel}.as(${castLabelOf(cast)})`;
+  const member = cast ?? natural ?? rootShape();
+  let base: DslJsonCondition;
+  if (isLinkedInstance(ec.predicate, ExistsCondition)) {
+    // An inner quantifier, on the member's shape. every(fn) was built as NOT EXISTS(NOT fn),
+    // which is `none` of the negated inner one: the same members.
+    base = {
+      [`${rel}.${ec.negated ? 'none' : 'some'}`]: encodeCondition(ec.predicate, member),
+    };
   } else {
-    quantifier = 'none';
+    let quantifier: 'some' | 'none' | 'every';
+    let predIr = ec.predicate.ir;
+    const predRefs = ec.predicate._refs;
+    if (!ec.negated) {
+      quantifier = 'some';
+    } else if (predIr.kind === 'not_expr') {
+      // every(fn) was built as NOT EXISTS(NOT fn) — unwrap the inner predicate.
+      quantifier = 'every';
+      predIr = predIr.expression;
+    } else {
+      quantifier = 'none';
+    }
+    base = {[`${rel}.${quantifier}`]: encodeBoolExpr(predIr, predRefs, member)};
   }
-  let base: DslJsonCondition = {
-    [`${rel}.${quantifier}`]: encodeBoolExpr(predIr, predRefs, shape),
-  };
   // Fold any chained and/or conditions into nested logical combinators.
   for (const {op, condition} of ec.chain) {
     const c = encodeCondition(
@@ -335,33 +353,42 @@ function encodeBoolExpr(
     return {not: encodeBoolExpr(ir.expression, refs, shape)};
   }
   if (ir.kind === 'in_expr') {
-    const key = pathKeyOf(ir.value, refs);
+    const key = pathKeyOf(ir.value, refs, shape);
     if (key !== null) {
-      const list = ir.source.list.map((e) => encodeValueExpr(e, refs));
+      const list = ir.source.list.map((e) => encodeValueExpr(e, refs, shape));
       return {[key]: {[ir.negated ? 'notOneOf' : 'oneOf']: list}} as DslJsonCondition;
     }
   }
   if (ir.kind === 'binary_expr' && COMPARISON_OPS.has(ir.operator)) {
-    const key = pathKeyOf(ir.left, refs);
+    const key = pathKeyOf(ir.left, refs, shape);
     if (key !== null) {
-      const value = encodeValueExpr(ir.right, refs);
+      const value = encodeValueExpr(ir.right, refs, shape);
       if (ir.operator === '=') return {[key]: value};
       return {[key]: {[ir.operator]: value}};
     }
   }
   // Fallback: S-expr (boolean expression that isn't a simple path-keyed shape).
-  return encodeValueExpr(ir, refs) as DslJsonCondition;
+  return encodeValueExpr(ir, refs, shape) as DslJsonCondition;
 }
 
-/** A path key for a left operand that is a single property/alias/context property. */
-function pathKeyOf(ir: IRExpression, refs: PropertyRefMap): string | null {
+/**
+ * A path key for a left operand that is a single property/alias/context property. A path that
+ * is a combinator name (a property labelled `and`) has none: it would be read as the combinator,
+ * so the condition is written as an S-expr.
+ */
+function pathKeyOf(ir: IRExpression, refs: PropertyRefMap, shape: NodeShapeData): string | null {
+  const key = pathKeyOfOperand(ir, refs, shape);
+  return key !== null && COMBINATORS.has(key) ? null : key;
+}
+
+function pathKeyOfOperand(ir: IRExpression, refs: PropertyRefMap, shape: NodeShapeData): string | null {
   if (ir.kind === 'property_expr') {
     const segs = refs.get(ir.sourceAlias);
-    return segs ? segmentsToPath(segs) : labelOf(ir.property);
+    return segs ? pathOfSegments(segs, shape) : labelOf(ir.property);
   }
   if (ir.kind === 'alias_expr') {
     const segs = refs.get(ir.alias);
-    return segs ? segmentsToPath(segs) : null;
+    return segs ? pathOfSegments(segs, shape) : null;
   }
   if (ir.kind === 'context_property_expr') {
     return null; // a context property on the LHS is uncommon; use S-expr
@@ -413,12 +440,15 @@ function decodeConditionNode(
     }
     // and / or
     const elems = (o[k] as DslJsonCondition[]).map((c) => decodeConditionNode(c, shape));
-    // An exists-chain: first operand is an ExistsCondition → fold the rest as its chain.
-    if (isLinkedInstance(elems[0], ExistsCondition)) {
-      let ec = elems[0] as ExistsCondition;
-      for (let i = 1; i < elems.length; i++) {
-        ec = (k === 'and' ? ec.and(elems[i] as never) : ec.or(elems[i] as never)) as ExistsCondition;
-      }
+    // An exists-chain: the first quantifier leads and the other operands fold onto it in order
+    // (and/or are commutative in a filter, so `{"and": [{"name": …}, {"friends.some": …}]}` is
+    // the same condition).
+    const lead = elems.findIndex((e) => isLinkedInstance(e, ExistsCondition));
+    if (lead >= 0) {
+      let ec = elems[lead] as ExistsCondition;
+      elems.forEach((e, i) => {
+        if (i !== lead) ec = k === 'and' ? ec.and(e) : ec.or(e);
+      });
       return ec;
     }
     const refs = new Map<string, readonly string[]>();
@@ -433,17 +463,32 @@ function decodeConditionNode(
   if (keys.length === 1) {
     const q = matchQuantifier(keys[0]);
     if (q) {
-      const predicate = expressionNodeFromCondition(o[keys[0]] as DslJsonCondition, shape);
-      const segmentIds = pathToSegmentIds(shape, q.rel);
-      if (q.kind === 'some') return new ExistsCondition(segmentIds, predicate, false);
-      if (q.kind === 'none') return new ExistsCondition(segmentIds, predicate, true);
+      const {relation, cast} = walkRelationWithCast(shape, q.rel);
+      const segmentIds = relation.segments.map((s) => s.id);
+      // The condition is on a member: its paths are the member shape's (the cast's, if any).
+      const member = cast ?? memberShapeOf(relation);
+      const predicate = decodeConditionNode(o[keys[0]] as DslJsonCondition, member);
+      if (q.kind === 'some') return new ExistsCondition(segmentIds, predicate, false, [], member.id);
+      if (q.kind === 'none') return new ExistsCondition(segmentIds, predicate, true, [], member.id);
       // every(fn) = NOT EXISTS(NOT fn)
       return new ExistsCondition(
         segmentIds,
-        new ExpressionNode({kind: 'not_expr', expression: predicate.ir}, predicate._refs),
+        isLinkedInstance(predicate, ExistsCondition)
+          ? predicate.not()
+          : new ExpressionNode({kind: 'not_expr', expression: predicate.ir}, predicate._refs),
         true,
+        [],
+        member.id,
       );
     }
+  }
+
+  // There is no empty condition in the DSL: `{}` would lower to an empty FILTER().
+  if (keys.length === 0) {
+    throw new Error(
+      'DSL-JSON: an empty condition {} is not a condition (in a where, a quantifier or a filter). ' +
+        'Leave it out, or state the condition.',
+    );
   }
 
   // Path-keyed condition(s): one or more `path: value|opMap` → AND of comparisons.
@@ -512,6 +557,32 @@ function isOpMap(value: unknown): boolean {
   );
 }
 
+/**
+ * The shape of a relation's members, as the DSL resolves it: its `sh:node`, or the shape targeting
+ * its `sh:class`; else core's root `Shape`, so `equals`/`id` work and any other path is refused.
+ * Never the outer shape, whose same-label properties would bind silently.
+ */
+function memberShapeOf(relation: PropertyPath): NodeShapeData {
+  const last = relation.segments[relation.segments.length - 1];
+  return (last && relationMemberShape(last)) ?? rootShape();
+}
+
+/** The member shape of a relation as the DSL resolves it (`sh:node`, else the shape targeting `sh:class`). */
+export function relationMemberShape(relation: Parameters<typeof resolveRelationShape>[0]): NodeShapeData | undefined {
+  const {shapeId} = resolveRelationShape(relation);
+  return shapeId ? shapeOfId(shapeId) : undefined;
+}
+
+function shapeOfId(id: string): NodeShapeData | undefined {
+  return getQueryShapeClass(id)?.shape ?? getNodeShape(id);
+}
+
+function rootShape(): NodeShapeData {
+  const root = getNodeShape(ROOT_SHAPE_IRI);
+  if (!root) throw new Error(`DSL-JSON: core's root Shape (${ROOT_SHAPE_IRI}) is not registered.`);
+  return root;
+}
+
 function matchQuantifier(
   key: string,
 ): {rel: string; kind: 'some' | 'every' | 'none'} | null {
@@ -524,11 +595,3 @@ function matchQuantifier(
 }
 
 /** A quantifier predicate decodes to an ExpressionNode (its inner boolean). */
-function expressionNodeFromCondition(json: DslJsonCondition, shape: NodeShapeData): ExpressionNode {
-  const node = decodeConditionNode(json, shape);
-  if (isLinkedInstance(node, ExistsCondition)) {
-    // Nested exists as a predicate is uncommon; wrap is not representable here.
-    throw new Error('Nested exists inside a quantifier predicate is not supported');
-  }
-  return node;
-}

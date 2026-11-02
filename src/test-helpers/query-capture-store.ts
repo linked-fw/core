@@ -4,6 +4,8 @@ import {
   setBuildSelectQueryHook,
 } from '../queries/IRPipeline';
 import {lower} from '../queries/lower';
+import {ALL_QUERY_FEATURES} from '../queries/queryFeatures';
+import {readKindOf, type ReadQuery, type ReadResult} from '../queries/readQuery';
 
 // Datasets now receive the live (closed) query; tests expect the lowered IR, so
 // lower() what we capture. Passing an already-IR object through is tolerated.
@@ -31,17 +33,14 @@ setBuildSelectQueryHook((raw: any) => {
 });
 
 setQueryDispatch({
-  selectQuery: async (query) => {
+  readQuery: async <Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> => {
     const ir = toIR(query);
     _lastQuery = ir;
-    // A count rides the select channel, and its answer is a number: `resolveCount`
-    // refuses the `[]` a row query returns (which is how it catches a store that ran
-    // the pattern as a select instead of counting it).
-    return (ir?.kind === 'count' ? 0 : []) as any;
-  },
-  askQuery: async (query) => {
-    _lastQuery = toIR(query);
-    return false;
+    // A count's answer is a number: `resolveRead` refuses the `[]` a row query returns
+    // (which is how it catches a store that ran the pattern as a select instead of
+    // counting it). An ask answers false.
+    const kind = readKindOf(query);
+    return (kind === 'count' ? 0 : kind === 'ask' ? false : []) as ReadResult<Q>;
   },
   createQuery: async (query) => {
     _lastQuery = toIR(query);
@@ -55,6 +54,8 @@ setQueryDispatch({
     _lastQuery = toIR(query);
     return {deleted: [], count: 0};
   },
+  // Captures every query, grouped ones included.
+  supports: ALL_QUERY_FEATURES,
 });
 
 /**

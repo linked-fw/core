@@ -3,6 +3,7 @@ import type {
   IRDeleteMutation,
   IRDeleteAllMutation,
   IRDeleteWhereMutation,
+  IRDeleteShapelessMutation,
 } from './IntermediateRepresentation.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import type {DeleteMutationJSON} from './MutationSerialization.js';
@@ -15,14 +16,21 @@ import type {DeleteLowerSpec} from './mutationLowerSpec.js';
  */
 export interface DeleteQuery {
   readonly __queryKind: 'delete';
-  readonly shape: NodeShapeData;
+  /** The store transaction this query runs in (`LinkedStorage.begin()`); absent outside one. */
+  readonly txId?: string;
+  /** The shape deleted from — `undefined` for a shapeless delete (`Shape.delete(ids)`). */
+  readonly shape: NodeShapeData | undefined;
   toJSON(): DeleteMutationJSON;
   /** @internal IR-free lowering spec consumed by `lower()`. */
   _lowerSpec(): DeleteLowerSpec;
 }
 
 /** The lowered IR for a delete mutation (what `lower()` produces). */
-export type IRDeleteQuery = IRDeleteMutation | IRDeleteAllMutation | IRDeleteWhereMutation;
+export type IRDeleteQuery =
+  | IRDeleteMutation
+  | IRDeleteAllMutation
+  | IRDeleteWhereMutation
+  | IRDeleteShapelessMutation;
 
 export type DeleteResponse = {
   /**

@@ -48,12 +48,10 @@ const thrown = new StoreError(
 
 /** A dataset whose every query fails with `thrown`. */
 const failingStore = {
-  askQuery: async () => {
+  readQuery: async () => {
     throw thrown;
   },
-  selectQuery: async () => {
-    throw thrown;
-  },
+  supports: ['ask'],
 } as unknown as IDataset;
 
 beforeEach(() => {

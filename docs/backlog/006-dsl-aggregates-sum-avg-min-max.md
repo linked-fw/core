@@ -1,14 +1,29 @@
 ---
 summary: >
-  Expose sum/avg/min/max on the query DSL. The IR, the SPARQL layers and the DSL-JSON decoder
-  already carry all five aggregates; the DSL surface reaches count only (`.size()`). Absorbs the
-  former backlog 016 (aggregations).
+  Expose sum/avg on the query DSL. min/max, countDistinct, Expr.count() and grouping are done
+  (report 096); sum and avg remain, and need an answer to the fan-out of joined plural paths.
+  Absorbs the former backlog 016 (aggregations).
 packages: [core]
 ---
 
-# DSL aggregates: sum / avg / min / max
+# DSL aggregates: sum / avg
 
-## What exists
+## Done in report 096
+
+Grouped selects (`select(…).groupBy('key')`), `Expr.count()`, `.countDistinct()`, `.min()`,
+`.max()` on literal paths (per group, or per row outside a grouped select), and every count
+lowered to `COUNT(DISTINCT …)`. The placement question is answered: methods on paths, plus
+`Expr.count()` for the members of a group. min/max are typed by the value (`Date` stays `Date`).
+
+## What remains: sum and avg
+
+`SUM`/`AVG` over a path joined with another plural path in the same select are inflated by the
+cross product, and `DISTINCT` does not fix a sum (two equal values are both counted). Options: one
+sub-select per aggregated path, or refuse a sum next to another plural path. Then
+`.sum()`/`.avg()` beside `min`/`max` in `AggregateMethods` (numeric only), the `'sum'`/`'avg'`
+query features, and their result types (`avg` of integers is a decimal).
+
+## What existed before report 096
 
 - The IR's `IRAggregateExpression` names `count | sum | avg | min | max`
   (`src/queries/IntermediateRepresentation.ts:295`); `irToAlgebra` and `algebraToString` lower
@@ -23,7 +38,7 @@ Settled elsewhere, so not part of this item:
 
 - `.count()` vs `.size()`: `.count()` is the match count of a whole query, `.size()` a property's
   value count per row (README §Counting; report 030). No alias.
-- Explicit `.groupBy()` and HAVING-style aggregate filters: backlog 012.
+- Explicit `.groupBy()` and HAVING-style aggregate filters: done (report 096; backlog 012 closed).
 - `COUNT(DISTINCT …)` and other DISTINCT aggregates: backlog 020.
 
 ## Sketch

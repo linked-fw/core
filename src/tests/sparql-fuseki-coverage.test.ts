@@ -1,7 +1,7 @@
 /**
  * Fuseki E2E coverage tests — exercises features supported by core but not
  * covered by sparql-fuseki.test.ts. Result assertions go through the live-query
- * store contract (FusekiStore.selectQuery/createQuery/updateQuery/deleteQuery),
+ * store contract (FusekiStore.readQuery/createQuery/updateQuery/deleteQuery),
  * which lowers internally — IR stays an internal detail.
  *
  * Live blocks run through `describeFuseki`: skipped visibly without Fuseki, and a failure under CI
@@ -171,7 +171,7 @@ const ids = (rows: Row[]): string[] =>
   rows.map((r) => r.id.replace(ENT, '')).sort();
 
 const runSel = (name: keyof typeof queryFactories) =>
-  store.selectQuery((queryFactories as any)[name]());
+  store.readQuery((queryFactories as any)[name]());
 
 const find = (rows: Row[], id: string): Row =>
   rows.find((r) => r.id.includes(id))!;
@@ -181,7 +181,7 @@ const find = (rows: Row[], id: string): Row =>
 // =========================================================================
 describeFuseki('coverage tails — operators & paths', () => {
   const P1 = {id: `${ENT}p1`}, PNA = {id: `${ENT}pna`};
-  const one = async (q: any, key: string) => ((await store.selectQuery(q)) as Row)[key];
+  const one = async (q: any, key: string) => ((await store.readQuery(q)) as Row)[key];
 
   test('date components hours/minutes/seconds (p1 13:45:30)', async () => {
     expect(await one(Person.select((p: any) => ({r: p.birthDate.hours()})).for(P1), 'r')).toBe(13);
@@ -194,18 +194,18 @@ describeFuseki('coverage tails — operators & paths', () => {
   });
 
   test('isLiteral / isNumeric introspection (filter)', async () => {
-    expect(ids((await store.selectQuery(Person.select().where((p: any) => p.name.isLiteral()))) as Row[]))
+    expect(ids((await store.readQuery(Person.select().where((p: any) => p.name.isLiteral()))) as Row[]))
       .toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
-    expect((await store.selectQuery(Person.select().where((p: any) => p.name.isNumeric()))) as Row[]).toEqual([]);
+    expect((await store.readQuery(Person.select().where((p: any) => p.name.isNumeric()))) as Row[]).toEqual([]);
   });
 
   test('zeroOrMore path knows*/name (pna → self + transitive)', async () => {
-    const r = (await store.selectQuery(PathNode.select((n: any) => n.knowsChainNames).for(PNA))) as Row;
+    const r = (await store.readQuery(PathNode.select((n: any) => n.knowsChainNames).for(PNA))) as Row;
     expect([...(r.knowsChainNames as string[])].sort()).toEqual(['A', 'B', 'C']);
   });
 
   test('zeroOrOne path knows?/name (pna → self + direct)', async () => {
-    const r = (await store.selectQuery(PathNode.select((n: any) => n.maybeKnownNames).for(PNA))) as Row;
+    const r = (await store.readQuery(PathNode.select((n: any) => n.maybeKnownNames).for(PNA))) as Row;
     expect([...(r.maybeKnownNames as string[])].sort()).toEqual(['A', 'B']);
   });
 });
@@ -221,7 +221,7 @@ describeFuseki('coverage tails — DSL-JSON delete & {$ctx} mutations', () => {
     await executeSparqlUpdate(`DELETE { <${ENT}p2> <${PROP}hobby> ?o } INSERT { <${ENT}p2> <${PROP}hobby> "Chess" } WHERE { <${ENT}p2> <${PROP}hobby> ?o }`);
     const dq = queryFactories.deleteWhere();
     await store.deleteQuery(fromJSON((dq as any).toJSON()) as any);
-    expect(ids((await store.selectQuery(queryFactories.selectName())) as Row[]))
+    expect(ids((await store.readQuery(queryFactories.selectName())) as Row[]))
       .toEqual(['p1', 'p3', 'p4', 'p5']);
   });
 
@@ -242,18 +242,18 @@ describeFuseki('coverage tails — DSL-JSON delete & {$ctx} mutations', () => {
 // §5 — Builder features (ordering / pagination)
 // =========================================================================
 describeFuseki('coverage §5 — builder features', () => {
-  const names = async (q: any) => ((await store.selectQuery(q)) as Row[]).map((r) => r.name);
+  const names = async (q: any) => ((await store.readQuery(q)) as Row[]).map((r) => r.name);
 
   test('orderBy DESC', async () => {
     expect(await names(Person.select((p: any) => p.name).orderBy((p: any) => p.name, 'DESC')))
       .toEqual(['Semmy', 'Quinn', 'Moa', 'Maximilian', 'Jinx']);
   });
 
-  test('multi-key orderBy [hobby, name] (nulls first, then by name)', async () => {
-    const rows = (await store.selectQuery(
+  test('multi-key orderBy [hobby, name] (missing hobby last, then by name)', async () => {
+    const rows = (await store.readQuery(
       Person.select((p: any) => [p.name, p.hobby]).orderBy((p: any) => [p.hobby, p.name]),
     )) as Row[];
-    expect(rows.map((r) => r.name)).toEqual(['Jinx', 'Maximilian', 'Quinn', 'Moa', 'Semmy']);
+    expect(rows.map((r) => r.name)).toEqual(['Moa', 'Semmy', 'Jinx', 'Maximilian', 'Quinn']);
   });
 
   test('top-level offset + limit windowing', async () => {
@@ -266,7 +266,7 @@ describeFuseki('coverage §5 — builder features', () => {
     const pageAfter = (lastId?: string) => {
       let q = Person.select((p: any) => p.name);
       if (lastId) q = q.where((p: any) => p.str().gt(lastId));
-      return store.selectQuery(q.orderBy((p: any) => p).limit(2)) as Promise<Row[]>;
+      return store.readQuery(q.orderBy((p: any) => p).limit(2)) as Promise<Row[]>;
     };
     const seen: string[] = [];
     let rows = await pageAfter();
@@ -288,8 +288,8 @@ describeFuseki('coverage §6 — DSL-JSON round-trip', () => {
     const q = Person.select((p: any) => [p.name, p.friends.name]);
     const json = (q as any).toJSON();
     expect(json.v).toBe(WIRE_VERSION);
-    const direct = await store.selectQuery(q);
-    const viaJson = await store.selectQuery(fromJSON(json) as any);
+    const direct = await store.readQuery(q);
+    const viaJson = await store.readQuery(fromJSON(json) as any);
     expect(viaJson).toEqual(direct);
   });
 
@@ -317,7 +317,7 @@ describeFuseki('coverage §7 — {$ctx} context', () => {
   beforeEach(async () => { await reloadBase(); });
 
   test('context as select subject (user = p3 → Jinx)', async () => {
-    const r = (await store.selectQuery(
+    const r = (await store.readQuery(
       Person.select((p: any) => p.name).for(getQueryContext('user')),
     )) as Row;
     expect(r.id).toContain('p3');
@@ -325,14 +325,14 @@ describeFuseki('coverage §7 — {$ctx} context', () => {
   });
 
   test('context as where-arg (bestFriend == user p3 → p2)', async () => {
-    expect(ids((await store.selectQuery(
+    expect(ids((await store.readQuery(
       Person.select().where((p: any) => p.bestFriend.equals(getQueryContext('user'))),
     )) as Row[])).toEqual(['p2']);
   });
 
   test('delete-by-context removes the context entity (p3)', async () => {
     await store.deleteQuery(Person.delete(getQueryContext('user')) as any);
-    const remaining = (await store.selectQuery(queryFactories.selectName())) as Row[];
+    const remaining = (await store.readQuery(queryFactories.selectName())) as Row[];
     expect(ids(remaining)).toEqual(['p1', 'p2', 'p4', 'p5']);
   });
 
@@ -351,28 +351,28 @@ describeFuseki('coverage §4 — property paths', () => {
   const PNB = {id: `${ENT}pnb`};
 
   test('sequence path: knows/name (pna → "B")', async () => {
-    const r = (await store.selectQuery(
+    const r = (await store.readQuery(
       PathNode.select((n: any) => n.friendName).for(PNA),
     )) as Row;
     expect(r.friendName).toBe('B');
   });
 
   test('alternative path: email|phone (pna → both)', async () => {
-    const r = (await store.selectQuery(
+    const r = (await store.readQuery(
       PathNode.select((n: any) => n.contact).for(PNA),
     )) as Row;
     expect([...(r.contact as string[])].sort()).toEqual(['555', 'a@x']);
   });
 
   test('inverse+sequence path: ^knows/name (pnb → "A")', async () => {
-    const r = (await store.selectQuery(
+    const r = (await store.readQuery(
       PathNode.select((n: any) => n.knownByName).for(PNB),
     )) as Row;
     expect(r.knownByName).toBe('A');
   });
 
   test('transitive path: manages+/name (pna → ["B","C"])', async () => {
-    const r = (await store.selectQuery(
+    const r = (await store.readQuery(
       PathNode.select((n: any) => n.reportNames).for(PNA),
     )) as Row;
     expect([...(r.reportNames as string[])].sort()).toEqual(['B', 'C']);
@@ -384,10 +384,10 @@ describeFuseki('coverage §4 — property paths', () => {
 // =========================================================================
 const P1 = {id: `${ENT}p1`}, M1 = {id: `${ENT}m1`}, M2 = {id: `${ENT}m2`};
 const projVal = async (q: any, key = 'r') => {
-  const r = (await store.selectQuery(q)) as any;
+  const r = (await store.readQuery(q)) as any;
   return Array.isArray(r) ? r.map((x) => x[key]) : r?.[key];
 };
-const filterIds = async (q: any) => ids((await store.selectQuery(q)) as Row[]);
+const filterIds = async (q: any) => ids((await store.readQuery(q)) as Row[]);
 
 describeFuseki('coverage §2 — string operators', () => {
   test('substr / replace / concat / before / after (projection)', async () => {
@@ -461,7 +461,7 @@ describeFuseki('coverage §2 — null / introspection / hash', () => {
     expect(await filterIds(Person.select().where((p: any) => p.hobby.isDefined()))).toEqual(['p1', 'p2']);
   });
   test('defaultTo (coalesce) fills missing hobby', async () => {
-    const r = (await store.selectQuery(Person.select((p: any) => ({r: p.hobby.defaultTo('none')})))) as Row[];
+    const r = (await store.readQuery(Person.select((p: any) => ({r: p.hobby.defaultTo('none')})))) as Row[];
     expect(Object.fromEntries(r.map((x) => [x.id.replace(ENT, ''), x.r]))).toEqual({
       p1: 'Reading', p2: 'Jogging', p3: 'none', p4: 'none', p5: 'none',
     });
@@ -491,7 +491,7 @@ describeFuseki('coverage §2 — null / introspection / hash', () => {
     ]);
   });
   test('Expr.ifThen picks the matching branch per row', async () => {
-    const r = (await store.selectQuery(
+    const r = (await store.readQuery(
       Person.select((p: any) => ({r: Expr.ifThen(p.name.equals('Semmy'), 'yes', 'no')})),
     )) as Row[];
     expect(Object.fromEntries(r.map((x) => [x.id.replace(ENT, ''), x.r]))).toEqual({
@@ -508,7 +508,7 @@ describeFuseki('coverage §2 — null / introspection / hash', () => {
 // =========================================================================
 describeFuseki('coverage §3 — datatypes', () => {
   test('decimal/double/long/integer coerce to JS number', async () => {
-    const m = (await store.selectQuery(
+    const m = (await store.readQuery(
       Metric.select((x: any) => [x.score, x.rating, x.views, x.count]).for({id: `${ENT}m1`}),
     )) as Row;
     expect(m.score).toBe(3.14);
@@ -519,7 +519,7 @@ describeFuseki('coverage §3 — datatypes', () => {
   });
 
   test('xsd:date coerces to a JS Date', async () => {
-    const m = (await store.selectQuery(
+    const m = (await store.readQuery(
       Metric.select((x: any) => x.joinedOn).for({id: `${ENT}m1`}),
     )) as Row;
     expect(m.joinedOn instanceof Date).toBe(true);
@@ -527,7 +527,7 @@ describeFuseki('coverage §3 — datatypes', () => {
   });
 
   test('negative numbers round-trip', async () => {
-    const m = (await store.selectQuery(
+    const m = (await store.readQuery(
       Metric.select((x: any) => [x.score, x.count]).for({id: `${ENT}m2`}),
     )) as Row;
     expect(m.score).toBe(-7.25);
@@ -535,7 +535,7 @@ describeFuseki('coverage §3 — datatypes', () => {
   });
 
   test('multi-valued numeric literal collects, dedups, into number[]', async () => {
-    const m = (await store.selectQuery(
+    const m = (await store.readQuery(
       Metric.select((x: any) => x.scores).for({id: `${ENT}m1`}),
     )) as Row;
     expect(Array.isArray(m.scores)).toBe(true);
@@ -887,7 +887,7 @@ describeFuseki('coverage §1 — bulk/conditional mutations', () => {
   test('deleteWhere — delete persons with hobby=Chess (set p2 Chess first)', async () => {
     await executeSparqlUpdate(`DELETE { <${ENT}p2> <${PROP}hobby> ?o } INSERT { <${ENT}p2> <${PROP}hobby> "Chess" } WHERE { <${ENT}p2> <${PROP}hobby> ?o }`);
     await store.deleteQuery(queryFactories.deleteWhere());
-    const remaining = (await store.selectQuery(queryFactories.selectName())) as Row[];
+    const remaining = (await store.readQuery(queryFactories.selectName())) as Row[];
     expect(ids(remaining)).toEqual(['p1', 'p3', 'p4', 'p5']);
   });
 
@@ -911,7 +911,7 @@ describeFuseki('coverage §1 — bulk/conditional mutations', () => {
 
   test('whereExprDeleteBuilder — delete where strlen(name)>3', async () => {
     await store.deleteQuery(queryFactories.whereExprDeleteBuilder() as any);
-    const remaining = (await store.selectQuery(queryFactories.selectName())) as Row[];
+    const remaining = (await store.readQuery(queryFactories.selectName())) as Row[];
     // only Moa (len 3) survives
     expect(ids(remaining)).toEqual(['p2']);
   });

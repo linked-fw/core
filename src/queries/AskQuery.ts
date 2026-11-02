@@ -35,6 +35,8 @@ import type {
  */
 export interface AskQuery {
   readonly __queryKind: 'ask';
+  /** The store transaction this query runs in (`LinkedStorage.begin()`); absent outside one. */
+  readonly txId?: string;
   /** The shape whose instances are asked about; absent for a shapeless ask. */
   readonly shape?: NodeShapeData;
   toJSON(): AskQueryJSON;
@@ -76,6 +78,8 @@ export type RawAskInput = {
  */
 export type AskQueryJSON = {
   v?: string;
+  /** The store transaction the query runs in (DSL-JSON 1.5); absent outside one. */
+  txId?: string;
   op: 'ask';
   /** Omitted for a shapeless ask (no `rdf:type` constraint). */
   shape?: string;
