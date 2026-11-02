@@ -1,5 +1,183 @@
 # Changelog
 
+## 2.46.0
+
+### Minor Changes
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`4aa1b8d`](https://github.com/linked-fw/core/commit/4aa1b8d1ddeb10fe94fefa8c944c0179da330bae) Thanks [@flyon](https://github.com/flyon)! - Component index vocabulary: `core:Component`, `core:SetComponent`, `core:ComponentsGraph`, `core:definesComponent`, `core:exportName`, `core:startShape`, `core:queryShape` and `core:query` in `coreOntology` and `core.ttl`, and `rdf:JSON` in the `rdf` module. `linked build` uses them for a package's `lib/esm/data/components.ttl`.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`e878273`](https://github.com/linked-fw/core/commit/e87827357715ab84c411d241df2ef48b3b336926) Thanks [@flyon](https://github.com/flyon)! - `ComponentsGraph`, the graph-registry record class of a package's component index graph (`core:ComponentsGraph`, beside `ShapesGraph`), with the record fields `package`, `version`, `commit` and `sources`; the new `core:commit` term (`coreOntology.commit`, `core.ttl`) records the commit a graph's content was built from.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`6d9a874`](https://github.com/linked-fw/core/commit/6d9a8741d68859837a992a1367bd4c750db38917) Thanks [@flyon](https://github.com/flyon)! - A shape may declare the graphs a read of it covers without `.from()`: `static defaultReadGraphs`,
+  inherited by subclasses. `NodeShape` and `PropertyShape` declare `graphs.allShapes`, so a select,
+  count or ask of them reads every shape graph the registry lists (with `@_linked/rdfs`'s next minor,
+  its `Class` and `Property`, and OWL's term shapes through them, read `graphs.allOntologies`). The
+  set is put on the IR when the read is lowered, so access rules see it; an explicit `.from()` wins;
+  writes are unchanged. A graph route for such a shape is refused (`graph-name-read-only`).
+  `InMemoryDataset` reads its one graph for `graphs.allOntologies` / `graphs.allShapes`. The
+  default-graph shape sync (`syncShapes`) reads the default graph explicitly. Code that writes
+  NodeShapes into the default graph and reads them back without `.from()` now adds
+  `.from(graphs.default)`. See docs/architecture/ontologies.md, "A shape's default read set".
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`3764a57`](https://github.com/linked-fw/core/commit/3764a57b53be3d0691afb980563f1ffc42ad9eab) Thanks [@flyon](https://github.com/flyon)! - Triples reads by object and by predicate, and an IRI-valued graph-record field.
+  
+  - `TriplesBuilder.toNode({id})` reads the triples whose object is that node, optionally
+    `.from(graphs)` (without graphs it looks where a subject read looks).
+  - `TriplesBuilder.withPredicate({id})` reads the triples of one predicate; it needs `.from(graphs)`.
+    `.withPredicate({id})` on a read narrows it to that predicate.
+  - `.exists(target?)` on a triples read: the read with `limit: 1`, `true` when a triple comes back.
+  - `TriplesQuery` gains `predicate` and `object`. A read that uses one needs the new query feature
+    `triplesPattern` in the dataset's `supports` (`SparqlDataset` lists it); other datasets are
+    refused before they are asked. DSL-JSON wire version 1.4.
+  - `NamedGraph.attributedTo` (`prov:wasAttributedTo`, an IRI, maxCount 1), on every graph-record
+    class: `ShapesGraph.update(g).set({attributedTo: {id}}).replaceContent(c)` writes the mark in the
+    same graph query as the content, `set({attributedTo: null})` clears it, and
+    `select(g => [g.attributedTo])` reads it as `{id}`. A record field set to `null` is cleared. A record
+    field can now be a node (`GraphRecordField` with `nodeKind: 'iri'`, values `{id}`); new terms
+    module `@_linked/core/ontologies/prov`.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`81f3a67`](https://github.com/linked-fw/core/commit/81f3a670a3090feb1b72ca2d8a48e4bca763ad37) Thanks [@flyon](https://github.com/flyon)! - One read method: `IDataset.readQuery(query)` answers every read, by the query's kind.
+  
+  - `readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>>` replaces `selectQuery`,
+    `askQuery` and the unreleased `triplesQuery` / `triplesTermsQuery` (no aliases). A select answers
+    `SelectResult`, a count a `number`, an ask a `boolean`, a triples read `Triple[]`, a terms read
+    `string[]`. `@_linked/core/queries/readQuery` has the types and `readKindOf(query)`,
+    `readKindOfJSON(json)` (a wire body's kind, before decoding; refuses writes and graph queries)
+    and `readFeaturesOf(query)`. `graphQuery` stays a method of its own: a graph query is a write.
+  - New query features `'ask'`, `'triples'` and `'triplesTerms'` (in `ALL_QUERY_FEATURES`; a
+    `SparqlDataset` lists them). A read a dataset does not declare is refused before it is sent;
+    an ask to a dataset without `'ask'` is still answered, as a select `LIMIT 1`.
+    `InMemoryDataset.supports` adds `'ask'`.
+  - The dispatch: `QueryDispatch.readQuery`; `resolveRead(target, query)` (the feature checks, the
+    ask fallback, the answer checks), `dispatchRead(query, target?)` and
+    `assertReadSupported(target, query)` replace `resolveExistence`, `resolveCount`,
+    `resolveTriples`, `resolveTriplesTerms`, `dispatchTriplesQuery`, `dispatchTriplesTermsQuery`,
+    `assertTriplesTarget` and `assertTriplesTermsTarget`. A router that lists `ALL_QUERY_FEATURES`
+    forwards each read through `resolveRead`. Listener event kinds are unchanged.
+  - `LinkedStorage.readQuery(query)` replaces the `selectQuery` and `askQuery` statics and routes
+    every read as they did. `Transaction.readQuery` runs selects, counts and asks in the
+    transaction and refuses triples and terms reads; `TransactionRouter.readQuery` replaces its
+    `selectQuery` / `askQuery`.
+  - A terms read is a `TriplesTermsQuery` of its own kind, `'triples_terms'`
+    (`TriplesBuilder…toTriplesTermsQuery()`, `parseTriplesTermsQuery`, `isTriplesTermsQuery`);
+    `TriplesQuery` has no `objects` / `predicates`, and `parseTriplesQuery` refuses them.
+  - DSL-JSON wire version 1.10.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`e15e756`](https://github.com/linked-fw/core/commit/e15e7563dedad3dc436b4ffe5fc5fb2cb51d9f0b) Thanks [@flyon](https://github.com/flyon)! - Grouped selects: `Shape.select((s) => ({key: s.path, n: Expr.count()})).where(…).groupBy('key')` returns a `GroupedSelectBuilder` with `having(field, condition)`, `orderBy(field | fields, direction)`, `limit`, `offset`, `from`, `exec` and its DSL-JSON form. New aggregates `Expr.count()`, `.countDistinct()`, `.min()`, `.max()` (per group, or per row outside a grouped select). Datasets declare the query features they answer in `IDataset.supports` (`SparqlDataset` declares all); a select that needs an undeclared feature is refused before it is sent. DSL-JSON 1.2: such a select carries `op: 'select'` and `requires`. Every count now lowers to `COUNT(DISTINCT …)`, so two counted paths in one select no longer inflate each other. `orderBy` on a plain select refuses an aggregate, and aggregates are refused as update values.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`7a233db`](https://github.com/linked-fw/core/commit/7a233dbeb4ef06f019fff83ac672987f60be6981) Thanks [@flyon](https://github.com/flyon)! - `$type()` in the select DSL: a node's `rdf:type` values, multi-valued IRI nodes typed `{id}`, on every shape (no property of the shape can shadow it). It works as a field (`Thing.select((t) => [t.name, t.$type()])`), as a group key (`.select((t) => ({kind: t.$type(), n: Expr.count()})).groupBy('kind')`, one group per type, so a node with two types is in two groups), in a where (`t.$type().equals({id: C})`, `.some(…)`, `.none(…)`), as a sort key and on nested paths (`p.bestFriend.$type()`). It answers what the store answers for `rdf:type`, so on an inferring store the stored and the inferred types. `$`-prefixed members are facts about the node, not shape fields; `$type` and `$graph` are reserved query names, and registering a property with either label throws. New: `equals(x)` on a multi-valued relation, which holds when some member is `x` (`p.friends.equals({id})`). DSL-JSON 1.6: the `$type` path segment, in fields, where, sortBy and group keys; `walkPropertyPath` and label selects (`select(['$type'])`) resolve it too. New exports `nodeTypePropertyShape`, `NODE_TYPE_LABEL`, `NODE_TYPE_PROPERTY_ID`.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`ebed912`](https://github.com/linked-fw/core/commit/ebed912235645849175925c7aad11309b2a183e2) Thanks [@flyon](https://github.com/flyon)! - Select types that match what the query returns.
+  
+  - A multi-valued literal (`get nickNames(): string[]`, no `maxCount: 1`) in an array select is
+    typed as a `string[]` field of the row (`select((p) => [p.nickNames])` was typed as `string[]`
+    for the whole row).
+  - A single-valued literal on a query path has the expression methods of its type in its type:
+    `.where((p) => p.hobby.isDefined())`, `p.name.strlen().gt(3)`, `p.name.lang()`; they already ran.
+    `BaseExpressionMethods` adds `lang`, `datatype`, `iri`, `isIri`, `isLiteral`, `isBlank`,
+    `isNumeric`, `md5`, `sha256`, `sha512`.
+  - A relation on a query path has `isDefined()` and `isNotDefined()` (now reserved names).
+  - Fixed: a relation projected bare next to a `where` that traverses it
+    (`select((u) => [u.ofKey]).where((u) => u.ofKey.ofShape.equals(…))`) returned `null`; it returns
+    its `{id}`.
+  - The inline `where` of a primitive (`p.hobby.where((h) => h.equals(…))`) is typed by what it
+    answers, `equals`.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`f58c5d6`](https://github.com/linked-fw/core/commit/f58c5d6ff544f69b696dede142bb3c8e5d507f3d) Thanks [@flyon](https://github.com/flyon)! - Shapeless delete: `Shape.delete(ids)` on the base class deletes nodes whose types the caller does not know. Every triple whose subject is one of the ids, and every triple that links to one, is deleted in every data graph of the dataset: the default graph and each named graph, with or without graph routing (never by way of `graphs.union`, and never the graph registry or a graph it records as a `core:ShapesGraph` or `core:OntologyGraph`). `_keepingIncoming()` keeps the links. IR kind `delete_shapeless`; DSL-JSON 1.3 `{op: 'delete', mode: 'shapeless', ids}` (no shape); SPARQL one update (`VALUES ?x`, the default graph's own pattern, and `GRAPH ?g { {?x ?p ?o} UNION {?s ?p2 ?x} }` over every named graph but the structure graphs; `deleteShapelessToSparql`). A dataset is sent one only when it lists the new query feature `'shapelessDelete'` in `supports` (`SparqlDataset` does). `LinkedStorage` never fans one out: without a target it goes to the one dataset LinkedStorage knows, and is refused when it knows several. It reaches every data graph, so a receiver that runs it for a client decides who may send it. `DeleteQuery.shape` (and `DeleteBuilder.shape`) is now `NodeShapeData | undefined`; `DeleteBuilder.isShapeless` and `requiredFeatures()` are new.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`ed5fd9c`](https://github.com/linked-fw/core/commit/ed5fd9c1d27994da178aed8023cc1ce0bb230b3c) Thanks [@flyon](https://github.com/flyon)! - `orderBy` sorts by a computed expression (`orderBy((p) => p.hobby.strlen())`), missing values last; before, the key was dropped without a word. An expression holding an aggregate is refused, as an aggregate is, and a callback that returns anything that is neither a path nor an expression is refused instead of ignored. A sort path's inline filter is honoured (`orderBy((p) => p.friends.where((f) => f.name.equals('Anna')).hobby)` sorts by the hobbies of the friends named Anna; the others are kept, last); before, it was dropped. A sort key no longer shares the traversal of a filtered projection, so `select((p) => p.friends.where(…).name).orderBy((p) => p.friends.hobby)` sorts by every friend's hobby.
+  
+  Fixed: a paged select (or one with a where-aggregate) sorting by a key read through a multi-valued traversal (`p.friends.hobby`) sorted an instance as missing when one of its friends had no hobby (Jena answers `MIN` over such a group as unbound). That key is now computed over the rows that bind it.
+  
+  `p.friends.nickNames` (a multi-valued literal straight under a multi-valued traversal) no longer throws. A quantifier takes another quantifier as its condition: `p.friends.some((f) => f.$type().equals({id: C}))`, `p.friends.some((f) => f.friends.some(…))`, as an EXISTS inside the EXISTS; DSL-JSON `{"friends.some": {"friends.some": …}}` now decodes. `LinkedStorage` checks every dataset a triples read goes to before it asks the first, so a dataset that cannot answer it (without `triplesPattern`) fails the read wherever it is in the order.
+  
+  Reserved names: `$`-prefixed names and `and`/`or`/`not` throw at registration; the other reserved names warn. Registering a property whose label starts with `$` throws (any `$` name, not only `$type`/`$graph`). DSL-JSON wire version 1.7: `sortBy` entries `{value, direction}` and `{path: {direction, where, whereIndex}}`; sort directions are read in any case.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`606aa06`](https://github.com/linked-fw/core/commit/606aa0671bff8fd04d9732d1f340b9f05c210a6d) Thanks [@flyon](https://github.com/flyon)! - A filter further down a sort path or a projection keeps every instance: `orderBy((p) => p.bestFriend.friends.where(…).hobby)` no longer throws, and an instance without a best friend (or without a friend the filter keeps) sorts last; `select((p) => p.bestFriend.friends.where(…).name)` no longer drops the persons without a best friend. A filter before a cast (`p.friends.where(…).as(Employee)`) is kept (it was dropped). DSL-JSON 1.8: a quantifier on a cast relation keeps its cast (`{"pets.as(Dog).some": {"guardDogLevel": 2}}`, was `pets.some` and failed to decode), condition and `sortBy` paths carry `as(X)` casts as fields do, and a `sortBy` filter may name any segment (`whereIndex`; an index that names no segment is refused, in a field too, where it was dropped). Decoding: a quantifier's condition reads the member shape the DSL reads (`sh:node`, the shape targeting `sh:class`, the cast, else core's root `Shape`), never the outer shape; a quantifier may be any operand of `and`/`or`; an empty condition `{}` and an unknown cast label are refused. `not().not()` on a chained quantifier gives the condition back. `FieldSet.pathToStringWithCasts` and `FieldSet.walkPathWithCasts` moved to the internal `castPaths` module.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`de6d858`](https://github.com/linked-fw/core/commit/de6d8583b1899c6baa08409cd99fa9353afeb4a7) Thanks [@flyon](https://github.com/flyon)! - Sorting never drops an instance, and an instance without a value for a sort key sorts after every instance with one, ascending and descending, for direct and nested paths alike (paged and unpaged selects, `.one()`, a grouped select's `orderBy`, and a nested select's own `orderBy` inside its window). **Visible change:** an `orderBy` on a direct path used to put instances without the value first when ascending; they now come last. An `orderBy` on a nested path (`p.bestFriend.name`, `p.friends.name`) used to return only the instances that have it; it now returns them all. The SPARQL lowering makes a sort path's traversal OPTIONAL and puts `DESC(BOUND(?k))` before each key.
+  
+  Also fixed: an unpaged select whose `where` holds an aggregate (`p.friends.size().equals(2)`) next to a multi-valued projection applied it per row and matched nobody; it now applies it per instance, through the same sub-SELECT of subjects a page uses. A multi-valued field of a nested entity (`Person.select((p) => p.bestFriend.nickNames)`) mapped to one value; it is now the array of all its values (`[]` when there are none, as on the root), also in a nested select under a multi-valued traversal (`p.friends.select((f) => [f.name, f.nickNames])`). An ungrouped select that projects an aggregate now sorts by a path it does not project. The metamodel's `PropertyShape.path` (`sh:path`) now declares `maxCount: 1`, as SHACL does, so a nested read (`NodeShape.select((ns) => [ns.properties.select((ps) => [ps.path])])`) keeps returning one node.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`0e55079`](https://github.com/linked-fw/core/commit/0e550795cccfa591d0bc91559e1599059db4ad42) Thanks [@flyon](https://github.com/flyon)! - Store transactions. `LinkedStorage.begin()` (or `LinkedStorage.transaction(async (tx) => …)`)
+  opens a transaction that binds to a store at its first query (`exec(tx)`) and calls the store's
+  `beginTransaction()`; every later query carries the txId (`query.txId`, and `txId` on DSL-JSON,
+  now version 1.5) and is sent at once; `tx.commit()` / `tx.rollback()` end it, and a failed query
+  rolls it back. A store declares `'transactions'` in `IDataset.supports` and implements
+  `beginTransaction()`, `commit(txId)` and `rollback(txId)`. A store without support
+  (`SparqlDataset`) warns once and runs the queries directly; a second store in one transaction gets
+  its own, with a warning that the two are not atomic. A query with a txId is refused by a store
+  that does not declare support. New `InMemoryDataset` (`@_linked/core/memory/InMemoryDataset`)
+  holds transactions for real (snapshot, swap on commit, 30 s idle expiry) and answers a subset of
+  queries. `QueryFeature` gains `'transactions'` (not in `ALL_QUERY_FEATURES`). New exports: `Transaction`,
+  `TransactionEndedError`, `inTransaction`, `txIdOf`.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`620c278`](https://github.com/linked-fw/core/commit/620c27892b7e496d765cb73c14c821d18db88c12) Thanks [@flyon](https://github.com/flyon)! - The ontology and shape syncs can follow the storage routing. New module
+  `@_linked/core/shapes/syncTargets` (server only):
+  
+  - `graphSyncTargets()` tells, per package, the datasets of its shape graph (every dataset one of
+    its shapes routes to, plus those of the `sh:NodeShape` / `sh:PropertyShape` shapes) and of its
+    ontology graph (also wherever a shape targeting one of its classes routes, and the datasets of
+    the ontology term shapes), and the datasets of the app's single-owner shape graph. Without pins
+    everything goes to the default dataset.
+  - `syncShapeGraphsRouted()` and `syncOntologiesRouted()` run the per-dataset syncs once per target
+    dataset with that dataset's packages (each package's text read once, the same bytes everywhere),
+    drop a package graph routing no longer sends to the default dataset there, report one left in
+    another dataset (`leftovers`), and report a dataset that fails (`failed`) while the others sync.
+  - `graphContent()` answers what the `'package'`-mode syncs would write (text, hash, sources) for
+    each package and for the app's graph, writing nothing.
+  - `SHAPE_SHAPE_CLASSES` and `ONTOLOGY_TERM_CLASSES` move here from `@_linked/server`.
+  
+  `syncShapeGraphs(ds)` and `syncOntologies(ds)` are unchanged. `syncParsedOntologies`,
+  `packageSources`, `readOntologyRecords` and `readShapesRecords` are exported for the routed syncs.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`55e5568`](https://github.com/linked-fw/core/commit/55e5568aa1ea21ab37e244ba22b17fa5d9dd39db) Thanks [@flyon](https://github.com/flyon)! - Triples reads: a graph read and a subject read, without a shape.
+  
+  - `NamedGraph.readContent(graph)` (and on every graph-record class: `DraftGraph.readContent(g)`)
+    reads every triple of a graph, routed like that class's graph queries.
+  - `TriplesBuilder.forNode({id})` reads one subject's triples, optionally `.from(graphs)`; without
+    graphs it looks where a shapeless ask looks. Both take `.limit(n)`.
+  - The answer is `Triple[]` (`{subject, predicate, object, graph?}`): IRIs as `{id}`, blank nodes as
+    `{id: '_:label'}`, literals as `{value, datatype, language?}`.
+  - A triples read (`TriplesQuery`, `kind: 'triples'`) goes to `IDataset.readQuery`, only to a
+    dataset that declares the `'triples'` query feature; `SparqlDataset` answers it with one SELECT
+    (`triplesToSparql`, `mapSparqlTriplesResult` in `@_linked/core/sparql`). `LinkedStorage` routes
+    it. `TriplesQuery` is plain data, checked at a wire boundary with `parseTriplesQuery`.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`58bd3cc`](https://github.com/linked-fw/core/commit/58bd3cc807116fb14d4389c360e49e939a6b34ab) Thanks [@flyon](https://github.com/flyon)! - Terms reads: which of a list of terms occur, in one query.
+  
+  - `TriplesBuilder.toNode([{id}, …])` and `withPredicate([{id}, …])` (static and on a read) take a
+    list of terms. `.whichExist(target?)` answers the `Set` of the listed IRIs that some triple of the
+    read has in that position; `.exists()` on such a read asks whether any does. A terms read has no
+    `exec()`.
+  - A terms read is a `TriplesTermsQuery` (`kind: 'triples_terms'`, `objects` or `predicates`, one
+    list per read). It goes to `IDataset.readQuery`, only to a dataset that declares the
+    `'triplesTerms'` and `'triplesPattern'` query features. `SparqlDataset` answers it with
+    `SELECT DISTINCT ?t WHERE { VALUES ?t { … } FILTER EXISTS { … } }`, one query per 400 terms
+    (`TRIPLES_TERMS_PER_QUERY`); `LinkedStorage` sends it to every dataset and joins the answers.
+    New exports: `triplesTermsToAlgebra`, `triplesTermsToSparql`, `mapSparqlTriplesTermsResult`.
+
+### Patch Changes
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`bc8d50d`](https://github.com/linked-fw/core/commit/bc8d50d179efdd5431478d061a4d9ce76b6b2b3e) Thanks [@flyon](https://github.com/flyon)! - `.select()`, `.where()` and `.selectAll()` on a plural relation whose value shape has no authored class (a data-only `sh:node`, or `sh:class` only) no longer throw "Cannot read properties of undefined (reading 'shape')": they resolve the members' shape through the relation, as `.some()` / `.every()` / `.none()` already do.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`b49c1c1`](https://github.com/linked-fw/core/commit/b49c1c1ee943ba556fceb1b87f30f99429ba43c3) Thanks [@flyon](https://github.com/flyon)! - `LinkedStorage` logs a notice, once per call site, when a shapeless read that names no dataset is
+  sent to more than one dataset: a subject read (`TriplesBuilder.forNode({id})` without `.from()`)
+  or a shapeless ask (`Shape.exists(iri)`, `AskBuilder.forNode(iri)`). The notice gives the number
+  of datasets and the fix: pass a dataset (`Shape.exists(iri, dataset)`, `.exec(dataset)`) or, for a
+  subject read, name graphs with `.from(graph)`. Nothing is logged with one dataset or an explicit
+  dataset.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`535b31a`](https://github.com/linked-fw/core/commit/535b31a8be69540f4cd6f8e6309c507acbd6ef0a) Thanks [@flyon](https://github.com/flyon)! - The query-feature check before dispatch no longer throws when evaluating a select or where callback fails; the error surfaces when the dataset lowers or serializes the query, as it did before the check existed.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`2d72926`](https://github.com/linked-fw/core/commit/2d72926cbadc03e289d5636893420c93bde35ed2) Thanks [@flyon](https://github.com/flyon)! - Graph-registry records: a record field given an empty list (for example `OntologyGraph.create({..., sources: []})`, or `.update(g).set({sources: []})`) is now left out of the generated SPARQL instead of producing `<p> ;`, which every SPARQL endpoint refused as a parse error. On an update the field's old values are still deleted, so setting a list field to `[]` clears it.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`6464ae7`](https://github.com/linked-fw/core/commit/6464ae7029495753af4cbf65349b0fdf0cd65322) Thanks [@flyon](https://github.com/flyon)! - `QueryBuilder.fromJSON` reads a `nullSubject` query back as `.for(null)` built it: its `toJSON()` no longer gains a `limit: 1`.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`4f82a42`](https://github.com/linked-fw/core/commit/4f82a422e79e6f80f1e379705f508fccea3c9bc5) Thanks [@flyon](https://github.com/flyon)! - Registering a property labelled `and`, `or` or `not` throws again, next to the `$`-prefixed names. `$`-prefixed names and `and`/`or`/`not` throw; the other reserved names warn. A shape loaded as data is still only reported.
+
+- [#407](https://github.com/linked-fw/core/pull/407) [`82547c7`](https://github.com/linked-fw/core/commit/82547c7a4c639994ff909fededccf6e607504510) Thanks [@flyon](https://github.com/flyon)! - `limit` and `offset` on a select page over the root subjects instead of SPARQL solution rows: a page holds `limit` instances, each with all its values, and an instance is never split across two pages. An `orderBy` on a multi-valued path sorts an instance by its lowest value ascending and its highest descending, ties broken by IRI. `.one()` reads the first instance with all its values. Grouped selects still count groups.
+
 ## 2.45.0
 
 ### Minor Changes
