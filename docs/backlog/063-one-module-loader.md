@@ -36,14 +36,14 @@ through the host loader **by package specifier** (`<name>/ontologies/<prefix>.re
 the module the app's own import of it gets. That is the reference pattern for any framework code
 that loads package modules: load by specifier through the host loader, never by file path. The
 public `importPackageModule` that both `loadStores` and `registerInstalledOntologies` use, with its
-docs page, is #375 (items 1 and 2 below). Items 3–5 remain open.
+docs page, is #413 (items 1 and 2 below). Items 3–5 remain open.
 
 ## What to do
 
 1. **One public loader in core**, `importPackageModule(specifier)`, backed by the loader `linked
    start` installs at `Symbol.for('@_linked/core:importModule')`; with no loader (production
    builds, plain Node, tests) it is native `import()`. `loadStores` and `registerInstalledOntologies`
-   use it (#375). Server's `nativeImport` for installed backends stays native by design (an
+   use it (#413). Server's `nativeImport` for installed backends stays native by design (an
    installed package is external).
 2. **Document it** in `docs/architecture/` (a short "Loading package modules" page, linked from
    `ontologies.md` and `runtime-instances.md`): why the loader exists, when to use it (any
