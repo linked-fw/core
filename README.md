@@ -1320,6 +1320,11 @@ value of every selected path, as without paging. An instance is never split acro
 however many values its multi-valued paths have. `.one()` is the first instance, with all its
 values; `.for(id)` reads one instance and needs no limit.
 
+This holds whatever a path's declared `maxCount`: data can hold more values than its shape
+allows (a `maxCount: 1` label in two languages), and such an instance still counts once. Its
+single-valued field is one of those values, the first in the select's order. An `offset`
+without an `orderBy` pages in IRI order.
+
 **Sorting never drops an instance, and missing values sort last**, ascending and descending,
 for direct and nested paths alike. With Anna (best friend Bob), Carl (best friend Ada) and Dirk
 (no best friend), `Person.select((p) => [p.name, p.bestFriend.name]).orderBy((p) =>
