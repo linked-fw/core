@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.48.0
+
+### Minor Changes
+
+- [#418](https://github.com/linked-fw/core/pull/418) [`5ee877b`](https://github.com/linked-fw/core/commit/5ee877b90434dbf7ba77909b2c3299550736339e) Thanks [@flyon](https://github.com/flyon)! - A node in a query, the root subject or a relation's value, has `isIri()` and `isBlank()` (SPARQL `isIRI` / `isBlank`): `.where((p) => p.isIri())` keeps the named subjects, `.minus((p) => p.isBlank())` leaves out the blank nodes, and `p.bestFriend.isBlank()` tests a relation's value. On a paged select the filter applies inside the page of subjects, before its LIMIT, so a page holds as many named subjects as asked.
+
 ## 2.47.1
 
 ### Patch Changes
