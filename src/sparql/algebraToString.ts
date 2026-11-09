@@ -309,7 +309,7 @@ export function serializeAlgebraNode(
           (e) => `(${serializeExpression(e.expression, collector)} AS ?${sanitizeVarName(e.alias)})`,
         ),
       ].join(' ');
-      const lines: string[] = [`SELECT ${projection} WHERE {`];
+      const lines: string[] = [`SELECT ${node.distinct ? 'DISTINCT ' : ''}${projection} WHERE {`];
       lines.push(indent(innerBody));
       lines.push('}');
       const trailing: string[] = [];

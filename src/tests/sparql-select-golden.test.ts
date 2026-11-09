@@ -256,10 +256,10 @@ WHERE {
 SELECT DISTINCT ?a0 ?a0_name
 WHERE {
   {
-    SELECT ?a0 WHERE {
+    SELECT DISTINCT ?a0 WHERE {
       ?a0 rdf:type <${PT}> .
       FILTER(?a0 = <linked://tmp/entities/p1>)
-    } GROUP BY ?a0 LIMIT 1
+    } LIMIT 1
   }
   ?a0 rdf:type <${PT}> .
   OPTIONAL {
@@ -577,11 +577,11 @@ WHERE {
 SELECT DISTINCT ?a0 ?a0_name
 WHERE {
   {
-    SELECT ?a0 WHERE {
+    SELECT DISTINCT ?a0 WHERE {
       ?a0 rdf:type <${PT}> .
       ?a0 <${PROP}name> ?a0_name .
       FILTER(?a0_name = "Semmy" || ?a0_name = "Moa")
-    } GROUP BY ?a0 LIMIT 1
+    } LIMIT 1
   }
   ?a0 rdf:type <${PT}> .
   ?a0 <${PROP}name> ?a0_name .

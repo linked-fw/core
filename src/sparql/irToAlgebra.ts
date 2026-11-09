@@ -1721,7 +1721,8 @@ function readsThroughMultiValuedTraversal(
  *   { SELECT ?a0 (MIN(?a0_x) AS ?page_order_0) WHERE { <where part> }
  *     GROUP BY ?a0 [HAVING(…)] ORDER BY ASC(?page_order_0) LIMIT n OFFSET m }
  *
- * and is joined to the select's own pattern, which reads every value of those subjects. The
+ * or, with no sort value and no HAVING, `{ SELECT DISTINCT ?a0 WHERE { … } [ORDER BY ASC(?a0)]
+ * LIMIT n OFFSET m }`, and is joined to the select's own pattern, which reads every value of those subjects. The
  * outer query orders its rows by the same keys, so the result keeps the page's order.
  *
  * Each sort key is one value per subject: the subject's first value in that key's direction —
@@ -1796,12 +1797,16 @@ function pageBySubject(
     (left, {page}) => ({type: 'left_join', left, right: page}),
     prunePagePattern(algebra, needed),
   );
+  // Without a sort value to aggregate or a HAVING, the page is the distinct subjects: a
+  // DISTINCT streams (a store can stop at the LIMIT), where a GROUP BY reads every subject first.
+  const distinctSubjects = expressions.length === 0 && keyPages.length === 0 && !having;
   const page: SparqlAlgebraNode = {
     type: 'subselect',
+    ...(distinctSubjects ? {distinct: true} : {}),
     projection: [rootAlias, ...keyAliases],
     ...(expressions.length > 0 ? {expressions} : {}),
     inner,
-    groupBy: [rootAlias, ...keyAliases],
+    ...(distinctSubjects ? {} : {groupBy: [rootAlias, ...keyAliases]}),
     ...(having ? {having} : {}),
     ...(keys.length > 0 ? {orderBy: keys} : {}),
     ...(limit !== undefined ? {limit} : {}),

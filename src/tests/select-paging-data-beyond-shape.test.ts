@@ -49,7 +49,7 @@ const byName = () => Person.select((p) => p.name).minus(Employee).orderBy((p) =>
 describe('paging when the data breaks maxCount (lowering)', () => {
   test('a single-valued projection pages a sub-SELECT of subjects', () => {
     const sparql = sparqlOf(Person.select((p) => p.name).limit(2).offset(1));
-    expect(sparql).toMatch(/\{\s*SELECT \?a0[\s\S]*GROUP BY \?a0[\s\S]*LIMIT 2 OFFSET 1\s*\}/);
+    expect(sparql).toMatch(/\{\s*SELECT DISTINCT \?a0 WHERE[\s\S]*ORDER BY ASC\(\?a0\) LIMIT 2 OFFSET 1\s*\}/);
     expect(sparql.trim()).not.toMatch(/LIMIT 2\s+OFFSET 1$/);
   });
 
@@ -66,12 +66,24 @@ describe('paging when the data breaks maxCount (lowering)', () => {
 
   test('a single-valued traversal pages by subject', () => {
     const sparql = sparqlOf(Person.select((p) => p.bestFriend.name).limit(2));
-    expect(sparql).toMatch(/SELECT \?a0[\s\S]*LIMIT 2\s*\}/);
+    expect(sparql).toMatch(/SELECT DISTINCT \?a0 WHERE[\s\S]*LIMIT 2\s*\}/);
   });
 
   test('.one() on a single-valued path pages by subject', () => {
     const sparql = sparqlOf(Person.select((p) => p.name).one());
-    expect(sparql).toMatch(/SELECT \?a0[\s\S]*LIMIT 1\s*\}/);
+    expect(sparql).toMatch(/SELECT DISTINCT \?a0 WHERE[\s\S]*LIMIT 1\s*\}/);
+  });
+
+  test('without a sort value, the page is the DISTINCT subjects, not a GROUP BY', () => {
+    const sparql = sparqlOf(Person.select((p) => p.name).limit(2));
+    expect(sparql).toMatch(/\{\s*SELECT DISTINCT \?a0 WHERE \{[\s\S]*\} LIMIT 2\s*\}/);
+    expect(sparql).not.toContain('GROUP BY');
+  });
+
+  test('an order on the subject itself needs no GROUP BY', () => {
+    const sparql = sparqlOf(Person.select((p) => p.name).orderBy((p) => p).limit(2));
+    expect(sparql).toMatch(/SELECT DISTINCT \?a0 WHERE[\s\S]*ORDER BY ASC\(\?a0\) LIMIT 2\s*\}/);
+    expect(sparql).not.toContain('GROUP BY');
   });
 
   test('an offset without an order pages in subject order', () => {
