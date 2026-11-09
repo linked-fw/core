@@ -718,10 +718,15 @@ describe('selectToAlgebra — ordering and pagination', () => {
     ]);
   });
 
-  test('outerWhereLimit has limit and Filter', async () => {
+  test('outerWhereLimit pages its subjects and has a Filter', async () => {
     const plan = await capturePlan(() => queryFactories.outerWhereLimit());
 
-    expect(plan.limit).toBe(1);
+    // The LIMIT is on the page of subjects, not on the rows.
+    expect(plan.limit).toBeUndefined();
+    expect(plan.algebra.type).toBe('join');
+    const page = (plan.algebra as {left: {type: string; limit?: number}}).left;
+    expect(page.type).toBe('subselect');
+    expect(page.limit).toBe(1);
 
     const filters = collectFilters(plan.algebra);
     expect(filters.length).toBeGreaterThanOrEqual(1);

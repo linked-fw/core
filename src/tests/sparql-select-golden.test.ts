@@ -255,13 +255,18 @@ WHERE {
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 SELECT DISTINCT ?a0 ?a0_name
 WHERE {
+  {
+    SELECT ?a0 WHERE {
+      ?a0 rdf:type <${PT}> .
+      FILTER(?a0 = <linked://tmp/entities/p1>)
+    } GROUP BY ?a0 LIMIT 1
+  }
   ?a0 rdf:type <${PT}> .
   OPTIONAL {
     ?a0 <${PROP}name> ?a0_name .
   }
   FILTER(?a0 = <linked://tmp/entities/p1>)
-}
-LIMIT 1`);
+}`);
   });
 });
 
@@ -571,11 +576,17 @@ WHERE {
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 SELECT DISTINCT ?a0 ?a0_name
 WHERE {
+  {
+    SELECT ?a0 WHERE {
+      ?a0 rdf:type <${PT}> .
+      ?a0 <${PROP}name> ?a0_name .
+      FILTER(?a0_name = "Semmy" || ?a0_name = "Moa")
+    } GROUP BY ?a0 LIMIT 1
+  }
   ?a0 rdf:type <${PT}> .
   ?a0 <${PROP}name> ?a0_name .
   FILTER(?a0_name = "Semmy" || ?a0_name = "Moa")
-}
-LIMIT 1`);
+}`);
   });
 
   test('outerWhereDifferentPropsOr', async () => {

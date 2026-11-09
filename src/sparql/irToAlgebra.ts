@@ -1341,14 +1341,17 @@ export function selectToAlgebra(
   }
 
   // LIMIT/OFFSET page over root subjects, not solution rows. A subject reached through a
-  // traversal, or with a multi-valued path in the projection or the order, spans one row per
-  // value; such a select is paged by a sub-SELECT of subjects (`pageBySubject`, below). A select
-  // of one subject (`.for(id)`) needs no LIMIT at all: a row LIMIT would cut its values.
+  // traversal, or with a path in the projection or the order, can span one row per value; such
+  // a select is paged by a sub-SELECT of subjects (`pageBySubject`, below). Paging does not trust
+  // a declared `maxCount: 1`: data can hold more values than its shape allows (a label in two
+  // languages), and a row LIMIT would then count a subject twice. A select of one subject
+  // (`.for(id)`) needs no LIMIT at all: a row LIMIT would cut its values.
   const multiRowPerSubject = !grouped && rowsPerSubjectMayExceedOne(query);
+  const rowsMayFanOut = !grouped && (multiRowPerSubject || readsPathPerRow(query));
   const oneSubjectRead =
-    multiRowPerSubject && !!query.subjectId && !query.offset && query.limit !== 0;
+    rowsMayFanOut && !!query.subjectId && !query.offset && query.limit !== 0;
   const pageSubjects =
-    multiRowPerSubject && !oneSubjectRead && (query.limit !== undefined || query.offset !== undefined);
+    rowsMayFanOut && !oneSubjectRead && (query.limit !== undefined || query.offset !== undefined);
   // A where-aggregate (HAVING) counts per subject. Over rows that can be several per subject the
   // outer GROUP BY would be per subject and values, so the same sub-SELECT of subjects applies
   // it, without LIMIT/OFFSET when the select is not paged.
@@ -1395,8 +1398,19 @@ export function selectToAlgebra(
   // own, so a row without its value can be told apart and sorted last (BOUND takes a variable).
   let unpagedAlgebra = scoped.algebra;
   let unpagedOrderBy = orderBy;
-  if (!paged && !grouped && orderBy) {
-    unpagedOrderBy = orderBy.map((condition, i) => {
+  // Here a row is a subject. On a page, ties are broken by the subject, and an offset without an
+  // order pages in subject order, so that consecutive pages neither repeat nor skip one.
+  const rootKey: SparqlOrderCondition = {expression: {kind: 'variable_expr', name: rootAlias}, direction: 'ASC'};
+  if (
+    !paged &&
+    !grouped &&
+    (orderBy ? query.limit !== undefined || query.offset !== undefined : query.offset !== undefined) &&
+    !(orderBy ?? []).some((o) => o.expression.kind === 'variable_expr' && o.expression.name === rootAlias)
+  ) {
+    unpagedOrderBy = [...(orderBy ?? []), rootKey];
+  }
+  if (!paged && !grouped && unpagedOrderBy) {
+    unpagedOrderBy = unpagedOrderBy.map((condition, i) => {
       const e = condition.expression;
       if (e.kind === 'variable_expr' || e.kind === 'aggregate_expr') return condition;
       const variable = `order_${i}`;
@@ -1451,28 +1465,46 @@ function collectRowTraversals(patterns: IRGraphPattern[], out: IRTraversePattern
   return out;
 }
 
-/** Whether an expression reads a multi-valued path of the row (not inside an aggregate). */
-function readsMultiValuedPath(expr: IRExpression): boolean {
+/**
+ * Whether an expression reads a path of the row (not inside an aggregate): a multi-valued one,
+ * or with `anyMaxCount` any path, whatever its declared `maxCount`.
+ */
+function readsMultiValuedPath(expr: IRExpression, anyMaxCount = false): boolean {
+  const reads = (e: IRExpression) => readsMultiValuedPath(e, anyMaxCount);
   switch (expr.kind) {
     case 'property_expr': {
+      if (anyMaxCount) return true;
       // A projected path carries its maxCount; an order or where path is looked up.
       const maxCount = expr.maxCount ?? findPropertyShapeById(expr.property)?.maxCount;
       return !(typeof maxCount === 'number' && maxCount <= 1);
     }
     case 'binary_expr':
-      return readsMultiValuedPath(expr.left) || readsMultiValuedPath(expr.right);
+      return reads(expr.left) || reads(expr.right);
     case 'logical_expr':
-      return expr.expressions.some(readsMultiValuedPath);
+      return expr.expressions.some(reads);
     case 'not_expr':
-      return readsMultiValuedPath(expr.expression);
+      return reads(expr.expression);
     case 'function_expr':
-      return expr.args.some(readsMultiValuedPath);
+      return expr.args.some(reads);
     case 'in_expr':
-      return readsMultiValuedPath(expr.value);
+      return reads(expr.value);
     // An aggregate collapses its values into one per subject; an exists binds nothing.
     default:
       return false;
   }
+}
+
+/**
+ * Whether a row of an ungrouped select carries any value besides its subject: a traversal (not
+ * inside an exists or minus), or a path in the projection or the order, whatever its declared
+ * `maxCount`. Without one, each subject is exactly one row.
+ */
+function readsPathPerRow(query: IRSelectQuery): boolean {
+  return (
+    collectRowTraversals(query.patterns).length > 0 ||
+    query.projection.some((item) => readsMultiValuedPath(item.expression, true)) ||
+    (query.orderBy ?? []).some((item) => readsMultiValuedPath(item.expression, true))
+  );
 }
 
 /**
@@ -1753,8 +1785,9 @@ function pageBySubject(
     }
     return [boundFirst(alias), {expression: {kind: 'variable_expr', name: alias}, direction: condition.direction}];
   });
-  // Ties are broken by the subject, so that consecutive pages neither repeat nor skip one.
-  if (keys.length > 0 && !keys.some((k) => k.expression.kind === 'variable_expr' && k.expression.name === rootAlias)) {
+  // Ties are broken by the subject, so that consecutive pages neither repeat nor skip one. An
+  // offset without an order pages in subject order, for the same reason.
+  if ((keys.length > 0 || offset !== undefined) && !keys.some((k) => k.expression.kind === 'variable_expr' && k.expression.name === rootAlias)) {
     keys.push({expression: {kind: 'variable_expr', name: rootAlias}, direction: 'ASC'});
   }
   // A key computed by its own sub-SELECT is one value per subject: grouping by it changes nothing.

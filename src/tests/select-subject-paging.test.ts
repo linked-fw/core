@@ -50,10 +50,15 @@ const nicksBySubject = (limit: number, offset?: number) => {
 };
 
 describe('subject paging (lowering)', () => {
-  test('a single-valued select keeps its plain LIMIT', () => {
-    const sparql = sparqlOf(Person.select((p) => p.name).orderBy((p) => p.name).limit(2).offset(1));
+  test('a select of subjects only keeps its plain LIMIT', () => {
+    const sparql = sparqlOf(Person.select().where((p) => p.name.equals('Ann')).limit(2).offset(1));
     expect(sparql).not.toMatch(/\{\s*SELECT/);
-    expect(sparql).toMatch(/LIMIT 2\s+OFFSET 1\s*$/);
+    expect(sparql).toMatch(/ORDER BY ASC\(\?a0\)\s+LIMIT 2\s+OFFSET 1\s*$/);
+  });
+
+  test('a single-valued select pages by subject: data can hold more values than declared', () => {
+    const sparql = sparqlOf(Person.select((p) => p.name).orderBy((p) => p.name).limit(2).offset(1));
+    expect(sparql).toMatch(/SELECT \?a0[\s\S]*ASC\(\?a0\) LIMIT 2 OFFSET 1\s*\}/);
   });
 
   test('a multi-valued projection pages a sub-SELECT of subjects', () => {
@@ -68,10 +73,9 @@ describe('subject paging (lowering)', () => {
     expect(inner).not.toContain('nickName');
   });
 
-  test('a single-valued traversal adds no rows: plain LIMIT', () => {
+  test('a single-valued traversal pages by subject', () => {
     const sparql = sparqlOf(Person.select((p) => p.bestFriend.name).limit(2));
-    expect(sparql).not.toMatch(/\{\s*SELECT/);
-    expect(sparql).toMatch(/LIMIT 2\s*$/);
+    expect(sparql).toMatch(/SELECT \?a0[\s\S]*LIMIT 2\s*\}/);
   });
 
   test('a traversal pages by subject', () => {
