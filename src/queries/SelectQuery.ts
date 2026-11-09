@@ -1422,6 +1422,20 @@ export class QueryShape<
     return toExpressionNode(this).str();
   }
 
+  /**
+   * The node is an IRI (SPARQL `isIRI`), not a blank node: `.where((c) => c.isIri())` keeps the
+   * named subjects, `p.bestFriend.isIri()` tests a relation's value. On a paged select the filter
+   * applies before the page is cut, so a page holds as many named subjects as asked.
+   */
+  isIri(): ExpressionNode {
+    return toExpressionNode(this).isIri();
+  }
+
+  /** The node is a blank node (SPARQL `isBlank`): `.minus((c) => c.isBlank())` leaves them out. */
+  isBlank(): ExpressionNode {
+    return toExpressionNode(this).isBlank();
+  }
+
   /** The relation has a value (SPARQL `BOUND`): `.where((k) => k.ofShape.isDefined())`. */
   isDefined(): ExpressionNode {
     return toExpressionNode(this).isDefined();
