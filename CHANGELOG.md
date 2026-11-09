@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.47.1
+
+### Patch Changes
+
+- [#417](https://github.com/linked-fw/core/pull/417) [`4d1941d`](https://github.com/linked-fw/core/commit/4d1941da33f1e1c05a4432130c3f11fc075fce67) Thanks [@flyon](https://github.com/flyon)! - `limit`/`offset` and `.one()` now page over subjects whenever a row carries any value besides its subject, whatever the path's declared `maxCount`. Data can hold more values than its shape allows (a `maxCount: 1` label in two languages); a row LIMIT then counted such a subject twice, so a page held fewer subjects than asked. Ties on the sort key are broken by the subject IRI on every page, and an `offset` without an `orderBy` pages in subject order, so consecutive pages neither repeat nor skip a subject. A select of subjects only keeps its plain LIMIT.
+
 ## 2.47.0
 
 ### Minor Changes
