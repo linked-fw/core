@@ -1,7 +1,7 @@
 {
   "name": "@_linked/core",
   "version": "2.48.0",
-  "packageManager": "npm@12.2.0",
+  "packageManager": "npm@12.2.2",
   "license": "MIT",
   "linked": {
     "kind": "library"
