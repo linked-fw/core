@@ -1234,7 +1234,8 @@ const birthYear = await Person.select((p) => ({
 
 Every single-valued literal on a query path has the methods of its type, in `select`, `where` and
 `update` callbacks alike. A relation (an object property) has `equals`, `oneOf`, `notOneOf`,
-`str`, `isDefined` and `isNotDefined`: `.where((k) => k.ofShape.isDefined())`.
+`str`, `isIri`, `isBlank`, `isDefined` and `isNotDefined`: `.where((k) => k.ofShape.isDefined())`.
+The root subject has `equals`, `str`, `isIri` and `isBlank`: `.where((p) => p.isIri())`.
 
 #### Expression-based WHERE filters
 
@@ -1304,7 +1305,15 @@ const unnamed = await Person.select((p) => p.name).minus((p) => [p.bestFriend.na
 
 // Exclude by condition — Persons whose hobby is NOT 'Chess'
 const noChess = await Person.select((p) => p.name).minus((p) => p.hobby.equals('Chess'));
+
+// Exclude by the subject's term type — Persons that are NOT blank nodes
+const named = await Person.select((p) => p.name).minus((p) => p.isBlank());
 ```
+
+A node, the root subject or a relation's value, has `isIri()` and `isBlank()`:
+`.where((p) => p.isIri())` keeps the named subjects, `.where((p) => p.bestFriend.isBlank())` those
+whose best friend is a blank node. On a paged select the filter applies before the page is cut,
+so a page holds as many named subjects as asked.
 
 #### Sorting, limiting, one
 ```typescript
