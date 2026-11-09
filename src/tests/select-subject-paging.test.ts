@@ -50,33 +50,37 @@ const nicksBySubject = (limit: number, offset?: number) => {
 };
 
 describe('subject paging (lowering)', () => {
-  test('a single-valued select keeps its plain LIMIT', () => {
-    const sparql = sparqlOf(Person.select((p) => p.name).orderBy((p) => p.name).limit(2).offset(1));
+  test('a select of subjects only keeps its plain LIMIT', () => {
+    const sparql = sparqlOf(Person.select().where((p) => p.name.equals('Ann')).limit(2).offset(1));
     expect(sparql).not.toMatch(/\{\s*SELECT/);
-    expect(sparql).toMatch(/LIMIT 2\s+OFFSET 1\s*$/);
+    expect(sparql).toMatch(/ORDER BY ASC\(\?a0\)\s+LIMIT 2\s+OFFSET 1\s*$/);
+  });
+
+  test('a single-valued select pages by subject: data can hold more values than declared', () => {
+    const sparql = sparqlOf(Person.select((p) => p.name).orderBy((p) => p.name).limit(2).offset(1));
+    expect(sparql).toMatch(/SELECT \?a0[\s\S]*ASC\(\?a0\) LIMIT 2 OFFSET 1\s*\}/);
   });
 
   test('a multi-valued projection pages a sub-SELECT of subjects', () => {
     const sparql = sparqlOf(nicksBySubject(2, 2));
     // The page: distinct subjects, ordered, limited.
-    expect(sparql).toMatch(/\{\s*SELECT \?a0 WHERE \{[\s\S]*\} GROUP BY \?a0 ORDER BY ASC\(\?a0\) LIMIT 2 OFFSET 2\s*\}/);
+    expect(sparql).toMatch(/\{\s*SELECT DISTINCT \?a0 WHERE \{[\s\S]*\} ORDER BY ASC\(\?a0\) LIMIT 2 OFFSET 2\s*\}/);
     // The outer query reads every value of those subjects: no LIMIT of its own.
     expect(sparql.trim()).toMatch(/ORDER BY ASC\(\?a0\)$/);
     // The page does not read the projected nick names.
     const page = sparql.slice(sparql.indexOf('{', sparql.indexOf('WHERE')) + 1);
-    const inner = page.slice(page.indexOf('SELECT'), page.indexOf('GROUP BY'));
+    const inner = page.slice(page.indexOf('SELECT'), page.indexOf('ORDER BY'));
     expect(inner).not.toContain('nickName');
   });
 
-  test('a single-valued traversal adds no rows: plain LIMIT', () => {
+  test('a single-valued traversal pages by subject', () => {
     const sparql = sparqlOf(Person.select((p) => p.bestFriend.name).limit(2));
-    expect(sparql).not.toMatch(/\{\s*SELECT/);
-    expect(sparql).toMatch(/LIMIT 2\s*$/);
+    expect(sparql).toMatch(/SELECT DISTINCT \?a0 WHERE[\s\S]*LIMIT 2\s*\}/);
   });
 
   test('a traversal pages by subject', () => {
     const sparql = sparqlOf(Person.select((p) => p.friends.name).limit(1));
-    expect(sparql).toMatch(/SELECT \?a0 WHERE[\s\S]*LIMIT 1\s*\}/);
+    expect(sparql).toMatch(/SELECT DISTINCT \?a0 WHERE[\s\S]*LIMIT 1\s*\}/);
   });
 
   test('an order on a multi-valued path sorts each subject by MIN ascending and MAX descending', () => {
@@ -88,7 +92,7 @@ describe('subject paging (lowering)', () => {
 
   test('.one() limits subjects, not rows', () => {
     const sparql = sparqlOf(Person.select((p) => p.nickNames).one());
-    expect(sparql).toMatch(/SELECT \?a0 WHERE[\s\S]*LIMIT 1\s*\}/);
+    expect(sparql).toMatch(/SELECT DISTINCT \?a0 WHERE[\s\S]*LIMIT 1\s*\}/);
   });
 
   test('.for(id) reads one subject without a LIMIT', () => {

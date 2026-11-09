@@ -736,7 +736,7 @@ loadStores<T>(config: DatasetsConfig): Promise<Record<string, T>>
 
 Dynamically imports each alias's `store` path and instantiates the resolved class with `new StoreClass(entry.config)`. Returns alias → store. The graph targets are not part of a store's config: they are one global setting (see [Ontology and shape graphs](#ontology-and-shape-graphs)); an entry whose config still sets `ontologyGraph` / `shapeGraph` gets a warning. Convention: the last segment of the `store` path is the named export to use (with `default` as a fallback). **Async + uses runtime dynamic `import()`** — works in Node where module specifiers resolve at runtime. Frontends can't use this (webpack can't bundle `import(variableString)`); frontend code instead imports each store class statically and constructs per alias by hand.
 
-**Host loader.** When `globalThis[Symbol.for('@_linked/core:importModule')]` is a function `(specifier: string) => Promise<unknown>`, `loadStores` imports each store through it instead of `import()`, passing the `store` specifier unchanged; it is read on every call. `linked start` (dev) sets it so a store comes from the same copy of its package as the app's own imports under Vite's SSR runner. Nothing else needs to set it.
+**Host loader.** When `globalThis[Symbol.for('@_linked/core:importModule')]` is a function `(specifier: string) => Promise<unknown>`, `loadStores` imports each store through it instead of `import()`, passing the `store` specifier unchanged; it is read on every call. `linked start` (dev) sets it so a store comes from the same copy of its package as the app's own imports under Vite's SSR runner. Nothing else needs to set it. `loadStores` reads it through `importPackageModule` (`@_linked/core/utils/importPackageModule`), which other framework code that imports package modules by specifier uses too (`registerInstalledOntologies`); see [docs/architecture/loading-package-modules.md](docs/architecture/loading-package-modules.md).
 
 A typical backend setup looks like:
 
@@ -1234,7 +1234,8 @@ const birthYear = await Person.select((p) => ({
 
 Every single-valued literal on a query path has the methods of its type, in `select`, `where` and
 `update` callbacks alike. A relation (an object property) has `equals`, `oneOf`, `notOneOf`,
-`str`, `isDefined` and `isNotDefined`: `.where((k) => k.ofShape.isDefined())`.
+`str`, `isIri`, `isBlank`, `isDefined` and `isNotDefined`: `.where((k) => k.ofShape.isDefined())`.
+The root subject has `equals`, `str`, `isIri` and `isBlank`: `.where((p) => p.isIri())`.
 
 #### Expression-based WHERE filters
 
@@ -1304,7 +1305,15 @@ const unnamed = await Person.select((p) => p.name).minus((p) => [p.bestFriend.na
 
 // Exclude by condition — Persons whose hobby is NOT 'Chess'
 const noChess = await Person.select((p) => p.name).minus((p) => p.hobby.equals('Chess'));
+
+// Exclude by the subject's term type — Persons that are NOT blank nodes
+const named = await Person.select((p) => p.name).minus((p) => p.isBlank());
 ```
+
+A node, the root subject or a relation's value, has `isIri()` and `isBlank()`:
+`.where((p) => p.isIri())` keeps the named subjects, `.where((p) => p.bestFriend.isBlank())` those
+whose best friend is a blank node. On a paged select the filter applies before the page is cut,
+so a page holds as many named subjects as asked.
 
 #### Sorting, limiting, one
 ```typescript
@@ -1319,6 +1328,11 @@ the rows a store returns: a page holds `n` instances after the first `m`, and ea
 value of every selected path, as without paging. An instance is never split across two pages,
 however many values its multi-valued paths have. `.one()` is the first instance, with all its
 values; `.for(id)` reads one instance and needs no limit.
+
+This holds whatever a path's declared `maxCount`: data can hold more values than its shape
+allows (a `maxCount: 1` label in two languages), and such an instance still counts once. Its
+single-valued field is one of those values, the first in the select's order. An `offset`
+without an `orderBy` pages in IRI order.
 
 **Sorting never drops an instance, and missing values sort last**, ascending and descending,
 for direct and nested paths alike. With Anna (best friend Bob), Carl (best friend Ada) and Dirk

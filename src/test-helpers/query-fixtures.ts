@@ -610,6 +610,12 @@ export const queryFactories = {
   minusShape: () =>
     Person.select((p) => p.name).minus(Employee),
 
+  // Exclude by the subject's term type
+  minusRootIsBlank: () =>
+    Person.select((p) => p.name).minus((p) => p.isBlank()),
+  whereRootIsIri: () =>
+    Person.select((p) => p.name).where((p) => p.isIri()),
+
   // Exclude by condition
   minusCondition: () =>
     Person.select((p) => p.name).minus((p) => p.hobby.equals('Chess')),

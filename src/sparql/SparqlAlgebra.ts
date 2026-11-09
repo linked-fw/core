@@ -99,6 +99,8 @@ export type SparqlValues = {
  */
 export type SparqlSubSelect = {
   type: 'subselect';
+  /** `SELECT DISTINCT`. */
+  distinct?: boolean;
   projection: string[];
   /** Computed projections after the variables, `(expr AS ?alias)`. */
   expressions?: Array<{alias: string; expression: SparqlExpression}>;
