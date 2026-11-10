@@ -119,7 +119,7 @@ describe('syncShapes', () => {
   });
 });
 
-describe('syncShapes orphanScope (multi-writer, arch-04)', () => {
+describe('syncShapes orphanScope (several writers share one dataset)', () => {
   const userIri = () => TUser.shape.id;
   // An orphan in the SAME package namespace as the app's shapes (a renamed/removed app shape).
   const OWNED_ORPHAN = 'https://linked.cm/shape/syncshapes-test/GoneShape';

@@ -41,7 +41,7 @@ describe('Package & Shape Metadata Registration', () => {
   });
 
   test('registers node shape metadata with expected id', () => {
-    // arch-02: {baseUri}shape/{packageSlug}/{ShapeName} — PascalCase shape name.
+    // The shape IRI scheme: {baseUri}shape/{packageSlug}/{ShapeName} — PascalCase shape name.
     const expectedId = `https://linked.cm/shape/${packageName}/${MetaPerson.name}`;
 
     expect(MetaPerson.shape).toBeDefined();

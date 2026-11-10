@@ -56,7 +56,7 @@ export function shapeGraphHash(turtle: string): string {
 /** The `dcterms:source` of a package's shape graph: the file `linked build` writes. */
 export const SHAPES_SOURCE = 'data/shapes.ttl';
 
-/** A package's shape graph IRI (arch-02: `{baseUri}pkg/{slug}/graph/shapes`). */
+/** A package's shape graph IRI (`{baseUri}pkg/{slug}/graph/shapes`). */
 const PACKAGE_SHAPES_GRAPH = /\/pkg\/[^/]+\/graph\/shapes$/;
 
 export interface SyncShapeGraphsOptions {

@@ -48,7 +48,7 @@ linkedStorageGlobal.__linkedStorageInstanceCount =
   (linkedStorageGlobal.__linkedStorageInstanceCount ?? 0) + 1;
 
 /**
- * Primary routing layer (arch-04 §The IDataset abstraction).
+ * Primary routing layer: every query goes through an IDataset, whatever store backs it.
  *
  * Resolves an incoming Linked Query to the IDataset that should handle it,
  * based on the query's target shape. Composite IDatasets (gateways, routers,

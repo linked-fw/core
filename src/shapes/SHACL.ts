@@ -58,7 +58,7 @@ export const LINKED_DATA_ROOT: string = 'https://linked.cm/';
 
 /**
  * Derive the public package slug — the npm package **basename** with the
- * `@scope/` dropped, kebab-cased (arch-02 §Slug rules: `^[a-z0-9]+(?:-[a-z0-9]+)*$`).
+ * `@scope/` dropped, kebab-cased (the slug rule: `^[a-z0-9]+(?:-[a-z0-9]+)*$`).
  * The package name is the single source of truth; there is no separate slug.
  *   `@_linked/core` → `core`, `@linked.cm/blog` → `blog`, `mypkg` → `mypkg`.
  *
@@ -96,7 +96,7 @@ function resolveBaseUri(packageName: string): string {
   return packageBaseUri.get(packageName) ?? LINKED_DATA_ROOT;
 }
 
-/** Public/first-party package IRI — arch-02: `{baseUri}pkg/{slug}`. */
+/** Public/first-party package IRI: `{baseUri}pkg/{slug}`. */
 export function getPackageUri(packageName: string): string {
   return `${resolveBaseUri(packageName)}pkg/${packageNameToSlug(packageName)}`;
 }
@@ -1108,7 +1108,7 @@ export function disallowProperty(
 }
 
 export function getNodeShapeUri(packageName: string, shapeName: string): string {
-  // arch-02: `{baseUri}shape/{packageSlug}/{ShapeName}` — ShapeName kept PascalCase
+  // The shape IRI scheme: `{baseUri}shape/{packageSlug}/{ShapeName}` — ShapeName kept PascalCase
   // (it is a class name, already URI-safe), packageSlug derived from the name.
   return `${resolveBaseUri(packageName)}shape/${packageNameToSlug(packageName)}/${shapeName}`;
 }

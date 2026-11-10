@@ -311,8 +311,8 @@ export interface SyncShapesOptions {
    *   here" is then taken to mean "deleted from code".
    * - `'ownedNamespaces'` — prune a store-only shape ONLY if its IRI falls within a namespace
    *   this process actually writes (the package-namespace of one of its code-registered shapes,
-   *   i.e. the IRI prefix up to the last `/` or `#`). Protects other writers' packages (arch-04:
-   *   one app-data dataset, several writers), but NOT the rest of a package the process only
+   *   i.e. the IRI prefix up to the last `/` or `#`). Protects other writers' packages (a dataset
+   *   of app data can have several writers), but NOT the rest of a package the process only
    *   partially loaded — the namespace is the whole package, so a deep import of one shape file
    *   still claims all of it.
    *
@@ -342,8 +342,9 @@ function shapeNamespace(iri: string): string {
 
 /**
  * Plan an idempotent sync of all code-registered NodeShapes into the store as SHACL data — the
- * forward (code → graph) materialization of arch-05 "code is canonical". Core's built-in
- * shapes are included, like any package's; other shapes in the core package are not.
+ * forward (code → graph) materialization of the rule that code is canonical and the store mirrors
+ * it. Core's built-in shapes are included, like any package's; other shapes in the core package
+ * are not.
  *
  * Returns built-but-unexecuted thunks; the caller controls execution and batching:
  * ```ts
