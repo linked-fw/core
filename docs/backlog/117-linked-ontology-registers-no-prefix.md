@@ -18,3 +18,8 @@ translation) get their only prefix registration from it.
    `_prefix` (`@_linked/fuseki` `fuseki.register.test.ts`, `@_linked/server`
    `ontology-prefix.test.ts`). Check with `git grep "Prefix.add"` in every ontology package
    that each registered ontology adds its own prefix.
+
+Since report 118, seven ontologies keep hand-written modules (`"generated": false` in
+`linkedOntologies`: core, fuseki, s3, sentry, server, server-utils, translation). No generated data
+module adds their prefix, so they still get it from `linkedOntology` (sentry, server-utils and core
+also add it by hand). Their vann data carries the prefix; step 1 above does not cover them.
