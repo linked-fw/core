@@ -10,7 +10,7 @@ Implements [ideas/026-targeted-query-execution.md](../ideas/026-targeted-query-e
 
 A query's `.exec()` always dispatched through the **global** `getQueryDispatch()` → `LinkedStorage`
 (routes by shape → default). Some callers need to run a query against **one specific dataset** that
-isn't the global default — e.g. CN materializing a shape into a per-project branch-metadata store
+isn't the global default — e.g. a host app materializing a shape into a per-project branch-metadata store
 that lives *outside* the main router. The prior options were temporary global-routing mutation
 (races under concurrency) or a second ambient context — both undesirable.
 
@@ -71,7 +71,7 @@ syncShape(target: typeof Shape | string, ds?: IDataset): () => Promise<void>
 syncShapes(ds?: IDataset): Promise<Array<() => Promise<void>>>
 ```
 
-Motivating use (CN bind-Person):
+Motivating use (a host app binding a Person):
 
 ```ts
 const {store} = await getBranchMetadataStore(projectId, branch);

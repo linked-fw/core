@@ -115,7 +115,7 @@ fuseki suites pass in isolation (90/90, 84/84) and serialized together (`--runIn
 
 - **Repo-root integration test (out of packages/core scope).**
   `tests/integration/workspace-image-dsl.spec.ts` still asserts the pre-fix orphan count
-  (`== 2`, codifying old behavior). Once packages/core is rebuilt and CN consumes it, that
+  (`== 2`, codifying old behavior). Once packages/core is rebuilt and the host app consumes it, that
   assertion must be flipped to the fixed count or it will go red. Sanctioned follow-up.
 - **Nested owned subtree under a non-`dependent` contained node.** The self-delete is one-hop; a
   `contains` child that is itself non-`dependent` and owns further `contains` children would only

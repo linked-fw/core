@@ -1,7 +1,7 @@
 ---
 date: 2026-10-27
 summary: >
-  Step CK of CN plan 057: package kinds `core:OntologyPackage` / `core:AssetPackage`
+  Step CK of the host app's plan: package kinds `core:OntologyPackage` / `core:AssetPackage`
   (⊑ `core:Package`) in core; the `npm:` module (`http://purl.org/on/npm/`), `core:packageName`,
   `core:ontologyTriples` and the ontology sync's default-graph fallback removed. A store without
   graph queries is now refused by the `'package'` and shared modes. npm's terms moved to the new
@@ -14,7 +14,7 @@ summary: >
 
 ### Summary
 
-Core names the package kinds and nothing npm-specific (contract K-core of CN plan 057). npm's
+Core names the package kinds and nothing npm-specific (contract K-core of the host app's plan). npm's
 terms live in their own vocabulary package, `@_linked/npm` on `https://linked.cm/ont/npm/` (npm
 report 001). The deprecated default-graph ontology sync, kept for stores without graph queries,
 is gone with the per-package `OntologySync` records it wrote.
@@ -71,7 +71,7 @@ is gone with the per-package `OntologySync` records it wrote.
   (clean).
 - `git grep -n 'purl.org/on/npm\|packageName' src/ontologies src/data` and
   `git grep -n 'ontologies/npm' src`: no output.
-- CN on the new core (CN code unchanged), worktree `ck`, `CN_TEST_PORT=4341 npm run test:regular`
+- The host app on the new core (its code unchanged), worktree `ck`, `npm run test:regular`
   (7 min 34 s): `unit (vitest) PASS 77s` (`Tests 2968 passed | 5 skipped`), `packages PASS 12s`
   (9 tests), `playwright (integration + sign-in e2e) PASS 343s` (`335 passed`, `14 skipped`,
   `1 flaky`: `dataset-records.spec.ts:175` "a second project creates no store and connects to the
@@ -79,25 +79,25 @@ is gone with the per-package `OntologySync` records it wrote.
   layout, not the change: `@_linked/schema` and the other unchanged packages resolve core from the
   main checkout, so tsc sees two `Shape` declarations (59 `TS2322`/`TS1238`). With one copy it is
   clean: `npx tsc -p tsconfig.typecheck.json --noEmit --preserveSymlinks` in the worktree (24.8 s,
-  no output), and after landing `npm run typecheck:gate` in CN's main checkout: `No new type
+  no output), and after landing `npm run typecheck:gate` in the host app's main checkout: `No new type
   errors. 0 pre-existing errors still in the baseline.` (19.6 s).
-- CN's boot ontology sync on the new core into a throwaway dataset (`cn-main-test-ck-purl`, mem,
-  on :3030, dropped after): `tsx tests/helpers/cnMainOntologySync.ts` wrote all 19 packages;
+- The host app's boot ontology sync on the new core into a throwaway dataset (`app-main-test-ck-purl`, mem,
+  on :3030, dropped after): its main-dataset ontology sync helper wrote all 19 packages;
   `SELECT (COUNT(*) …) FILTER(STRSTARTS(STR(?s),"http://purl.org/on/npm/"))` → `0`; the same with
-  `https://linked.cm/ont/npm/` → `0` (nothing CN loads depends on `@_linked/npm` yet);
+  `https://linked.cm/ont/npm/` → `0` (nothing the host app loads depends on `@_linked/npm` yet);
   `…/core/OntologyPackage` → `4`.
-- cn-main (read only): the purl count is `15` today; it drops to `0` at the owner's next CN
+- The app's main dataset (read only): the purl count is `15` today; it drops to `0` at the owner's next
   restart, when the sync replaces core's ontology graph (its hash changed). Restarting the owner's
-  CN on :4040 was refused to this session, so that query is open (see Deviations).
+  host app on :4040 was refused to this session, so that query is open (see Deviations).
 
 ### Deviations
 
-- **Owner's CN not restarted.** The Verify item "restart the owner's CN on :4040, purl count 0 on
-  cn-main" was not run: stopping the owner's running process was not permitted here. Measured
-  instead on a throwaway dataset (above). Owner's path: CN on :4040 serves the rebuilt core to the
+- **Owner's host app not restarted.** The Verify item "restart the owner's host app on :4040, purl count 0 on
+  the main dataset" was not run: stopping the owner's running process was not permitted here. Measured
+  instead on a throwaway dataset (above). Owner's path: the host app on :4040 serves the rebuilt core to the
   browser, a signed-in session loads the dashboard and Projects; the project and Ontology Manager
   half needs the owner's own account (this browser's account has no projects).
-- **CN's regular gate**: its `typecheck:gate` step fails in a worktree that overlays core (two
+- **The host app's regular gate**: its `typecheck:gate` step fails in a worktree that overlays core (two
   copies of core's types); measured clean with one copy, in the worktree and in the main checkout
   after landing.
 - **The server** keeps reading the removed `fallback` (structural type, always unset now):
@@ -106,7 +106,7 @@ is gone with the per-package `OntologySync` records it wrote.
 ### Follow-ups
 
 - ~~Server `docs/backlog/006-ontology-sync-fallback-field.md`~~ — done, see the addendum.
-- The cn-main purl check after the owner's next CN restart — owner, at the next restart (sub-plan
+- The main-dataset purl check after the owner's next host app restart — owner, at the next restart (sub-plan
   005 Verify).
 
 ## Details
@@ -114,7 +114,7 @@ is gone with the per-package `OntologySync` records it wrote.
 - Core's own `package.json` gets `linked.kind: "library"` in step RK, not here.
 - No migration: datasets with old purl npm triples heal on the next sync (core's graph is replaced
   whole when its hash changes); per-package `OntologySync` nodes are no longer removed by the
-  sync — cn-main has none (plan 057 master decision); any elsewhere are inert, and a `'default'`
+  sync — the app's main dataset has none (a master decision of that plan); any elsewhere are inert, and a `'default'`
   rebuild replaces core's namespace.
 - `syncOntologies` still reads every registered package also with `packages` set: the shared and
   default modes rebuild from all, and the in-memory hierarchy needs all.

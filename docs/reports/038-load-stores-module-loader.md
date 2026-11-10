@@ -12,7 +12,7 @@ packages: [core]
 
 Source: [cli backlog 014](https://github.com/linked-fw/cli/blob/main/docs/backlog/014-dev-loads-a-second-copy-of-datasets-file-stores.md)
 (the measurements) and [cli backlog 015](https://github.com/linked-fw/cli/blob/main/docs/backlog/015-one-copy-of-each-framework-package.md)
-(the bug class). Plan: Create Now plan 068, phase 4. The CLI half (`linked start` installs the
+(the bug class). Plan: the host app's plan. The CLI half (`linked start` installs the
 loader) is a separate change in linked-fw/cli.
 
 ## Problem

@@ -11,13 +11,13 @@ packages: [core]
 
 # 041 — Unresolved-shape errors name the property, its shape and the scope
 
-Source: backlog 056 (removed with this report), from Create Now plan 068 phase 3 (CN report 098).
+Source: backlog 056 (removed with this report), from the host app's plan.
 
 ## Problem
 
 Inside a `ShapeCatalog` (report 037), a property whose `sh:node` names a shape the catalog does not
 hold made query building throw `Shape class not found for <shape>` and `fromJSON` throw
-`Cannot resolve shape for '<shape>'`. Neither named the property or the catalog, so a host (CN's
+`Cannot resolve shape for '<shape>'`. Neither named the property or the catalog, so a host (its
 `namedShapeError`) had to guess from the message.
 
 ## What was built
@@ -66,7 +66,7 @@ catch (err) {
 
 - **Backlog 056 §1 (lexical forms in `validate`) closed, not implemented.** Core refuses strings
   for typed datatypes on purpose (see the `xsd:date`/`xsd:dateTime` note above the datatype checks
-  in `src/shapes/validation.ts`); Create Now keeps its own lexical rule (`src/utils/shapeValidity.ts`).
+  in `src/shapes/validation.ts`); the host app keeps its own lexical rule.
 - The backlog's proposed wording (`Property '<label>' of '<shape>' points at '<target>', which
   catalog '<name>' does not hold`) was not used, to keep existing prefixes matchable.
 
@@ -95,7 +95,7 @@ catch (err) {
 
 ## Follow-ups
 
-- Create Now reads the fields instead of parsing the message (`namedShapeError`); done on CN's
+- The host app reads the fields instead of parsing the message (`namedShapeError`); done on its
   side with core 2.36.1. No core follow-up.
 
 ## PRs

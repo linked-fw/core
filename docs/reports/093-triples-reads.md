@@ -16,7 +16,7 @@ packages: [core]
 
 ### Summary
 
-Create Now still reads some graphs with raw SPARQL because the DSL has no shape for the data: a
+The host app still reads some graphs with raw SPARQL because the DSL has no shape for the data: a
 personal ontology draft graph, an import's staging graph, one node of unknown type. This adds two
 reads that need no shape:
 
@@ -64,7 +64,7 @@ Both answer `Triple[]`: `{subject, predicate, object, graph?}`, an IRI `{id}`, a
 
 ### Verification
 
-In `/Users/rene/web/wt/side-225--cg-core`, `npx linked build`:
+In the step worktree `side-225--cg-core`, `npx linked build`:
 
 ```
 ✔ Build successful
@@ -96,17 +96,17 @@ Tests:       52 passed, 52 total
 
 ### Deviations
 
-The plan (CN plan 323, step CG) placed the reads "next to `graph_replace`/`graph_drop` in
+The plan (the host app's plan, step CG) placed the reads "next to `graph_replace`/`graph_drop` in
 `GraphQuery`". They are a query of their own instead, in the same plain-data style, because
-`graphQuery` is the write channel: CN's `DraftsRouter.graphQuery` sends it to the writable store
-(`writable('graph', …)`, which forks a branch on its first write) and `WorkspaceCnRouter` to its
+`graphQuery` is the write channel: the host app's `DraftsRouter.graphQuery` sends it to the writable store
+(`writable('graph', …)`, which forks a branch on its first write) and the workspace router to its
 writable one, and `GraphResult` is a write's answer (hash, modified, changed). A read on that
 channel would fork branches for reads, or need every router to tell reads from writes. The graph
 read keeps the graph statics' routing by putting the record class on the query.
 
 ### Follow-ups
 
-- CN (step SQ2): `DraftsRouter`, `WorkspaceCnRouter`, `AppDataRouter`, `OntologyFileStore`, the
+- The host app (step SQ2): `DraftsRouter`, the workspace router, `AppDataRouter`, `OntologyFileStore`, the
   execution gateway and `HostAgentForwarder` have no `triplesQuery`; a call site that goes through
   one needs an arm there (a read: to the store that holds the data, not a writable fork). The call
   sites below run on a concrete store already, except `documentStaging`'s `io.selectDrafts`.
@@ -128,9 +128,9 @@ read keeps the graph statics' routing by putting the record class on the query.
 read on an inferring store returns the triples that store answers a `?s ?p ?o` pattern with,
 inferred types included.
 
-### Before and after, per Create Now call site
+### Before and after, per the host app call site
 
-**`src/backend/shapes/ontologyDraftStore.ts` `get` (~159).** Before:
+**The ontology draft store's `get`.** Before:
 
 ```ts
 const json = (await dataset.rawQuery(`SELECT ?s ?p ?o WHERE { GRAPH <${graph}> { ?s ?p ?o } } LIMIT ${MAX_DRAFT_ROWS + 1}`, 'query')) as …;
@@ -150,7 +150,7 @@ return draftRecordOf(graph, ontology, triples);
 
 The read goes where `DraftGraph.replaceContent(graph, body).exec(dataset)` writes.
 
-**`src/utils/documentStaging.ts` `readStagedInstance` (~357).** Before:
+**Document staging's `readStagedInstance`.** Before:
 
 ```ts
 const rows = await io.selectDrafts(target, `SELECT ?p ?o WHERE { GRAPH <${graph}> { <${instanceId}> ?p ?o } }`);
@@ -164,7 +164,7 @@ const triples = await TriplesBuilder.forNode({id: instanceId}).from(graph).exec(
 for (const {predicate, object} of triples) { … }
 ```
 
-**`src/utils/documentStaging.ts` `stagedSubjects` (~376).** Before:
+**Document staging's `stagedSubjects`.** Before:
 
 ```ts
 const rows = await io.selectDrafts(target, `SELECT DISTINCT ?s WHERE { GRAPH <${graph}> { ?s ?p ?o } }`);
@@ -178,13 +178,13 @@ const triples = await NamedGraph.readContent(graph).exec(dataset);
 return [...new Set(triples.map((t) => t.subject.id))].filter(isSafeIri);
 ```
 
-**`src/services/AppShapeIngestService.ts` `foreignSubjects` (~286), a node's types.** A subject
+**The shape ingest service's `foreignSubjects`, a node's types.** A subject
 read gives one IRI's types and owner tag:
 
 ```ts
-const triples = await TriplesBuilder.forNode({id: iri}).exec(cnMainDataset());
+const triples = await TriplesBuilder.forNode({id: iri}).exec(appMainDataset());
 const types = triples.filter((t) => t.predicate.id === rdf.type.id).map((t) => t.object);
-const owned = triples.some((t) => t.predicate.id === cnSh.ownerProjectId.id && isLiteralTerm(t.object) && t.object.value === projectId);
+const owned = triples.some((t) => t.predicate.id === appSh.ownerProjectId.id && isLiteralTerm(t.object) && t.object.value === projectId);
 ```
 
 It does not replace the whole query: two of its branches match triples that point at the subject

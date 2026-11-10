@@ -15,7 +15,7 @@ summary: >
 
 ### Summary
 
-The plan-071 overview review (context: reports 048–054, CN report 119) found eight issues in
+The plan-071 overview review (context: reports 048–054 and the host app's report) found eight issues in
 core. Each was re-checked against the code first; all eight held.
 
 1. **Old-store guard (high).** The ontology sync moved the hierarchy into package graphs and
@@ -29,7 +29,7 @@ core. Each was re-checked against the code first; all eight held.
 3. **Create on a populated graph without a record (low).** It used to drop the content silently.
    It is now refused with `graph-exists`.
 4. **Record-only update (low-medium).** It reported `changed: false`. It now reports `true`
-   whenever a record field is written (`feedsHierarchy` changes what the store infers, and CN's
+   whenever a record field is written (`feedsHierarchy` changes what the store infers, and the host app's
    gateway invalidates catalogs on `changed`).
 5. **Registry cache across copies (medium-low).** Its state moved to `globalThis` through
    `sharedState`.
@@ -150,7 +150,7 @@ LINKED_CORE_TEST_COMPOSE_PROJECT=fuseki-chard REQUIRE_FUSEKI=1` exported. A seco
   ignore it, and the next drop removes it.
 - The probe graphs are named `{data root}/graph/import/linked-inference-probe-{random}[-data]`,
   import-kind names, both recorded as `OntologyGraph` (import graphs are ontologies fetched by
-  URL). CN's gateway rule is being changed to admit `OntologyGraph` records under `graph/import/…`.
+  URL). The host app's gateway rule is being changed to admit `OntologyGraph` records under `graph/import/…`.
   Their records name the package `@_linked/inference-probe`.
 - A create on a populated graph without a record uses the existing `graph-exists` code, with its
   own message, so no new error code is added.
@@ -176,18 +176,18 @@ An independent read-only review found two high and five medium findings.
   linearisation, and the final state (graph and record gone) is the same.
   `noteGraphQuery` does not touch the cache for a replace, so nothing is resurrected there.
 - Low, applied: `FILTER EXISTS` on inserts; warnings keyed like the probe cache, shared across
-  copies and reset with it. Not applied: one shared regex for the import slug (core and CN keep
+  copies and reset with it. Not applied: one shared regex for the import slug (core and the host app keep
   the same pattern), and a retry for stores that apply `feedsHierarchy` asynchronously
   (`resetHierarchyInference` re-probes).
 
 ### Follow-ups
 
-- CN passes `{refuseKeepIncoming: true}` on its gateway and generic plane, in a CN change. CN's
-  `appGatewayRoutes` already invalidates catalogs on `changed`, which now covers record-only
+- The host app passes `{refuseKeepIncoming: true}` on its gateway and generic plane, in a host app
+  change. Its `appGatewayRoutes` already invalidates catalogs on `changed`, which now covers record-only
   updates.
 - `two-copies-built.test.ts` crashes in jest locally: backlog 060.
 - Done in 2.40.1: the probe runs only before the sync writes its first package graph (a sync with
-  nothing to write probed and so wrote at every boot, which forked every unforked CN branch), and
+  nothing to write probed and so wrote at every boot, which forked every unforked host app branch), and
   no answer keeps a default-graph copy of the hierarchy any more: `'default-graph'` and `'none'`
   write package graphs only, remove what an earlier sync kept in the default graph, and warn once
   that class-scoped reads miss subclass instances. This replaces the `'default-graph'` decision

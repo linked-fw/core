@@ -4,7 +4,7 @@ summary: >
   Triples reads by object (`TriplesBuilder.toNode`) and by predicate (`withPredicate`, which needs
   `.from()`), `.exists()` as their ask, the query feature `triplesPattern`, DSL-JSON 1.4; and an
   IRI-valued graph-record field, `NamedGraph.attributedTo` (`prov:wasAttributedTo`), written in the
-  same graph query as the content. Minor. Unblocks Create Now's raw SPARQL rows G1, G2 (property
+  same graph query as the content. Minor. Unblocks the host app's raw SPARQL rows G1, G2 (property
   half) and G6.
 packages: [core]
 ---
@@ -15,7 +15,7 @@ packages: [core]
 
 ### Summary
 
-Create Now still runs raw SPARQL to count the references to a term in the ontology graphs (G1,
+The host app still runs raw SPARQL to count the references to a term in the ontology graphs (G1,
 `termUsage.ts:96-106`), to ask whether a predicate is used in the data graphs (G2,
 `termUsage.ts:114-124`), and to mark the graphs it writes with `prov:wasAttributedTo` beside their
 registry record (G6, `hubGraphSync.ts:98-108`). Core now has all three:
@@ -91,7 +91,7 @@ One earlier run on a machine at load average 46 timed out in the hooks of
 `sparql-fuseki-shape-sync` and in the two race tests of `graph-query-fuseki` (19 failed); those
 suites passed alone (`17 passed`, `16 passed`) and in the run above.
 
-From CN's main checkout, after landing and `npx linked build` in its core checkout,
+From the host app's main checkout, after landing and `npx linked build` in its core checkout,
 `npm run typecheck:gate`:
 
 ```
@@ -121,9 +121,9 @@ No new type errors. 0 pre-existing errors still in the baseline.
   reaches them, so `exists()` stopping at the first answer can skip a later dataset that lacks
   `triplesPattern` (which would have been refused had it come first). Checking every dataset's
   features before the loop makes the refusal independent of order.
-- CN (batch B2): `termUsage.ts`/`OntologyUsageProvider.ts` move to `toNode`/`withPredicate`; every
+- The host app (batch B2): `termUsage.ts`/`OntologyUsageProvider.ts` move to `toNode`/`withPredicate`; every
   router and the execution gateway that forwards `triplesQuery` must list `triplesPattern` in its
-  `supports`, and the gateway's triples arm needs its rule for registered ontology graphs (CN's
-  inventory, question 3). CN (B3): `hubGraphSync.ts` moves to `attributedTo`.
+  `supports`, and the gateway's triples arm needs its rule for registered ontology graphs (the host app's
+  inventory, question 3). The host app (B3): `hubGraphSync.ts` moves to `attributedTo`.
 - `withPredicate(p).from(graphs.union)` reads every named graph, as `readContent(graphs.union)`
   does; the rule is that a predicate read names its graphs, not that the set is small.

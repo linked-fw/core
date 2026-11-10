@@ -47,13 +47,13 @@ Tests:       122 skipped, 3330 passed, 3452 total
 
 `npx tsc -p tsconfig-tests.json`: no errors. rdfs `npm test`: `# pass 2`, `# fail 0`.
 
-CN, worktree on this core and rdfs, `CN_TEST_PORT=4088 npm run test:feature -- ontologies`:
+The host app, worktree on this core and rdfs, `npm run test:feature -- ontologies`:
 `Test Files 63 passed (63)`, `Tests 462 passed (462)`, Playwright `1 failed, 4 skipped, 90
-passed (8.3m)`. The one failure, `tests/e2e/ontology-view-cards.spec.ts`, fails the same way on
-CN's `dev` without this change (`1 failed … 1 passed (50.7s)`, run from the main checkout): it
-is CN's `termUsage` → `dataGraphs()` → `GraphRoutingUnknownError` (CN backlog 393). The
-worktree's `typecheck:gate` fails because a worktree loads two copies of core; it was run in CN's
-main checkout after landing (see the CN report).
+passed (8.3m)`. The one failure, the ontology view cards spec, fails the same way on
+the host app's `dev` without this change (`1 failed … 1 passed (50.7s)`, run from the main checkout): it
+is the host app's `termUsage` → `dataGraphs()` → `GraphRoutingUnknownError` (the host app's backlog). The
+worktree's `typecheck:gate` fails because a worktree loads two copies of core; it was run in the host app's
+main checkout after landing (see the host app's report).
 
 **Deviations**
 
@@ -65,14 +65,14 @@ main checkout after landing (see the CN report).
 
 **Follow-ups**
 
-- CN backlog 393: OntologyUsageProvider's froms after the hub-sync rework lands; CN's app gateway
+- The host app's backlog: OntologyUsageProvider's froms after the hub-sync rework lands; the host app's gateway
   checks the DSL-JSON's graphs, not the IR's; outside collaborators meet the M48 check on plain
   term and shape reads now.
 
 ## Details
 
 **Where the default is applied.** It goes on the IR, not only into the compiled SPARQL (the way
-`storedInGraph` works for the registry records). CN's query-plane rule
+`storedInGraph` works for the registry records). The host app's query-plane rule
 (`authorizeProjectDataQuery`) reads `ir.graphs` to apply the workspace visibility rule (M48), so
 a set added only at compile time would let a plain `OwlClass.select()` read workspace-private
 ontology graphs without that check. With the set on the IR, the rule sees `graphs.allOntologies`,
@@ -97,7 +97,7 @@ as it would for an explicit `.from()`.
 3. Medium: the legacy sync's reads with `.from(graphs.default)` would not follow a graph route for
    NodeShape. That is moot now, because such a route is refused.
 
-The review's CN items (the gateway and outside collaborators) are in CN backlog 393.
+The review's the host app's items (the gateway and outside collaborators) are in the host app's backlog.
 
 **Tests added.** `src/tests/default-read-graphs.test.ts` covers select, count and ask; sub-shape
 inheritance and opt-out; `.from()` winning; the DSL-JSON round trip; a catalog; route refusal; an

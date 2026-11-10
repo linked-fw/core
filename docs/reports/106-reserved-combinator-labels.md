@@ -26,4 +26,4 @@ Owner decision: `$`-prefixed names and `and`/`or`/`not` throw; the other reserve
 
 ### Verification
 
-Core suite, `npx linked build`, and CN `npm run typecheck:gate` (results in the hand-off).
+Core suite, `npx linked build`, and the host app's `npm run typecheck:gate` (results in the hand-off).

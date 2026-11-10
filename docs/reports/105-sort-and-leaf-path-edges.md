@@ -82,8 +82,8 @@ paging, IRI tie-break.
   failed, 2 skipped`; typecheck clean. An earlier run while another agent loaded the machine had
   six live suites time out (5 s); they pass alone (`38 passed`) and in this run.
 - `npx linked build`: `✔ Build successful`.
-- CN main checkout, core landed and built there: `npm run typecheck:gate`: `No new type errors.
-  0 pre-existing errors still in the baseline.` `CN_TEST_PORT=4597 npm run test:feature --
+- The host app's main checkout, core landed and built there: `npm run typecheck:gate`: `No new type errors.
+  0 pre-existing errors still in the baseline.` `npm run test:feature --
   data,apps,ontologies --tier smoke`: typecheck:gate PASS, `unit (vitest, 137 files) PASS`
   (`1433 passed | 2 skipped`), gateway package PASS (`66 passed`), `playwright (11 specs, smoke)
   PASS` (`12 passed`), total PASS.
@@ -95,10 +95,10 @@ paging, IRI tie-break.
 - `and`/`or`/`not` labels now warn instead of throwing (the owner's rule, taken literally).
 - Sort directions on the wire are now validated (any case); they were passed through.
 
-### CN impact
+### Host app impact
 
-None expected: CN's `sortBy` uses the path form (`src/utils/prompts.ts`, `src/backend/ai/dataQuery.ts`,
-`InstanceProvider` `{"": "ASC"}`), unchanged. `SortByPath` (`paths` → `keys`) is not exported
+None expected: the host app's `sortBy` uses the path form (its AI data queries and the instance
+list's `{"": "ASC"}`), unchanged. `SortByPath` (`paths` → `keys`) is not exported
 from the package root.
 
 ### Follow-ups
@@ -220,7 +220,7 @@ All six items. Validation: the new tests pass; goldens; whole core suite with li
 
 #### Phase 3: review and fixes
 
-Independent review; fix medium and up. Validation: whole suite again; CN typecheck gate and smoke.
+Independent review; fix medium and up. Validation: whole suite again; the host app's typecheck gate and smoke.
 
 Dependency: phases in order; items within phase 2 are independent.
 
@@ -294,4 +294,4 @@ Decode the condition against the relation's value shape (fallback: the outer sha
   `memberShapeOf`; JSDoc. Tests: every over a chained inner quantifier (lowering, wire, live),
   later-segment and wire-index refusals, pets round trip. README and dsl-json.md state the
   first-segment rule.
-- Validation: whole suite with live Fuseki after `npx linked build`; CN typecheck gate and smoke.
+- Validation: whole suite with live Fuseki after `npx linked build`; the host app's typecheck gate and smoke.

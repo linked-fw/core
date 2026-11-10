@@ -63,7 +63,7 @@ packages: [core]
   rewritten for `readQuery`.
 
 **Verification** (worktree `one-read-method--c1`, own Fuseki on :3962, compose project
-`fuseki-orm-c1`; cn-main untouched)
+`fuseki-orm-c1`; app-main untouched)
 
 - `npx linked build` (the main checkout's `linked` binary; `npx linked` does not resolve inside a
   package checkout): `✔ Build successful`, 7.5 s.
@@ -100,7 +100,7 @@ packages: [core]
 
 **Follow-ups**
 
-- Wave 2 (master plan 111): `@_linked/server` (S1), CN (N1, N2) and the test doubles of the other
+- Wave 2 (master plan 111): `@_linked/server` (S1), the host app (N1, N2) and the test doubles of the other
   repos (X1) do not compile or pass against this core until they land; expected.
 - Third-party datasets that implemented `askQuery` must declare `'ask'` in `supports` to keep
   answering asks natively (else they get the select `LIMIT 1` fallback); said in the changeset.
@@ -108,7 +108,7 @@ packages: [core]
 ## Details
 
 **Contracts after the owner's decisions (2026-11-01)**, applied in a first docs commit to plans
-111 (core), 027 (server) and 394 (CN) before the code: `graphQuery` stays its own method, endpoint
+111 (core), 027 (server) and the host app's before the code: `graphQuery` stays its own method, endpoint
 and dispatch path; `readQuery` covers select, count, ask, triples and terms; no `'graph'` feature;
 `LinkedStorage`'s read statics collapse into `LinkedStorage.readQuery`; no legacy endpoints or
 aliases; the server's `readQuery` refuses triples and terms reads (S1's concern).
@@ -145,14 +145,14 @@ Plans 027 and 394 were changed in the master worktree directly (docs only): `dce
 | 12 | phase 5 | Test doubles: one `readQuery` per double across ~40 files | Side-effect-free helper `readQueryOf({select, ask, triples, terms})` and `isSelectRead` (`src/test-helpers/read-double.ts`) | A `switch` in every double | Fewest moving parts; a kind without a handler is refused |
 | 13 | phase 5 | Current docs outside the Verify grep (`documentation/*.md`) name the old methods | Updated too | Leave them | Current docs describe the current state |
 | 14 | phase 5, Verify | The Verify grep hits the module path `queries/triplesQuery` | Keep the module name; the hits are import paths only | Rename the module | C-4 names `triplesQuery.ts`; a rename breaks every importer for nothing |
-| 15 | start | The owner's decisions had to land in three repos' plans before the code | Core's in this worktree (fast-forwarded into the master first); server's and CN's committed directly in the master worktree (docs only) | Worktrees for server and CN too | Smallest footprint; no code in those repos |
+| 15 | start | The owner's decisions had to land in three repos' plans before the code | Core's in this worktree (fast-forwarded into the master first); server's and the host app's committed directly in the master worktree (docs only) | Worktrees for server and the host app too | Smallest footprint; no code in those repos |
 | 16 | wrapup | The changesets of the unreleased triples reads named methods that no longer exist | Rewrote `triples-reads.md`, `triples-terms-reads.md` and the mention in `sort-and-leaf-path-edges.md`; one new minor `one-read-method.md` | Leave them and explain in the new one | A changelog that names removed methods misleads |
 
 **Notes for wave 2**
 
 - A dataset that implemented `askQuery` declares `'ask'`; a triples-reading one `'triples'`
   (+`'triplesPattern'`); a terms-reading one `'triplesTerms'` + `'triplesPattern'`.
-- A `SparqlDataset` subclass that overrode `selectQuery` (CN's `AppDataFusekiStore`) overrides
+- A `SparqlDataset` subclass that overrode `selectQuery` (the host app's `AppDataFusekiStore`) overrides
   `readQuery` and calls `super.readQuery(query)`.
 - `readKindOfJSON` throws on graph kinds, so a `readQuery` endpoint refuses a graph query by
   calling it first.

@@ -52,7 +52,7 @@ Backlog 089:
 2. Nested sort dropping instances: the rule above.
 3. `Person.select((p) => p.bestFriend.nickNames)` mapped to `{nickNames: 'C'}`; now `['C', 'D',
    'E']`. Cause: `collectNestedGroup` filled a nested entity's fields from its first binding.
-   The coordinator's case (CN report 380), a multi-valued leaf in a nested select under a
+   The coordinator's case (the host app's report), a multi-valued leaf in a nested select under a
    multi-valued traversal (`Import.select(i => [i.created.select(c => [c.shape,
    c.instances])])`), has **the same cause** and is fixed by the same change (test "a
    multi-valued leaf in a nested select under a multi-valued traversal": `K`, `X` before,
@@ -69,7 +69,7 @@ Backlog 089:
 - `src/sparql/resultMapping.ts`: nested fields from all of an entity's bindings
   (`populateFlatFields`); `populateFields` removed.
 - `src/utils/Package.ts`: `PropertyShape.path` declares `maxCount: 1` (SHACL: exactly one
-  `sh:path`). Found by CN's smoke run: CN's shape catalog reads `ns.properties.select((ps) =>
+  `sh:path`). Found by the host app's smoke run: The host app's shape catalog reads `ns.properties.select((ps) =>
   [ps.path, …])`, and with the mapping fix the undeclared-cardinality `path` came back as a
   list, so every shape was skipped ("Invalid property path step"). `fixtures/core-shapes.ttl`
   regenerated (one line).
@@ -89,7 +89,7 @@ Backlog 089:
 - Final, whole core suite against an own Fuseki (`FUSEKI_BASE_URL=http://localhost:3967 npm
   test`): `Tests: 122 skipped, 3169 passed, 3291 total`, `[fuseki] live tests: 467 total — 465
   passed, 0 failed, 2 skipped`; typecheck clean. `npx linked build`: `✔ Build successful`.
-- CN main checkout, core landed and built there: `npm run typecheck:gate`: `No new type errors.
+- The host app's main checkout, core landed and built there: `npm run typecheck:gate`: `No new type errors.
   0 pre-existing errors still in the baseline.` `npm run test:feature -- data,apps,ontologies
   --tier smoke`: typecheck, `unit (vitest, 136 files) PASS`, gateway package PASS, playwright
   `1 failed, 10 passed`. The first run failed 4 specs (`app-scope`, `gateway-shapeless-delete`,
@@ -109,31 +109,29 @@ Backlog 089:
 - Unpaged selects keep their row ORDER BY (an instance sorts at its first row, which is MIN
   ascending and MAX descending already); no IRI tie-break added there.
 
-### CN impact
+### Host app impact
 
-No CN change was needed. Callers checked:
+No host-app change was needed. Callers checked:
 
-- `orderBy` in CN: `src/backend.ts:3252`, `src/backend/shapes/InstanceProvider.ts:504` and
-  `:721` sort by the subject only (`orderBy((p) => p)`), which gets no bound key: unchanged. No
-  CN caller sorts by a nested path. DSL-JSON `sortBy` from the AI data queries
-  (`src/backend/ai/dataQuery.ts`, `src/utils/prompts.ts`, `llm-data-queries.spec.ts`) now puts
+- `orderBy` in the host app: three server-side calls sort by the subject only (`orderBy((p) => p)`), which gets no bound key: unchanged. No
+  host-app caller sorts by a nested path. DSL-JSON `sortBy` from the AI data queries now puts
   instances without the key last; the `llm-data-queries` smoke passes.
-- `rowLimitOf` (`src/services/ontologyTermSearch.ts:114`, `termSelect` `.limit(...)`): the term
+- The term search's `rowLimitOf` (`.limit(...)` on its term select): the term
   select projects multi-valued `label`/`comment`, so since report 098 its limit counts terms,
   not rows; the ×4 headroom now over-reads (no wrong results). Not changed.
-- `src/utils/documentStaging.ts` reads the import's created record at the top level and then
-  `ImportCreated.select(...).forAll(ids)` (CN report 380), working around the nested
+- The document staging code reads the import's created record at the top level and then
+  `ImportCreated.select(...).forAll(ids)` (the host app's report), working around the nested
   multi-valued mapping fixed here; it can go back to one nested select. Not changed.
-- `src/utils/shapeCatalogQuery.ts` (`fetchShapeCatalog`, `ns.properties.select((ps) =>
+- The shape catalog query (`fetchShapeCatalog`, `ns.properties.select((ps) =>
   [ps.path, …])`): broke on the mapping fix, fixed in core (above).
-- CN smoke spec `gateway-shapeless-delete` (smoke) depends on an untagged test's `setFlag(true)`:
-  a CN test issue, for whoever owns plan 376.
+- The host app's smoke spec `gateway-shapeless-delete` depends on an untagged test's `setFlag(true)`:
+  a host-app test issue, for whoever owns that spec.
 
 ### Follow-ups
 
 - Backlog 092: `orderBy` on a computed expression is dropped silently; a filter on a sort path
   is ignored; `p.friends.nickNames` throws in the proxy.
-- CN (not recorded in CN, for the coordinator): `documentStaging.ts` can return to one nested
+- The host app (not recorded there, for the coordinator): document staging can return to one nested
   select; `rowLimitOf` headroom can go; the `gateway-shapeless-delete` smoke test's order
   dependency.
 

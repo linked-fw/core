@@ -6,13 +6,13 @@ summary: >
   read the in-memory hierarchy (a safety net) and a guarded edge covered by a more general guard
   is not repeated. Every decorator tighten-only widening throws; `override-not-tightened` is an
   error for decorated shapes; `autoLoadOntologyData` and xsd `Bytes` are removed; `NodeShape` and
-  `PropertyShape` carry typed metamodel accessors. Step K3 of CN plan 070.
+  `PropertyShape` carry typed metamodel accessors. Step K3 of the host app's plan.
 packages: [core]
 ---
 
 # 044 — The no-inference workarounds go
 
-Source: CN plan 070 (`create-now/docs/plans/070-store-inference-and-ontology-data.md`), step K3;
+Source: the host app's store-inference plan, step K3;
 sub-plan [003](../plans/003-store-inference.md). Design: the master's §Decisions 14, 20-23 and its
 §Contracts "Tighten-only", "Class hierarchy in memory", "Shape check". Two phases, one commit
 each. Released as a **minor** (the owner's decision; the changeset states the store requirement
@@ -64,7 +64,7 @@ throws the first error (review finding). Data-only shapes stay warnings (the tex
 property registered in `utils/Package.ts` (owner answer 2's terms — `sh:name`,
 `targetSubjectsOf`, `deactivated`, `message`, `severity`, `andShapes`, `notShape`, `xoneShapes`;
 `flags`, `languageIn`, `uniqueLang`, `qualifiedMinCount`, nested `properties` — and the rest), so
-`NodeShape.select((s) => [s.name, …])` and subclasses such as CN's `CatalogNodeShape` type-check.
+`NodeShape.select((s) => [s.name, …])` and subclasses such as a host app's `CatalogNodeShape` type-check.
 The registrations were all there since K1 phase 3; what C6 found missing was the typed surface
 (`TS2339: Property 'name' does not exist on type 'QShape<NodeShape…>'`). A test pins that every
 accessor is a registered property.
@@ -120,8 +120,8 @@ node …/_linked-cli/lib/esm/launch.js build   ✔ Build successful (5.9 s)
 @_linked/schema   npm test                 # tests 97  # pass 97  # fail 0
 @_linked/server-utils npm run test:calls   # tests 95  # pass 95  # fail 0   (test:unit is red in this layout before the change too, report 003)
 @_linked/server   npm test                 Tests: 409 passed; only two-copies.test.ts fails (as on store-inference, backlog 060)
-CN npm run typecheck:gate                  No new type errors. 0 pre-existing errors still in the baseline. (22.9 s)
-CN npx vitest run                          Test Files 273 passed | 1 skipped (274); Tests 2355 passed | 5 skipped (55.4 s)
+app npm run typecheck:gate                 No new type errors. 0 pre-existing errors still in the baseline. (22.9 s)
+app npx vitest run                         Test Files 273 passed | 1 skipped (274); Tests 2355 passed | 5 skipped (55.4 s)
 ```
 
 ## What later steps must know
@@ -129,12 +129,12 @@ CN npx vitest run                          Test Files 273 passed | 1 skipped (27
 - **webid.email's `Passkey` will throw at load** with this core: it declares
   `@literalProperty({path: wie.label}) get label()`, and every shape inherits the base `Shape`'s
   `label` (`rdfs:label`), so it is a path change, now refused (decision 14). Fix in webid.email:
-  use `rdfs:label` for it, or name the accessor differently. No other localized package or CN
-  shape declares an override with a changed path (searched; CN vitest and its shape check pass).
+  use `rdfs:label` for it, or name the accessor differently. No other localized package or host app
+  shape declares an override with a changed path (searched; the host app's vitest and its shape check pass).
 - The single-owner constraint and the owned-link check now depend on the dataset holding the
   synced hierarchy; a dataset without it under-counts owners and refuses subclass instances.
-- CN's catalog read (`getCatalogNodeShapes`) can become a typed `CatalogNodeShape` select (C6's
-  note); not done here (CN).
+- The host app's catalog read (`getCatalogNodeShapes`) can become a typed `CatalogNodeShape` select (C6's
+  note); not done here (host app).
 - Follow-up from the review, recorded as [backlog 061](../backlog/061-value-shape-callbacks-need-own-properties.md):
   callbacks waiting on a `[package, name]` value shape run only when that shape has decorated
   properties of its own (older behaviour, not changed here).

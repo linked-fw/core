@@ -3,7 +3,7 @@ summary: >
   `registerInstalledOntologies(packageDirs, {importModule})`: a package directory without built
   register modules but with `src/ontologies/*.register.ts` (a workspace package in dev, never
   built) registers through `importModule`, which the server sets to Vite's `ssrLoadModule`.
-  Without it such a directory is skipped, as before. CN plan 070, §Installed packages' ontologies.
+  Without it such a directory is skipped, as before. The host app's plan, §Installed packages' ontologies.
 packages: [core]
 ---
 
@@ -12,9 +12,9 @@ packages: [core]
 ## Why
 
 `registerInstalledOntologies` (report 045) imports only `<dir>/lib/esm/ontologies/*.register.js`.
-A Create Now clone's ontology package (`packages/<slug>-ont`) is a workspace package nothing
+A host app clone's ontology package (`packages/<slug>-ont`) is a workspace package nothing
 builds in dev and nothing imports, so it never registered and the app's ontology sync could not
-write the hierarchy the ontology builder had just written into it (CN report 109, §Blocked).
+write the hierarchy the ontology builder had just written into it (the host app's report, §Blocked).
 
 ## What
 

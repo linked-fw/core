@@ -1,7 +1,7 @@
 ---
 date: 2026-10-27
 summary: >
-  Step OA of CN plan 070: the ontology status values as public individuals in core —
+  Step OA of the host app's ontology plan: the ontology status values as public individuals in core —
   `core:OntologyStatus` with `core:Draft`, `core:ReadyForReview` and `core:Published`, in
   `core.ttl` and on `coreOntology`. An ontology states its status as `adms:status <iri>` (owl's
   `Ontology.status`, owl report 003). Minor.
@@ -41,21 +41,21 @@ Time:        28.824 s, estimated 57 s
 
 (The skipped suites are the `[fuseki]` live tests, which need a Fuseki of their own.)
 
-CN booted on this core (worktree, :4352) logged `[cn-main] ontology sync: written @_linked/core`
+The host app booted on this core (worktree, :4352) logged `[app-main] ontology sync: written @_linked/core`
 and no error.
 
 ### Deviations
 
-- Numbered 083, not 081 as CN plan 070 lists: 081 and 082 were taken on `dev` while this step ran.
+- Numbered 083, not 081 as the host app's plan lists: 081 and 082 were taken on `dev` while this step ran.
 
 ### Follow-ups
 
-None in core. Writing a status (CN plan 070 step SV) and showing it (step NP) are those steps'
-scope, recorded in CN `docs/plans/200-ontology-cn-steps.md`.
+None in core. Writing a status (the host app's step SV) and showing it (step NP) are those steps'
+scope, recorded in the host app's plan.
 
 ## Details
 
 - `linked-core.ts` is hand-written (not generated), so the terms are added beside the other
   `ns()` constants with a comment on what they are for.
-- The individuals carry no order or `skos:` scheme: the three values are a fixed set CN reads by
+- The individuals carry no order or `skos:` scheme: the three values are a fixed set the host app reads by
   IRI.

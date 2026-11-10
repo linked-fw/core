@@ -3,7 +3,7 @@ summary: >
   `@_linked/core/ontology/registerInstalled` (server only): `registerInstalledOntologies(packageDirs)`
   imports each package directory's `lib/esm/ontologies/*.register.js` and returns the packages it
   registered, so the ontology sync and the shape check see the data of a package an app only
-  deep-imports shape files from. CN plan 070, §Installed packages' ontologies.
+  deep-imports shape files from. The host app's plan, §Installed packages' ontologies.
 packages: [core]
 ---
 

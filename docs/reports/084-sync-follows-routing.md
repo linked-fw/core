@@ -1,6 +1,6 @@
 ---
 summary: >
-  Step SY of CN master plan 282: the ontology and shape syncs follow the storage routing (K4).
+  Step SY of the host app's master plan: the ontology and shape syncs follow the storage routing (K4).
   New `@_linked/core/shapes/syncTargets`: graphSyncTargets(), syncShapeGraphsRouted,
   syncOntologiesRouted (prune in the default dataset only, leftovers reported elsewhere, failures
   per dataset) and graphContent() (what the 'package'-mode syncs would write). Server half:
@@ -14,10 +14,10 @@ summary: >
 ### Summary
 
 An app's ontology and shape graphs now go wherever its storage routing needs them, not only into
-the default dataset (CN plan 282, D12/D14/G2, K4; consumes core backlog 076). Core computes the
+the default dataset (the host app's master plan, D12/D14/G2, K4; consumes core backlog 076). Core computes the
 targets and runs the per-dataset syncs per target; `@_linked/server`'s boot uses them (server
 report 023). `graphContent()` gives a host the exact text and hash the syncs would write (K3).
-`syncShapeGraphs(ds)` and `syncOntologies(ds)` are unchanged (CN calls them).
+`syncShapeGraphs(ds)` and `syncOntologies(ds)` are unchanged (the host app calls them).
 
 ### Changes
 
@@ -46,14 +46,14 @@ report 023). `graphContent()` gives a host the exact text and hash the syncs wou
 
 ### Verification
 
-Run from `/Users/rene/web/wt/hub-imports--sy/packages-local/_linked-core` (CLI: the main
+Run from the step worktree's `packages-local/_linked-core` (`hub-imports--sy`) (CLI: the main
 checkout's `launch.js`, see S1).
 
 - `linked build`: `✔ Build successful` (15.6 s).
 - `npm test` (jest + typecheck): `Test Suites: 17 skipped, 140 passed, 140 of 157 total`,
   `Tests: 535 skipped, 2569 passed, 3104 total` (Fuseki suites skipped without the env).
 - `npm run check:dts`: no output, exit 0 (1.7 s).
-- `npm run test:fuseki` against CN's Fuseki on 3030 (own `linked-core-test-*` datasets only):
+- `npm run test:fuseki` against the host app's Fuseki on 3030 (own `linked-core-test-*` datasets only):
   first run (phase 2) `[fuseki] live tests: 415 total — 406 passed, 7 failed, 2 skipped`; the 7 all
   `Loading SHACL test data failed: 405 Method Not Allowed — is the test Fuseki running with
   ENABLE_DATA_WRITE/ENABLE_SHACL` (that Fuseki is not the test image; unrelated). The gate rerun
@@ -61,9 +61,9 @@ checkout's `launch.js`, see S1).
   rerun in band afterwards: `PASS sync-routed-fuseki`, `PASS ontology-sync-fuseki`, `PASS
   graph-targets-fuseki`, `shape-graphs-fuseki` only its SHACL case — `[fuseki] live tests: 32
   total — 29 passed, 1 failed, 2 skipped`.
-- CN: `npm run typecheck:gate` in `/Users/rene/web/wt/hub-imports--sy` reports 117 errors, every
+- Host app: `npm run typecheck:gate` in its step worktree `hub-imports--sy` reports 117 errors, every
   one between two copies of core (`…/hub-imports--sy/packages-local/_linked-core/…` vs
-  `…/create_now/packages-local/_linked-core/…`: the step's core next to the copy the main install's
+  `…/<main checkout>/packages-local/_linked-core/…`: the step's core next to the copy the main install's
   `@_linked/*` packages resolve). With one copy (`paths` mapping `@_linked/core` to the step's
   build, scratch tsconfig, removed): `tsc` 0 errors (1 min 38 s). Vitest
   `src/services/appShapeSync.test.ts src/services/hubOntologySync.test.ts`: `Test Files 2 passed
@@ -75,7 +75,7 @@ checkout's `launch.js`, see S1).
   first draft); K4 detail in 006 updated.
 - Routed result adds `leftovers` (M11's report of graphs left in non-default datasets).
 - Phases 1 and 2 split by commit as tests/docs, not by code (S5).
-- CN's typecheck gate cannot pass in a step worktree that has its own core (see Verification);
+- The host app's typecheck gate cannot pass in a step worktree that has its own core (see Verification);
   verified with one core copy instead.
 
 ### Follow-ups
@@ -85,7 +85,7 @@ checkout's `launch.js`, see S1).
 - `'default'` ontology mode leaves a moved package's terms: core backlog 068 (extended, M10).
 - Ontology registration without data file names writes invalid SPARQL: core backlog 085.
 - The master rebuilds its `_linked-core` then `_linked-cli` (S1).
-- Removal of `/admin/sync-shapes` and the boot flags, CN writing the graphs: step HS (M5).
+- Removal of `/admin/sync-shapes` and the boot flags, the host app writing the graphs: step HS (M5).
 
 ## Details
 
@@ -104,7 +104,7 @@ nothing stored changes shape; no reset needed.
 | S5 | phase 1 | Commit granularity | `syncTargets.ts` lands whole in phase 1 (targets, content and the routed syncs); the routed syncs' tests, the Fuseki test and the README follow in phase 2 | Split the module across commits | One module, one review; nothing calls the routed syncs before phase 2 |
 | S6 | phase 2 | A dataset the router no longer knows (nothing pinned to it) can hold a leftover graph | Not read; the README says so | Remember past targets | Routing is the only source of datasets; no new state |
 | S7 | phase 2 | `'default'` ontology mode, a dataset without every package (M10) | One warning per dataset and process naming the packages routed elsewhere; fix homed in core backlog 068 | Per-run warning | Edge case; one line per boot |
-| S8 | phase 2 | Live Fuseki suites that need SHACL validation and data upload (7 tests) fail on CN's Fuseki (405, no `ENABLE_SHACL`/data write) | Reported as environment failures; every other live suite, mine included, passes | Start the test image on another port | Unrelated to the change (they load SHACL data over GSP); the owner's Fuseki is not reconfigured |
+| S8 | phase 2 | Live Fuseki suites that need SHACL validation and data upload (7 tests) fail on the host app's Fuseki (405, no `ENABLE_SHACL`/data write) | Reported as environment failures; every other live suite, mine included, passes | Start the test image on another port | Unrelated to the change (they load SHACL data over GSP); the owner's Fuseki is not reconfigured |
 | S9 | phase 3 | Keep the server's single-dataset sync paths (`syncShapeGraphsInto(ds)`, `runOntologyPhase(ds)` without `routed`)? | Kept: they sync one given dataset (the live suite syncs through a `RemoteDataset` client that is not the router's default); the boot and `resyncShapes` always run routed | Remove them | Same meaning as core's per-dataset `syncShapeGraphs(ds)`/`syncOntologies(ds)`, which stay (M12) |
 | S10 | phase 3 | A routed run where one dataset failed | Log the others, then throw naming each failed dataset (boot: the existing non-fatal warning; sync-shapes: 500) | Answer 200 with `failed` | Keeps today's contract: a failed sync is never answered as a success |
 | S11 | phase 3 | The boot's targets log line with no pins | Silent (the syncs' own lines say it all); logged only when some graph goes beyond the default dataset | Always log | No new noise for the common case |
@@ -129,7 +129,7 @@ nothing stored changes shape; no reset needed.
   `Tests: 1 skipped, 21 passed, 22 total`; `sync-routed-fuseki` `[fuseki] live tests: 1 total — 1
   passed`; `npm run typecheck` 0 errors. Server `graph-targets boot-shape-sync graph-content
   graph-writer boot-ontology-sync`: `Tests: 76 passed, 76 total`.
-- The 117 CN `typecheck:gate` errors of the first round come from two copies of core in a step
+- The 117 host app `typecheck:gate` errors of the first round come from two copies of core in a step
   worktree (the link farm loads the step's core and, for the main install's other `@_linked/*`
   packages, the main checkout's); homed in cli backlog 013.
 - Typecheck fix: `@linkedPackage('…').linkedShape` (TS1497) in `sync-routed.test.ts` and `sync-routed-fuseki.test.ts` replaced by a named `termsShape` decorator; full `npm test` (jest + typecheck) exit 0: `Test Suites: 17 skipped, 140 passed, 140 of 157 total`, `Tests: 535 skipped, 2579 passed, 3114 total`.

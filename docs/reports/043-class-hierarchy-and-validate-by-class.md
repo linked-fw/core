@@ -4,13 +4,13 @@ summary: >
   triples, filled by `loadOntologyHierarchy`, which the ontology sync and the shape check call),
   `validateByClass` (SHACL class targeting in process), and direction I of the shape check with
   multiple inheritance (one in-scope superclass on the extends chain satisfies it; each one off
-  the chain is a warning). Step K2 of CN plan 070.
+  the chain is a warning). Step K2 of the host app's plan.
 packages: [core]
 ---
 
 # 043 — The class hierarchy in memory and validate by class
 
-Source: CN plan 070 (`create-now/docs/plans/070-store-inference-and-ontology-data.md`), step K2;
+Source: the host app's store-inference plan, step K2;
 sub-plan [003](../plans/003-store-inference.md). Design: the master's §Decisions 13, 22, 23 and
 its §Contracts "Class hierarchy in memory" and "Validate by class". Three phases, one commit each.
 
@@ -59,7 +59,7 @@ The shape's *anchor* is its nearest domain ancestor of a real (non-meta) class i
 package or a dependency). When an in-scope superclass shape sB is missing and the shape has an
 anchor that sB is not a sub-shape of, sB is off the extends chain: a warning naming the multiple
 inheritance. A sB below the anchor stays an error (the shape could extend sB instead); with no
-anchor every in-scope B stays an error. The module JSDoc states the rule with CN's `Dataset`.
+anchor every in-scope B stays an error. The module JSDoc states the rule with an app's `Dataset`.
 
 ## Tests
 
@@ -76,8 +76,8 @@ anchor every in-scope B stays an error. The module JSDoc states the rule with CN
   `sharedTargetClass` sub-shape does not; two types (`rdf:type` key, string and `{id}`) with a
   key neither declares reported once; no type (Info); `types` overriding the data; a data-only
   shape; partial mode.
-- `src/tests/shape-check-multiple-inheritance.test.ts` (4): CN's `Dataset` case in three packages
-  (`createNow:Dataset ⊑ dcat:Dataset, schema:CreativeWork`; dcat ships `Resource` and no
+- `src/tests/shape-check-multiple-inheritance.test.ts` (4): an app's `Dataset` case in three packages
+  (`app:Dataset ⊑ dcat:Dataset, schema:CreativeWork`; dcat ships `Resource` and no
   `Dataset` shape, as it does): Dataset extending CreativeWork → no error, one warning for dcat's
   `Resource`; the same classes extending nothing → errors for `Resource`, `CreativeWork`,
   `Thing`; a `Report ⊑ Article` extending CreativeWork → `Article` stays an error; without the
@@ -118,7 +118,7 @@ grep -rln "n3'" lib/esm --include='*.js'                → lib/esm/ontology/hie
 grep -n '^import' lib/esm/ontology/classHierarchy.js     → ShapeClass, registryCache, sharedState
 ```
 
-Verify (CN worktree set, the built core through the overlay, `@_linked/schema` from the
+Verify (the host app's worktree set, the built core through the overlay, `@_linked/schema` from the
 integration set):
 
 ```

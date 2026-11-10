@@ -702,7 +702,7 @@ run), second sync skipped in 58 ms with no write.
 ## K2 — validate by class
 
 Master §K2: [§Class hierarchy in memory](#class-hierarchy-in-memory-provider-k2-consumers-u1-k3-apps)
-first (U1 lands on it), then [§Validate by class](#validate-by-class-provider-k2-consumers-apps-cn),
+first (U1 lands on it), then [§Validate by class](#validate-by-class-provider-k2-consumers-apps-the-host-app),
 then direction I with multiple inheritance (decision 13). Report 043; changeset `minor`.
 Size: small, **3 phases**. Depends on K1 phases 1-4 (landed, 944b6d0); not on K1's store phase.
 Phases run in order (2 reads phase 1's closure; 3 is independent of 2 but shares the files' tests).

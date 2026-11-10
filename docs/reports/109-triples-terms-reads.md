@@ -15,7 +15,7 @@ packages: [core]
 ### Summary
 
 A triples read can now ask which of a list of terms occur, in one query instead of one read per
-term (CN's term usage made one per class and per property).
+term (the host app's term usage made one per class and per property).
 
 ```ts
 const instantiated = await TriplesBuilder.toNode(classes).withPredicate(rdf.type).from(dataGraphs).whichExist(ds);
@@ -50,9 +50,9 @@ const used = await TriplesBuilder.withPredicate(properties).from(dataGraphs).whi
   `Test Suites: 4 skipped, 168 passed, 168 of 172 total`, `Tests: 122 skipped, 3321 passed, 3443
   total`, `[fuseki] live tests: 493 total — 491 passed, 0 failed, 2 skipped`; typecheck clean.
 - `npx linked build`: `✔ Build successful`.
-- CN (report 389): term usage on the terms read; `npm run test:changed` in the worktree ran the
+- The host app (its own report): term usage on the terms read; `npm run test:changed` in the worktree ran the
   regular set: unit `Tests 4063 passed | 5 skipped (4068)`, playwright `517 passed (13.1m)`,
-  packages PASS. CN main checkout after landing: see report 389 for `npm run typecheck:gate`.
+  packages PASS. The host app's main checkout after landing: see its report for `npm run typecheck:gate`.
 
 ### Deviations
 
@@ -63,8 +63,8 @@ const used = await TriplesBuilder.withPredicate(properties).from(dataGraphs).whi
 
 ### Follow-ups
 
-- CN routers without `triplesTermsQuery`, `@_linked/server`'s `RemoteDataset` sending neither
-  triples nor terms reads, the gateway's 10 000-term cap: CN backlog 390.
+- The host app's routers without `triplesTermsQuery`, `@_linked/server`'s `RemoteDataset` sending neither
+  triples nor terms reads, the gateway's 10 000-term cap: the host app's backlog.
 
 ## Details
 
@@ -86,6 +86,6 @@ const used = await TriplesBuilder.withPredicate(properties).from(dataGraphs).whi
 
 ### Review
 
-An independent review of the core and CN diffs found nothing at medium or above. Its low findings:
+An independent review of the core and the host app diffs found nothing at medium or above. Its low findings:
 LinkedStorage counted the raw query's terms (now checked with `triplesQueryOf` first), the
-gateway's cap counted one list (now both), a duplicate import (merged); the rest are CN backlog 390.
+gateway's cap counted one list (now both), a duplicate import (merged); the rest are the host app's backlog.

@@ -18,7 +18,7 @@ packages: [core]
 Report 099 scoped the shapeless delete to the graphs a dataset routes, with two server-side
 narrowings. The owner changed the design: a shared dataset is shared on purpose, its graphs are
 only places, and rights are per shape across the whole dataset. A receiver that runs a shapeless
-delete for a client now decides who may send it with a dataset-wide rule (Create Now: report 377).
+delete for a client now decides who may send it with a dataset-wide rule (the host app's report).
 So the delete is dataset-wide:
 
 - With no graph named, it deletes every triple of each id, and every link to one, in the default
@@ -108,5 +108,5 @@ The live suite covers:
 
 ## Details
 
-The independent review covered this diff and Create Now's together (CN report 377). Its core
+The independent review covered this diff and the host app's together (the host app's report). Its core
 findings were the structure graphs (high) and the fan-out (medium), both fixed here.

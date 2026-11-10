@@ -15,8 +15,8 @@ packages: [core]
 
 `syncShapes()` planned a delete (cascade) → create for every registered shape on every run, even
 when the stored SHACL was identical, so every app boot wrote to app-data
-(`synced shapes into app-data ...: 14 shape(s) written`). Create Now wants to fork a branch dataset
-on its first write (CN backlog 115), so an unchanged boot must not count as a write.
+(`synced shapes into app-data ...: 14 shape(s) written`). The host app wants to fork a branch dataset
+on its first write (its backlog), so an unchanged boot must not count as a write.
 
 ## What was built
 
@@ -124,7 +124,7 @@ reverted experiment in the PR).
 
 - `@_linked/server` (`materializeShapes`): optional wording for the zero case ("all shapes up to
   date") and an env switch for `force`. Not recorded in a backlog.
-- Create Now backlog 115 (fork the branch dataset on first write) depended on this; picked up
+- The host app's backlog item (fork the branch dataset on first write) depended on this; picked up
   through Renovate's core bump.
 
 ## PRs

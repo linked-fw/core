@@ -6,7 +6,7 @@ summary: Serialize code-registered NodeShapes to the store as SHACL via the quer
 
 Implements `docs/ideas/015`. **All work in `@_linked/core`.** Shapes defined in code are
 materialized into the store as SHACL data via the existing query engine — the forward
-(code → graph) direction of [arch-05 code-as-canonical](../../../../docs/architecture/05-code-as-canonical.md):
+(code → graph) direction of "code as canonical":
 **code is canonical, the store is a rebuildable projection.**
 
 ## Architecture overview
@@ -144,7 +144,7 @@ Totals: `npm test` **1135 passed** (114 Fuseki-gated skipped), `npm run test:fus
 
 ## Known limitations / follow-ups
 
-- **CN wiring:** `syncShapes()` is exported but nothing calls it yet (CN follow-up; out of scope).
+- **Host app wiring:** `syncShapes()` is exported but nothing calls it yet (host app follow-up; out of scope).
 - **`sortBy` / `defaultValue`** PropertyShape fields are not serialized (non-SHACL extras).
 - **Cascade scope is global** (all contains preds + dependent types) — correct but broad; a
   shape-scoped alternation is a possible optimization.
@@ -154,17 +154,16 @@ Totals: `npm test` **1135 passed** (114 Fuseki-gated skipped), `npm run test:fus
 
 ## Out of scope (closed, not deferred)
 
-- **Reverse import (SHACL RDF → NodeShape)** — will be built in **CN**, not core.
+- **Reverse import (SHACL RDF → NodeShape)** — will be built in **the host app**, not core.
 - **`{__rdfList}` IR/mutation-engine primitive** — won't build; `rdfList()` is the complete API and a
   primitive would add a second same-output mechanism to core lowering for no functional gain.
 
 ## Architecture compliance
 
-Follows [05-code-as-canonical](../../../../docs/architecture/05-code-as-canonical.md) (forward
-materialization), [04-storage-model](../../../../docs/architecture/04-storage-model.md) (writes via
-queries → IDataset; default graph), and [10-code-structure §Testing](../../../../docs/architecture/10-code-structure.md)
+Follows the host app's architecture: code is canonical (forward materialization), the storage
+model (writes via queries → IDataset; default graph), and its testing conventions
 (jest unit + Fuseki integration, matching core's `sparql-fuseki.test.ts` convention). No architecture
-changes required; reverse import deferred to CN.
+changes required; reverse import deferred to the host app.
 
 
 ### Update — `orphanScope` on `syncShapes()`

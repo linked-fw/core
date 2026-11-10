@@ -32,7 +32,7 @@ await LinkedStorage.transaction(async (tx) => { … });  // commit on return, ro
 - **API:** `LinkedStorage.begin(): Transaction`, `LinkedStorage.transaction(fn)`; `Transaction`
   (`commit()`, `rollback()`, `state`, `failedWith`), `TransactionEndedError`; `inTransaction`,
   `txIdOf`; `QueryFeature` gains `'transactions'`, which `ALL_QUERY_FEATURES` leaves out (a
-  separate `DatasetFeature` type broke CN's `AppDataRouter`, which narrows `supports` to
+  separate `DatasetFeature` type broke the host app's `AppDataRouter`, which narrows `supports` to
   `QueryFeature`).
 - **Store protocol (`IDataset`):** `supports` may list `'transactions'`; `beginTransaction():
   Promise<string>`, `commit(txId)`, `rollback(txId)`; the txId on every query as `query.txId`.
@@ -91,14 +91,14 @@ transaction as target, at commit with the store).
   ```
   (after the rebase onto report 102's triples reads; no Fuseki of this run's own, so the live tests skip)
 - `npx linked build`: `✔ Build successful`.
-- CN main checkout `npm run typecheck:gate`, after landing and `npx linked build` there:
+- The host app's main checkout `npm run typecheck:gate`, after landing and `npx linked build` there:
   `No new type errors. 0 pre-existing errors still in the baseline.` (The first landing reported
   `src/data/AppDataRouter.ts: TS2345: Argument of type 'DatasetFeature' is not assignable to
   parameter of type 'QueryFeature'`; fixed in core by making `'transactions'` a `QueryFeature`.)
 
 ### Deviations from the brief
 
-- No backlog items in `@_linked/server` or CN: the owner moved their forwarding to the next step;
+- No backlog items in `@_linked/server` or the host app: the owner moved their forwarding to the next step;
   the contract is below.
 - There was no in-memory dataset in core, so `InMemoryDataset` is new, with a deliberate subset.
 - `RemoteDataset` is unchanged: a query's `toJSON()` already carries `txId`, so it forwards it;
@@ -115,7 +115,7 @@ transaction as target, at commit with the store).
   answering the txId string; `commit(txId)` → `…/commit` with `{args: [txId]}`; `rollback(txId)` →
   `…/rollback` with `{args: [txId]}`; never retried. Declare `'transactions'` in `supports` only
   when the server answers them (decide from `ping`), so an old server is never sent a txId.
-- **Server `/call` handler and CN's gateway:** pass through `beginTransaction`, `commit(txId)`,
+- **Server `/call` handler and the host app's gateway:** pass through `beginTransaction`, `commit(txId)`,
   `rollback(txId)` to the store the transaction's queries route to, plus every query with its
   txId (`fromJSON()` → `LinkedStorage.xQuery(query)` or the routed store, which receives
   `query.txId`). Check rights per query as today. Bind a txId to its caller and refuse it from
@@ -132,10 +132,10 @@ transaction as target, at commit with the store).
 
 ### Follow-ups
 
-- Conditions (`.when(...)` on a write, `tx.require(select…exists())`) for compare-and-set (CN's
+- Conditions (`.when(...)` on a write, `tx.require(select…exists())`) for compare-and-set (the host app's
   lease locks, `storeLocks.ts`, `forkClaims.ts`): later, in the IR, independent of any engine.
 - Logos: transactions as short-lived branches, merged at commit (recorded in Logos's repo).
-- Forwarding in `@_linked/server` and CN's gateway: the next step (contract above).
+- Forwarding in `@_linked/server` and the host app's gateway: the next step (contract above).
 - `lowerMutationJSON` (JSON straight to IR) carries no txId: a receiver that uses it runs the write
   outside the transaction; receivers use `fromJSON()`.
 
@@ -143,14 +143,14 @@ transaction as target, at commit with the store).
 
 ### Backlog 090 (closed here)
 
-Source: Create Now's review of its multi-step writes (owner decisions, 2026-10-31). CN's cases:
+Source: The host app's review of its multi-step writes (owner decisions, 2026-10-31). The host app's cases:
 `writeActivation` (delete the old app config, then create the new one), `commitImport`,
 `ensureSingleUserWorkspace`, `createApplication`, `setMembership` and other delete-then-create
 pairs. Decided: no dataset is named; the transaction object holds only `{store → txId}`, the store
 holds the transaction; a store declares support in `IDataset.supports`; queries are sent at once;
 unsupported stores warn once and run directly; a second store gets its own transaction with a
 warning; abandoned transactions expire in the store; the in-memory store implements it for real;
-`transaction(fn)` as the convenient form. Create Now keeps running on Fuseki for now, so its call
+`transaction(fn)` as the convenient form. The host app keeps running on Fuseki for now, so its call
 sites gain the code shape but not atomicity until a store with support is behind them.
 
 ### How the txId reaches the store

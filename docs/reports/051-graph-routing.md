@@ -6,7 +6,7 @@ summary: >
   sub-shapes' and its owners'), compiled as `GRAPH <g>`, `FROM NAMED` + `GRAPH ?g`, `VALUES` for a
   narrower type-checked subject, and without `FROM NAMED` when the default graph is in the mix;
   routed writes (`INSERT DATA { GRAPH <g> … }`, `WITH <g>`), `.into()` checked against the routing
-  and never in DSL-JSON; live-query dependencies and effects carry graphs. CN plan 071, sub-plan 004.
+  and never in DSL-JSON; live-query dependencies and effects carry graphs. The host app's named-graphs plan, sub-plan 004.
 packages: [core]
 ---
 
@@ -14,7 +14,7 @@ packages: [core]
 
 ## Why
 
-CN plan 071 decision 8: storage rules pick the graph, per app, the way they pick the dataset, so
+Decision 8 of the host app's named-graphs plan: storage rules pick the graph, per app, the way they pick the dataset, so
 ordinary code never names one. Decision 9 settled how routed reads are written (one `GRAPH ?gN`
 block per subject group, `FROM NAMED` from the routing, `VALUES` where a group's set differs, the
 default graph's store name in the set). Phase 1 shipped `.from()` for one graph set per query
@@ -65,7 +65,7 @@ and a linked subject's data lives in one graph, so `FROM NAMED` (or `VALUES`) fi
 type check; adding one would change every select. `isolateLinkedTypeChecks` stays inert for
 generated queries.
 
-**Routed writes** (the write rule as decided on the review, master §Contracts at CN `48d5865ff`).
+**Routed writes** (the write rule as decided on the review, master §Contracts).
 The mutation IR kinds carry `graph?` and, for changes to existing subjects, `writeGraphs?`;
 `SparqlDataset.resolveWriteGraph` sets them:
 
@@ -262,7 +262,7 @@ quoted: "**Verdict: not clean. There is 1 high finding and 1 medium finding.**"
   for bulk writes, `MutationEffects.graph` becoming a set; (b) refuse writes through a shape whose
   read set has more than one graph unless `.into()` names one; (c) accept and record it (backlog 067
   and the changeset). The step stopped unlanded; the owner chose (a), resolved inside the same
-  update, recorded in master §Contracts at CN `48d5865ff`; implemented as above, with `[fuseki]`
+  update, recorded in master §Contracts; implemented as above, with `[fuseki]`
   tests "an Employee changed or deleted as a Person changes only the staff graph" (update, upsert,
   upsert of a missing subject, delete of two ids, bulk delete through the super-shape) and "an
   owned node changed through its own shape is changed in its owner graph; an owned link to a node
@@ -305,7 +305,7 @@ without graphs.
 
 ## Review fixes
 
-Fixes from the final review of CN plan 071's phase 2 (core), in worktree `named-graphs--fixcore`.
+Fixes from the final review of the host app's named-graphs plan's phase 2 (core), in worktree `named-graphs--fixcore`.
 Shape-graph fixes (3, 9) are recorded here too and cross-referenced from report 052; the
 managed-graph refusal (4) from report 053.
 
@@ -346,12 +346,12 @@ managed-graph refusal (4) from report 053.
    `{DATA_ROOT}/graph/shapes` (`dataGraph('shapes')`) or `{DATA_ROOT}/graph/import/…`: at
    `setShapeGraphs` time for `'own'`, `dataGraph()` and IRIs, and, for a full IRI under the data
    root, when the routing is read (the root is known only then). **Not done: `{DATA_ROOT}/graph/drafts/…`.**
-   CN routes its draft shapes (`FormDraft`, `OntologyDraft` and their fields and terms) to
+   The host app routes its draft shapes (`FormDraft`, `OntologyDraft` and their fields and terms) to
    `{DATA_ROOT}/graph/drafts/forms` and `…/drafts/ontology` with `setShapeGraphs` on
-   `AppDataFusekiStore` (`draftGraphRoutes`), so refusing drafts in core would break CN's drafts;
+   `AppDataFusekiStore` (`draftGraphRoutes`), so refusing drafts in core would break the host app's drafts;
    left routable pending a decision (reported to the master).
 5. **(Low) `toJSON` with `.into()`** now throws on create, update and delete builders
-   (`queries/intoGraph.ts`), instead of dropping the graph. Published dependents checked: CN calls
+   (`queries/intoGraph.ts`), instead of dropping the graph. Published dependents checked: the host app calls
    `.into()` only in `formDraftStore.ts` and `ontologyDraftStore.ts`, server-side on the branch
    store (no serialization); the server's `RemoteDataset` ships `toJSON()` and now refuses such a
    builder, which is the intent; server-utils, fuseki and webid.email do not call `.into()`. The test
@@ -397,6 +397,6 @@ before every jest run):
   incoming references in other graphs and where-filters that traverse into another graph.
 - Backlogs 065 and 066 are resolved here (no linked type checks needed; the default graph through
   `VALUES`) and removed.
-- C3 (CN): `AppDataRouter`/the EG register the app's routes on the branch store with
+- C3 (host app): `AppDataRouter`/the EG register the app's routes on the branch store with
   `setShapeGraphs` (or route through `graphRouting()`), from the clone's
   `linked.backend.datasets.json`.

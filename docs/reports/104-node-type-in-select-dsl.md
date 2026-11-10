@@ -38,7 +38,7 @@ Thing.select().where((t) => t.$type().equals({id: C})).exists()
 - **groupBy:** one group per type value; a node with two types is in two groups, so the counts
   add up to more than the number of nodes (README, JSDoc, live test: Person 3, Employee 1,
   Robot 1 over three nodes).
-- **Inference:** `$type()` answers what the store answers for `rdf:type`; on CN's Fuseki (and
+- **Inference:** `$type()` answers what the store answers for `rdf:type`; on the host app's Fuseki (and
   the inferring test image) the stored types and every superclass (live test: Erik stored as
   Employee answers Employee and Person). `InMemoryDataset` answers it as a field with the stored
   types and refuses it in a where, group key or sort, as for any path.
@@ -79,7 +79,7 @@ Thing.select().where((t) => t.$type().equals({id: C})).exists()
   475 passed, 0 failed, 2 skipped`; typecheck clean. `transactions.test.ts` asserted wire 1.5; it
   now reads `WIRE_VERSION`.
 - `npx linked build`: `✔ Build successful`.
-- CN main checkout, core landed and built there: `npm run typecheck:gate`: `No new type errors.
+- The host app's main checkout, core landed and built there: `npm run typecheck:gate`: `No new type errors.
   0 pre-existing errors still in the baseline.`
 
 ### Deviations
@@ -91,9 +91,9 @@ Thing.select().where((t) => t.$type().equals({id: C})).exists()
   again. Inside another set's callback, write the path from the outside
   (`p.friends.$type().equals(C)`).
 
-### CN impact
+### Host app impact
 
-No CN change. No CN code uses `$type`, `$graph` or a property with those labels (grep of `src`
+No host-app change. No host-app code uses `$type`, `$graph` or a property with those labels (grep of `src`
 and `packages`).
 
 ### Follow-ups
@@ -168,7 +168,7 @@ Other points, settled without alternatives:
 
 - Mutations do not accept `$type` (types are written by `create`/the shape); the label lookup
   that resolves `$type` is query-side only.
-- Inference: `$type()` answers whatever the store answers for `rdf:type`; CN's Fuseki infers
+- Inference: `$type()` answers whatever the store answers for `rdf:type`; the host app's Fuseki infers
   classes through `rdfs:subClassOf`, so stored and inferred types come back. Documented.
 - groupBy: a key per type value; a node with two types is in two groups (one row per type), so
   group counts add up to more than the number of nodes. Documented.
@@ -231,7 +231,7 @@ Other points, settled without alternatives:
 #### Phase 3: docs and changeset
 
 - README, dsl-json.md, changeset.
-- Validation: dsl-json spec fixtures test passes; CN main checkout `npm run typecheck:gate`.
+- Validation: dsl-json spec fixtures test passes; the host app's main checkout `npm run typecheck:gate`.
 
 Phases run in order (each depends on the previous).
 
@@ -301,7 +301,7 @@ throws, as for `and`/`or`/`not` (a label with no way in).
 - As above; tests: a friend's type inside `some()` (lowering and live), label select, refused
   labels, NodeShape's own `type` next to `$type()`; goldens and spec fixtures for the new where
   form.
-- Validation: whole suite with live Fuseki; build; CN typecheck gate.
+- Validation: whole suite with live Fuseki; build; the host app's typecheck gate.
 
 ### Review, round 2
 
@@ -336,4 +336,4 @@ Chosen: A; B recorded as a follow-up.
   member's type from the outside (lowering and live), the warning, InMemoryDataset field and
   refusal. Goldens back to EXISTS.
 - Rebased onto dev (transactions, wire 1.5): wire version 1.6.
-- Validation: whole suite with live Fuseki; build; CN typecheck gate.
+- Validation: whole suite with live Fuseki; build; the host app's typecheck gate.

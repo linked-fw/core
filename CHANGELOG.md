@@ -1079,7 +1079,7 @@
   node reference — `docs/backlog/014-prefixed-uris-in-json.md` lists `.where(…).equals(val)` as taking
   `JSNonNullPrimitive | NodeReferenceValue`.
 
-  So the documented call was a type error at every call site. Create Now had 24 of them:
+  So the documented call was a type error at every call site. The host app had 24 of them:
 
   ```
   LinkedDocumentRepository.ts(268,100): error TS2353: Object literal may only specify known
@@ -1112,7 +1112,7 @@ JSPrimitive | QueryBuilderObject | NodeReferenceValue`. Nothing is widened to `a
   That made ordinary states indistinguishable from real faults. "This dataset does not exist" — a
   404/405 on the endpoint itself, which is what you get when a name is derived from an id that has no
   data yet — reads exactly like "this query is wrong", and the only way left to tell them apart was to
-  pattern-match the message. Create Now hit this in `getShapeCatalog`, where an unknown project id
+  pattern-match the message. A host app hit this in `getShapeCatalog`, where an unknown project id
   produced a 500 where an empty catalog belonged.
 
   The wrapper now sets `cause` to the original error, so callers can branch on structure:
@@ -1251,7 +1251,7 @@ a registered property with this name`, for a property declared correctly two fil
 
   ```
   [AppDataRouter] query reached the app-data router with NO active project.
-  CN-internal shapes must be pinned to cn-main/cn-ai ...
+  App-internal shapes must be pinned to app-main/app-ai ...
   ```
 
   — reporting a missing pin for a shape that is pinned two files away. Dev loads
@@ -1626,7 +1626,7 @@ WHERE { … }`. Like an ask, a count is its own builder and IR kind, so `limit`/
   `getPropertyShapeTerm(label)`, so an alternative serializer can look up each constraint's
   predicate, datatype and node kind rather than hard-coding its own copy.
 
-  Purely additive — `buildPropertyShapeData` is unchanged. Create Now's code→RDF shape sync uses
+  Purely additive — `buildPropertyShapeData` is unchanged. A host app's code→RDF shape sync uses
   this to emit the full SHACL constraint set (pattern, `sh:in`, ranges, lengths, class) instead of
   the five it previously enumerated by hand.
 
@@ -1713,8 +1713,8 @@ WHERE { … }`. Like an ask, a count is its own builder and IR kind, so `limit`/
 
   `Prefix.toPrefixed()` guarded only against `/`, so when a registered namespace was a proper
   string prefix of an IRI's own namespace the compaction produced names like
-  `create-now:access#PolicyRegistry`. `#` is not in `PN_LOCAL`: the tokenizer ends the name at
-  `create-now:access` and reads the rest of the line as a **comment**, eating the triple
+  `my-app:access#PolicyRegistry`. `#` is not in `PN_LOCAL`: the tokenizer ends the name at
+  `my-app:access` and reads the rest of the line as a **comment**, eating the triple
   terminator and yielding a query the store rejects — with a parse error pointing at the
   _following_ line, which is why this was hard to attribute.
 
@@ -2216,7 +2216,7 @@ WHERE { … }`. Like an ask, a count is its own builder and IR kind, so `limit`/
 
   **New / changed public API:**
 
-  - `linkedPackage(name, { baseUri? })` — packages declare where they publish. `baseUri` defaults to `https://linked.cm/` (first-party); CN injects a workspace-scoped root (`{workspaceSlug}.id.create.now`) for private packages. The IRI slug is the package **basename** with the npm scope dropped (`@_linked/core` → `core`, `@linked.cm/blog` → `blog`); there is no separate slug param. Slugs must be globally unique within the publish root — the registry enforces this and reserves the first-party (`@_linked`) names.
+  - `linkedPackage(name, { baseUri? })` — packages declare where they publish. `baseUri` defaults to `https://linked.cm/` (first-party); a host app can inject a workspace-scoped root (`{workspaceSlug}.example.org`) for private packages. The IRI slug is the package **basename** with the npm scope dropped (`@_linked/core` → `core`, `@linked.cm/blog` → `blog`); there is no separate slug param. Slugs must be globally unique within the publish root — the registry enforces this and reserves the first-party (`@_linked`) names.
   - New exports `LINKED_DATA_ROOT`, `getPackageUri()`, `setPackagePublishConfig()`, `packageNameToSlug()` (replaces the removed `LINCD_DATA_ROOT`).
   - The framework ontology export is now `coreOntology` (was `lincd`).
 
@@ -2304,8 +2304,6 @@ dependent: true })` marks a shape whose instances may be cascade-deleted when re
   loaded — accepted during HMR/Vite interim" in their dev log will no
   longer see that line.
 
-  Context: see create-now plan-011 report (docs/reports/009-legacy-lincd-eradication.md).
-
 - [#96](https://github.com/linked-cm/core/pull/96) [`3114383`](https://github.com/linked-cm/core/commit/3114383563fc9d1c8a4ae11356792a8595f6027a) Thanks [@flyon](https://github.com/flyon)! - Lower multi-valued projected traversals into OPTIONAL (left-join) subtrees.
 
   Report 014 fixed projection-only **singular** object traversals (`maxCount <= 1`)
@@ -2342,7 +2340,7 @@ dependent: true })` marks a shape whose instances may be cascade-deleted when re
 
   **New / changed public API:**
 
-  - `linkedPackage(name, { baseUri? })` — packages declare where they publish. `baseUri` defaults to `https://linked.cm/` (first-party); CN injects a workspace-scoped root (`{workspaceSlug}.id.create.now`) for private packages. The IRI slug is the package **basename** with the npm scope dropped (`@_linked/core` → `core`, `@linked.cm/blog` → `blog`); there is no separate slug param. Slugs must be globally unique within the publish root — the registry enforces this and reserves the first-party (`@_linked`) names.
+  - `linkedPackage(name, { baseUri? })` — packages declare where they publish. `baseUri` defaults to `https://linked.cm/` (first-party); a host app can inject a workspace-scoped root (`{workspaceSlug}.example.org`) for private packages. The IRI slug is the package **basename** with the npm scope dropped (`@_linked/core` → `core`, `@linked.cm/blog` → `blog`); there is no separate slug param. Slugs must be globally unique within the publish root — the registry enforces this and reserves the first-party (`@_linked`) names.
   - New exports `LINKED_DATA_ROOT`, `getPackageUri()`, `setPackagePublishConfig()`, `packageNameToSlug()` (replaces the removed `LINCD_DATA_ROOT`).
   - The framework ontology export is now `coreOntology` (was `lincd`).
 
@@ -2389,8 +2387,6 @@ dependent: true })` marks a shape whose instances may be cascade-deleted when re
   saw before. Apps that previously saw "Multiple versions of Linked are
   loaded — accepted during HMR/Vite interim" in their dev log will no
   longer see that line.
-
-  Context: see create-now plan-011 report (docs/reports/009-legacy-lincd-eradication.md).
 
 ## 2.6.0
 

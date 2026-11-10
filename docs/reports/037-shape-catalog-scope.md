@@ -13,7 +13,7 @@ packages: [core]
 # 037 — Shape catalogs: a synchronous scope over the shape registry
 
 Contract: [runtime instances § Shape catalogs](../architecture/runtime-instances.md#shape-catalogs).
-User docs: README "Shape catalogs". Consumer: Create Now plan 068 phase 3, which resolves each
+User docs: README "Shape catalogs". Consumer: the host app's plan, which resolves each
 project branch's shapes against its own catalog instead of re-registering them process-wide.
 
 ## Problem
@@ -185,7 +185,7 @@ Best-of-run select and create are within 5 % of `main`.
 
 - A data-only shape in the **global** registry still resolves nested value shapes through
   `getShapeClass` (authored classes only), as before; only catalogs get the constructor
-  fallback. Hosts moving project shapes into catalogs (CN plan 068 phase 3) no longer depend on
+  fallback. Hosts moving project shapes into catalogs (the host app's plan) no longer depend on
   the global path for them. Recorded here; no backlog item, since the global path is kept as is
   on purpose.
 

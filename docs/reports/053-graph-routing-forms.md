@@ -4,7 +4,7 @@ summary: >
   `{graph: dataGraph('slug')}` → `{DATA_ROOT}/graph/{slug}`, resolved under the store's data root
   (`IDataset.dataRoot()`, `SparqlOptions.dataRoot`, else `DATA_ROOT`) whenever the routing is read;
   full IRIs stay accepted. The datasets config's `graphs` key is removed (ignored with a warning).
-  Backlog 069 records per-instance graph functions. CN plan 071, sub-plan 004.
+  Backlog 069 records per-instance graph functions. The host app's named-graphs plan, sub-plan 004.
 packages: [core]
 ---
 
@@ -12,8 +12,8 @@ packages: [core]
 
 ## Why
 
-CN plan 071, open question 5, as decided by the owner on 2026-10-23: graph routing lives only in
-the app's code (arch-04 Layer 1), not in `linked.backend.datasets.json` (1a); a route states intent
+The host app's named-graphs plan, open question 5, as decided by the owner on 2026-10-23: graph routing lives only in
+the app's code, not in `linked.backend.datasets.json` (1a); a route states intent
 and developers never write graph IRIs (1c-i); graph IRIs live under the data's root (1c-ii).
 Sub-plan [004](../plans/004-named-graphs.md) §K6 holds the plan-mode detail.
 
@@ -31,7 +31,7 @@ route})` is one of:
 
 - **The `'own'` rule.** The package is the one the shape class was registered by
   (`linkedPackage(name)`, the class's `packageName`, read from the shared registry by shape IRI).
-  Its slug is `packageNameToSlug(name)`, arch-02's rule for package IRIs: drop the npm scope
+  Its slug is `packageNameToSlug(name)`, the rule for package IRIs: drop the npm scope
   (`@scope/`), replace every run of characters other than ASCII letters and digits with `-`, trim
   leading and trailing `-`, lower-case (`@acme/News_Site` → `news-site`, `@_linked/core` → `core`).
   The shape name is the shape IRI's last path segment, case kept: `@linkedShape({name})` if given,
@@ -43,7 +43,7 @@ route})` is one of:
   `/`-separated segments, each `^[a-z0-9]+(?:-[a-z0-9]+)*$`; anything else throws (no silent
   rewriting). A route that arrives as plain data (`{dataGraph: '../x'}`) is checked again.
 - **`DATA_ROOT`.** The one the store mints ids under (`generateEntityUri`): the new optional
-  `IDataset.dataRoot()` (`SparqlDataset.dataRoot()` returns `SparqlOptions.dataRoot`; CN's
+  `IDataset.dataRoot()` (`SparqlDataset.dataRoot()` returns `SparqlOptions.dataRoot`; the host app's
   `AppDataFusekiStore` sets that option to the project's app data root once resolved), else the
   process's `DATA_ROOT`. `dataRootOf(dataset)` trims it and drops trailing slashes (as the server's
   `appShapesGraph` does). There is no `example.org` fallback.
@@ -68,7 +68,8 @@ not read it (grep of their sources on `named-graphs`).
 
 ## Deviations from the sub-plan
 
-None in core. One finding about CN contradicted the step's brief (below); CN was fixed first.
+None in core. One finding about the host app contradicted the step's brief (below); the host app was fixed
+first.
 
 ## Breaking changes (changeset `graph-routing-forms.md`, minor)
 
@@ -79,22 +80,21 @@ None in core. One finding about CN contradicted the step's brief (below); CN was
 The unreleased `graph-routing.md` changeset no longer mentions the config key. No export was
 removed.
 
-## CN relied on the key: fixed in CN before this landed
+## The host app relied on the key: fixed there before this landed
 
-The brief assumed "removing the key from core does not break that CN code, because CN parses the
-file itself". CN's C3 `parseAppGraphRoutes` (`src/data/appGraphRoutes.ts`) parsed the JSON itself
+The brief assumed "removing the key from core does not break that host app code, because the
+host app parses the file itself". The host app's C3 `parseAppGraphRoutes` parsed the JSON itself
 but passed `graphs` through core's `parseDatasetsConfig` and read
 `parsed.datasets.appData.graphs` back. Against this step's core that was `error TS2339: Property
-'graphs' does not exist on type 'DatasetEntry'.`, and `appGraphRoutes.test.ts:73` expected core to
-throw `/graph IRIs/`. The step stopped; the master chose to fix CN first. CN `2004766be` ("fix: app
-graph routes read graphs from the raw datasets entry and check the IRIs in CN") reads `graphs` from
-the raw entry, resolves its placeholders through core's parser (in the `config` slot, typed in both
-cores) and checks shape IRI → graph IRI in CN with core's old rule and message. Its gate:
-`typecheck:gate` "No new type errors." (current core), the same file compiled against this step's
-`lib` with no error in it, Vitest `appGraphRoutes.test.ts` `Tests 11 passed`,
-`tests/integration/graph-routing.spec.ts` `9 passed (25.7s)` on :3190 with `CN_TEST_PORT=4192`
-(4190, the port first assigned, is on the fetch spec's blocked-port list: undici answers "bad
-port", so CN never looks healthy).
+'graphs' does not exist on type 'DatasetEntry'.`, and its graph-routes unit test expected core to
+throw `/graph IRIs/`. The step stopped; the master chose to fix the host app first. Its fix reads
+`graphs` from the raw entry, resolves its placeholders through core's parser (in the `config`
+slot, typed in both cores) and checks shape IRI → graph IRI in the host app with core's old rule
+and message. Its gate: `typecheck:gate` "No new type errors." (current core), the same file
+compiled against this step's `lib` with no error in it, the graph-routes unit test `Tests 11
+passed`, and the graph-routing integration spec `9 passed (25.7s)` on :3190 with the app's test
+port at 4192 (4190, the port first assigned, is on the fetch spec's blocked-port list: undici
+answers "bad port", so the app never looks healthy).
 
 ## Verification
 
@@ -145,8 +145,8 @@ Recorded in report [051](051-graph-routing.md) §Review fixes: routes to managed
 ## Follow-ups
 
 - Backlog [069](../backlog/069-per-instance-graph-functions.md): per-instance graph functions.
-- CN (C6): `AppDataFusekiStore` must resolve its data root before reads that use intent routes
+- Host app (C6): `AppDataFusekiStore` must resolve its data root before reads that use intent routes
   (today it does so on reads only when it has `ownRoutes`); otherwise `dataRoot()` falls back to
-  CN's own `DATA_ROOT`. C6 also moves `routesForProject` from the datasets file to the storage file.
+  the host app's own `DATA_ROOT`. C6 also moves `routesForProject` from the datasets file to the storage file.
 - To confirm (master, 1c-ii): the root is stable across a project's branches, so fork copies keep
   graph names.

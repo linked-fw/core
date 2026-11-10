@@ -41,7 +41,7 @@ setting, one string each.
   the `OntologySync` shape, removed. Warns only.
 - Results gain `target` and `fallback`. Docs: README "Store requirements" and the new "Ontology and
   shape graphs" section (modes, env variables, Turtle as the source of a package's terms, clearing
-  before switching, CN-managed apps use `package`); `docs/architecture/ontologies.md`.
+  before switching, host-managed apps use `package`); `docs/architecture/ontologies.md`.
 
 ### Changes
 

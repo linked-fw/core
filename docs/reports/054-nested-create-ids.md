@@ -63,7 +63,7 @@ REQUIRE_FUSEKI=1` exported before every jest run.
 - `two-copies-built.test.ts` alone: `Module cache already has entry …/lib/esm/shapes/SHACL.js. This
   is a bug in Jest` (backlog 060, known).
 - `npm run typecheck`: clean. `npm run check:dts`: clean.
-- Dependents grepped for reliance on the empty id (CN `src`, `packages/*/src`, server,
+- Dependents grepped for reliance on the empty id (the host app's `src`, `packages/*/src`, server,
   server-utils, auth, react, shape-ui): none reads a nested create result's `id` as "not created".
 
 ### Deviations
@@ -131,7 +131,7 @@ time) `planGraph` is `undefined`, so no child was ever `null` there.
 
 ### Dependents
 
-Grep of CN `src`, `packages/*/src`, `@_linked/server`, `server-utils`, `auth`, `react` and
+Grep of the host app's `src`, `packages/*/src`, `@_linked/server`, `server-utils`, `auth`, `react` and
 `shape-ui` for `id === ''`, `id: ''` and `!x.id` on mutation results found no caller treating a
 nested create's empty id as meaningful. No dataset implementation outside core overrides
 `createQuery`/`updateQuery` of `SparqlDataset` (`FusekiStore` inherits them); remote datasets send

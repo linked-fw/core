@@ -6,7 +6,7 @@ summary: >
   generated shapes); `syncShapeGraphs` replaces `{package IRI}/graph/shapes` whole on a hash
   mismatch (`linked-shape-graph/1`), writes the app graph, cleans the old default-graph shapes once
   and falls back to `syncShapes`; a graph patch deletes a blank-node structure as a pattern through
-  its IRI subject (CBD). CN plan 071, sub-plan 004.
+  its IRI subject (CBD). The host app's named-graphs plan, sub-plan 004.
 packages: [core]
 ---
 
@@ -14,7 +14,7 @@ packages: [core]
 
 ## Why
 
-CN plan 071 decision 13: each package's shapes live in their own named graph, written from a
+Decision 13 of the host app's named-graphs plan: each package's shapes live in their own named graph, written from a
 deterministic `shapes.ttl` that `linked build` emits (L1) and the server syncs by hash (V2). 13b
 stores shapes as declared, 13c makes a shape edit a patch of that shape's statements, and the
 blank-node rule makes the patch unit the shape's concise bounded description. Sub-plan
@@ -135,8 +135,8 @@ error, as the parser's other refusals. `GraphQueryBodies` gains `deletePatterns`
 - **For C4 (catalog readers):** the default-graph `syncShapes` writes declared shapes now, so a
   catalog built from the default graph shows a sub-shape without its inherited property shapes
   unless the parent is registered in the same catalog (core's walk follows `extends` through the
-  registry). This lands on `:4040` with this step: CN's shapes are rewritten once at its next
-  boot (version 3), and CN backlog 131 (inherited properties by following `core:isExtending`) is
+  registry). This lands on `:4040` with this step: the host app's shapes are rewritten once at its next
+  boot (version 3), and the host app's backlog item (inherited properties by following `core:isExtending`) is
   C4's.
 - **For V2:** `turtleFor` is where the installed `shapes.ttl` comes in; open question 6's warning
   (no file, so generated) belongs there. The graph hash covers the bytes passed.
@@ -204,6 +204,6 @@ Recorded in report [051](051-graph-routing.md) §Review fixes: the cleanup now k
 - L1: `linked build` writes `lib/esm/data/shapes.ttl` with `packageShapesTurtle(pkg)` (master §L1).
 - V2: boot and re-sync through `syncShapeGraphs(ds, {turtleFor, appShapes})` (master §V2).
 - C4: catalogs on `graphs.allShapes` plus the app graph, inherited properties through
-  `core:isExtending` (master §C4, CN backlog 131); a shape edit's patch is the shape's statements as
+  `core:isExtending` (master §C4, a host app backlog item); a shape edit's patch is the shape's statements as
   `shapes.ttl` holds them (the CBD rule above).
 - Package versions in records: backlog 064, unchanged.

@@ -4,13 +4,13 @@ summary: >
   OntologySync shape, the shape check (`checkShapeHierarchy`, five kinds, `mirrors`,
   `sharedTargetClass`), tighten-only warnings with inheritance of omitted constraints, and the rest
   of the SHACL Core terms plus PropertyGroup in the metamodel, and core's live tests on the
-  inferring Fuseki image (TDB2 datasets, an inference probe). Step K1 of CN plan 070.
+  inferring Fuseki image (TDB2 datasets, an inference probe). Step K1 of the host app's plan.
 packages: [core]
 ---
 
 # 042 — Store inference: ontology sync and the shape check
 
-Source: CN plan 070 (`create-now/docs/plans/070-store-inference-and-ontology-data.md`), step K1;
+Source: the host app's store-inference plan, step K1;
 sub-plan [003](../plans/003-store-inference.md). Design: the master's §Decisions 1, 10-16, 19.
 All five phases are done; the store phase (phase 5) landed after the image (step F1, fuseki
 `store-inference` 112f09f).
@@ -253,9 +253,9 @@ three consecutive `test:fuseki` runs were green (10.6 s, 14.9 s, 14.1 s).
   started for older branches must be stopped, or `FUSEKI_BASE_URL` pointed elsewhere.
 - `two-copies-built` not running: [backlog 060](../reports/092-two-copies-built-jest-module-cache.md).
 - Tighten-only errors, `autoLoadOntologyData` removal: K3.
-- CN: `src/utils/shapeCatalogQuery.ts` (the catalog projection) writes a property's `group` as a
-  string; with `PropertyShapeData.group` a `NodeReferenceValue` it must write `{id}` once CN
+- The host app: its catalog projection writes a property's `group` as a
+  string; with `PropertyShapeData.group` a `NodeReferenceValue` it must write `{id}` once the host app
   compiles against this core (its typecheck reads the main checkout's core until then). Reported to
-  the plan's master for the CN step that raises core.
-- CN's `tests/integration/shape-catalog-scoping.spec.ts` (built-in count 8) was updated but not
-  run here: it needs a CN backend on the owner's Fuseki; CN's heavy set runs it.
+  the plan's master for the host app step that raises core.
+- The host app's shape-catalog scoping spec (built-in count 8) was updated but not run here: it
+  needs a host app backend on the owner's Fuseki; the host app's heavy set runs it.
