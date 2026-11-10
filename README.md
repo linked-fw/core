@@ -375,10 +375,33 @@ export const {
 **Decorators and helpers**
 - `@linkedShape`: registers a Shape class and generates SHACL shape metadata
 - `@linkedUtil`: exposes utilities to other Linked modules
-- `linkedOntology(...)`: registers an ontology and (optionally) its data loader
+- `linkedOntology(...)`: registers an ontology and (optionally) its data loader (see §Registering an ontology)
 - `registerPackageExport(...)`: manually export something into the Linked package tree
 - `registerPackageModule(...)`: lower-level module registration
 - `getPackageShape(...)`: resolve a Shape class by name to avoid circular imports
+
+### Registering an ontology
+
+An ontology is addressed by its package's npm name and its **name within the package**:
+`linkedOntology(terms, ns, name, loadData?, dataFiles?)`. The name is unique in the package,
+lowercase letters and digits in words joined by `-` or `_` (`my-vocab`), and need not equal the
+module's file name. It is not a prefix: prefixes are free choices and not unique across packages.
+An ontology's suggested prefix is data, `vann:preferredNamespacePrefix` (with
+`vann:preferredNamespaceUri`) on the `owl:Ontology` node of its Turtle.
+
+```typescript
+// src/ontologies/my-vocab.register.ts
+import * as terms from './my-vocab.js';
+import {dataFiles, loadData, ns} from './my-vocab.js';
+import {linkedOntology} from '../package.js';
+
+linkedOntology(terms, ns, 'my-vocab', loadData, dataFiles);
+```
+
+`getRegisteredOntologies()` (`@_linked/core/utils/Package`) lists every registration as
+`{packageName, name, ns, files, load?, terms}`, keyed by package and name: registering the same
+package and name again replaces the entry. `linkedOntology` still registers the name as a prefix
+of the namespace with `Prefix`, for modules that add no prefix of their own.
 
 ## Shapes
 

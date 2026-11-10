@@ -3,6 +3,7 @@ import {
   getPackageMirrors,
   getRegisteredOntologies,
   linkedPackage,
+  type OntologyRegistration,
 } from '../utils/Package';
 import {createNameSpace} from '../utils/NameSpace';
 import {readPackageOntologies, registrationsByPackage} from '../ontology/registryData';
@@ -26,17 +27,17 @@ const ns = createNameSpace('http://example.org/reg/');
 const terms = {A: ns('A'), B: ns('B')};
 
 describe('the ontology registry', () => {
-  test('records each linkedOntology call with its package, prefix, namespace, loader and files', () => {
+  test('records each linkedOntology call with its package, name, namespace, loader and files', () => {
     const pkg = linkedPackage('ontology-registry-test-a');
     const load = async () => [`${PREFIXES}ex:A rdfs:subClassOf ex:B .`];
     pkg.linkedOntology(terms, ns, 'reg-a', load, ['../data/reg-a.ttl', '../data/reg-a-added.ttl']);
     pkg.linkedOntology(terms, ns, 'reg-b', load, '../data/reg-b.ttl');
     pkg.linkedOntology(terms, ns, 'reg-c');
     const own = getRegisteredOntologies().filter((r) => r.packageName === 'ontology-registry-test-a');
-    expect(own.map((r) => r.prefix)).toEqual(['reg-a', 'reg-b', 'reg-c']);
+    expect(own.map((r) => r.name)).toEqual(['reg-a', 'reg-b', 'reg-c']);
     expect(own[0]).toMatchObject({
       packageName: 'ontology-registry-test-a',
-      prefix: 'reg-a',
+      name: 'reg-a',
       files: ['../data/reg-a.ttl', '../data/reg-a-added.ttl'],
       load,
     });
@@ -47,7 +48,27 @@ describe('the ontology registry', () => {
     expect(registrationsByPackage(own).get('ontology-registry-test-a')).toHaveLength(3);
   });
 
-  test('re-registering the same package and prefix replaces the entry (idempotent)', () => {
+  test('a name need not equal a module file name, and two packages may use the same name', () => {
+    linkedPackage('ontology-registry-test-name-1').linkedOntology(terms, ns, 'shared_name');
+    linkedPackage('ontology-registry-test-name-2').linkedOntology(terms, ns, 'shared_name');
+    const both = getRegisteredOntologies().filter((r) => r.name === 'shared_name');
+    expect(both.map((r) => r.packageName)).toEqual([
+      'ontology-registry-test-name-1',
+      'ontology-registry-test-name-2',
+    ]);
+  });
+
+  test('an entry an older copy of core wrote (a prefix, no name) is skipped with one warning', () => {
+    const legacy = {packageName: 'ontology-registry-test-legacy', prefix: 'old', ns, files: [], terms: {}};
+    const current: OntologyRegistration = {packageName: 'ontology-registry-test-legacy', name: 'new', ns, files: [], terms: {}};
+    const byPackage = registrationsByPackage([legacy as unknown as OntologyRegistration, current]);
+    expect(byPackage.get('ontology-registry-test-legacy')).toEqual([current]);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('without a name');
+    expect(warned[0]).toContain('old');
+  });
+
+  test('re-registering the same package and name replaces the entry (idempotent)', () => {
     const pkg = linkedPackage('ontology-registry-test-idem');
     const first = async () => ['first'];
     const second = async () => ['second'];

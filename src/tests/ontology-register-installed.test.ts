@@ -31,7 +31,7 @@ afterEach(() => {
 const registeredPrefixes = (packageName: string) =>
   getRegisteredOntologies()
     .filter((r) => r.packageName === packageName)
-    .map((r) => r.prefix);
+    .map((r) => r.name);
 
 describe('registerInstalledOntologies', () => {
   // Runs first: the deep import must happen before anything evaluated the register module.

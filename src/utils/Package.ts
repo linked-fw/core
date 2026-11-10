@@ -41,8 +41,11 @@ declare var global;
 export interface OntologyRegistration {
   /** The npm name of the package that registered the ontology. */
   packageName: string;
-  /** The ontology's prefix, which is also its module's file name. */
-  prefix: string;
+  /**
+   * The ontology's name within its package (unique in the package). With `packageName` it
+   * addresses the ontology; it is not a prefix and need not equal the module's file name.
+   */
+  name: string;
   /** The namespace function: `ns('Term')` is the term's `{id}` reference. */
   ns: (term: string) => NodeReferenceValue;
   /** Reads the package's Turtle data (`loadOntologyFiles`); absent for an ontology without data. */
@@ -63,7 +66,7 @@ export interface OntologyRegistration {
  */
 const packageState = sharedState('@_linked/core', 'Package', () => ({
   ontologies: new Set<any>(),
-  /** Keyed by `packageName + prefix`, so a module evaluated twice registers once. */
+  /** Keyed by `packageName + name`, so a module evaluated twice registers once. */
   ontologyRegistry: new Map<string, OntologyRegistration>(),
   /** Package name → the namespaces it mirrors (`linkedPackage(name, {mirrors})`). */
   packageMirrors: new Map<string, string[]>(),
@@ -213,19 +216,24 @@ export interface LinkedPackageObject
    */
   linkedUtil: (constructor: any) => any;
   /**
-   * Registers an ontology of this package: its prefix (registered with `Prefix`), its terms
-   * (registered in the package tree under the prefix) and, when the package ships data, how to
+   * Registers an ontology of this package under its name within the package: its terms
+   * (registered in the package tree under the name) and, when the package ships data, how to
    * read it. The data is Turtle, one file per vocabulary under `src/data/`, read by
    * `loadOntologyFiles` (`@_linked/core/ontology/loadOntologyFiles`). Nothing is loaded at
    * registration: the ontology sync (`@_linked/core/ontology/syncOntologies`) reads the data,
    * writes each package's class hierarchy into the store, and the store infers over it.
    *
-   * Call it from a sibling `<prefix>.register.ts` module, never from the ontology module
+   * The package's npm name and the ontology's name address the ontology; the name is not a
+   * prefix. The suggested prefix of the ontology is data: `vann:preferredNamespacePrefix` on its
+   * `owl:Ontology` node.
+   *
+   * Call it from a sibling `<module>.register.ts` module, never from the ontology module
    * itself (a module cannot import its own namespace once a bundler is involved).
    *
    * @param allFileExports - every export of the ontology module (`import * as terms from './my-vocab.js'`)
    * @param nameSpace - the namespace function (`createNameSpace`), so consumers can build terms the module does not list
-   * @param suggestedPrefixAndFileName - the prefix; it MUST match the ontology module's file name
+   * @param name - the ontology's name within the package: unique in the package, lowercase
+   *   letters and digits in words joined by `-` or `_` (`my-vocab`); need not equal the module's file name
    * @param loadDataFunction - reads the Turtle data: `() => loadOntologyFiles(import.meta.url, files)`. Omit it for an ontology without data
    * @param dataSource - the data file(s) `loadDataFunction` reads, relative to the ontology module (named in errors)
    * @example
@@ -255,7 +263,7 @@ export interface LinkedPackageObject
   linkedOntology: (
     allFileExports,
     nameSpace: (term: string) => NodeReferenceValue,
-    suggestedPrefixAndFileName: string,
+    name: string,
     loadDataFunction?: () => Promise<unknown>,
     dataSource?: string | string[],
   ) => void;
@@ -553,52 +561,51 @@ export function linkedPackage(
   }
 
   /**
-   * Registers an ontology module: its prefix, its namespace, its exported terms and, when the
-   * package ships data, how to read it. See {@link LinkedPackageObject.linkedOntology}.
+   * Registers an ontology module under its name within the package: its namespace, its exported
+   * terms and, when the package ships data, how to read it. See {@link LinkedPackageObject.linkedOntology}.
    *
    * @param exports all exports of the ontology module (`import * as terms from './x.js'`)
    * @param nameSpace the namespace function of the ontology
-   * @param prefixAndFileName the prefix, which MUST match the module's file name
+   * @param name the ontology's name within the package
    * @param loadData reads the ontology's Turtle data: `() => loadOntologyFiles(import.meta.url, files)`
    * @param dataSource the data file(s) `loadData` reads, relative to the ontology module
    */
   let linkedOntology = function(
     exports,
     nameSpace: (term: string) => NodeReferenceValue,
-    prefixAndFileName: string,
+    name: string,
     loadData?: () => Promise<unknown>,
     dataSource?: string | string[],
   ) {
     let exportsCopy = {...exports};
     //store specifics in exports. And make sure we can detect this as an ontology later
     exportsCopy['_ns'] = nameSpace;
-    exportsCopy['_prefix'] = prefixAndFileName;
+    exportsCopy['_prefix'] = name;
     exportsCopy['_load'] = loadData;
     exportsCopy['_data'] = dataSource;
 
-    //register the prefix here (so just calling linkedOntology with a prefix will automatically register that prefix)
-    if (prefixAndFileName)
+    // Registers the name as a prefix of the namespace, for modules that add no prefix of their own.
+    if (name)
     {
-      //run the namespace without any term name, this will give back a named node with just the namespace as URI, then get that URI to provide it as full URI
-      Prefix.add(prefixAndFileName,nameSpace('').id);
+      Prefix.add(name,nameSpace('').id);
     }
 
     ontologies.add(exportsCopy);
-    //register all the exports under the prefix. NOTE: this means the file name HAS to match the prefix
-    registerInPackageTree(prefixAndFileName,exportsCopy);
+    // The package tree holds the exports under the ontology's name.
+    registerInPackageTree(name,exportsCopy);
 
-    // The registry the ontology sync and the shape check read. Keyed by package and prefix:
+    // The registry the ontology sync and the shape check read. Keyed by package and name:
     // a module Vite evaluates twice, or two copies of core, register the ontology once.
     const files = dataSource === undefined ? [] : Array.isArray(dataSource) ? dataSource : [dataSource];
     const registration: OntologyRegistration = {
       packageName,
-      prefix: prefixAndFileName,
+      name,
       ns: nameSpace,
       files,
       terms: exportsCopy,
     };
     if (loadData) registration.load = loadData;
-    packageState.ontologyRegistry.set(`${packageName}\u0000${prefixAndFileName}`, registration);
+    packageState.ontologyRegistry.set(`${packageName}\u0000${name}`, registration);
   };
 
   /**

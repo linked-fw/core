@@ -20,7 +20,7 @@ export interface PackageOntologyData {
   packageName: string;
   /** The Turtle text of every data file of every ontology the package registered. */
   texts: string[];
-  /** `files` of each text, prefixed with the ontology's prefix, for error messages. */
+  /** `files` of each text, prefixed with the ontology's name, for error messages. */
   sources: string[];
   /** The `rdfs:subClassOf` triples of the package's data, deduped and sorted. */
   triples: HierarchyTriple[];
@@ -29,16 +29,21 @@ export interface PackageOntologyData {
 const isTexts = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === 'string');
 
-/** Registrations grouped by package, in registration order, skipping entries an older copy of core wrote without a package name. */
+/**
+ * Registrations grouped by package, in registration order, skipping entries an older copy of
+ * core wrote: without a package name, or with a `prefix` and no `name`.
+ */
 export function registrationsByPackage(
   registrations: OntologyRegistration[] = getRegisteredOntologies(),
 ): Map<string, OntologyRegistration[]> {
   const byPackage = new Map<string, OntologyRegistration[]>();
   for (const registration of registrations) {
-    if (!registration?.packageName) {
+    if (!registration?.packageName || !registration.name) {
+      const legacy = registration as {name?: string; prefix?: string} | undefined;
       console.warn(
-        `[linked] An ontology registration without a package name was skipped (prefix ` +
-          `${registration?.prefix ?? '?'}): it was made by an older copy of @_linked/core.`,
+        `[linked] An ontology registration without a ${registration?.packageName ? 'name' : 'package name'} ` +
+          `was skipped (${registration?.packageName ?? '?'}, ${legacy?.name ?? legacy?.prefix ?? '?'}): ` +
+          `it was made by an older copy of @_linked/core.`,
       );
       continue;
     }
@@ -74,7 +79,7 @@ export async function readPackageOntologies(options?: {
         loaded = await registration.load!();
       } catch (error) {
         console.warn(
-          `[linked] Could not read the ontology data of ${packageName} (${registration.prefix}, ` +
+          `[linked] Could not read the ontology data of ${packageName} (${registration.name}, ` +
             `${registration.files.join(', ') || 'no file named'}); the package is skipped: ` +
             `${error instanceof Error ? error.message : String(error)}`,
         );
@@ -83,7 +88,7 @@ export async function readPackageOntologies(options?: {
       }
       if (!isTexts(loaded)) {
         console.warn(
-          `[linked] ontology data of ${packageName} (${registration.prefix}) is not Turtle text; ` +
+          `[linked] ontology data of ${packageName} (${registration.name}) is not Turtle text; ` +
             `skipped — convert src/data to .ttl`,
         );
         ok = false;
@@ -91,7 +96,7 @@ export async function readPackageOntologies(options?: {
       }
       loaded.forEach((text, i) => {
         texts.push(text);
-        sources.push(`${registration.prefix}: ${registration.files[i] ?? `text #${i + 1}`}`);
+        sources.push(`${registration.name}: ${registration.files[i] ?? `text #${i + 1}`}`);
       });
     }
     if (!ok) {

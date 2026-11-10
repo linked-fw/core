@@ -41,7 +41,7 @@ describe('core: package kinds', () => {
     expect(quads.some((q) => q.subject.value === `${CORE}packageName`)).toBe(false);
     expect(turtle).not.toContain('purl.org/on/npm');
     const coreRegistrations = getRegisteredOntologies().filter((r) => r.packageName === '@_linked/core');
-    expect(coreRegistrations.map((r) => r.prefix)).toEqual(['core']);
+    expect(coreRegistrations.map((r) => r.name)).toEqual(['core']);
   });
 });
 
