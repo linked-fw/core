@@ -1,41 +1,23 @@
-import {Prefix} from './Prefix.js';
+import {Prefix, type PrefixMap} from './Prefix.js';
 
 export type NodeReferenceValue = {id: string};
 
 export type NodeReferenceInput = NodeReferenceValue | string;
 
 /**
- * Resolve a string that looks like a prefixed name (e.g. 'foaf:knows') to its full IRI.
- * - Strings containing '://' are full IRIs — returned as-is.
- * - Strings without ':' are plain IDs — returned as-is.
- * - Strings matching 'prefix:local' are resolved via Prefix.toFullIfPossible()
- *   (returns original string if prefix is not registered).
- *
- * @example
- * resolvePrefixedUri('foaf:Person')         // 'http://xmlns.com/foaf/0.1/Person'
- * resolvePrefixedUri('http://example.org/x') // 'http://example.org/x' (unchanged)
- * resolvePrefixedUri('my-id')                // 'my-id' (unchanged, no colon)
- */
-export function resolvePrefixedUri(str: string): string {
-  if (str.includes('://')) return str;
-  if (!str.includes(':')) return str;
-  return Prefix.toFullIfPossible(str);
-}
-
-/**
- * Resolve a URI string strictly: must be either a full IRI (contains '://')
- * or a registered prefixed name ('foaf:Person'). Throws if the prefix is unknown.
+ * Resolve a URI string strictly: a full IRI (`https://…`, `urn:…`, see `Prefix.isFullIri`) is
+ * returned as is, a prefixed name (`foaf:Person`) is expanded against `map` (default: the app's
+ * prefix map in use). Throws `UnknownPrefixError` for any other string.
  *
  * Use this at API boundaries where strings are always URIs (never plain IDs).
  */
-export function resolveUriOrThrow(str: string): string {
-  if (str.includes('://')) return str;
-  return Prefix.toFull(str);
+export function resolveUriOrThrow(str: string, map?: PrefixMap): string {
+  return Prefix.toFull(str, map);
 }
 
 /**
  * Convert a NodeReferenceInput to a NodeReferenceValue.
- * Simple wrap — no prefix resolution. Use resolvePrefixedUri() for that.
+ * Simple wrap — no prefix resolution. Use resolveUriOrThrow() for that.
  */
 export function toNodeReference(value: NodeReferenceInput): NodeReferenceValue {
   if (typeof value === 'string') {

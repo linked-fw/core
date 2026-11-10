@@ -24,7 +24,7 @@ describe('Prefix._toFull — colon-containing local names (Gap 1.b)', () => {
   });
 
   test('toFull throws with the correct prefix name for an unknown prefix', () => {
-    expect(() => Prefix.toFull('nope:foo:bar')).toThrow('Unknown prefix nope');
+    expect(() => Prefix.toFull('nope:foo:bar')).toThrow('Unknown prefix "nope" in "nope:foo:bar"');
   });
 });
 

@@ -7,7 +7,7 @@
 import type {PathExpr, PathRef} from './PropertyPathExpr.js';
 import {isPathRef, PATH_OPERATOR_CHARS} from './PropertyPathExpr.js';
 import {assertSafeIri} from '../sparql/sparqlUtils.js';
-import {Prefix} from '../utils/Prefix.js';
+import {Prefix, type PrefixMap} from '../utils/Prefix.js';
 import {brandLinkedError} from '../utils/linkedError.js';
 
 // ---------------------------------------------------------------------------
@@ -44,26 +44,24 @@ export function isPrefixedNameToken(value: string): boolean {
 }
 
 /**
- * The full IRI of a string path step that is a prefixed name with a registered prefix, or
- * undefined. Only such a step may be read as a prefixed name: any other string is an IRI, and is
- * written in angle brackets.
+ * The full IRI of a string path step that is one prefixed-name token (`ex:name`), expanded
+ * against `map` (default: the app's prefix map in use), or undefined when the step is not such a
+ * token. A token with an IRI scheme (`urn:prop:a`) is the IRI itself.
+ *
+ * @throws UnknownPrefixError when the token's prefix is not in the map.
  */
-export function expandRegisteredPrefixedName(value: string): string | undefined {
-  const match = typeof value === 'string' ? PREFIXED_NAME.exec(value) : null;
-  if (!match) return undefined;
-  const prefix = match[1] ?? '';
-  const namespace = Prefix.getFullURI(prefix);
-  if (!namespace) return undefined;
-  return namespace + (match[2] ?? '');
+export function expandPrefixedName(value: string, map?: PrefixMap): string | undefined {
+  if (!isPrefixedNameToken(value)) return undefined;
+  return Prefix.toFull(value, map);
 }
 
 /**
- * The IRI a path step names, as the serializer writes it: a registered prefixed name expands to
- * its full IRI, and every other step is the IRI itself.
+ * The IRI a path step names, as the serializer writes it: a prefixed-name string step expands to
+ * its full IRI (an unknown prefix throws), and every other step is the IRI itself.
  */
-export function pathRefIri(ref: PathRef): string {
+export function pathRefIri(ref: PathRef, map?: PrefixMap): string {
   if (typeof ref !== 'string') return ref.id;
-  return expandRegisteredPrefixedName(ref) ?? ref;
+  return expandPrefixedName(ref, map) ?? ref;
 }
 
 /**
