@@ -115,6 +115,14 @@ describe('the ontology registry', () => {
     expect(warned[0]).toContain('old');
   });
 
+  test('an entry an older copy of core wrote (a namespace function, no namespace) is skipped with one warning', () => {
+    const older = {packageName: 'ontology-registry-test-older', name: 'older', ns, files: [], terms: {}};
+    const byPackage = registrationsByPackage([older as unknown as OntologyRegistration]);
+    expect(byPackage.has('ontology-registry-test-older')).toBe(false);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('without a namespace');
+  });
+
   test('re-registering the same package and name replaces the entry (idempotent)', () => {
     const pkg = linkedPackage('ontology-registry-test-idem');
     const first = async () => ['first'];

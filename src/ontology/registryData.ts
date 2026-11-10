@@ -31,17 +31,18 @@ const isTexts = (value: unknown): value is string[] =>
 
 /**
  * Registrations grouped by package, in registration order, skipping entries an older copy of
- * core wrote: without a package name, or with a `prefix` and no `name`.
+ * core wrote: without a package name, with a `prefix` and no `name`, or without a `namespace`.
  */
 export function registrationsByPackage(
   registrations: OntologyRegistration[] = getRegisteredOntologies(),
 ): Map<string, OntologyRegistration[]> {
   const byPackage = new Map<string, OntologyRegistration[]>();
   for (const registration of registrations) {
-    if (!registration?.packageName || !registration.name) {
+    if (!registration?.packageName || !registration.name || typeof registration.namespace !== 'string') {
       const legacy = registration as {name?: string; prefix?: string} | undefined;
+      const missing = !registration?.packageName ? 'package name' : !registration.name ? 'name' : 'namespace';
       console.warn(
-        `[linked] An ontology registration without a ${registration?.packageName ? 'name' : 'package name'} ` +
+        `[linked] An ontology registration without a ${missing} ` +
           `was skipped (${registration?.packageName ?? '?'}, ${legacy?.name ?? legacy?.prefix ?? '?'}): ` +
           `it was made by an older copy of @_linked/core.`,
       );
