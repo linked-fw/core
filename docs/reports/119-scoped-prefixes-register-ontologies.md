@@ -181,3 +181,17 @@ that has it; string path steps with such prefixes throw at query time.
 `src/queries/{UpdateBuilder,DeleteBuilder}.ts`, `src/test-helpers/register-test-ontology.ts`,
 `jest.config.cjs`, `src/tests/setup-prefixes.ts`, `src/tests/prefix-scoped.test.ts` (new), the
 installed-package fixtures, 20 test files; README, `docs/architecture/{ontologies,loading-package-modules}.md`.
+
+### Addendum: the index as the generator writes it
+
+The cli's build check (the generator for this layout landed after this report) refused core's
+hand-written `src/ontologies/index.ts`. The generator expresses it fully: `linked generate-ontology`
+rewrote it with the generated header and the terms binding `linked_core` (from the module name);
+the call is unchanged. With that cli, `linked build`:
+
+```
+✔ Checking ontology modules
+✔ Build successful
+```
+
+`npm test`: `Tests: 623 skipped, 2892 passed, 3515 total` (exit 0).
