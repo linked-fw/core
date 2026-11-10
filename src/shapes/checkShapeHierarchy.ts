@@ -192,12 +192,7 @@ export async function checkShapeHierarchy(options?: {
   const namespaceOwner = (cls: string): string | undefined => {
     let best: {pkg: string; ns: string} | undefined;
     for (const registration of getRegisteredOntologies()) {
-      let ns: string | undefined;
-      try {
-        ns = registration.ns?.('')?.id;
-      } catch {
-        ns = undefined;
-      }
+      const ns = registration.namespace;
       if (ns && cls.startsWith(ns) && (!best || ns.length > best.ns.length)) {
         best = {pkg: registration.packageName, ns};
       }

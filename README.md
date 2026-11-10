@@ -364,7 +364,7 @@ import {linkedPackage} from '@_linked/core/utils/Package';
 export const {
   linkedShape,
   linkedUtil,
-  linkedOntology,
+  registerOntologies,
   registerPackageExport,
   registerPackageModule,
   packageExports,
@@ -375,33 +375,92 @@ export const {
 **Decorators and helpers**
 - `@linkedShape`: registers a Shape class and generates SHACL shape metadata
 - `@linkedUtil`: exposes utilities to other Linked modules
-- `linkedOntology(...)`: registers an ontology and (optionally) its data loader (see §Registering an ontology)
+- `registerOntologies(...)`: registers the package's ontologies and where their data is (see §Registering ontologies)
 - `registerPackageExport(...)`: manually export something into the Linked package tree
 - `registerPackageModule(...)`: lower-level module registration
 - `getPackageShape(...)`: resolve a Shape class by name to avoid circular imports
 
-### Registering an ontology
+### Registering ontologies
 
-An ontology is addressed by its package's npm name and its **name within the package**:
-`linkedOntology(terms, ns, name, loadData?, dataFiles?)`. The name is unique in the package,
-lowercase letters and digits in words joined by `-` or `_` (`my-vocab`), and need not equal the
-module's file name. It is not a prefix: prefixes are free choices and not unique across packages.
-An ontology's suggested prefix is data, `vann:preferredNamespacePrefix` (with
-`vann:preferredNamespaceUri`) on the `owl:Ontology` node of its Turtle.
+An ontology is addressed by its package's npm name and its **name within the package**. The
+name is unique in the package, lowercase letters and digits in words joined by `-` or `_`
+(`my-vocab`), and need not equal the module's file name. It is not a prefix: prefixes are free
+choices and not unique across packages. An ontology's suggested prefix is data,
+`vann:preferredNamespacePrefix` (with `vann:preferredNamespaceUri`) on the `owl:Ontology` node of
+its Turtle.
+
+A package has one terms module per ontology and one module that registers them all,
+`src/ontologies/index.ts`, which the package's entry imports (`linked generate-ontology` writes
+both from `package.json` `linkedOntologies` and the data). A terms module holds only the terms,
+each as an `{id}` literal with its full IRI, and imports nothing:
 
 ```typescript
-// src/ontologies/my-vocab.register.ts
-import * as terms from './my-vocab.js';
-import {dataFiles, loadData, ns} from './my-vocab.js';
-import {linkedOntology} from '../package.js';
+// src/ontologies/my-vocab.ts
+export const ExampleClass = {id: 'https://example.org/ont/my-vocab/ExampleClass'};
+export const exampleProperty = {id: 'https://example.org/ont/my-vocab/exampleProperty'};
 
-linkedOntology(terms, ns, 'my-vocab', loadData, dataFiles);
+// src/ontologies/index.ts
+import * as myVocab from './my-vocab.js';
+import {registerOntologies} from '../package.js';
+
+registerOntologies(
+  [
+    {
+      name: 'my-vocab',
+      namespace: 'https://example.org/ont/my-vocab/',
+      terms: myVocab,
+      data: ['../data/my-vocab.ttl'], // optional, relative to the second argument
+      suggestedPrefix: 'myvocab', // optional, from the data's vann prefix
+    },
+  ],
+  import.meta.url,
+);
 ```
 
+`registerOntologies(ontologies: OntologyDeclaration[], moduleUrl: string)` throws on an invalid
+or repeated name, an empty namespace or an invalid suggested prefix. It **registers no prefix**.
+The data is read only when the ontology sync or the shape check asks (server only, with
+`loadOntologyFiles(moduleUrl, data)`). A namespace function, where code needs one, is
+`createNameSpace(namespace)` from `@_linked/core/utils/NameSpace`.
+
 `getRegisteredOntologies()` (`@_linked/core/utils/Package`) lists every registration as
-`{packageName, name, ns, files, load?, terms}`, keyed by package and name: registering the same
-package and name again replaces the entry. `linkedOntology` still registers the name as a prefix
-of the namespace with `Prefix`, for modules that add no prefix of their own.
+`{packageName, name, namespace, suggestedPrefix?, files, load?, terms}`, keyed by package and
+name: registering the same package and name again replaces the entry. `suggestedPrefixes()` lists
+`{packageName, name, namespace, prefix}` for each registration with a suggested prefix, for a tool
+that builds an app's prefix map. `registerInstalledOntologies(dirs)`
+(`@_linked/core/ontology/registerInstalled`) imports `<pkg>/ontologies/index` of each package
+directory.
+
+### Prefixes: one map per app
+
+Prefixes are an app's choice: no package registers one. The app's map is the `prefixes` of its
+`linked.app.json`, and the app loads it into core once at start (the cli does this on the server
+and in the browser bundle):
+
+```typescript
+import {Prefix, type PrefixMap} from '@_linked/core/utils/Prefix';
+
+Prefix.load({schema: 'https://schema.org/', ex: 'https://example.org/ns/'});
+```
+
+- `Prefix.load(map: PrefixMap)` replaces the map in use (`PrefixMap` is `Record<prefix,
+  namespace>`). It throws on a prefix that is not a SPARQL/Turtle `PN_PREFIX` or an empty
+  namespace. When two prefixes share a namespace, compaction uses the later one.
+- `Prefix.toMap()` returns a copy of the map in use; `Prefix.add`, `delete`, `clear` change it
+  one entry at a time (tests).
+- **An unknown prefix throws.** `Prefix.toFull(value, map?)` returns a full IRI as is (one
+  containing `://`, or with the scheme `http`, `https`, `urn`, `mailto`, `did`, `file` or `data`:
+  `Prefix.isFullIri`), expands `prefix:local` when the prefix is in the map, and otherwise throws
+  `UnknownPrefixError` (`.prefix`, `.value`), naming both. There is no silent fallback to the
+  string as an IRI: query DSL subjects (`.for('ex:alice')`, `update().for`, `delete` ids), property
+  path steps (`'ex:knows/ex:name'`) and every other expansion in core go through it.
+- **Acting for another app:** pass that app's map. Expansion and compaction take an optional
+  explicit map: `Prefix.toFull(value, map)`, `Prefix.toPrefixed(iri, map)`,
+  `Prefix.toPrefixedIfPossible(iri, map)`, `Prefix.getFullURI(prefix, map)`,
+  `Prefix.getPrefix(iri, map)`, `Prefix.findMatch(iri, map)`, `resolveUriOrThrow(value, map)`.
+- Output stays self-contained: SPARQL that core writes declares a `PREFIX` for every prefixed
+  name it uses (from the map in use), and `shapesToTurtle` writes its own prefix section.
+- A test declares the prefixes it assumes in its own setup (`Prefix.load(...)`).
 
 ## Shapes
 
@@ -461,9 +520,8 @@ Turtle by `linked generate-ontology`. Use them like this:
 
   There is no aggregated object (`import {schema} from …`). A local name that is not an
   identifier follows one rule: `schema:3DModel` is `schema._3DModel`, `schema:yield` is
-  `schema.yield_`, `dcterms:ISO639-2` is `dcterms.ISO639_2`. The namespace function and the data
-  helpers (`ns`, `dataFiles`, `loadData`, `_ontologyResource`) are in the sibling
-  `ontologies/<prefix>.data` module.
+  `schema.yield_`, `dcterms:ISO639-2` is `dcterms.ISO639_2`. A terms module exports only terms;
+  a namespace function, where code needs one, is `createNameSpace(namespace)`.
 - **Prefer the accessor over `{id}`.** `schema.name` is checked by the compiler and found by
   "go to definition"; `{id: 'http://schema.org/name'}` is a string nothing checks.
 - **Use `{id}` (or `createNameSpace`) only for a namespace without a module**, such as a
@@ -616,8 +674,9 @@ Read a stored path's structure in the same query that finds it (`?ps sh:path ?p 
 
 Each step of a path is a prefixed name (`ex:name`) or an absolute IRI (`https://…`, `{id:
 'urn:x:name'}`, or `<urn:x:name>` in the string syntax). A string step is written into a query as a
-prefixed name only when it is one SPARQL prefixed-name token whose prefix is registered; any other
-step is written as `<IRI>`, so `urn:prop:a` stays an IRI. A path read as data (`fromWire`,
+prefixed name when it is one SPARQL prefixed-name token, expanded against the app's prefix map (an
+unknown prefix throws `UnknownPrefixError`); a token with an IRI scheme (`urn:prop:a`) and any other
+step are written as `<IRI>`. A path read as data (`fromWire`,
 `ShapeCatalog.from`, `registerRuntimeShape`) or given to a decorator is checked when it loads: a
 step that is neither throws `InvalidPropertyPathError`, naming the step and its property shape.
 

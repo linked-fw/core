@@ -1,50 +1,32 @@
-import type {NodeReferenceValue} from '../utils/NodeReference.js';
-import {createNameSpace} from '../utils/NameSpace.js';
-import {Prefix} from '../utils/Prefix.js';
-// Through the package specifier, not a relative path: the `browser` and `react-native` export
-// conditions of this subpath give a client build the stub, and a relative import ignores them.
-import {loadOntologyFiles} from '@_linked/core/ontology/loadOntologyFiles';
+/*
+ * The @_linked/core framework vocabulary: its terms, each with its full IRI. First-party ontology
+ * IRIs follow the public ontology namespace `https://linked.cm/ont/{name}/{localName}`.
+ *
+ * Registered (with its data, `../data/core.ttl`) by `./index.ts`. This module holds only terms and
+ * imports nothing; the `core` prefix it suggests is data (`vann:preferredNamespacePrefix`), and an
+ * app adds it to its own prefix map.
+ */
 
-/** This ontology's data, relative to this module (Turtle, copied into `lib/` by the build). */
-export const dataFiles = ['../data/core.ttl'];
-
-/** Reads this ontology's data (server only). */
-export const loadData = () => loadOntologyFiles(import.meta.url, dataFiles);
-
-// The @_linked/core framework vocabulary. First-party ontology IRIs follow the public
-// ontology namespace:
-//   https://linked.cm/ont/{ontologySlug}/{localName}
-// where ontologySlug defaults to the owning package's publicSlug (`@_linked/core` -> `core`)
-// and the prefix label equals the ontologySlug. Previously `https://linked.cm/ont/linked-core/`
-// (prefix `linked_core`), a leftover of a reverted slug derivation.
-export const ns = createNameSpace('https://linked.cm/ont/core/');
-export const _self: NodeReferenceValue = ns('');
-// @deprecated prefix alias: keeps `linked_core:` prefixed names resolving (to the NEW IRIs).
-// It does not make the old full IRIs match. Registered BEFORE `core` because the last add
-// wins for IRI -> prefix compaction, so output always uses `core:`.
-Prefix.add('linked_core', _self.id);
-Prefix.add('core', _self.id);
-
-const Package = ns('Package');
+const Package = {id: 'https://linked.cm/ont/core/Package'};
 // The kinds of package (`rdfs:subClassOf core:Package`): one that holds an ontology (and may carry
 // shapes for its own terms), and one that holds assets.
-const OntologyPackage = ns('OntologyPackage');
-const AssetPackage = ns('AssetPackage');
-const ShapeClass = ns('ShapeClass');
-const definesShape = ns('definesShape');
-const moduleProperty = ns('module');
-const usesShapeClass = ns('usesShapeClass');
-const editInline = ns('editInline');
-const isExtending = ns('isExtending');
+const OntologyPackage = {id: 'https://linked.cm/ont/core/OntologyPackage'};
+const AssetPackage = {id: 'https://linked.cm/ont/core/AssetPackage'};
+const ShapeClass = {id: 'https://linked.cm/ont/core/ShapeClass'};
+const definesShape = {id: 'https://linked.cm/ont/core/definesShape'};
+const moduleProperty = {id: 'https://linked.cm/ont/core/module'};
+const usesShapeClass = {id: 'https://linked.cm/ont/core/usesShapeClass'};
+const editInline = {id: 'https://linked.cm/ont/core/editInline'};
+const isExtending = {id: 'https://linked.cm/ont/core/isExtending'};
 
 // Containment / lifecycle vocabulary.
 //   contains  — property characteristic: the subject owns the value through this property
 //               (composition); the owned walk follows it.
 //   dependent — shape characteristic, deprecated: no effect (persisted for older shapes).
 //   PathNode  — class for SHACL property-path operator nodes (sh:inversePath/alternativePath/…).
-const contains = ns('contains');
-const dependent = ns('dependent');
-const PathNode = ns('PathNode');
+const contains = {id: 'https://linked.cm/ont/core/contains'};
+const dependent = {id: 'https://linked.cm/ont/core/dependent'};
+const PathNode = {id: 'https://linked.cm/ont/core/PathNode'};
 
 // Display vocabulary. SHACL has `sh:order` and `sh:group`, which say how properties
 // are arranged; it has no way to say how *important* a property is, which is what a
@@ -56,69 +38,69 @@ const PathNode = ns('PathNode');
 // Placement is deliberate (backlog-029): this is an ecosystem SHACL extension that
 // materializes onto the pure `sh:NodeShape` and therefore travels with an ejected
 // app — NOT an app's own `code:` vocab, which describes source-code structure.
-const displayRank = ns('displayRank');
-const displayHidden = ns('displayHidden');
+const displayRank = {id: 'https://linked.cm/ont/core/displayRank'};
+const displayHidden = {id: 'https://linked.cm/ont/core/displayHidden'};
 
 // Provenance marker: a NodeShape core generates at sync time from another shape's code
 // (today the `<propertyShape>.singleOwner` constraint derived from `contains`), rather than one a
 // developer declared. Catalog readers skip shapes with `core:generated true`.
-const generated = ns('generated');
+const generated = {id: 'https://linked.cm/ont/core/generated'};
 
 // Ownership edge from a NodeShape to the shapes core generated from it at sync time (the
 // single-owner constraint of each `contains` property). It is `contains`, so deleting the
 // shape deletes them, and sync writes them nested in the shape's own create.
-const generatedShape = ns('generatedShape');
+const generatedShape = {id: 'https://linked.cm/ont/core/generatedShape'};
 
 // Content hash of everything shape sync writes for a NodeShape (the shape, its property shapes,
 // lists, paths and generated shapes), stored on the NodeShape. A sync skips a shape whose stored
 // hash equals the hash of what it would write.
-const shapeHash = ns('shapeHash');
+const shapeHash = {id: 'https://linked.cm/ont/core/shapeHash'};
 
 // A NodeShape that shares its targetClass on purpose (`@linkedShape({sharedTargetClass: true})`),
 // so the shape check does not report it as borrowing another shape's class.
-const sharedTargetClass = ns('sharedTargetClass');
+const sharedTargetClass = {id: 'https://linked.cm/ont/core/sharedTargetClass'};
 
 // Ontology sync (`syncOntologies`): in the `'default'` graph mode one `core:OntologySync` node in
 // the default graph records the combined hash of the ontology written there (`core:ontologyHash`),
 // so an unchanged ontology is skipped.
-const OntologySync = ns('OntologySync');
-const ontologyHash = ns('ontologyHash');
+const OntologySync = {id: 'https://linked.cm/ont/core/OntologySync'};
+const ontologyHash = {id: 'https://linked.cm/ont/core/ontologyHash'};
 
 // Ontology status: the stage an ontology is at (`core:OntologyStatus`), one of three public
 // individuals, stated on the ontology as `adms:status` (ADMS's own status vocabulary has none of
 // these stages).
-const OntologyStatus = ns('OntologyStatus');
-const Draft = ns('Draft');
-const ReadyForReview = ns('ReadyForReview');
-const Published = ns('Published');
+const OntologyStatus = {id: 'https://linked.cm/ont/core/OntologyStatus'};
+const Draft = {id: 'https://linked.cm/ont/core/Draft'};
+const ReadyForReview = {id: 'https://linked.cm/ont/core/ReadyForReview'};
+const Published = {id: 'https://linked.cm/ont/core/Published'};
 
 // Named graphs (`shapes/NamedGraph.ts`): the classes of graph-registry records (each
 // `rdfs:subClassOf sd:NamedGraph`) and the record fields core adds to SPARQL Service Description.
-const OntologyGraph = ns('OntologyGraph');
-const ShapesGraph = ns('ShapesGraph');
-const DraftGraph = ns('DraftGraph');
-const contentHash = ns('contentHash');
-const feedsHierarchy = ns('feedsHierarchy');
-const packageTerm = ns('package');
-const version = ns('version');
+const OntologyGraph = {id: 'https://linked.cm/ont/core/OntologyGraph'};
+const ShapesGraph = {id: 'https://linked.cm/ont/core/ShapesGraph'};
+const DraftGraph = {id: 'https://linked.cm/ont/core/DraftGraph'};
+const contentHash = {id: 'https://linked.cm/ont/core/contentHash'};
+const feedsHierarchy = {id: 'https://linked.cm/ont/core/feedsHierarchy'};
+const packageTerm = {id: 'https://linked.cm/ont/core/package'};
+const version = {id: 'https://linked.cm/ont/core/version'};
 // A shared ontology or shape graph (one graph for every package, `utils/graphTargets.ts`) records
 // each package's part as `"{npm name} {sha256 hex}"`.
-const packageHash = ns('packageHash');
+const packageHash = {id: 'https://linked.cm/ont/core/packageHash'};
 
 // The component index (`lib/esm/data/components.ttl`, written by `linked build` from a package's
 // `components/index`): each linked component the package exports, with its export name, its start
 // shape, its query's shape and its query in the wire format (`QueryBuilder.toJSON()`, an
 // `rdf:JSON` literal). `ComponentsGraph` is the registry class of the graph a host keeps it in.
-const Component = ns('Component');
-const SetComponent = ns('SetComponent');
-const ComponentsGraph = ns('ComponentsGraph');
-const definesComponent = ns('definesComponent');
-const exportName = ns('exportName');
-const startShape = ns('startShape');
-const queryShape = ns('queryShape');
-const query = ns('query');
+const Component = {id: 'https://linked.cm/ont/core/Component'};
+const SetComponent = {id: 'https://linked.cm/ont/core/SetComponent'};
+const ComponentsGraph = {id: 'https://linked.cm/ont/core/ComponentsGraph'};
+const definesComponent = {id: 'https://linked.cm/ont/core/definesComponent'};
+const exportName = {id: 'https://linked.cm/ont/core/exportName'};
+const startShape = {id: 'https://linked.cm/ont/core/startShape'};
+const queryShape = {id: 'https://linked.cm/ont/core/queryShape'};
+const query = {id: 'https://linked.cm/ont/core/query'};
 // The commit a graph's content was built from (a `ComponentsGraph` of a package branch).
-const commit = ns('commit');
+const commit = {id: 'https://linked.cm/ont/core/commit'};
 
 export const coreOntology = {
   Package,

@@ -4,6 +4,7 @@
  * the shared modes hold each dataset's own packages, the hierarchy covers every package, and a
  * failing dataset is reported while the others sync.
  */
+import {registerTestOntology} from '../test-helpers/register-test-ontology';
 import {afterEach, describe, expect, jest, test} from '@jest/globals';
 import {linkedPackage} from '../utils/Package';
 import {createNameSpace} from '../utils/NameSpace';
@@ -24,12 +25,12 @@ const NS_B = 'http://example.org/sr-onto-b/';
 const SUB = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
 const X = 'http://example.org/sr#';
 
-linkedPackage('sr-onto-a').linkedOntology({}, createNameSpace(NS_A), 'sr-onto-a', async () => [
+registerTestOntology('sr-onto-a', {name: 'sr-onto-a', namespace: NS_A, load: async () => [
   `<${NS_A}Kid> <${SUB}> <${NS_A}Person> .`,
-]);
-linkedPackage('sr-onto-b').linkedOntology({}, createNameSpace(NS_B), 'sr-onto-b', async () => [
+]});
+registerTestOntology('sr-onto-b', {name: 'sr-onto-b', namespace: NS_B, load: async () => [
   `<${NS_B}Album> <${SUB}> <${NS_B}Work> .`,
-]);
+]});
 
 const {linkedShape: aShape} = linkedPackage('sr-a');
 @aShape

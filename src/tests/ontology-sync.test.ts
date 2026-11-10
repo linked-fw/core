@@ -7,6 +7,7 @@
  * A store without graph queries (one that refuses them, or has no `graphQuery`) is refused in the
  * `'package'` and shared modes, before anything is written.
  */
+import {registerTestOntology} from '../test-helpers/register-test-ontology';
 import {afterEach, beforeEach, describe, expect, jest, test} from '@jest/globals';
 import {createHash} from 'node:crypto';
 import {linkedPackage} from '../utils/Package';
@@ -66,7 +67,7 @@ const data: Record<string, string> = {};
 // Each registers its own namespace, so NS has no prefix and the SPARQL shows full IRIs.
 const ownNs = (pkg: string) => createNameSpace(`http://example.org/ns/${pkg}/`);
 const register = (pkg: string, prefix: string) =>
-  linkedPackage(pkg).linkedOntology({}, ownNs(pkg), prefix, async () => [data[pkg] ?? ''], `../data/${prefix}.ttl`);
+  registerTestOntology(pkg, {name: prefix, namespace: ownNs(pkg)('').id, load: async () => [data[pkg] ?? ''], files: `../data/${prefix}.ttl`});
 register('sync-a', 'sync-a');
 register('sync-b', 'sync-b');
 
@@ -224,13 +225,7 @@ describe('syncOntologies: package graphs', () => {
     const restriction = (prop: string) =>
       `@prefix owl: <http://www.w3.org/2002/07/owl#> .\n@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n` +
       `_:b0 a owl:Restriction ; owl:onProperty <${NS}${prop}> .\n<${NS}${prop}C> rdfs:subClassOf _:b0 .\n`;
-    linkedPackage('sync-bnodes').linkedOntology(
-      {},
-      ownNs('sync-bnodes'),
-      'sync-bnodes',
-      async () => [restriction('p'), restriction('q')],
-      ['../data/one.ttl', '../data/two.ttl'],
-    );
+    registerTestOntology('sync-bnodes', {name: 'sync-bnodes', namespace: ownNs('sync-bnodes')('').id, load: async () => [restriction('p'), restriction('q')], files: ['../data/one.ttl', '../data/two.ttl']});
     await syncOntologies(gs, {packages: ['sync-bnodes']});
     const text = gs.graphQueries[0].content!.text;
     const labels = new Set([...text.matchAll(/_:[^\s]+/g)].map((m) => m[0]));
@@ -265,7 +260,7 @@ describe('syncOntologies: package graphs', () => {
   test('an unreadable package is skipped with its warning', async () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      linkedPackage('sync-json').linkedOntology({}, ownNs('sync-json'), 'sync-json', async () => ({'@graph': []}), '../data/x.json');
+      registerTestOntology('sync-json', {name: 'sync-json', namespace: ownNs('sync-json')('').id, load: async () => ({'@graph': []}), files: '../data/x.json'});
       const result = await syncOntologies(gs, {packages: ['sync-json']});
       expect(result).toMatchObject({written: [], skipped: ['sync-json'], pruned: []});
       expect(gs.graphQueries).toEqual([]);

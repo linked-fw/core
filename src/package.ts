@@ -3,7 +3,7 @@ import {corePackage} from './utils/Package.js';
 export const {
   linkedShape,
   linkedUtil,
-  linkedOntology,
+  registerOntologies,
   registerPackageExport,
   registerPackageModule,
   packageExports,

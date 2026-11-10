@@ -28,22 +28,22 @@ afterEach(() => {
   console.warn = originalWarn;
 });
 
-const registeredPrefixes = (packageName: string) =>
+const registeredNames = (packageName: string) =>
   getRegisteredOntologies()
     .filter((r) => r.packageName === packageName)
     .map((r) => r.name);
 
 describe('registerInstalledOntologies', () => {
-  // Runs first: the deep import must happen before anything evaluated the register module.
+  // Runs first: the deep import must happen before anything evaluated the ontology index.
   test('a deep-imported shape registers nothing; registering the installed package then reads its data', async () => {
     const shape = (await import(
       pathToFileURL(path.join(WITH, 'lib/esm/shapes/Cat.js')).href
     )) as {CatShape: {packageName: string; targetClass: {id: string}}};
     expect(shape.CatShape.packageName).toBe(WITH_NAME);
-    expect(registeredPrefixes(WITH_NAME)).toEqual([]);
+    expect(registeredNames(WITH_NAME)).toEqual([]);
 
     expect(await registerInstalledOntologies([WITH])).toEqual([WITH_NAME]);
-    expect(registeredPrefixes(WITH_NAME)).toEqual(['installed-pets']);
+    expect(registeredNames(WITH_NAME)).toEqual(['installed-pets']);
 
     const {packages, skipped} = await readPackageOntologies({packages: [WITH_NAME]});
     expect(skipped).toEqual([]);
@@ -52,7 +52,7 @@ describe('registerInstalledOntologies', () => {
     ]);
   });
 
-  test('a directory without register modules is skipped silently', async () => {
+  test('a directory without an ontology index is skipped silently', async () => {
     expect(await registerInstalledOntologies([WITHOUT])).toEqual([]);
     expect(await registerInstalledOntologies([path.join(FIXTURES, 'does-not-exist')])).toEqual([]);
     expect(warned).toEqual([]);
@@ -64,27 +64,27 @@ describe('registerInstalledOntologies', () => {
       const link = path.join(tmp, 'linked-with');
       symlinkSync(WITH, link, 'dir');
       expect(await registerInstalledOntologies([WITHOUT, WITH, link, WITH])).toEqual([WITH_NAME]);
-      expect(registeredPrefixes(WITH_NAME)).toEqual(['installed-pets']);
+      expect(registeredNames(WITH_NAME)).toEqual(['installed-pets']);
     } finally {
       rmSync(tmp, {recursive: true, force: true});
     }
   });
 
-  test('a register module that throws is warned about, naming the file, and the rest still register', async () => {
+  test('an ontology index that throws is warned about, naming the file, and the rest still register', async () => {
     expect(await registerInstalledOntologies([BROKEN, WITH])).toEqual([WITH_NAME]);
     expect(warned).toHaveLength(1);
-    expect(warned[0]).toMatch(/broken\.register\.js/);
-    expect(warned[0]).toMatch(/broken register module/);
+    expect(warned[0]).toMatch(/broken\/lib\/esm\/ontologies\/index\.js/);
+    expect(warned[0]).toMatch(/broken ontology index/);
   });
 
-  describe('a source package (no built register modules)', () => {
+  describe('a source package (no built ontology index)', () => {
     test('is skipped without importModule', async () => {
       expect(await registerInstalledOntologies([SOURCE])).toEqual([]);
-      expect(registeredPrefixes(SOURCE_NAME)).toEqual([]);
+      expect(registeredNames(SOURCE_NAME)).toEqual([]);
       expect(warned).toEqual([]);
     });
 
-    test('registers its src/ontologies/*.register.ts through importModule, which built packages do not use', async () => {
+    test('registers its src/ontologies/index.ts through importModule, which built packages do not use', async () => {
       const imported: string[] = [];
       const importModule = async (file: string) => {
         imported.push(file);
@@ -94,8 +94,8 @@ describe('registerInstalledOntologies', () => {
         WITH_NAME,
         SOURCE_NAME,
       ]);
-      expect(imported).toEqual([path.join(SOURCE, 'src/ontologies/birds.register.ts')]);
-      expect(registeredPrefixes(SOURCE_NAME)).toEqual(['source-birds']);
+      expect(imported).toEqual([path.join(SOURCE, 'src/ontologies/index.ts')]);
+      expect(registeredNames(SOURCE_NAME)).toEqual(['source-birds']);
 
       const {packages, skipped} = await readPackageOntologies({packages: [SOURCE_NAME]});
       expect(skipped).toEqual([]);
@@ -110,7 +110,7 @@ describe('registerInstalledOntologies', () => {
       };
       expect(await registerInstalledOntologies([SOURCE, WITH], {importModule})).toEqual([WITH_NAME]);
       expect(warned).toHaveLength(1);
-      expect(warned[0]).toMatch(/birds\.register\.ts/);
+      expect(warned[0]).toMatch(/source-only\/src\/ontologies\/index\.ts/);
       expect(warned[0]).toMatch(/loader failed/);
     });
   });
@@ -148,14 +148,14 @@ describe('registerInstalledOntologies', () => {
         imported.push(file);
         return {};
       };
-      // BROKEN's register module throws when it is evaluated: imported by file, it would warn.
+      // BROKEN's ontology index throws when it is evaluated: imported by file, it would warn.
       expect(await registerInstalledOntologies([BROKEN, SOURCE], {importModule})).toEqual([
         BROKEN_NAME,
         SOURCE_NAME,
       ]);
       expect(specifiers).toEqual([
-        `${BROKEN_NAME}/ontologies/broken.register`,
-        `${SOURCE_NAME}/ontologies/birds.register`,
+        `${BROKEN_NAME}/ontologies/index`,
+        `${SOURCE_NAME}/ontologies/index`,
       ]);
       expect(imported).toEqual([]);
       expect(warned).toEqual([]);
@@ -181,7 +181,7 @@ describe('registerInstalledOntologies', () => {
       };
       expect(await registerInstalledOntologies([BROKEN])).toEqual([]);
       expect(warned).toHaveLength(1);
-      expect(warned[0]).toMatch(/@fixture\/installed-broken\/ontologies\/broken\.register \(through the host loader\)/);
+      expect(warned[0]).toMatch(/@fixture\/installed-broken\/ontologies\/index \(through the host loader\)/);
       expect(warned[0]).toMatch(/host failed/);
     });
 
@@ -196,19 +196,19 @@ describe('registerInstalledOntologies', () => {
       expect(await registerInstalledOntologies([WITH, BROKEN])).toEqual([WITH_NAME]);
       expect(specifiers).toEqual([]);
       expect(warned).toHaveLength(1);
-      expect(warned[0]).toMatch(/broken\.register\.js/);
+      expect(warned[0]).toMatch(/broken\/lib\/esm\/ontologies\/index\.js/);
     });
   });
 });
 
 describe('slashedPath', () => {
   test('a Windows path reaches importModule with / separators', () => {
-    const native = path.win32.join('C:\\work\\app', 'src', 'ontologies', 'x.register.ts');
-    expect(native).toBe('C:\\work\\app\\src\\ontologies\\x.register.ts');
-    expect(slashedPath(native)).toBe('C:/work/app/src/ontologies/x.register.ts');
+    const native = path.win32.join('C:\\work\\app', 'src', 'ontologies', 'index.ts');
+    expect(native).toBe('C:\\work\\app\\src\\ontologies\\index.ts');
+    expect(slashedPath(native)).toBe('C:/work/app/src/ontologies/index.ts');
   });
   test('a POSIX path is unchanged', () => {
-    const native = path.posix.join('/work/app', 'src', 'ontologies', 'x.register.ts');
+    const native = path.posix.join('/work/app', 'src', 'ontologies', 'index.ts');
     expect(slashedPath(native)).toBe(native);
   });
 });

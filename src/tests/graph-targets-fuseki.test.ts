@@ -15,6 +15,7 @@
  * An unchanged sync sends no update (so no probe) in every mode, and a sync that finds another
  * mode's data warns once and leaves it.
  */
+import {registerTestOntology} from '../test-helpers/register-test-ontology';
 import {afterAll, beforeAll, describe, expect, jest, test} from '@jest/globals';
 import {
   createDataset,
@@ -70,8 +71,8 @@ const PREFIXES =
   `@prefix a: <${A}> . @prefix b: <${B}> . @prefix other: <${OTHER}> .\n`;
 let aData = '';
 let bData = '';
-pkgA.linkedOntology({}, createNameSpace(A), 'gmode-a', async () => [aData], '../data/gmode-a.ttl');
-linkedPackage(PKG_B).linkedOntology({}, createNameSpace(B), 'gmode-b', async () => [bData], '../data/gmode-b.ttl');
+registerTestOntology(pkgA.packageName, {name: 'gmode-a', namespace: A, load: async () => [aData], files: '../data/gmode-a.ttl'});
+registerTestOntology(PKG_B, {name: 'gmode-b', namespace: B, load: async () => [bData], files: '../data/gmode-b.ttl'});
 
 @pkgA.linkedShape
 class GmPet extends Shape {

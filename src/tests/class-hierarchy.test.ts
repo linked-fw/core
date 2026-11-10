@@ -2,6 +2,7 @@
  * The class hierarchy in memory: the shape tree's edges, the ontology triples once set, and
  * `loadOntologyHierarchy` / `checkShapeHierarchy` filling it.
  */
+import {registerTestOntology} from '../test-helpers/register-test-ontology';
 import {beforeEach, describe, expect, test} from '@jest/globals';
 import {linkedPackage} from '../utils/Package';
 import {createNameSpace} from '../utils/NameSpace';
@@ -45,13 +46,7 @@ const data = {
 ex:Puppy rdfs:subClassOf ex:Dog .
 ex:Plant rdfs:subClassOf ex:Organism .`,
 };
-linkedPackage('class-hierarchy-data').linkedOntology(
-  {},
-  createNameSpace('http://example.org/ns/class-hierarchy-data/'),
-  'chd',
-  async () => [data.ttl],
-  '../data/chd.ttl',
-);
+registerTestOntology('class-hierarchy-data', {name: 'chd', namespace: 'http://example.org/ns/class-hierarchy-data/', load: async () => [data.ttl], files: '../data/chd.ttl'});
 
 beforeEach(() => setOntologyHierarchy([]));
 

@@ -197,7 +197,39 @@ module exports). These are F7's / F6's to convert.
 `security-path-injection` updated to the throw. Validation: typecheck clean; full jest run 2886
 passed, the 3 failures were the old silent-IRI expectations, now changed (199 pass in those suites).
 
+### Phases 3 and 4 (done, one commit)
+
+`registerOntologies(ontologies, moduleUrl)` on the package object and `src/package.ts`;
+`linkedOntology` removed; `OntologyRegistration` has `namespace`/`suggestedPrefix` instead of `ns`;
+`suggestedPrefixes()`; `setOntologyRegistration` (@internal) behind it; `checkShapeHierarchy`,
+`syncOntologies`, `syncTargets` read `namespace`; `registerInstalledOntologies` imports
+`ontologies/index`. Core: `linked-core.ts` literal terms, `ontologies/index.ts`, register module
+deleted, entry imports the index; `Prefix.add` gone from rdf, rdfs, owl, xsd, shacl, sd, prov.
+Found while running: `update().for('p:x')` and `delete` string ids were never expanded (silent
+`<p:x>`), now through `resolveNodeId`. Tests: `setup-prefixes.ts` (jest `setupFiles`),
+`registerTestOntology` helper for in-memory data (13 suites converted), installed-package
+fixtures in the index layout, registry tests for `registerOntologies` (data read from temp files,
+refusals, no prefix registered, `suggestedPrefixes`). Validation: `npx linked build` ok; `npm test`
+2891 passed, 623 skipped (Fuseki), typecheck clean; built-lib smoke (`node`): core registers with
+its data (10252 chars), `suggestedPrefixes()` gives `core`, the map starts empty, `core:x` throws
+`UnknownPrefixError` until `Prefix.load`.
+
 ## Autonomous decisions
 
 | # | Where | Problem | Choice | Alternative | Rationale |
 |---|---|---|---|---|---|
+| 1 | contract K9 | K9 shows `registerOntologies([...])` with `data`, but a data path needs a base URL | `registerOntologies(ontologies, moduleUrl)`, `data: string[]` relative to `moduleUrl` (`import.meta.url`), core reads with `loadOntologyFiles` | a `load` function per entry in the generated code | one argument the generator always writes; core owns reading; entries stay data |
+| 2 | registry | `OntologyRegistration.ns` (a function) vs K9's `namespace` | `namespace: string` replaces `ns`; `suggestedPrefix?` added | keep `ns` too | one way; consumers make `createNameSpace(namespace)` (K9) |
+| 3 | `Prefix.load` | merge into or replace the map in use | replace (clear, then add in order; later prefix of one namespace compacts) | merge | "the app's map is the map"; no package adds prefixes any more |
+| 4 | `Prefix.load` validation | K10's stricter prefix rule vs SPARQL `PN_PREFIX` | core checks `PN_PREFIX` (what core needs to write valid SPARQL/Turtle); K10's rule is the cli's | K10 rule in core | core does not own `linked.app.json`; a looser check never rejects a valid map |
+| 5 ⚠ risky | K11 schemes | the old warn list also passed `tag`, `tel`, `uuid`, `geo`, `info` as IRIs in path steps | exactly K11's seven schemes plus any `://`; others throw as unknown prefixes | keep the wider list | contract is explicit; `geo:` is a common real prefix; loud, not silent |
+| 6 | canonical path key | `{id: 'schema:name'}` (catalog spelling) | expanded when the prefix is in the map, else the `{id}` is an IRI (`<tag:…>` from brackets stays) | throw on any unknown `{id}` prefix | an `{id}` is an IRI by type; keeps one key per path |
+| 7 | silent APIs | `Prefix.toFullIfPossible`, `resolvePrefixedUri` | removed | keep as deprecated | K11; coordinated major, no compat layer |
+| 8 | mutation ids | `update().for('p1')` / delete ids are plain ids in tests and apps | `resolveNodeId`: expand prefixed names (unknown throws), keep plain ids and `_:` labels as they were | `resolveUriOrThrow` (throws on plain ids) | K11 covers prefixed names; plain ids are not one, and their existing errors stay |
+| 9 | core's shortcut vocabularies | K9 for rdf/rdfs/owl/xsd/shacl/sd/prov | drop `Prefix.add`, not registered, `ns` helpers kept | literal-term rewrite and registration | core does not own those namespaces (their packages do); registering them would attribute them to core |
+| 10 | `linked_core` alias | deprecated prefix label in `linked-core.ts` | removed with the other `Prefix.add` | keep | K8: deprecated labels included |
+| 11 | `registerInstalledOntologies` | not named in F5, but K9 deletes `*.register` modules | imports `<pkg>/ontologies/index` (built `index.js`, source `index.ts`, host specifier) | leave for F6/F7 | core owns the loader; otherwise nothing registers after F7 |
+| 12 | shared state | the `ontologies` Set in core's shared `Package` container is unused now | keep initialising it | drop | an older copy of core in the same runtime writes to it (the two-copies test caught it) |
+| 13 | tests | 13 suites registered in-memory data through `linkedOntology(load)` | `registerTestOntology` helper over an `@internal` `setOntologyRegistration` | temp files per test | tests change data between syncs; production keeps one way |
+| 14 | `linked-core.ts` | export each term or keep the `coreOntology` object | literal terms, unexported consts, `coreOntology` export kept | export each | `generated: false` keeps its exports; consumers import `coreOntology` only |
+| 15 | architecture doc | "Terms are properties" contradicted the generated per-term exports | rewritten to the current layout while updating the doc | leave | docs describe the current state |

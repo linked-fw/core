@@ -3,7 +3,8 @@ import {Prefix, UnknownPrefixError} from '../utils/Prefix';
 import {isLinkedError} from '../utils/linkedError';
 import {pathExprToSparql, canonicalPathKey} from '../paths/pathExprToSparql';
 import {expandPrefixedName, pathRefIri} from '../paths/propertyPathSafety';
-import {resolveUriOrThrow} from '../utils/NodeReference';
+import {resolveNodeId, resolveUriOrThrow} from '../utils/NodeReference';
+import {DeleteBuilder} from '../queries/DeleteBuilder';
 
 const EX = 'https://example.org/ns/';
 const OTHER = 'https://other.example.org/vocab#';
@@ -107,5 +108,15 @@ describe('an unknown prefix throws (no silent IRI)', () => {
     expect(pathExprToSparql('ex:a')).toBe('ex:a');
     expect(canonicalPathKey('ex:a')).toBe(`${EX}a`);
     expect(canonicalPathKey({id: 'ex:a'})).toBe(`${EX}a`);
+  });
+
+  it('a mutation id that is a prefixed name expands; an unknown prefix throws; a plain id stays', () => {
+    expect(resolveNodeId('ex:alice')).toBe(`${EX}alice`);
+    expect(resolveNodeId('plain-id')).toBe('plain-id');
+    expect(resolveNodeId('_:b0')).toBe('_:b0');
+    expect(resolveNodeId('urn:x:1')).toBe('urn:x:1');
+    expect(() => resolveNodeId('nope:alice')).toThrow(UnknownPrefixError);
+    expect(DeleteBuilder.forNodes('ex:alice').toJSON()).toMatchObject({ids: [`${EX}alice`]});
+    expect(() => DeleteBuilder.forNodes('nope:alice')).toThrow(UnknownPrefixError);
   });
 });

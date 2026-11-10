@@ -9,7 +9,7 @@ import path from 'node:path';
 import {Parser} from 'n3';
 import {coreOntology} from '../ontologies/linked-core';
 import {rdf} from '../ontologies/rdf';
-import '../ontologies/linked-core.register';
+import '../ontologies/index';
 import {getRegisteredOntologies} from '../utils/Package';
 
 const CORE = 'https://linked.cm/ont/core/';

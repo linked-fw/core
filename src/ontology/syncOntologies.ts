@@ -559,7 +559,7 @@ async function syncSharedGraph(run: SyncRun, graph: string): Promise<SyncOntolog
 
 /**
  * The namespaces the `'default'` mode sweeps: each registered ontology with data of the run's
- * packages (`ns('')`), sorted. Throws when one would sweep more than ontology terms: one that is
+ * packages (`namespace`), sorted. Throws when one would sweep more than ontology terms: one that is
  * empty, that the store's data root starts with (the app's own data), or that a registered
  * shape's IRI starts with (the shapes share the default graph in that mode).
  */
@@ -568,7 +568,7 @@ function defaultModeNamespaces(run: SyncRun, target: IDataset): string[] {
   for (const name of run.parsed.keys()) {
     for (const registration of registrationsByPackage().get(name) ?? []) {
       if (typeof registration.load !== 'function') continue;
-      namespaces.add(registration.ns('').id);
+      namespaces.add(registration.namespace);
     }
   }
   const root = `${dataRootOf(target) ?? LINKED_DATA_ROOT.replace(/\/+$/, '')}/`;

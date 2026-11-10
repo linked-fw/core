@@ -15,17 +15,16 @@ depends on core.
 
 So they are deliberately minimal:
 
-- a `ns()` IRI builder and the terms core itself references,
-- a prefix registered directly through `Prefix.add`,
-- **no data file, and no `linkedOntology()` call.**
+- the terms core itself references (some with an `ns()` IRI builder),
+- **no prefix, no data file, and no registration.**
 
 They are not a smaller version of the real thing and should not grow into one. If core finds
 itself wanting a term it does not have, the question is whether core should be reaching for
 that term at all.
 
-`linked-core` (`core:`) is different: it is registered like a package's ontology
-(`linked-core.register.ts`, imported by core's index), with Turtle data in `src/data/core.ttl`
-that types, labels and describes every term.
+`linked-core` (`core:`) is different: it is registered like a package's ontology (by
+`src/ontologies/index.ts`, imported by core's index), with Turtle data in `src/data/core.ttl` that
+types, labels and describes every term. Its module holds only `{id}` literal terms.
 
 `linked-core` is core's own vocabulary: the package kinds `core:OntologyPackage` and
 `core:AssetPackage` (`rdfs:subClassOf core:Package`), the terms of its SHACL meta-model extensions, such as
@@ -48,8 +47,8 @@ ontology is the complete vocabulary, and carries what core's shortcuts leave out
 |---|---|---|
 | terms | only what core uses | the whole vocabulary |
 | data file | none | `src/data/<name>.ttl` (Turtle), read on the server only |
-| `linkedOntology()` | not called | called, from a sibling module |
-| registered via | `Prefix.add` directly | `linkedOntology`, which also registers the prefix |
+| registered | no | by the package's `ontologies/index.ts` (`registerOntologies`) |
+| prefix | none | none: it suggests one in its data (`vann:preferredNamespacePrefix`); the app's prefix map decides |
 
 ## Ontology data is Turtle
 
@@ -58,39 +57,37 @@ deterministic writer (fixed prefix block, subjects sorted, `a` first, predicates
 blank nodes and no graphs. `linked build` copies `src/**/*.ttl` into `lib/esm/` with the same
 layout, so a module's relative path to its data holds in both trees.
 
-The ontology module reads it with `loadOntologyFiles`:
+The package's `ontologies/index.ts` names the files (`data`, relative to its own
+`import.meta.url`), and core reads them with `loadOntologyFiles` when asked:
 
 ```ts
-// src/ontologies/my-vocab.ts
-import {loadOntologyFiles} from '@_linked/core/ontology/loadOntologyFiles';
-export const dataFiles = ['../data/my-vocab.ttl'];
-export const loadData = () => loadOntologyFiles(import.meta.url, dataFiles);
+registerOntologies([{name: 'my-vocab', namespace, terms, data: ['../data/my-vocab.ttl']}], import.meta.url);
 ```
 
 `loadOntologyFiles(moduleUrl, files)` resolves each file against the module URL and reads it as
 text. Ontology modules are reachable from browser bundles, so the loader imports
-`node:fs/promises` dynamically through a variable specifier (kept out of bundles); calling it in
-a browser rejects. A missing file rejects, naming the file.
+`node:fs/promises` dynamically through a variable specifier (kept out of bundles), and a client
+build gets a stub through the `browser` export condition; calling it in a browser rejects. A
+missing file rejects, naming the file.
 
-An ontology without data passes no `loadData`. A `loadData` that resolves to anything other than
-a list of strings (a package whose data is still JSON) is skipped with one warning naming the
-package.
+An ontology without data has no `data`. A load that resolves to anything other than a list of
+strings is skipped with one warning naming the package.
 
 Registration does not load the data.
 
 ## The registry
 
-Every `linkedOntology(terms, ns, prefix, loadData?, dataSource?)` records
-`{packageName, prefix, ns, load, files, terms}` (`terms`: the module's exports, read by the
-mirror check) in core's shared state (`getRegisteredOntologies()` from `utils/Package`), keyed by
-package and prefix, so a module evaluated twice (Vite SSR) or seen by two copies of core
-registers once. A package may register several ontologies (dcmi registers
+`registerOntologies` records each ontology as
+`{packageName, name, namespace, suggestedPrefix?, load?, files, terms}` (`terms`: the terms
+module, read by the mirror check) in core's shared state (`getRegisteredOntologies()` from
+`utils/Package`), keyed by package and name, so a module evaluated twice (Vite SSR) or seen by two
+copies of core registers once. It registers no prefix; `suggestedPrefixes()` lists the suggestions
+for a tool that builds an app's prefix map. A package may register several ontologies (dcmi registers
 three); the readers group them by package.
 
 ### Installed packages register explicitly
 
-A package registers from its `ontologies/<prefix>.register.js` modules, which its index and
-`shapes/index` import. An app that deep-imports one shape file
+A package registers from its `ontologies/index.js`, which its entry imports. An app that deep-imports one shape file
 (`@_linked/schema/shapes/Person`) never evaluates them, so the registry would lack that
 package's data. Whoever syncs or checks therefore registers the installed packages first:
 
@@ -100,21 +97,20 @@ import {registerInstalledOntologies} from '@_linked/core/ontology/registerInstal
 const names = await registerInstalledOntologies(packageDirs); // package roots
 ```
 
-It imports `<dir>/lib/esm/ontologies/*.register.js` of each directory (the cli's build layout),
-in the order given and by file name within a package, and returns the names of the packages it
-registered. When the host has installed a module loader (`linked start` in dev; see
+It imports `<dir>/lib/esm/ontologies/index.js` of each directory (the cli's build layout), in
+the order given, and returns the names of the packages it registered. When the host has installed a module loader (`linked start` in dev; see
 [Loading package modules](./loading-package-modules.md)), a package that the app resolves to that
 directory is imported through the loader by specifier instead,
-`<name>/ontologies/<prefix>.register` (listed from `src/ontologies` when the package has it), so
+`<name>/ontologies/index` (when `src/ontologies` or `lib/esm/ontologies` has an index), so
 it is the same module the app's own import of it gets and Vite never sees a second copy. Without
 a loader (a built app, the cli's build check), or for a directory the app does not resolve the
-package to, each file is imported natively by its path. A directory without register modules is skipped silently, a directory given twice
-(also through a symlink) is imported once, and a register module that throws is warned about,
+package to, the index is imported natively by its path. A directory without an index is skipped silently, a directory given twice
+(also through a symlink) is imported once, and an index that throws is warned about,
 naming the file, and its package left out. Registration is idempotent, so a package the app
 already imported is unaffected.
 
 A workspace package in dev has no `lib/` (nothing builds it), only
-`src/ontologies/*.register.ts`. For such a directory the helper imports those source modules
+`src/ontologies/index.ts`. For such a directory the helper imports that source module
 through `options.importModule` (absolute file path), when given; without it the directory is
 skipped as before. The server passes Vite's `ssrLoadModule` in dev:
 
@@ -654,7 +650,7 @@ A package that mirrors a published vocabulary (`@_linked/schema`, `dcat`, `org`,
 only that standard's terms, and declares the namespace(s) it mirrors:
 
 ```ts
-export const {linkedShape, linkedOntology} = linkedPackage('@_linked/schema', {
+export const {linkedShape, registerOntologies} = linkedPackage('@_linked/schema', {
   mirrors: 'http://schema.org/',
 });
 ```
@@ -664,40 +660,41 @@ mirrored namespace that a shape or an exported term uses and the package's data 
 (`mirror-undefined-term`). Custom shapes and terms belong in their own package and namespace,
 optionally `rdfs:subClassOf` the standard class.
 
-## Registration goes in a sibling module
+## One index registers a package's ontologies
 
-`linkedOntology()` needs the ontology module's whole export namespace, and a module cannot
-import itself once a bundler is involved: Rollup treats the self-reference as a circular
-import and **elides it**, so the binding is `undefined` at runtime and the consuming app dies
-at boot with `_this is not defined` — naming neither the ontology nor the package.
-
-`tsc` preserves it, which is why the pattern survived for as long as packages were built with
-`tsc` alone and only broke once an app bundled them.
-
-So registration lives in `<prefix>.register.ts`, imported from the package entry:
+A terms module (`src/ontologies/<module ?? name>.ts`) holds only `{id}` literals and imports
+nothing. `src/ontologies/index.ts` imports every terms module and registers them all with one
+`registerOntologies` call; the package entry imports the index:
 
 ```ts
-import * as terms from './my-vocab.js';
-import {linkedOntology} from '../package.js';
-import {dataFiles, loadData, ns} from './my-vocab.js';
+import * as myVocab from './my-vocab.js';
+import {registerOntologies} from '../package.js';
 
-linkedOntology(terms, ns, 'my-vocab', loadData, dataFiles);
+registerOntologies(
+  [{name: 'my-vocab', namespace: 'https://example.org/ont/my-vocab/', terms: myVocab, data: ['../data/my-vocab.ttl'], suggestedPrefix: 'myvocab'}],
+  import.meta.url,
+);
 ```
 
-`linked create-ontology` scaffolds both files. Core's vocabularies need none of this, because
-they never call `linkedOntology`.
+Registration needs a terms module's whole export namespace, and a module cannot import itself
+once a bundler is involved (Rollup elides the self-reference and the app dies at boot with
+`_this is not defined`), so it is never in the terms module. `linked generate-ontology` writes both
+from `package.json` `linkedOntologies` and the data. A hand-written module (`"generated": false`)
+may export more than terms; the index registers it the same way.
 
-## Terms are properties, not module bindings
+## Prefixes are the app's
 
-A package ontology exports **one namespace object**, not a binding per term:
+No ontology registers a prefix. An app's map is the `prefixes` of its `linked.app.json`, loaded
+with `Prefix.load(map)` at start; expansion of a prefixed name with a prefix not in the map
+throws `UnknownPrefixError`, and a caller acting for another app passes that app's map
+(`Prefix.toFull(value, map)`). See the README, §Prefixes: one map per app.
 
-```ts
-const Person = ns('Person');          // not `export const`
-export const schema = {Person, ...};   // this is the export
-```
+## Terms are module bindings; shapes name themselves
 
+A terms module exports one binding per term (`export const Person = {id: '…/Person'}`), and
+consumers import it as a namespace (`import * as schema from '@_linked/schema/ontologies/schema'`).
 Term names and shape class names collide — a shape and the ontology term it targets
-deliberately share a name. Two top-level bindings of one name in a bundle scope make the
-bundler rename one of them, and if the loser is the shape class then `constructor.name` is its
-IRI, so the shape registers under a name nothing will ask for. A term that is not a top-level
-binding cannot collide.
+deliberately share a name — and two top-level bindings of one name in a bundle scope make the
+bundler rename one of them. If the loser is the shape class, `constructor.name` is not the
+intended name, so its IRI is one nothing asks for: core warns about a shape name ending in a
+digit, and such a shape takes an explicit name (`@linkedShape({name: 'Person'})`).

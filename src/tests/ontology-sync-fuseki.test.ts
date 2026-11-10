@@ -14,6 +14,7 @@
  * against a second server: a stock `secoresearch/fuseki:6.2.0` answers `none`, the
  * `ghcr.io/linked-fw/fuseki:6.2.0-1` image `default-graph`.
  */
+import {registerTestOntology} from '../test-helpers/register-test-ontology';
 import {afterAll, beforeAll, describe, expect, jest, test} from '@jest/globals';
 import {existsSync, readFileSync} from 'node:fs';
 import path from 'node:path';
@@ -71,15 +72,9 @@ class NoGraphStore extends CountingStore {
 }
 
 let liveData = '';
-pkg.linkedOntology({}, createNameSpace(`${EX}ns/`), 'sync-live', async () => [liveData], '../data/sync-live.ttl');
+registerTestOntology(pkg.packageName, {name: 'sync-live', namespace: `${EX}ns/`, load: async () => [liveData], files: '../data/sync-live.ttl'});
 let otherData = '';
-linkedPackage('ontology-sync-live-other').linkedOntology(
-  {},
-  createNameSpace(`${EX}other/`),
-  'sync-live-other',
-  async () => [otherData],
-  '../data/sync-live-other.ttl',
-);
+registerTestOntology('ontology-sync-live-other', {name: 'sync-live-other', namespace: `${EX}other/`, load: async () => [otherData], files: '../data/sync-live-other.ttl'});
 const LIVE = ['ontology-sync-live-other', 'ontology-sync-live-test'];
 
 // The measurement uses schema.org's whole data when LINKED_SCHEMA_TTL names it, else the
@@ -91,13 +86,7 @@ const schemaHierarchy = readFileSync(
     : path.resolve(process.cwd(), 'src/tests/fixtures/ontology-data/schema-hierarchy.ttl'),
   'utf8',
 );
-linkedPackage('ontology-sync-schema-fixture').linkedOntology(
-  {},
-  createNameSpace('https://schema.org/'),
-  'schema-fixture',
-  async () => [schemaHierarchy],
-  '../data/schema-hierarchy.ttl',
-);
+registerTestOntology('ontology-sync-schema-fixture', {name: 'schema-fixture', namespace: 'https://schema.org/', load: async () => [schemaHierarchy], files: '../data/schema-hierarchy.ttl'});
 
 /** Every graph of the dataset, the registry and package graphs included. */
 const dropAll = () => executeSparqlUpdate('DROP ALL');

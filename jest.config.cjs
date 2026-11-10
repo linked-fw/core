@@ -6,6 +6,8 @@ module.exports = {
   roots: ['<rootDir>/src/tests'],
   testMatch: ['<rootDir>/src/tests/*.test.ts'],
   globalSetup: '<rootDir>/src/tests/global-setup.ts',
+  // The prefix map core's tests assume (core registers none of its own).
+  setupFiles: ['<rootDir>/src/tests/setup-prefixes.ts'],
   globalTeardown: '<rootDir>/src/tests/global-teardown.ts',
   // Adds a `[fuseki] live tests: …` count to every run's output.
   reporters: ['default', '<rootDir>/src/tests/fuseki-live-reporter.cjs'],

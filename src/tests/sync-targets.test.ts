@@ -4,6 +4,7 @@
  * targets, and (with contains properties) to the app graph; a sub-shape follows its parent's pin;
  * the shape shapes and the term shapes pinned apart are both targets (no refusal).
  */
+import {registerTestOntology} from '../test-helpers/register-test-ontology';
 import {afterEach, describe, expect, test} from '@jest/globals';
 import {linkedPackage} from '../utils/Package';
 import {createNameSpace} from '../utils/NameSpace';
@@ -19,9 +20,9 @@ const X = 'http://example.org/st#';
 const RDFS_CLASS = 'http://www.w3.org/2000/01/rdf-schema#Class';
 
 // An ontology-only package: data, no shapes.
-linkedPackage('st-onto').linkedOntology({}, createNameSpace(ONTO_NS), 'st-onto', async () => [
+registerTestOntology('st-onto', {name: 'st-onto', namespace: ONTO_NS, load: async () => [
   `<${ONTO_NS}Thing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <${ONTO_NS}Root> .`,
-]);
+]});
 
 const a = linkedPackage('st-a');
 
