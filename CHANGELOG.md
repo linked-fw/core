@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.48.0
+
+### Minor Changes
+
+- [#418](https://github.com/linked-fw/core/pull/418) [`5ee877b`](https://github.com/linked-fw/core/commit/5ee877b90434dbf7ba77909b2c3299550736339e) Thanks [@flyon](https://github.com/flyon)! - A node in a query, the root subject or a relation's value, has `isIri()` and `isBlank()` (SPARQL `isIRI` / `isBlank`): `.where((p) => p.isIri())` keeps the named subjects, `.minus((p) => p.isBlank())` leaves out the blank nodes, and `p.bestFriend.isBlank()` tests a relation's value. On a paged select the filter applies inside the page of subjects, before its LIMIT, so a page holds as many named subjects as asked.
+
+## 2.47.1
+
+### Patch Changes
+
+- [#417](https://github.com/linked-fw/core/pull/417) [`4d1941d`](https://github.com/linked-fw/core/commit/4d1941da33f1e1c05a4432130c3f11fc075fce67) Thanks [@flyon](https://github.com/flyon)! - `limit`/`offset` and `.one()` now page over subjects whenever a row carries any value besides its subject, whatever the path's declared `maxCount`. Data can hold more values than its shape allows (a `maxCount: 1` label in two languages); a row LIMIT then counted such a subject twice, so a page held fewer subjects than asked. Ties on the sort key are broken by the subject IRI on every page, and an `offset` without an `orderBy` pages in subject order, so consecutive pages neither repeat nor skip a subject. A select of subjects only keeps its plain LIMIT.
+
 ## 2.47.0
 
 ### Minor Changes
