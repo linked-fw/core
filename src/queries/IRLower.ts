@@ -31,6 +31,7 @@ import type {PathExpr} from '../paths/PropertyPathExpr.js';
 import {isLinkedInstance} from '../utils/linkedError.js';
 import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
 import {dedupeProjectionSeeds, type ProjectionSeed} from './projectionDuplicates.js';
+import {containsAggregate} from './irExpressions.js';
 
 /**
  * Creates a memoized traversal resolver that deduplicates (fromAlias, propertyShapeId)
@@ -193,8 +194,38 @@ type PathLoweringOptions = {
   rootAlias: string;
   /** `where`: the step's inline filter (a projection's filtered step), see `getOrCreateFilteredTraversal`. */
   resolveTraversal: (fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number, where?: DesugaredWhere) => string;
-  /** An inline filter's: resolves a path it reads from the outer subject. */
+  /** An inline filter's or a quantifier's: resolves a path it reads from the outer subject. */
   resolveOuter?: OuterReferenceResolver;
+  /**
+   * How far a path from the query root (`p.bestFriend.name`) walks along nodes bound where the
+   * condition is evaluated: the alias it reaches and the ids it used. A quantifier traverses the
+   * rest inside its EXISTS. Absent: the condition is the query's own where (`rootAlias` is the
+   * query root, the only node bound).
+   */
+  boundOuterPrefix?: (segmentIds: readonly string[]) => {alias: string; consumed: number};
+  /**
+   * The members of the enclosing inline filter and quantifiers, outermost first, innermost (this
+   * condition's own member) last: what an enclosing member's path (`f.name` read in a quantifier
+   * inside `f`'s) resolves from.
+   */
+  scopeAliases?: readonly string[];
+};
+
+/**
+ * An aggregate inside a condition SPARQL evaluates per member (an EXISTS, a filtered OPTIONAL
+ * block, a MINUS block) is not allowed there: a FILTER cannot hold one. Answering it needs a
+ * sub-SELECT with GROUP BY/HAVING, which this layer cannot emit (backlog 042). Refused, never sent
+ * to a store as invalid SPARQL.
+ */
+const refuseAggregateIn = (construct: string, expr: IRExpression | undefined): void => {
+  if (!containsAggregate(expr)) return;
+  throw new Error(
+    `An aggregate (size, min, max, …) inside ${construct} is not supported: SPARQL tests that ` +
+    'condition per member, where an aggregate is not allowed (it would need a sub-select with ' +
+    'GROUP BY/HAVING). Compare an aggregate at the top level of a where, over the query\'s own ' +
+    'subject (`.where((p) => p.friends.size().equals(1))`), or select it ' +
+    '(`p.friends.select((f) => ({friendCount: f.friends.size()}))`) and filter the rows.',
+  );
 };
 
 /**
@@ -264,7 +295,14 @@ const lowerWhere = (
     case 'where_exists_condition': {
       // ExistsCondition-based WHERE (from .some()/.every()/.none())
       const existsWhere = where as DesugaredExistsWhere;
-      return resolveContextRefs(lowerExistsCondition(existsWhere.existsCondition, ctx, options));
+      // Unless an inline filter says otherwise, this is the query's own where (or a mutation's,
+      // a minus's, a group filter's): the root is the only node bound where its quantifiers are
+      // tested.
+      const rootAlias = options.rootAlias;
+      return resolveContextRefs(lowerExistsCondition(existsWhere.existsCondition, ctx, {
+        ...options,
+        boundOuterPrefix: options.boundOuterPrefix ?? (() => ({alias: rootAlias, consumed: 0})),
+      }));
     }
     default:
       const _exhaustive: never = where;
@@ -305,28 +343,89 @@ const lowerExistsCondition = (
     (from, to, property): IRTraversePattern => ({kind: 'traverse', from, to, property}),
   );
 
-  // Walk the path segments to create traversal patterns
+  // Walk the path segments to create traversal patterns, from the enclosing callback's subject or,
+  // for a relation of the outer subject or an enclosing member (`p.pets.some(…)` inside
+  // `p.friends.some((f) => …)`), from that node.
   let currentAlias = options.rootAlias;
+  const outerRoot = condition.outerRoot;
+  if (outerRoot) {
+    if (outerRoot === 'unscoped' || !options.resolveOuter) {
+      throw new Error(
+        `A quantifier on ${condition.pathSegmentIds.map(labelOfId).join('.')} is written inside another ` +
+        'callback, on a node that is not in scope there.',
+      );
+    }
+    currentAlias = 'prefix' in outerRoot
+      ? options.resolveOuter(outerRoot.prefix)
+      : options.resolveOuter([], outerRoot.up);
+  }
   for (const segmentId of condition.pathSegmentIds) {
     currentAlias = existsResolve(currentAlias, segmentId);
   }
 
+  // A path the predicate reads from outside its member: from the query root, along the nodes
+  // bound where the EXISTS is tested, or from an enclosing member (bound there too, as EXISTS
+  // substitutes the outer bindings). The rest of the path is traversed inside this EXISTS, by
+  // traversals of its own: `p.friends.name` read in `p.friends.some(…)` is any friend's name, never
+  // the member's.
+  const scopeAliases = [...(options.scopeAliases ?? []), currentAlias];
+  const boundOuterPrefix = options.boundOuterPrefix;
+  const {resolve: outerResolve, patterns: outerTraversals} = createTraversalResolver(
+    () => ctx.generateAlias(),
+    (from, to, property): IRTraversePattern => ({kind: 'traverse', from, to, property}),
+  );
+  const resolveOuter: OuterReferenceResolver = (segmentIds, scopesUp) => {
+    let alias: string | undefined;
+    let rest: readonly string[] = segmentIds;
+    if (scopesUp === undefined) {
+      if (!boundOuterPrefix) {
+        throw new Error(
+          `A quantifier (some/every/none) reads a path of the outer subject ` +
+          `(${segmentIds.map(labelOfId).join('.') || 'the subject itself'}) where the subject is not in scope.`,
+        );
+      }
+      const prefix = boundOuterPrefix(segmentIds);
+      alias = prefix.alias;
+      rest = segmentIds.slice(prefix.consumed);
+    } else {
+      alias = scopesUp >= 1 ? scopeAliases[scopeAliases.length - 1 - scopesUp] : undefined;
+      if (alias === undefined) {
+        throw new Error(
+          'A quantifier (some/every/none) reads a path of an enclosing member that is not in scope ' +
+          `(${segmentIds.map(labelOfId).join('.') || 'the member itself'}).`,
+        );
+      }
+    }
+    for (const segmentId of rest) alias = outerResolve(alias, segmentId);
+    return alias;
+  };
+  const predicateOptions: PathLoweringOptions = {
+    rootAlias: currentAlias,
+    resolveTraversal: existsResolve,
+    resolveOuter,
+    boundOuterPrefix,
+    scopeAliases,
+  };
+
   // Resolve the inner predicate's property refs against the EXISTS scope; an inner quantifier
   // is an EXISTS of its own, rooted at the member.
   const filter = isLinkedInstance(condition.predicate, ExistsCondition)
-    ? lowerExistsCondition(condition.predicate, ctx, {rootAlias: currentAlias, resolveTraversal: existsResolve})
+    ? lowerExistsCondition(condition.predicate, ctx, predicateOptions)
     : resolveExpressionRefs(
       condition.predicate.ir,
       condition.predicate._refs,
       currentAlias,
       existsResolve,
+      resolveOuter,
     );
+  refuseAggregateIn('a quantifier (some/every/none)', filter);
 
+  const existsTraversals = [...traversals, ...outerTraversals];
   let existsExpr: IRExpression = {
     kind: 'exists_expr',
-    pattern: traversals.length === 1
-      ? traversals[0]
-      : {kind: 'join', patterns: traversals},
+    pattern: existsTraversals.length === 1
+      ? existsTraversals[0]
+      : {kind: 'join', patterns: existsTraversals},
     filter,
   };
 
@@ -511,19 +610,21 @@ export const lowerSelectQuery = (
   // Inline filter handler: when a property step has `.where()`, canonicalize
   // and lower the where predicate, then attach it to the traverse pattern.
   const inlineFilterHandler = (traverseAlias: string, where: DesugaredWhere) => {
+    const ancestors = ancestorTraversalsOf(traverseAlias);
     const filterExpr = lowerWhere(where, ctx, {
       rootAlias: traverseAlias,
       resolveTraversal: pathOptions.resolveTraversal,
-      resolveOuter: outerResolverFor(traverseAlias),
+      resolveOuter: outerResolverFor(ancestors),
+      boundOuterPrefix: (segments) => walkAncestors(ancestors, segments),
+      scopeAliases: [traverseAlias],
     });
+    refuseAggregateIn('an inline filter (`.where()` on a relation)', filterExpr);
     ctx.attachFilter(traverseAlias, filterExpr);
   };
 
-  // A path an inline filter reads from the outer subject (`p.name`, `p.bestFriend`) resolves along
-  // the traversals that lead to the filtered one, never a traversal of its own: those are the
-  // aliases bound around the filter's block. Anything else is refused, never compared with the
-  // member itself.
-  function outerResolverFor(filteredAlias: string): OuterReferenceResolver {
+  // The traversals that lead to a filtered one (from its source up to the root): the aliases
+  // bound around the filter's block.
+  function ancestorTraversalsOf(filteredAlias: string): IRTraversePattern[] {
     const ancestors: IRTraversePattern[] = [];
     for (let from = ctx.traversalTo(filteredAlias)?.from; from && from !== ctx.rootAlias; ) {
       const pattern = ctx.traversalTo(from);
@@ -531,19 +632,36 @@ export const lowerSelectQuery = (
       ancestors.push(pattern);
       from = pattern.from;
     }
-    return (segments) => {
-      let alias = ctx.rootAlias;
-      for (const segment of segments) {
-        const next = ancestors.find((p) => p.from === alias && p.property === segment);
-        if (!next) {
-          throw new Error(
-            `A filter reads a path from outside its own member (${segments.map(labelOfId).join('.')}) ` +
-            'that is not a hop above the filtered relation. An inline filter can read the outer ' +
-            'subject and the hops above the filtered relation (`p.bestFriend.friends.where((f) => ' +
-            'f.name.equals(p.bestFriend.name))`), not another path.',
-          );
-        }
-        alias = next.to;
+    return ancestors;
+  }
+
+  // How far a path from the root walks along those traversals.
+  function walkAncestors(ancestors: IRTraversePattern[], segments: readonly string[]): {alias: string; consumed: number} {
+    let alias = ctx.rootAlias;
+    let consumed = 0;
+    for (const segment of segments) {
+      const next = ancestors.find((p) => p.from === alias && p.property === segment);
+      if (!next) break;
+      alias = next.to;
+      consumed++;
+    }
+    return {alias, consumed};
+  }
+
+  // A path an inline filter reads from the outer subject (`p.name`, `p.bestFriend`) resolves along
+  // the traversals that lead to the filtered one, never a traversal of its own: those are the
+  // aliases bound around the filter's block. Anything else is refused, never compared with the
+  // member itself. (A quantifier inside the filter may traverse further, inside its EXISTS.)
+  function outerResolverFor(ancestors: IRTraversePattern[]): OuterReferenceResolver {
+    return (segments, scopesUp) => {
+      const {alias, consumed} = walkAncestors(ancestors, segments);
+      if (scopesUp !== undefined || consumed < segments.length) {
+        throw new Error(
+          `A filter reads a path from outside its own member (${segments.map(labelOfId).join('.')}) ` +
+          'that is not a hop above the filtered relation. An inline filter can read the outer ' +
+          'subject and the hops above the filtered relation (`p.bestFriend.friends.where((f) => ' +
+          'f.name.equals(p.bestFriend.name))`), not another path.',
+        );
       }
       return alias;
     };
@@ -656,6 +774,7 @@ export const lowerSelectQuery = (
           resolveTraversal: minusResolveTraversal,
         };
         const filter = lowerWhere(entry.where, ctx, minusOptions);
+        refuseAggregateIn('minus()', filter);
         const innerPattern: IRGraphPattern = minusTraversals.length === 1
           ? minusTraversals[0]
           : minusTraversals.length > 1

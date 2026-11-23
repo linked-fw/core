@@ -469,24 +469,40 @@ export function tracedAliasExpression(
   return new ExpressionNode(ir, refs);
 }
 
-/** Placeholder prefixes of a path an inline filter reads from outside its member. */
+/** Placeholder prefixes of a path an inline filter or a quantifier reads from outside its member. */
 const OUTER_REF_PREFIX = '__outer_ref_';
+const ENCLOSING_REF_PREFIX = '__enclosing_ref_';
 const UNSCOPED_REF_PREFIX = '__unscoped_ref_';
 
+/** Where a path read from outside a callback's member starts. */
+export type OuterReferenceScope =
+  /** At the query root (the select, sort or where callback's subject). */
+  | 'outer'
+  /** At the member of the scope `up` levels above the innermost one (an enclosing quantifier's). */
+  | {up: number}
+  /** Nowhere a path reaches: refused at lowering. */
+  | 'unscoped';
+
 /**
- * A traced path an inline filter reads from outside its member (`p.name` in
- * `p.friends.where((f) => f.name.equals(p.name))`).
- * - `outer`: `segmentIds` run from the query root; lowering resolves them to the outer alias.
- * - `unscoped`: the path starts at an enclosing filter's member, read from a quantifier inside
- *   it; lowering refuses it.
+ * A traced path an inline filter or a quantifier reads from outside its member (`p.name` in
+ * `p.friends.where((f) => f.name.equals(p.name))` or `p.friends.some((f) => f.name.equals(p.name))`).
+ * - `outer`: `segmentIds` run from the query root.
+ * - `{up}`: `segmentIds` run from an enclosing scope's member (`f.name` in
+ *   `p.friends.some((f) => f.friends.some((g) => g.name.equals(f.name)))` is `up: 1`).
+ * - `unscoped`: no path reaches its root; lowering refuses it.
  * `kind` is `property` (the last segment is the property read) or `alias` (the node itself).
  */
 export function tracedOuterExpression(
   segmentIds: readonly string[],
   kind: 'property' | 'alias',
-  scope: 'outer' | 'unscoped',
+  scope: OuterReferenceScope,
 ): ExpressionNode {
-  const placeholder = `${scope === 'outer' ? OUTER_REF_PREFIX : UNSCOPED_REF_PREFIX}${_refCounter++}__`;
+  const prefix = scope === 'outer'
+    ? OUTER_REF_PREFIX
+    : scope === 'unscoped'
+      ? UNSCOPED_REF_PREFIX
+      : `${ENCLOSING_REF_PREFIX}${scope.up}_`;
+  const placeholder = `${prefix}${_refCounter++}__`;
   const ir: IRExpression = kind === 'property'
     ? {kind: 'property_expr', sourceAlias: placeholder, property: segmentIds[segmentIds.length - 1]}
     : {kind: 'alias_expr', alias: placeholder};
@@ -494,9 +510,11 @@ export function tracedOuterExpression(
   return new ExpressionNode(ir, refs);
 }
 
-/** Whether a placeholder is a path read from outside an inline filter's member. */
+/** Whether a placeholder is a path read from outside an inline filter's or a quantifier's member. */
 export const isOuterReference = (placeholder: string): boolean =>
-  placeholder.startsWith(OUTER_REF_PREFIX) || placeholder.startsWith(UNSCOPED_REF_PREFIX);
+  placeholder.startsWith(OUTER_REF_PREFIX) ||
+  placeholder.startsWith(ENCLOSING_REF_PREFIX) ||
+  placeholder.startsWith(UNSCOPED_REF_PREFIX);
 
 /**
  * `node` with the paths it reads from the outer subject moved under `prefix` (property ids): an
@@ -509,8 +527,14 @@ export function reRootOuterReferences<T extends ExpressionNode | ExistsCondition
     const ec = node as ExistsCondition;
     const predicate = reRootOuterReferences(ec.predicate, prefix);
     const chain = ec.chain.map(({op, condition}) => ({op, condition: reRootOuterReferences(condition, prefix)}));
-    if (predicate === ec.predicate && chain.every((c, i) => c.condition === ec.chain[i].condition)) return node;
-    return new ExistsCondition(ec.pathSegmentIds, predicate, ec.negated, chain, ec.memberShapeId) as T;
+    // A quantifier on the outer subject's relation starts at the outer subject: moved too.
+    const outerRoot = ec.outerRoot && typeof ec.outerRoot === 'object' && 'prefix' in ec.outerRoot
+      ? {prefix: [...prefix, ...ec.outerRoot.prefix]}
+      : ec.outerRoot;
+    if (predicate === ec.predicate && chain.every((c, i) => c.condition === ec.chain[i].condition) && outerRoot === ec.outerRoot) {
+      return node;
+    }
+    return new ExistsCondition(ec.pathSegmentIds, predicate, ec.negated, chain, ec.memberShapeId, outerRoot) as T;
   }
   const en = node as ExpressionNode;
   if (![...en._refs.keys()].some((k) => k.startsWith(OUTER_REF_PREFIX))) return node;
@@ -520,10 +544,11 @@ export function reRootOuterReferences<T extends ExpressionNode | ExistsCondition
 }
 
 /**
- * Resolves the traversal part of an outer reference (property ids from the query root) to the
- * alias it reaches, or throws when that alias is not in scope.
+ * Resolves the traversal part of an outer reference to the alias it reaches, or throws when that
+ * alias is not in scope. `scopesUp` absent: the ids run from the query root; else from the member
+ * of the scope that many levels above the innermost one.
  */
-export type OuterReferenceResolver = (traversalSegmentIds: readonly string[]) => string;
+export type OuterReferenceResolver = (traversalSegmentIds: readonly string[], scopesUp?: number) => string;
 
 const outerReferenceRefusal = (segments: readonly string[], why: string): Error =>
   new Error(
@@ -547,22 +572,24 @@ export function resolveExpressionRefs(
 ): IRExpression {
   if (refs.size === 0) return expr;
 
-  // An outer reference: the alias its traversal reaches, from the query root.
+  // An outer reference: the alias its traversal reaches, from the query root or an enclosing
+  // scope's member.
   const outerAlias = (placeholder: string, traversal: readonly string[]): string => {
     const path = refs.get(placeholder)!;
     if (placeholder.startsWith(UNSCOPED_REF_PREFIX)) {
-      throw outerReferenceRefusal(
-        path,
-        'a quantifier (some/every/none) inside an inline filter can read only its own member.',
-      );
+      throw outerReferenceRefusal(path, 'its root is not reachable from where the filter is evaluated.');
     }
     if (!resolveOuter) {
       throw outerReferenceRefusal(
         path,
-        'only an inline filter on a projected or sorted path can read the outer subject, not a quantifier inside it.',
+        'only an inline filter on a projected or sorted path, or a quantifier (some/every/none), can read ' +
+        'the outer subject.',
       );
     }
-    return resolveOuter(traversal);
+    const up = placeholder.startsWith(ENCLOSING_REF_PREFIX)
+      ? Number(placeholder.slice(ENCLOSING_REF_PREFIX.length).split('_')[0])
+      : undefined;
+    return resolveOuter(traversal, up);
   };
 
   const resolve = (e: IRExpression): IRExpression => {
@@ -653,6 +680,13 @@ export class ExistsCondition {
      * was cast to (`p.pets.as(Dog).some(…)`), which the wire writes as `pets.as(Dog).some`.
      */
     public readonly memberShapeId?: string,
+    /**
+     * Where `pathSegmentIds` start when the relation is not the enclosing callback's own
+     * (`p.pets.some(…)` written inside `p.friends.some((f) => …)`): the query root, after
+     * `prefix` (a sub-select's path), or an enclosing scope's member. Absent: the enclosing
+     * callback's subject.
+     */
+    public readonly outerRoot?: {prefix: readonly string[]} | {up: number} | 'unscoped',
   ) {}
 
   /**
@@ -667,6 +701,7 @@ export class ExistsCondition {
       !this.negated,
       this._chain.map(({op, condition}) => ({op: op === 'and' ? 'or' : 'and', condition: negate(condition)})),
       this.memberShapeId,
+      this.outerRoot,
     );
   }
 
@@ -682,7 +717,9 @@ export class ExistsCondition {
     const condition = isLinkedInstance(other, ExistsCondition) || isLinkedInstance(other, ExpressionNode)
       ? other
       : new ExpressionNode(toIRExpression(other));
-    return new ExistsCondition(this.pathSegmentIds, this.predicate, this.negated, [...this._chain, {op, condition}], this.memberShapeId);
+    return new ExistsCondition(
+      this.pathSegmentIds, this.predicate, this.negated, [...this._chain, {op, condition}], this.memberShapeId, this.outerRoot,
+    );
   }
 
   get chain(): ReadonlyArray<{op: 'and' | 'or'; condition: ExpressionNode | ExistsCondition}> {

@@ -780,6 +780,28 @@ function mapOuterReads(
 }
 
 /**
+ * Adds to `out` each node in `aliases` an `EXISTS` inside `expr` reads (a quantifier in an inline
+ * filter reading the outer subject): EXISTS substitutes the bindings where the filter is
+ * evaluated, so those nodes must be bound there as well.
+ */
+function collectExistsReads(value: unknown, aliases: ReadonlySet<string>, out: Set<string>, inExists = false): void {
+  if (Array.isArray(value)) {
+    for (const v of value) collectExistsReads(v, aliases, out, inExists);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  const node = value as Record<string, unknown>;
+  const within = inExists || node.kind === 'exists_expr';
+  for (const [field, v] of Object.entries(node)) {
+    if (typeof v === 'string') {
+      if (within && ['from', 'to', 'sourceAlias', 'alias'].includes(field) && aliases.has(v)) out.add(v);
+    } else {
+      collectExistsReads(v, aliases, out, within);
+    }
+  }
+}
+
+/**
  * Refuses an inline filter whose outer reads are not bound where its block is evaluated: a nested
  * OPTIONAL is evaluated before it is joined, so a node further up is unbound there, and the filter
  * would compare with any node's value. Never compiled to a wrong answer.
@@ -935,6 +957,7 @@ export function selectToAlgebra(
       }
       return {...expr, sourceAlias: key};
     });
+    collectExistsReads(block.filter, ancestors, nodes);
     return {reads, nodes};
   });
   const isOuterReadKey = (idx: number, alias: string) => outerReadsByBlock[idx].reads.some((r) => r.key === alias);
@@ -2397,11 +2420,12 @@ function convertExpression(
         // First, discover and register filter property references,
         // collecting their triples into a local array (NOT the outer scope).
         const existsPropertyTriples: SparqlTriple[] = [];
-        processExpressionForProperties(expr.filter, registry, existsPropertyTriples);
+        const filter = bindOuterReadsInExists(expr.filter, expr.pattern, registry, existsPropertyTriples);
+        processExpressionForProperties(filter, registry, existsPropertyTriples);
 
         // Now convert the filter expression (variables are registered above).
         const filterExpr = convertExpression(
-          expr.filter,
+          filter,
           registry,
           existsPropertyTriples, // unused — properties already registered
         );
@@ -2431,6 +2455,65 @@ function convertExpression(
 
     default:
       throw new Error(`Unknown IR expression kind: ${(expr as never as {kind: string}).kind}`);
+  }
+}
+
+/**
+ * `filter` (an EXISTS's) with each property it reads of a node the EXISTS does not bind itself (the
+ * outer subject or an enclosing member: `p.name` in `p.friends.some((f) => f.name.equals(p.name))`)
+ * read into a variable of its own, by a triple added to `triples` (inside the EXISTS). Sharing the
+ * outer query's variable would tie the EXISTS to whichever row binds it (a projected `p.name`
+ * would keep only the names that match), or move that variable's only triple into the EXISTS.
+ * A nested EXISTS binds its own reads.
+ */
+function bindOuterReadsInExists(
+  filter: IRExpression,
+  pattern: IRGraphPattern,
+  registry: VariableRegistry,
+  triples: SparqlTriple[],
+): IRExpression {
+  const local = new Set<string>();
+  collectBoundAliases(pattern, local);
+  const scope = [...local][0] ?? 'exists';
+  const bound = new Set<string>();
+  // Every read is offered to `replace` (a set that has every alias); a local one is kept as it is.
+  const anyAlias = {has: () => true} as unknown as ReadonlySet<string>;
+  return mapOuterReads(filter, anyAlias, (read) => {
+    if (read.kind !== 'property_expr' || local.has(read.sourceAlias)) return read;
+    const key = `${read.sourceAlias}@${scope}`;
+    if (!bound.has(bindingKey(key, read.property))) {
+      bound.add(bindingKey(key, read.property));
+      triples.push(tripleOf(
+        varTerm(read.sourceAlias),
+        buildPredicateTerm(read),
+        varTerm(registry.createAs(key, read.sourceAlias, read.property)),
+      ));
+    }
+    return {...read, sourceAlias: key};
+  });
+}
+
+/** The aliases a pattern binds (its traversals' targets, a scan's subject). */
+function collectBoundAliases(pattern: IRGraphPattern, out: Set<string>): void {
+  switch (pattern.kind) {
+    case 'traverse':
+      out.add(pattern.to);
+      return;
+    case 'shape_scan':
+      out.add(pattern.alias);
+      return;
+    case 'join':
+      for (const sub of pattern.patterns) collectBoundAliases(sub, out);
+      return;
+    case 'optional':
+    case 'exists':
+      collectBoundAliases(pattern.pattern, out);
+      return;
+    case 'union':
+      for (const branch of pattern.branches) collectBoundAliases(branch, out);
+      return;
+    default:
+      return;
   }
 }
 

@@ -19,7 +19,7 @@ import {FieldSet} from './FieldSet.js';
 import {PropertyPath} from './PropertyPath.js';
 import type {QueryBuilder, QueryBuilderJSON} from './QueryBuilder.js';
 import {AggregateExpression, ExpressionNode, ExistsCondition, isExpressionNode, isExistsCondition, tracedPropertyExpression, tracedAliasExpression, tracedOuterExpression} from '../expressions/ExpressionNode.js';
-import {inTraceScope, traceScopeOf, withTraceScope} from './traceScopes.js';
+import {traceScopeOf, withTraceScope} from './traceScopes.js';
 import {PendingQueryContext} from './QueryContext.js';
 import type {
   AggregateMethods,
@@ -831,13 +831,14 @@ function toExpressionNode(qbo: QueryBuilderObject): ExpressionNode {
 
   const segments = FieldSet.collectPropertySegments(qbo);
   const segmentIds = segments.map((s) => s.id);
-  // Inside an inline filter, a path from another callback's proxy reads the outer subject.
+  // Inside an inline filter or a quantifier, a path from another callback's proxy reads the outer
+  // subject (or an enclosing quantifier's member).
   const scope = traceScopeOf(qbo);
   if (scope.kind !== 'own') {
     return tracedOuterExpression(
       [...(scope.kind === 'outer' ? scope.prefix : []), ...segmentIds],
       segments.length === 0 ? 'alias' : 'property',
-      scope.kind,
+      scope.kind === 'enclosing' ? {up: scope.up} : scope.kind,
     );
   }
   if (segments.length === 0) {
@@ -848,14 +849,15 @@ function toExpressionNode(qbo: QueryBuilderObject): ExpressionNode {
 }
 
 /**
- * An aggregate (`size()`, `min()`, `max()`) traced inside an inline filter over a path from outside
- * its member would be counted on the member: refused.
+ * An aggregate (`size()`, `min()`, `max()`) traced inside an inline filter or a quantifier over a
+ * path from outside its member would be counted on the member: refused.
  */
 function assertOwnAggregatePath(qbo: QueryBuilderObject): void {
   if (traceScopeOf(qbo).kind !== 'own') {
     throw new Error(
-      'An aggregate (size, min, max) inside an inline filter can be taken only over its own ' +
-      "member's paths, not the outer subject's.",
+      "An aggregate (size, min, max) over the outer subject's paths inside an inline filter or a " +
+      'quantifier (some/every/none) would be counted per member. Compare it at the top level of ' +
+      'the where instead (`.where((p) => p.friends.size().equals(1))`).',
     );
   }
 }
@@ -1031,7 +1033,15 @@ function memberShapeClass(set: QueryShapeSet<any>): ShapeConstructor | undefined
  */
 function quantified(set: QueryShapeSet<any>, predicate: ExpressionNode | ExistsCondition, negated: boolean): ExistsCondition {
   const pathSegmentIds = FieldSet.collectPropertySegments(set).map((s) => s.id);
-  return new ExistsCondition(pathSegmentIds, predicate, negated, [], memberShapeClass(set)?.shape?.id);
+  // Inside another callback, a relation of the outer subject (`p.pets.some(…)` inside
+  // `p.friends.some((f) => …)`) starts there, never at that callback's member.
+  const scope = traceScopeOf(set);
+  const outerRoot = scope.kind === 'own'
+    ? undefined
+    : scope.kind === 'outer'
+      ? {prefix: scope.prefix}
+      : scope.kind === 'enclosing' ? {up: scope.up} : 'unscoped' as const;
+  return new ExistsCondition(pathSegmentIds, predicate, negated, [], memberShapeClass(set)?.shape?.id, outerRoot);
 }
 
 /**
@@ -1325,9 +1335,10 @@ export class QueryShapeSet<
   private buildPredicateExpression(validation: WhereClause<S>): ExpressionNode | ExistsCondition {
     if (validation instanceof Function) {
       const proxy = createProxiedPathBuilder(memberShapeClassOrBase(this)) as any;
-      // Inside an inline filter, the quantifier's member is a scope of its own: a path from the
-      // filter's member or the outer subject is marked, and lowering refuses it.
-      const result = inTraceScope() ? withTraceScope(proxy, () => validation(proxy)) : validation(proxy);
+      // The quantifier's member is a scope of its own: a path from the outer subject or an
+      // enclosing member (`p.name`, `f.name` from a nested quantifier) is marked as such, and
+      // lowering resolves it there, never against this member.
+      const result = withTraceScope(proxy, () => validation(proxy));
       // A quantifier on the member's own path (`f.$type().equals(C)`, `f.friends.some(…)`) is an
       // EXISTS inside this one.
       if (isExpressionNode(result) || isExistsCondition(result)) {

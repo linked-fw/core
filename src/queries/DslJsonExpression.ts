@@ -120,18 +120,21 @@ function pathOfSegments(segmentIds: readonly string[], shape: NodeShapeData | un
 // ---------------------------------------------------------------------------
 
 /**
- * A path an inline filter reads from the outer subject has no DSL-JSON form yet: written as a
- * member path, it would decode to the member comparing with itself. Refused.
+ * A path an inline filter or a quantifier reads from the outer subject (or an enclosing
+ * quantifier's member) has no DSL-JSON form yet: written as a member path, it would decode to the
+ * member comparing with itself. Refused.
  */
 function assertEncodable(placeholder: string): string {
-  if (isOuterReference(placeholder)) {
-    throw new Error(
-      'An inline filter that reads the outer subject (`p.friends.where((f) => f.name.equals(p.name))`) ' +
-      'has no DSL-JSON form yet: it can be run, not serialized (toJSON).',
-    );
-  }
+  if (isOuterReference(placeholder)) throw outerReferenceHasNoWireForm();
   return placeholder;
 }
+
+const outerReferenceHasNoWireForm = (): Error =>
+  new Error(
+    'An inline filter or a quantifier that reads the outer subject ' +
+    '(`p.friends.where((f) => f.name.equals(p.name))`, `p.friends.some((f) => f.name.equals(p.name))`) ' +
+    'has no DSL-JSON form yet: it can be run, not serialized (toJSON).',
+  );
 
 function mergeRefs(into: Map<string, readonly string[]>, from: PropertyRefMap): void {
   for (const [k, v] of from) into.set(k, v);
@@ -309,6 +312,9 @@ export function encodeCondition(
 }
 
 function encodeExists(ec: ExistsCondition, shape: NodeShapeData): DslJsonCondition {
+  // A quantifier on the outer subject's relation, written inside another callback: its path is
+  // not the enclosing member's, which is all the wire can say.
+  if (ec.outerRoot) throw outerReferenceHasNoWireForm();
   // The relation, then its cast when the members are read as another shape than the relation's
   // own (`p.pets.as(Dog).some(…)` → `pets.as(Dog).some`); the condition's paths start there.
   let rel = pathOfSegments(ec.pathSegmentIds, shape);

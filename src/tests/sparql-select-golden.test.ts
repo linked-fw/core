@@ -1928,3 +1928,47 @@ WHERE {
 }`);
   });
 });
+
+describe('SPARQL golden — quantifiers reading the outer subject', () => {
+  test('a quantifier reads the outer subject inside its EXISTS, into a variable of its own', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.name).where((p) => p.friends.some((f) => f.name.equals(p.name))) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a0_name
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  FILTER(EXISTS {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    ?a0 <${PROP}name> ?a0_name_2 .
+    ?a1 <${PROP}name> ?a1_name .
+    FILTER(?a1_name = ?a0_name_2)
+  })
+}`);
+  });
+
+  test('a nested quantifier reads the enclosing quantifier\'s member', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select().where((p) => p.friends.none((f) => f.friends.some((g) => g.name.equals(f.name)))) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  FILTER(!(EXISTS {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    FILTER(EXISTS {
+      ?a1 <${PROP}hasFriend> ?a2 .
+      ?a1 <${PROP}name> ?a1_name .
+      ?a2 <${PROP}name> ?a2_name .
+      FILTER(?a2_name = ?a1_name)
+    })
+  }))
+}`);
+  });
+});

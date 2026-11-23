@@ -6,12 +6,16 @@
  * Both paths trace to the same property ids (`['name']`), so the filter must know which root a
  * path starts from: `f.name` reads the member, `p.name` reads the outer subject.
  *
- * While an inline filter's callback (or a quantifier's callback inside one) runs, its proxy is on
- * the scope stack. A path whose chain root is not the innermost scope is an outer reference:
- * - rooted at the query's own proxy (the select, sort or sub-select callback): it is resolved to
- *   the outer alias, by its path from the query root (`outerPathOf`);
- * - rooted at an enclosing scope (the inline filter's member, read from a quantifier inside it):
- *   no path from the query root reaches it, and lowering refuses it.
+ * A quantifier (`p.friends.some((f) => f.name.equals(p.name))`) has the same problem: its callback's
+ * proxy is the member, and `p` is the outer subject.
+ *
+ * While an inline filter's or a quantifier's callback runs, its proxy is on the scope stack. A path
+ * whose chain root is not the innermost scope is an outer reference:
+ * - rooted at the query's own proxy (the select, sort, where or sub-select callback): it is
+ *   resolved by its path from the query root (`outerPathOf`);
+ * - rooted at an enclosing scope (an inline filter's or an outer quantifier's member, read from a
+ *   quantifier inside it): it is resolved from that scope's member, counted in scopes up from the
+ *   innermost one.
  */
 
 type TraceObject = {subject?: TraceObject; property?: {id: string}};
@@ -40,9 +44,6 @@ export const withTraceScope = <T>(root: object, fn: () => T): T => {
   }
 };
 
-/** Whether an inline filter's callback is running (quantifiers open a scope only inside one). */
-export const inTraceScope = (): boolean => scopeStack.length > 0;
-
 /** Records that `proxy` is the root of a sub-select on `source`. */
 export const registerSubSelectRoot = (proxy: object, source: TraceObject | undefined): void => {
   if (source) subSelectSources.set(chainRootOf(proxy as TraceObject), source);
@@ -52,6 +53,9 @@ export type TraceScopeOfPath =
   | {kind: 'own'}
   /** Property ids from the query root to the path's root. */
   | {kind: 'outer'; prefix: string[]}
+  /** `up` scopes above the innermost one (1: the scope enclosing it). */
+  | {kind: 'enclosing'; up: number}
+  /** A sub-select rooted inside an enclosing scope: no path reaches it, lowering refuses it. */
   | {kind: 'unscoped'};
 
 /** Where a traced path starts, relative to the innermost scope. */
@@ -59,6 +63,8 @@ export const traceScopeOf = (obj: TraceObject): TraceScopeOfPath => {
   if (scopeStack.length === 0) return {kind: 'own'};
   const root = chainRootOf(obj);
   if (root === scopeStack[scopeStack.length - 1]) return {kind: 'own'};
+  const index = scopeStack.lastIndexOf(root);
+  if (index >= 0) return {kind: 'enclosing', up: scopeStack.length - 1 - index};
   const prefix = outerPathOf(root);
   return prefix ? {kind: 'outer', prefix} : {kind: 'unscoped'};
 };
@@ -71,7 +77,7 @@ const segmentIdsOf = (obj: TraceObject): string[] => {
   return ids;
 };
 
-/** The path from the query root to `root`, or undefined when `root` is an enclosing scope. */
+/** The path from the query root to `root`, or undefined when it starts in an enclosing scope. */
 const outerPathOf = (root: object): string[] | undefined => {
   if (scopeStack.includes(root)) return undefined;
   const source = subSelectSources.get(root);

@@ -110,16 +110,16 @@ describe('an inline filter reading the outer subject', () => {
     )).toThrow(/more than one hop above the relation it filters/);
   });
 
-  test('a quantifier inside the filter reads only its own member', () => {
-    expect(() => irOf(Person.select((p) => p.friends.where((f) => f.friends.some((g) => g.name.equals(p.name))).name)))
-      .toThrow(/not a quantifier inside it/);
-    expect(() => irOf(Person.select((p) => p.friends.where((f) => f.friends.some((g) => g.name.equals(f.name))).name)))
-      .toThrow(/a quantifier \(some\/every\/none\) inside an inline filter can read only its own member/);
+  test('a quantifier inside the filter reads the outer subject and the filter\'s member (report 118)', () => {
+    expect(sparqlOf(Person.select((p) => p.friends.where((f) => f.friends.some((g) => g.name.equals(p.name))).name)))
+      .toContain('FILTER(?a2_name = ?a0_name)');
+    expect(sparqlOf(Person.select((p) => p.friends.where((f) => f.friends.some((g) => g.name.equals(f.name))).name)))
+      .toContain('FILTER(?a2_name = ?a1_name_2)');
   });
 
   test('an aggregate over the outer subject inside the filter is refused', () => {
     expect(() => irOf(Person.select((p) => p.friends.where((f) => p.friends.size().equals(2)).name)))
-      .toThrow(/only over its own member's paths/);
+      .toThrow(/over the outer subject's paths inside an inline filter/);
   });
 
   test('has no DSL-JSON form yet: toJSON refuses it', () => {
