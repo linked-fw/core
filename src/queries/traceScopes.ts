@@ -29,9 +29,32 @@ const subSelectSources = new WeakMap<object, TraceObject>();
  * query object, the callback receives its proxy (`proxy` on the object); both name the same root.
  */
 export const chainRootOf = (obj: TraceObject): object => {
+  const root = rawRootOf(obj);
+  return castRoots.get(root) ?? root;
+};
+
+const rawRootOf = (obj: TraceObject): object => {
   let current = obj;
   while (current.subject) current = current.subject;
   return (current as {proxy?: object}).proxy ?? current;
+};
+
+/**
+ * A root cast (`f.as(Employee)` on a callback's own proxy) is a new root object: it maps to the
+ * root it casts, so a cast member is still that callback's member, never the query root.
+ */
+const castRoots = new WeakMap<object, object>();
+/** Every root a query callback receives (`createProxiedPathBuilder`), or a cast of one. */
+const knownRoots = new WeakSet<object>();
+
+/** Records that `cast` (a root cast's object) is `original`'s root seen as another shape. */
+export const registerCastRoot = (cast: object, original: object): void => {
+  castRoots.set(rawRootOf(cast as TraceObject), chainRootOf(original as TraceObject));
+};
+
+/** Records a callback's proxy as a root a traced path may start from. */
+export const registerQueryRoot = (proxy: object): void => {
+  knownRoots.add(rawRootOf(proxy as TraceObject));
 };
 
 /** Runs `fn` with `root` (a callback's proxy) as the innermost scope. */
@@ -81,7 +104,11 @@ const segmentIdsOf = (obj: TraceObject): string[] => {
 const outerPathOf = (root: object): string[] | undefined => {
   if (scopeStack.includes(root)) return undefined;
   const source = subSelectSources.get(root);
-  if (!source) return [];
+  if (!source) {
+    // The query's own root (a select, where or sort callback's proxy). A root this module does not
+    // know is never taken for it: refused at lowering rather than read from the query root.
+    return knownRoots.has(root) ? [] : undefined;
+  }
   const prefix = outerPathOf(chainRootOf(source));
   return prefix && [...prefix, ...segmentIdsOf(source)];
 };

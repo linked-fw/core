@@ -1,6 +1,7 @@
 import {Shape, createShapeTarget, type ShapeConstructor} from '../shapes/Shape.js';
 import {QueryBuilderObject, QueryShape} from './SelectQuery.js';
 import {isLinkedInstance} from '../utils/linkedError.js';
+import {registerQueryRoot} from './traceScopes.js';
 
 /**
  * Creates the proxy object used as the `p` parameter in query callbacks.
@@ -26,5 +27,7 @@ export function createProxiedPathBuilder<S extends Shape>(
   // to its PropertyShapeData, building a chain of QueryBuilderObjects that
   // records which path was traversed.
   const dummyShape = createShapeTarget(shape);
-  return QueryShape.create(dummyShape);
+  const proxy = QueryShape.create(dummyShape);
+  registerQueryRoot(proxy);
+  return proxy;
 }

@@ -16,7 +16,7 @@ import {
 import {captureQuery} from '../test-helpers/query-capture-store';
 import {selectToSparql} from '../sparql/irToAlgebra';
 import {setQueryContext} from '../queries/QueryContext';
-import {Person} from '../test-helpers/query-fixtures';
+import {Person, Employee} from '../test-helpers/query-fixtures';
 import {Expr} from '../expressions/Expr';
 
 import '../ontologies/rdf';
@@ -1969,6 +1969,25 @@ WHERE {
       FILTER(?a2_name = ?a1_name)
     })
   }))
+}`);
+  });
+});
+
+describe('SPARQL golden — a member cast inside a quantifier', () => {
+  test('f.as(Employee) reads the member, not the outer subject', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select().where((p) => p.friends.some((f) => f.as(Employee).department.equals('x'))) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  FILTER(EXISTS {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    ?a1 <${PROP}employeeDepartment> ?a1_department .
+    FILTER(?a1_department = "x")
+  })
 }`);
   });
 });

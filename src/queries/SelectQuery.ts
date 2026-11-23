@@ -19,7 +19,7 @@ import {FieldSet} from './FieldSet.js';
 import {PropertyPath} from './PropertyPath.js';
 import type {QueryBuilder, QueryBuilderJSON} from './QueryBuilder.js';
 import {AggregateExpression, ExpressionNode, ExistsCondition, isExpressionNode, isExistsCondition, tracedPropertyExpression, tracedAliasExpression, tracedOuterExpression} from '../expressions/ExpressionNode.js';
-import {traceScopeOf, withTraceScope} from './traceScopes.js';
+import {registerCastRoot, traceScopeOf, withTraceScope} from './traceScopes.js';
 import {PendingQueryContext} from './QueryContext.js';
 import type {
   AggregateMethods,
@@ -1440,6 +1440,8 @@ export class QueryShape<
       const cast = QueryShape.create(newOriginal, this.property, this.subject as any);
       // An inline filter before the cast (`p.bestFriend.where(…).as(Employee)`) stays on the segment.
       cast.wherePath = this.wherePath;
+      // A cast of a callback's own root (`f.as(Employee)`) is still that callback's member.
+      if (!this.subject) registerCastRoot(cast, this);
       return cast;
     }
     return this as any as QShape<InstanceType<ShapeClass>, Source, Property>;

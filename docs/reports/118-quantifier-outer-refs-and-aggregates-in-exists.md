@@ -258,3 +258,72 @@ oxigraph store, in the scratch directory): 5 of 5 pass.
 | 8 | implementation | Backlog 111 items 1–2 removed; renumber 3–5? | Keep numbers (reports cite 111.3/111.5) | Renumber | Stable references |
 | 9 | wrapup | Phases share `lowerExistsCondition` | One implementation commit | Split by hand | The split would not build on its own between the two |
 | 10 | rebase | The S1 review fixes landed `reRootOuterReferences` (preloaded components) and the same `nodeEquals` fix | Kept theirs; `reRootOuterReferences` also re-roots `outerRoot`; tests for a preloaded component's quantifiers | — | Merge without losing either behaviour |
+
+## Addendum — review fixes
+
+An independent review (oxigraph, against base f462e96) found one regression and one documentation
+gap.
+
+**HIGH: a member cast inside a callback read the outer subject.**
+`Person.select().where((p) => p.friends.some((f) => f.as(Employee).department.equals('x')))` read
+`?a0 :employeeDepartment` inside the EXISTS, not `?a1`'s. The same happened with `every`, nested
+quantifiers, `f.as(Employee).equals(…)`, `f.as(Employee).friends.some(…)` (its `outerRoot` was set
+to `?a0`) and `f.as(Employee).$type()`, and `toJSON()` refused the query. `QueryShape.as` on a root
+proxy builds a new root object. `outerPathOf` took any root it did not know for the query root, and
+since every quantifier now opens a scope, the cast became an outer reference. The inline-filter form
+(`p.friends.where((f) => f.as(Employee).department.equals('x'))`) had the same fault before this
+step (since report 115), and is fixed too.
+
+- `src/queries/traceScopes.ts`: `registerCastRoot(cast, original)` maps a root cast to the root it
+  casts (`chainRootOf` follows it); `registerQueryRoot` records every callback proxy
+  `createProxiedPathBuilder` makes. `outerPathOf` gives the query root only to a known root and
+  `unscoped` (refused at lowering) to anything else.
+- `src/queries/SelectQuery.ts` (`QueryShape.as`) registers a root cast;
+  `src/queries/ProxiedPathBuilder.ts` registers callback roots.
+- Tests: new `src/tests/quantifier-member-cast.test.ts` covers some, every, nested, node
+  comparison, a quantifier on the cast's relation, `$type()`, an inline filter, a cast of the outer
+  subject, the DSL-JSON form (`{"friends.some": {"as(Employee).department": "x"}}` again), an
+  unknown root and a `[fuseki]` block. There is also one golden in `sparql-select-golden.test.ts`.
+
+**LOW: semantics in `every`/`none`.** With a multi-valued outer value, `every` and `none` test each
+value (`p.friends.every((f) => f.name.equals(p.nickNames))` leaves out a person with nicknames X
+and Y and one friend X), while `some` takes any value. A missing outer value passes `every` and
+`none`, as a member without the property does. The README's set-filtering section now says so.
+
+### Verification
+
+```
+$ time npx tsc -p tsconfig-tests.json --noEmit
+real	0m9.040s                (no diagnostics)
+$ time NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs \
+    src/tests/quantifier-member-cast.test.ts src/tests/quantifier-outer-refs-and-aggregates.test.ts \
+    src/tests/inline-filter-outer-refs-and-filtered-size.test.ts src/tests/sparql-select-golden.test.ts \
+    src/tests/ir-select-golden.test.ts src/tests/sparql-ask-golden.test.ts src/tests/sparql-count-golden.test.ts
+Test Suites: 7 passed, 7 total
+Tests:       15 skipped, 269 passed, 284 total
+real	0m6.409s
+$ NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs
+Test Suites: 3 failed, 19 skipped, 162 passed, 165 of 184 total
+Tests:       51 failed, 641 skipped, 2959 passed, 3651 total
+(the 3 failing suites need a build: lib/esm/index.js is missing, as before)
+```
+
+oxigraph 0.5.13 ran the new file's `[fuseki]` block with its store swapped for an oxigraph store.
+The dataset: e1 (Employee, department x), e2 (Employee, department y), p1 (friend e1), p2
+(department x itself, friend e2), p3 (friends e1 and e2, best friend e2), p4 (friend p1).
+
+| Query | Before (b9d4429) | Now |
+|---|---|---|
+| `some(f => f.as(Employee).department.equals('x'))` | `[p2]` | `[p1, p3]` |
+| `every(…)` | all six (read the outer subject's department) | `[e1, e2, p1, p4]` |
+| `f.friends.some(g => g.as(Employee)…)` | – | `[p4]` |
+| `some(f => f.as(Employee).equals(p.bestFriend))` | – | `[p3]` |
+| inline filter `p.friends.where(f => f.as(Employee)…)` | `p2: [e2]`, others `[]` | `p1: [e1]`, `p3: [e1]`, others `[]` |
+
+All 5 live tests pass on oxigraph. On b9d4429 the same block fails on `some` and on the inline
+filter, with the wrong rows shown above.
+
+| # | Where | Problem | Choice | Alternative | Rationale |
+|---|-------|---------|--------|-------------|-----------|
+| 11 | review fix | How a root cast keeps its scope | A WeakMap from the cast root to the root it casts, which `chainRootOf` follows | Give the cast a link field on the object | Contained in the scope module, the same way as sub-select roots |
+| 12 | review fix | An unknown root was taken for the query root | Known roots come from `createProxiedPathBuilder`; any other root is `unscoped` (refused) | Keep the fallback | Never a silent wrong answer (the reviewer's direction) |

@@ -1015,6 +1015,11 @@ const knowsSomeoneWhoKnowsANamesake = await Person.select().where((p) =>
 path below the outer subject (`p.bestFriend.name`) is read inside the quantifier's own `EXISTS`, and
 a quantifier on the outer subject's relation written inside another one
 (`p.friends.some((f) => p.bestFriend.friends.some((x) => x.equals(f)))`) starts at the subject.
+A member cast inside the callback (`f.as(Employee).department`) is still the member. With a
+multi-valued or missing outer value, `some` matches any of its values, while `every` and `none` test
+every value: `p.knows.every((f) => f.name.equals(p.nickNames))` leaves out a person with nicknames
+X and Y and one friend named X (the friend is not named Y), and a person without the outer value
+passes `every` and `none` (no member contradicts it), as a member without the property does.
 Such a query has no DSL-JSON form yet: `toJSON()` refuses it. An aggregate inside a quantifier
 (`p.knows.some((f) => f.knows.size().equals(1))`), an inline filter or a `minus()` is refused:
 SPARQL tests those conditions per member, where it cannot count. Compare a count at the top level
