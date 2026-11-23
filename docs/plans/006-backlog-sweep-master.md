@@ -115,6 +115,8 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 | 25 ⚠ risky | S10 | A delete/update where with `||` or `isNotDefined()` used to change too few subjects (or none) | Match what a select's where matches; the changeset calls out that such mutations now delete/update more | Keep the old (wrong) matching | Correctness; but apps relying on the no-op now lose rows — flagged for the owner |
 | 26 ⚠ risky | S9 review HIGH 1 | A hop under a bare `isNotDefined()`/`defaultTo()` became OPTIONAL: `deleteWhere(p.bestFriend.name.isNotDefined())` deleted 7 instead of 1 | Keep base semantics: the path's relations must exist, only the leaf may be missing; only an `||` branch makes a hop optional | "No value at the path" reading | Safety (destructive in mutations) and backward compatibility; consistent with `.equals()` requiring the hop |
 | 27 | S9 review MEDIUM 4 | Under `every`, a member lacking the predicate's hop passes | It is a counterexample (fails the predicate), for plain and filtered `every`; `some`/`none` unchanged | Document today's behaviour | Correctness: "every friend's best friend is Erik" is false for a friend without one |
+| 28 | S8 review MEDIUM 4 | The array form changed (per-member sizes/expressions in sub-selects) contrary to the contract | Keep the new (correct) rows; list them in report 121 and the changeset | Restore the old rows | Correctness; the old rows were wrong |
+| 29 | S8 review MEDIUM 5 | A `SelectResponse` constraint on every `select` signature broke code that compiled (`unknown` callbacks, generic wrappers, interfaces) | Remove the constraint; a nested object / `id` key yields an exported `SelectError` row type; the build-time refusal stays | Keep the constraint | Backward compatibility, with the protection kept at the result type and at runtime |
 
 ## Contracts
 
@@ -273,9 +275,10 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 | S5 | 088 relation field type | – | done | b6aa386..448c188 | 120 | follow-up 110 → S8 |
 | S2 | 079 refuse agg in EXISTS + 111 items 1–2 | S1 | done | bb31db3..b9d4429, 2e2f82e | 118 | review: `.as()` cast regression, fixed |
 | S3 | 023 duplicate fields | S1 | done | 3e328a2..f462e96 | 119 | fix round: decision 17 |
-| S8 | 110 object-form rows follow their keys | S3 | in progress | | 121 | plan doc 007 |
-| S9 | 112 inline-filter / size lowering edges | S2 | done | d81ff18..107a39a | 122 | 112 reduced to 4, 6 (refused half), 7; follow-up 113 → S10; review: destructive isNotDefined hop regression + every → fix round (decisions 26, 27) |
-| S10 | 113 `||` in mutation where | S9 | done | 027d44c | 123 | ⚠ deletes more (decision 25) |
+| S8 | 110 object-form rows follow their keys | S3 | done | a0f0ef7..920a240, e16939a..314383c | 121 | minor; review: live refresh across hops, sibling count, preload drop, signature break → fixed (decisions 28, 29); follow-up 114 |
+| S9 | 112 inline-filter / size lowering edges | S2 | done | d81ff18..107a39a, 13764c9 | 122 | 112 reduced to 4, 6 (refused half), 7; follow-up 113 → S10; review: destructive isNotDefined hop regression + every → fix round (decisions 26, 27) |
+| S10 | 113 `||` in mutation where | S9 | done | 027d44c, c5fc20c | 123 | ⚠ deletes more (decision 25), called out in changeset |
+| W2 | final run + reviews of S2, S9, S8 | – | done | c5fc20c | – | 3161 passed, 0 failed, 697 skipped (Fuseki, no Docker); check:dts green |
 | W1 | wave 1 run + review of S1 | – | done | fixes d208c9e | – | 2938 passed, 0 failed (Fuseki skipped); review: 3 wrong answers, fixed |
 
 ## Progress
