@@ -92,8 +92,8 @@ export type GroupedRow<R, Keys extends string> = {
 
 /**
  * A key's value in a row. A node (a relation, or the subject itself) is its `{id}`: stated here
- * because the object form of select does not type the subject as a field (`{person: p}`) as a
- * plain `{id}`. A multi-valued path's key is one value.
+ * because the object form of select types the subject as a field (`{person: p}`) as a malformed
+ * object rather than `{id}` (backlog 110). A multi-valued path's key is one value.
  */
 type GroupKeyValue<Q, V> = Q extends QueryShape<any, any, any> | QueryShapeSet<any, any, any>
   ? {id: string}

@@ -198,7 +198,7 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 - [x] S6 — report 117
 - [ ] S2 — report 118
 - [ ] S3 — report 119
-- [ ] S5 — report 120
+- [x] S5 — report 120
 
 ## Starter prompt template
 

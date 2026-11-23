@@ -422,8 +422,8 @@ export type CreateQResult<
       ParentSource extends null
       ? HasName extends true
         ? //a named field (object form of select): the key is known, so the value is returned unwrapped.
-          //A relation (Value is the shape) holds a node reference at runtime, `{id}`, plus what a
-          //preloadFor component selects (SubProperties); never the shape instance itself.
+          //A relation (Value is the shape) holds a node reference at runtime, `{id}`, never the shape
+          //instance itself; the array form types it the same way.
           Value extends Shape
           ? QResult<Value, SubProperties>
           : Value
@@ -503,8 +503,8 @@ export type CreateShapeSetQResult<
   Source extends QueryShape<infer SourceShapeType, infer ParentSource>
     ? //if HasName is true and source is a QueryShape, but ITS source (ParentSource) is null
       //then we don't want to create a nested QResult, but instead we ignore this last property and we return an array of the members
-      //This is used by custom object keys with values like: p.friends, which hold node references at runtime ({id}[], plus what a
-      //preloadFor component selects), not a {friends:...} QResult
+      //This is used by custom object keys with values like: p.friends, which hold node references at runtime ({id}[]),
+      //not a {friends:...} QResult
       //NOTE: this notation check if 2 statements are true: HasName is true, and ParentSource is null
       [HasName, ParentSource] extends [true, null]
       ? QResult<ShapeType extends Shape ? ShapeType : Shape, SubProperties>[]
