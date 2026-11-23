@@ -5,11 +5,24 @@ import {isLinkedInstance} from '../utils/linkedError.js';
 import {labelOfId} from './castPaths.js';
 
 /**
+ * The row a field is selected in: the root (no steps), or the member row of the innermost
+ * sub-select around it. `steps` lead from the root to that row's members; `underKey` says whether
+ * some sub-select around it is keyed (its rows then sit under that key, not under their relation);
+ * `groups` are those keyed sub-selects, outermost first, each with its steps and pagination.
+ */
+export type SeedRow = {
+  steps: DesugaredStep[];
+  underKey: boolean;
+  groups: {key: string; steps: DesugaredStep[]; context: Record<number, string>}[];
+};
+
+/**
  * One field of a select's projection, before lowering: a selection path, or an expression
  * already resolved against the query's aliases. `groupPath` holds the steps of the sub-selects
  * that enclose it (an expression's own path is resolved already); `context` records their
  * inner LIMIT/OFFSET/ORDER BY by the depth of the relation it applies to (1 = the first step),
- * which belongs to the field as much as its path does.
+ * which belongs to the field as much as its path does. A `members` seed is a keyed sub-select
+ * (or preload): its key holds the member rows its `path` reaches.
  */
 export type ProjectionSeed =
   | {
@@ -17,14 +30,28 @@ export type ProjectionSeed =
       path: DesugaredSelectionPath;
       key?: string;
       context: Record<number, string>;
+      row: SeedRow;
     }
   | {
       kind: 'expression';
       expression: IRExpression;
       key: string;
+      /** Written under a key (the object form), not the default `expr` of an unnamed expression. */
+      keyed: boolean;
       groupPath: DesugaredStep[];
       context: Record<number, string>;
+      row: SeedRow;
+    }
+  | {
+      kind: 'members';
+      key: string;
+      path: DesugaredStep[];
+      context: Record<number, string>;
+      row: SeedRow;
     };
+
+/** A seed that is a field of a row (not a keyed sub-select's members). */
+type FieldSeed = Exclude<ProjectionSeed, {kind: 'members'}>;
 
 /** The local name a result key is written with in a row (`…/Person/name` → `name`). */
 const localName = (uri: string): string => {
@@ -39,7 +66,7 @@ const localName = (uri: string): string => {
  * row nests a path's value under each relation it traverses (`p.bestFriend.name` →
  * `{bestFriend: {name}}`), so the groups are the path's steps before its last.
  */
-const positionOf = (seed: ProjectionSeed): {groups: DesugaredPropertyStep[]; key: string} => {
+const positionOf = (seed: FieldSeed): {groups: DesugaredPropertyStep[]; key: string} => {
   if (seed.kind === 'expression') {
     return {groups: propertySteps(seed.groupPath), key: localName(seed.key)};
   }
@@ -113,7 +140,7 @@ const canonicalStep = (step: DesugaredStep): unknown => {
 };
 
 /** What a seed selects, whatever key it is written under: equal signatures select the same value. */
-const signatureOf = (seed: ProjectionSeed): string =>
+const signatureOf = (seed: FieldSeed): string =>
   JSON.stringify(
     seed.kind === 'path'
       ? {path: seed.path.steps.map(canonicalStep), context: seed.context}
@@ -125,7 +152,7 @@ const signatureOf = (seed: ProjectionSeed): string =>
   );
 
 /** A seed as the user wrote it, for error messages: `friends.where(…).name`, `friends.size()`. */
-const written = (seed: ProjectionSeed): string => {
+const written = (seed: FieldSeed): string => {
   const steps = seed.kind === 'path' ? seed.path.steps : seed.groupPath;
   const parts = steps.map((step) =>
     step.kind === 'property_step'
@@ -145,20 +172,20 @@ const written = (seed: ProjectionSeed): string => {
  * would not keep them apart either (backlog 112). A relation read with different filters gets a
  * traversal per filter, so the object form can keep those apart.
  */
-const paginationDiffers = (a: ProjectionSeed, b: ProjectionSeed): boolean =>
+const paginationDiffers = (a: FieldSeed, b: FieldSeed): boolean =>
   JSON.stringify(a.context) !== JSON.stringify(b.context);
 
 /** A position as a dotted key (a filtered relation's own entry has no key of its own). */
 const shown = (position: string[]): string => position.filter(Boolean).join('.');
 
 /** Whether a seed already carries a key of the object form. */
-const keyed = (seed: ProjectionSeed): boolean => seed.kind === 'expression' || !!seed.key;
+const keyed = (seed: FieldSeed): boolean => seed.kind === 'expression' || !!seed.key;
 
 /**
  * `at` is where the two meet: one `position`, one key `nested` under the other, or one
  * `relation` both nest under but read differently.
  */
-const refuse = (key: string, a: ProjectionSeed, b: ProjectionSeed, at: 'position' | 'nested' | 'relation'): never => {
+const refuse = (key: string, a: FieldSeed, b: FieldSeed, at: 'position' | 'nested' | 'relation'): never => {
   const conflict =
     `Select: the result key "${key}" is selected twice with different paths or sub-selections ` +
     `(${written(a)} and ${written(b)}); a row holds one value per key.`;
@@ -190,7 +217,7 @@ const refuse = (key: string, a: ProjectionSeed, b: ProjectionSeed, at: 'position
  * unless they read that relation in different ways (`[p.friends.name, p.friends.where(…).hobby]`):
  * the row has one `friends` list, so that is refused too.
  */
-type Entry = {seed: ProjectionSeed; groups: DesugaredPropertyStep[]; position: string[]; signature: string};
+type Entry = {seed: FieldSeed; groups: DesugaredPropertyStep[]; position: string[]; signature: string};
 
 /**
  * Whether `nested` already answers the bare relation `bare` (`p.bestFriend` beside
@@ -218,7 +245,12 @@ const subsumes = (nested: Entry, bare: Entry): boolean => {
 export const dedupeProjectionSeeds = (seeds: ProjectionSeed[]): ProjectionSeed[] => {
   const kept: Entry[] = [];
   const byPosition = new Map<string, Entry>();
+  const out: ProjectionSeed[] = [];
   for (const seed of seeds) {
+    if (seed.kind === 'members') {
+      out.push(seed);
+      continue;
+    }
     const {groups, key} = positionOf(seed);
     const position = [...groups.map((step) => localName(step.propertyShapeId)), key];
     const positionKey = JSON.stringify(position);
@@ -231,6 +263,7 @@ export const dedupeProjectionSeeds = (seeds: ProjectionSeed[]): ProjectionSeed[]
     const entry = {seed, groups, position, signature};
     byPosition.set(positionKey, entry);
     kept.push(entry);
+    out.push(seed);
   }
 
   for (const [i, a] of kept.entries()) {
@@ -261,5 +294,5 @@ export const dedupeProjectionSeeds = (seeds: ProjectionSeed[]): ProjectionSeed[]
     }
   }
 
-  return kept.map((entry) => entry.seed);
+  return out;
 };

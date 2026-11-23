@@ -1,7 +1,7 @@
 ---
 summary: Step S8 of plan 006 (backlog 110) — object-form select rows follow the keys the user wrote; the types match; nested objects and the key `id` are refused; DSL-JSON `as` names the key.
 packages: [core]
-status: Tasks
+status: Implementation
 ---
 
 # 007 — Object-form rows follow their keys
@@ -154,7 +154,10 @@ Full gate at review: the step's landing gate (plan 006 + task prompt).
 
 ## Status
 
-- Phase 1: pending
+- Phase 1: done — `container`/`keyed`/`members` on result-map entries, keys per entry, `as` as key,
+  refusals (nested object/array value, key `id`, two names for one DSL-JSON key). Gate: typecheck
+  exit 0; `object-form-rows` 14 passed; goldens 199/200 — the remaining failure is the
+  ir-select-golden mapping test of a keyed sub-select, which needs phase 2's result mapping.
 - Phase 2: pending
 - Phase 3: pending
 - Phase 4: pending
@@ -169,3 +172,7 @@ Full gate at review: the step's landing gate (plan 006 + task prompt).
 | # | Where | Problem | Choice | Alternative | Rationale |
 |---|-------|---------|--------|-------------|-----------|
 | 1 | design, IR | How to mark object-form entries | Three optional fields on `IRResultMapEntry` (`container`, `keyed`, `members`), only where the default placement is wrong | A container on every entry | Contract asks for additive IR so array-form goldens stay put |
+| 2 | phase 1, refusals | An array as an object-form value (`{both: [p.name, p.hobby]}`) also threw `Unknown trace result type` | Refused like a nested object, naming the key | Support it as a nested multi-selection | No row field can hold an array of selections; same reason as decision 20 |
+| 3 | phase 1, DSL-JSON | A field with both `customKey` and `as` | Refused when they differ; either one names the key | `customKey` wins silently | Never a silent choice between two names the user wrote |
+| 4 | phase 1, IR | An object-form component under `preloadFor` in the array form (`p.bestFriend.preloadFor(c)`, c keyed) gets `container`/`keyed` entries | Accept: the component's keys are fields of its member row; the rows of the array form stay as they were | Strip keys inside unkeyed preloads | The contract places a sub-select's keys in its member row; rows unchanged, only the IR gains fields |
+| 5 | phase 1, lowering | Container aliases must not change traversal order (array-form goldens) | Resolve a seed's container after its own path is lowered (`aliasAfterPath` then shares the traversal); a members seed lowers its steps with their inline filters | Resolve while collecting seeds | Eager resolution renumbers traversals of array-form selects |

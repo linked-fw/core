@@ -803,14 +803,17 @@ describe("IR pipeline behavior", () => {
       })),
     );
 
-    expect(ir.resultMap).toHaveLength(1);
+    // The key names the sub-select's member rows (a `members` entry); the field inside keeps its
+    // own property key, in those rows.
+    expect(ir.resultMap).toHaveLength(2);
+    expect(ir.resultMap?.[0]).toEqual({key: 'bestFriend', alias: 'a1', container: 'a0', keyed: true, members: true});
     expect(ir.projection[0].expression.kind).toBe('property_expr');
-    expect(ir.resultMap?.[0].key).toBe(
+    expect(ir.resultMap?.[1].key).toBe(
       ir.projection[0].expression.kind === 'property_expr'
         ? ir.projection[0].expression.property
         : undefined,
     );
-    expect(ir.resultMap?.[0].key).not.toBe('bestFriend');
+    expect(ir.resultMap?.[1].container).toBe('a1');
   });
 
   test("nested array children map to their property key in the final result", () => {

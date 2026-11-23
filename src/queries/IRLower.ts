@@ -30,7 +30,7 @@ import {attachCatalog} from '../utils/ShapeClass.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
 import {isLinkedInstance} from '../utils/linkedError.js';
 import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
-import {dedupeProjectionSeeds, type ProjectionSeed} from './projectionDuplicates.js';
+import {dedupeProjectionSeeds, type ProjectionSeed, type SeedRow} from './projectionDuplicates.js';
 import {containsAggregate} from './irExpressions.js';
 
 /**
@@ -617,11 +617,14 @@ export const lowerSelectQuery = (
 
   // `context` holds the inner pagination of the sub-selects around a field, by the depth of the
   // relation it applies to, so a field is a duplicate of another only when that matches too.
+  // `row` is the row the field is selected in: the root, or the member row of the innermost
+  // sub-select around it (its steps from the root, and whether some sub-select around it is keyed).
   const collectProjectionSeeds = (
     selection: DesugaredSelection,
     key?: string,
     parentPath: DesugaredStep[] = [],
     context: Record<number, string> = {},
+    row: SeedRow = {steps: [], underKey: false, groups: []},
   ): ProjectionSeed[] => {
     if (selection.kind === 'selection_path') {
       return [{
@@ -629,6 +632,7 @@ export const lowerSelectQuery = (
         path: combineWithParentPath(parentPath, selection),
         key,
         context,
+        row,
       }];
     }
 
@@ -656,21 +660,28 @@ export const lowerSelectQuery = (
         ctx.attachInnerPagination(childAlias, pagination);
         innerContext = {...context, [combinedParentPath.length]: JSON.stringify(pagination)};
       }
-      return collectProjectionSeeds(
-        selection.selections,
-        // The enclosing key identifies the sub-select container. Result-map
-        // entries produced inside that container must retain their own property
-        // keys. This also covers one-element array selections, which desugaring
-        // intentionally collapses to a single selection.
-        undefined,
-        combinedParentPath,
-        innerContext,
-      );
+      // The fields of a sub-select are fields of its member row. A keyed sub-select holds those
+      // rows under its key (a `members` seed); an unkeyed one nests them under its relation.
+      const memberRow: SeedRow = {
+        steps: combinedParentPath,
+        underKey: row.underKey || !!key,
+        groups: key ? [...row.groups, {key, steps: combinedParentPath, context: innerContext}] : row.groups,
+      };
+      const members: ProjectionSeed[] = key
+        ? [{kind: 'members', key, path: combinedParentPath, context: innerContext, row}]
+        : [];
+      return [
+        ...members,
+        // The enclosing key names the sub-select's member rows; the fields inside keep their own
+        // keys. This also covers one-element array selections, which desugaring intentionally
+        // collapses to a single selection.
+        ...collectProjectionSeeds(selection.selections, undefined, combinedParentPath, innerContext, memberRow),
+      ];
     }
 
     if (selection.kind === 'custom_object_select') {
       return selection.entries.flatMap((entry) =>
-        collectProjectionSeeds(entry.value, entry.key, parentPath, context),
+        collectProjectionSeeds(entry.value, entry.key, parentPath, context, row),
       );
     }
 
@@ -680,7 +691,7 @@ export const lowerSelectQuery = (
         // replace the individual keys of an array/multi-selection. Each child
         // derives its own key from its terminal property (or carries its own
         // explicit custom key).
-        collectProjectionSeeds(nestedSelection, undefined, parentPath, context),
+        collectProjectionSeeds(nestedSelection, undefined, parentPath, context, row),
       );
     }
 
@@ -698,10 +709,13 @@ export const lowerSelectQuery = (
       ));
       return [{
         kind: 'expression',
+        // An unkeyed expression (DSL-JSON without `customKey`/`as`) is the field `expr`.
         key: key || 'expr',
+        keyed: !!key,
         expression: resolved,
         groupPath: parentPath,
         context,
+        row,
       }];
     }
 
@@ -794,20 +808,53 @@ export const lowerSelectQuery = (
     };
   }
 
+  // The alias of a seed's row: the member alias of its innermost sub-select (traversed already by
+  // the seed's own path or its members seed, so this shares that traversal), or the root.
+  const containerOf = (row: SeedRow): {container: string} => ({
+    container: row.steps.length === 0 ? ctx.rootAlias : aliasAfterPath(row.steps),
+  });
+
+  // The traversal a members seed holds the rows of, with any inline filter on its steps attached
+  // (the filter of `p.friends.where(…).select(…)` belongs to the members whatever fields follow).
+  const membersAlias = (steps: DesugaredStep[]): string => {
+    let alias = ctx.rootAlias;
+    for (const step of steps) {
+      if (step.kind !== 'property_step') continue;
+      alias = pathOptions.resolveTraversal(alias, step.propertyShapeId, step.pathExpr, step.maxCount, step.where);
+      if (step.where) inlineFilterHandler(alias, step.where);
+    }
+    return alias;
+  };
+
   for (const seed of projectionSeeds) {
+    if (seed.kind === 'members') {
+      resultMapEntries.push({
+        key: seed.key,
+        alias: membersAlias(seed.path),
+        ...containerOf(seed.row),
+        keyed: true,
+        members: true,
+      });
+      continue;
+    }
     const key = seed.kind === 'path'
       ? (seed.key || projectionKeyFromPath(seed.path))
       : seed.key;
     const alias = projectionScope.generateAlias(key).alias;
-    projection.push({
-      alias,
-      expression: seed.kind === 'path'
-        ? lowerSelectionPathExpression(seed.path, pathOptions, inlineFilterHandler)
-        : seed.expression,
-    });
+    const expression = seed.kind === 'path'
+      ? lowerSelectionPathExpression(seed.path, pathOptions, inlineFilterHandler)
+      : seed.expression;
+    projection.push({alias, expression});
+    // Where the field sits (see `IRResultMapEntry`): a keyed field in the row it is written in; an
+    // unkeyed one there only inside a keyed sub-select, or when it is computed per member (an
+    // expression or aggregate inside a sub-select); otherwise under its hops from the root.
+    const keyed = seed.kind === 'path' ? !!seed.key : seed.keyed;
+    const perMember = expression.kind !== 'property_expr' && expression.kind !== 'alias_expr' && seed.row.steps.length > 0;
     resultMapEntries.push({
       key,
       alias,
+      ...(keyed || seed.row.underKey || perMember ? containerOf(seed.row) : {}),
+      ...(keyed ? {keyed: true as const} : {}),
     });
   }
 

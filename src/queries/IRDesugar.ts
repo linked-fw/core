@@ -285,22 +285,37 @@ const desugarEntry = (entry: FieldSetEntry): DesugaredSelection => {
 };
 
 /**
+ * The key an entry is written under: its object-form key, or a DSL-JSON `as` (which names the
+ * result key). Undefined for an array-form entry.
+ */
+const keyOf = (entry: FieldSetEntry): string | undefined => entry.customKey || entry.alias || undefined;
+
+/**
+ * FieldSetEntry[] as selections, each key honoured on its own entry: all keyed → one object
+ * (the object form); otherwise a keyed entry is a one-key object beside the unkeyed ones (a
+ * `.preload()` beside keyed fields, a DSL-JSON list that names some fields).
+ */
+const desugarEntries = (entries: readonly FieldSetEntry[]): DesugaredSelection[] => {
+  const all = entries as FieldSetEntry[];
+  if (all.length > 0 && all.every((e) => keyOf(e))) {
+    return [{
+      kind: 'custom_object_select',
+      entries: all.map((e) => ({key: keyOf(e)!, value: desugarEntry(e)})),
+    }];
+  }
+  return all.map((e): DesugaredSelection => {
+    const key = keyOf(e);
+    return key
+      ? {kind: 'custom_object_select', entries: [{key, value: desugarEntry(e)}]}
+      : desugarEntry(e);
+  });
+};
+
+/**
  * Convert sub-select FieldSetEntry[] to a single DesugaredSelection.
  */
 const desugarSubSelectEntries = (entries: FieldSetEntry[]): DesugaredSelection => {
-  // Check if all entries have customKey → custom object form
-  const allCustom = entries.length > 0 && entries.every((e) => e.customKey);
-  if (allCustom) {
-    return {
-      kind: 'custom_object_select',
-      entries: entries.map((e) => ({
-        key: e.customKey!,
-        value: desugarEntry(e),
-      })),
-    };
-  }
-
-  const selections = entries.map((e) => desugarEntry(e));
+  const selections = desugarEntries(entries);
   if (selections.length === 1) {
     return selections[0];
   }
@@ -310,21 +325,8 @@ const desugarSubSelectEntries = (entries: FieldSetEntry[]): DesugaredSelection =
 /**
  * Convert top-level FieldSetEntry[] to DesugaredSelection[].
  */
-const desugarFieldSetEntries = (entries: readonly FieldSetEntry[]): DesugaredSelection[] => {
-  // Check if all entries have customKey → wrap in single custom object
-  const allCustom = entries.length > 0 && entries.every((e) => e.customKey);
-  if (allCustom) {
-    return [{
-      kind: 'custom_object_select',
-      entries: (entries as FieldSetEntry[]).map((e) => ({
-        key: e.customKey!,
-        value: desugarEntry(e),
-      })),
-    }];
-  }
-
-  return (entries as FieldSetEntry[]).map((e) => desugarEntry(e));
-};
+const desugarFieldSetEntries = (entries: readonly FieldSetEntry[]): DesugaredSelection[] =>
+  desugarEntries(entries);
 
 const isSizeStep = (step: QueryStep): step is SizeStep => 'count' in step;
 const isPropertyStep = (step: QueryStep): step is PropertyQueryStep =>

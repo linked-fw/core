@@ -128,9 +128,37 @@ export type IROrderByItem = {
   direction: IRDirection;
 };
 
+/**
+ * One field of a result row: its `key` and the projection `alias` it reads.
+ *
+ * Without the optional fields (the array form), the value nests under each traversal of its
+ * path from the root (`p.bestFriend.name` → `{bestFriend: {id, name}}`). The object form names
+ * its fields, and a field then sits where its key is written:
+ */
 export type IRResultMapEntry = {
   key: string;
   alias: IRAlias;
+  /**
+   * The row the field belongs to: the root alias, or the member alias of the sub-select it is
+   * selected in. Absent = the root row. Set wherever the hops from the root would place the
+   * field elsewhere: a keyed field, a field inside a keyed sub-select, an expression or aggregate
+   * inside any sub-select (computed per member).
+   */
+  container?: IRAlias;
+  /**
+   * An object-form key: `key` is a field of the container's row holding the expression's yield
+   * through the hops between the container and the value. Through single-valued hops only, the
+   * value or `null`; through any multi-valued hop (or of a multi-valued property), the array of
+   * distinct values. The hops never appear in the row. Absent: the value nests under each hop
+   * from the container, as in the array form.
+   */
+  keyed?: true;
+  /**
+   * A keyed sub-select or preload: `alias` is the traversal target of its members, and `key`
+   * holds their rows (`{id, …}`; an array through a multi-valued hop, else one row or `null`).
+   * The fields of those rows are the entries whose `container` is `alias`. Has no projection item.
+   */
+  members?: true;
 };
 
 export type IRGraphPattern =

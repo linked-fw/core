@@ -172,6 +172,33 @@ const RELATION_OPTION_KEYS = new Set([
 ]);
 
 /**
+ * A result key the object form cannot use: `id` is the identity of the row the key is a field of
+ * (a field under it would overwrite the row's id).
+ */
+const assertResultKey = (key: string): void => {
+  if (key === 'id') {
+    throw new Error(
+      'Select: "id" cannot be a key of the object form: every row already holds its id under ' +
+      '`id`. Name the field differently.',
+    );
+  }
+};
+
+/**
+ * A DSL-JSON field's key: `customKey` and `as` both name it. Two different names for one field
+ * are refused.
+ */
+const checkJsonKey = (customKey: string | undefined, as: string | undefined): void => {
+  if (customKey && as && customKey !== as) {
+    throw new Error(
+      `A DSL-JSON field names its key twice: "customKey": "${customKey}" and "as": "${as}". Use one.`,
+    );
+  }
+  const key = customKey || as;
+  if (key) assertResultKey(key);
+};
+
+/**
  * An immutable, composable collection of property paths for a shape.
  *
  * FieldSet describes which properties to select, independent of
@@ -694,6 +721,7 @@ export class FieldSet<R = any, Source = any> {
       };
       if (computed.as) entry.alias = computed.as;
       if (computed.customKey) entry.customKey = computed.customKey;
+      checkJsonKey(computed.customKey, computed.as);
       return entry;
     }
     // Relation-keyed: the single non-option key is the relation path.
@@ -710,6 +738,7 @@ export class FieldSet<R = any, Source = any> {
     const opts = Array.isArray(spec) ? ({} as FieldSetRelationOptionsJSON) : spec;
     if (opts.as) entry.alias = opts.as;
     if (opts.customKey) entry.customKey = opts.customKey;
+    checkJsonKey(opts.customKey, opts.as);
     if (opts.aggregation) {
       // `count` (`.size()`) is the only aggregation a relation field carries; min/max and the
       // rest travel as computed fields. Anything else would be read as the bare path.
@@ -916,13 +945,7 @@ export class FieldSet<R = any, Source = any> {
     }
     if (typeof result === 'object' && result !== null) {
       // Custom object form: {name: p.name, hobby: p.hobby}
-      const entries: FieldSetEntry[] = [];
-      for (const [key, value] of Object.entries(result)) {
-        const entry = FieldSet.convertTraceResult(nodeShape, value);
-        entry.customKey = key;
-        entries.push(entry);
-      }
-      return entries;
+      return Object.entries(result).map(([key, value]) => FieldSet.keyedEntry(nodeShape, key, value));
     }
     return [];
   }
@@ -974,6 +997,35 @@ export class FieldSet<R = any, Source = any> {
       current = current.subject;
       leafDistance++;
     }
+  }
+
+  /**
+   * One field of the object form (`{key: value}`): the value traced, under its key. A key is a
+   * field of the row the object is written in, so a value that is itself a plain object or an
+   * array (`{info: {friend: p.bestFriend}}`) has no field to become, and `id` is the row's own
+   * identity: both refused here, naming the key.
+   */
+  private static keyedEntry(rootShape: NodeShapeData, key: string, value: unknown): FieldSetEntry {
+    assertResultKey(key);
+    if (
+      Array.isArray(value) ||
+      (value !== null &&
+        typeof value === 'object' &&
+        !isQueryBuilderObject(value) &&
+        !isLinkedInstance(value, FieldSet) &&
+        !isSetSize(value) &&
+        !isBoundComponent(value) &&
+        !isExpressionNode(value))
+    ) {
+      throw new Error(
+        `Select: the value of key "${key}" is ${Array.isArray(value) ? 'an array' : 'a plain object'}; ` +
+        'the object form maps each key to one path, sub-select or expression. Select its fields under ' +
+        `keys of their own, or as a sub-select (\`${key}: p.bestFriend.select((f) => ({…}))\`).`,
+      );
+    }
+    const entry = FieldSet.convertTraceResult(rootShape, value);
+    entry.customKey = key;
+    return entry;
   }
 
   /**
@@ -1155,15 +1207,9 @@ export class FieldSet<R = any, Source = any> {
     }
     if (typeof traceResponse === 'object' && traceResponse !== null) {
       // Custom object form: {name: p.name, hobby: p.hobby}
-      const entries: FieldSetEntry[] = [];
-      for (const [key, value] of Object.entries(traceResponse)) {
-        if (value !== null && value !== undefined) {
-          const entry = FieldSet.convertTraceResult(rootShape, value);
-          entry.customKey = key;
-          entries.push(entry);
-        }
-      }
-      return entries;
+      return Object.entries(traceResponse)
+        .filter(([, value]) => value !== null && value !== undefined)
+        .map(([key, value]) => FieldSet.keyedEntry(rootShape, key, value));
     }
     return [];
   }
