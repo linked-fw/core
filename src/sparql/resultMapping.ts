@@ -206,35 +206,51 @@ type FieldDescriptor = {
   maxCount?: number;
 };
 
-type NestedGroup = {
-  key: string;
-  traverseAlias: string;
+/**
+ * The fields of one kind of row: the root's, a traversed entity's (array form), or a keyed
+ * sub-select's members'. Unkeyed fields sit flat or nested under their hops; keyed ones by key.
+ */
+type RowSpec = {
   flatFields: FieldDescriptor[];
   nestedGroups: NestedGroup[];
+  keyed: KeyedField[];
+};
+
+type NestedGroup = RowSpec & {
+  key: string;
+  traverseAlias: string;
   maxCount?: number;
 };
 
-type NestingDescriptor = {
+/**
+ * An object-form key of a row: a value read through the hops below the row (`value`), or the
+ * member rows of a keyed sub-select or preload (`members`). `plural`: some hop (or the property
+ * itself) is multi-valued, so the field holds every distinct value / member.
+ */
+type KeyedField =
+  | {kind: 'value'; key: string; field: FieldDescriptor; plural: boolean}
+  | {kind: 'members'; key: string; alias: string; plural: boolean; row: RowSpec};
+
+type NestingDescriptor = RowSpec & {
   /** The root alias variable name (e.g. "a0") */
   rootVar: string;
-  /** Flat fields: fields directly on the root entity */
-  flatFields: FieldDescriptor[];
-  /** Nested groups: fields that come from traversed entities (recursive) */
-  nestedGroups: NestedGroup[];
 };
 
+type TraverseInfo = {from: string; property: string; maxCount?: number};
+
 /**
- * Builds the alias chain from sourceAlias back to rootAlias by walking the traverseMap.
- * Returns the chain from root outward, e.g. [{alias: "a1", property: "friends"}, {alias: "a2", property: "bestFriend"}].
+ * Builds the alias chain from sourceAlias back to `stopAlias` (the root, or the row a field is
+ * read from) by walking the traverseMap.
+ * Returns the chain outward, e.g. [{alias: "a1", property: "friends"}, {alias: "a2", property: "bestFriend"}].
  */
 function buildAliasChain(
   sourceAlias: string,
-  rootAlias: string,
-  traverseMap: Map<string, {from: string; property: string; maxCount?: number}>,
+  stopAlias: string,
+  traverseMap: Map<string, TraverseInfo>,
 ): Array<{alias: string; property: string; maxCount?: number}> {
   const chain: Array<{alias: string; property: string; maxCount?: number}> = [];
   let current = sourceAlias;
-  while (current !== rootAlias) {
+  while (current !== stopAlias) {
     const info = traverseMap.get(current);
     if (!info) break;
     chain.unshift({alias: current, property: info.property, maxCount: info.maxCount});
@@ -243,12 +259,31 @@ function buildAliasChain(
   return chain;
 }
 
+const multiValued = (maxCount: number | undefined): boolean => typeof maxCount !== 'number' || maxCount > 1;
+
+/** The nested group for a traversal target under `row`, created when it is not there yet. */
+function groupIn(row: RowSpec, hop: {alias: string; property: string; maxCount?: number}): NestedGroup {
+  let group = row.nestedGroups.find((g) => g.traverseAlias === hop.alias);
+  if (!group) {
+    group = {
+      key: localName(hop.property),
+      traverseAlias: hop.alias,
+      flatFields: [],
+      nestedGroups: [],
+      keyed: [],
+      maxCount: hop.maxCount,
+    };
+    row.nestedGroups.push(group);
+  }
+  return group;
+}
+
 /**
  * Inserts a field into the nesting tree at the position described by the alias chain.
  * Creates intermediate NestedGroup nodes as needed.
  */
 function insertIntoTree(
-  root: {flatFields: FieldDescriptor[]; nestedGroups: NestedGroup[]},
+  root: RowSpec,
   chain: Array<{alias: string; property: string; maxCount?: number}>,
   field: FieldDescriptor,
 ): void {
@@ -265,33 +300,38 @@ function insertIntoTree(
     root.flatFields.push(field);
     return;
   }
-
-  const target = chain[0];
-  let group = root.nestedGroups.find((g) => g.traverseAlias === target.alias);
-  if (!group) {
-    group = {
-      key: localName(target.property),
-      traverseAlias: target.alias,
-      flatFields: [],
-      nestedGroups: [],
-      maxCount: target.maxCount,
-    };
-    root.nestedGroups.push(group);
-  }
-
   // Recurse: remaining chain determines where the field sits within this group
-  insertIntoTree(group, chain.slice(1), field);
+  insertIntoTree(groupIn(root, chain[0]), chain.slice(1), field);
+}
+
+/** The entity a field is read from: its source alias (an aggregate: its argument's). */
+function sourceAliasOf(expression: IRExpression, rootAlias: string): string {
+  if (expression.kind === 'property_expr') return expression.sourceAlias;
+  if (expression.kind === 'alias_expr') return expression.alias;
+  if (expression.kind === 'aggregate_expr') {
+    // An aggregate over a traversed entity's property (e.g. a sub-select
+    // `f.friends.size()`) is grouped per that entity — anchor the field to
+    // the argument's source alias, not the root.
+    const propArg = expression.args.find((a) => a.kind === 'property_expr');
+    return propArg && propArg.kind === 'property_expr' ? propArg.sourceAlias : rootAlias;
+  }
+  return rootAlias;
 }
 
 /**
  * Analyzes the query structure to build a recursive nesting descriptor that guides
  * how flat SPARQL bindings should be grouped into nested result objects.
+ *
+ * An entry without a `container` (the array form) nests under each traversal from the root. An
+ * entry with one is a field of that row: the root, a keyed sub-select's members (a `members`
+ * entry, earlier in the result map), or an entity an unkeyed sub-select reaches from one of those
+ * (found by walking its traversals up). A keyed entry collapses the hops below its row.
  */
 function buildNestingDescriptor(query: IRSelectQuery): NestingDescriptor {
   const rootAlias = query.root.alias;
 
   // Build a map from alias → traverse pattern (to identify which aliases are traversals)
-  const traverseMap = new Map<string, {from: string; property: string; maxCount?: number}>();
+  const traverseMap = new Map<string, TraverseInfo>();
   for (const pattern of query.patterns) {
     if (pattern.kind === 'traverse') {
       traverseMap.set(pattern.to, {from: pattern.from, property: pattern.property, maxCount: pattern.maxCount});
@@ -304,6 +344,22 @@ function buildNestingDescriptor(query: IRSelectQuery): NestingDescriptor {
     rootVar: rootAlias,
     flatFields: [],
     nestedGroups: [],
+    keyed: [],
+  };
+
+  // The row of each container alias: the root, the members of a keyed sub-select, or an entity
+  // nested (by its hops) under one of those.
+  const rows = new Map<string, RowSpec>([[rootAlias, descriptor]]);
+  const rowFor = (alias: string): RowSpec => {
+    const known = rows.get(alias);
+    if (known) return known;
+    const info = traverseMap.get(alias);
+    if (!info) {
+      throw new Error(`Result mapping: no row for "${alias}", which no traversal of the query reaches.`);
+    }
+    const row = groupIn(rowFor(info.from), {alias, ...info});
+    rows.set(alias, row);
+    return row;
   };
 
   const resultMap = query.resultMap ?? [];
@@ -312,43 +368,44 @@ function buildNestingDescriptor(query: IRSelectQuery): NestingDescriptor {
   );
 
   for (const entry of resultMap) {
+    if (entry.members) {
+      // A keyed sub-select or preload: its key holds the member rows its traversal reaches.
+      const container = entry.container ?? rootAlias;
+      const chain = buildAliasChain(entry.alias, container, traverseMap);
+      const row: RowSpec = {flatFields: [], nestedGroups: [], keyed: []};
+      rows.set(entry.alias, row);
+      rowFor(container).keyed.push({
+        kind: 'members',
+        key: entry.key,
+        alias: entry.alias,
+        plural: chain.some((hop) => multiValued(hop.maxCount)),
+        row,
+      });
+      continue;
+    }
+
     const projItem = projectionByAlias.get(entry.alias);
 
     // When irToAlgebra renames an aggregate alias (e.g. a1 → a1_agg) to avoid
     // collision with a traversal alias, it updates resultMap but not projection.
     // In that case, use the resultMap alias directly as the SPARQL variable name
-    // and treat the expression as an aggregate (single-value, root-level).
+    // and treat the expression as an aggregate (single-value, in its row).
     if (!projItem) {
-      const resultKey = localName(entry.key);
       const field: FieldDescriptor = {
-        key: resultKey,
+        key: localName(entry.key),
         sparqlVar: entry.alias,
         expression: {kind: 'aggregate_expr', name: 'count', args: []} as any,
         maxCount: 1,
       };
-      descriptor.flatFields.push(field);
+      const row = rowFor(entry.container ?? rootAlias);
+      if (entry.keyed) row.keyed.push({kind: 'value', key: field.key, field, plural: false});
+      else row.flatFields.push(field);
       continue;
     }
 
     const expression = projItem.expression;
     const sparqlVar = sparqlVarName(expression, entry.alias, traverseVars);
     const resultKey = localName(entry.key);
-
-    // Determine which entity this field belongs to
-    let sourceAlias: string;
-    if (expression.kind === 'property_expr') {
-      sourceAlias = expression.sourceAlias;
-    } else if (expression.kind === 'alias_expr') {
-      sourceAlias = expression.alias;
-    } else if (expression.kind === 'aggregate_expr') {
-      // An aggregate over a traversed entity's property (e.g. a sub-select
-      // `f.friends.size()`) is grouped per that entity — anchor the field to
-      // the argument's source alias, not the root.
-      const propArg = expression.args.find((a) => a.kind === 'property_expr');
-      sourceAlias = propArg && propArg.kind === 'property_expr' ? propArg.sourceAlias : rootAlias;
-    } else {
-      sourceAlias = rootAlias;
-    }
 
     const field: FieldDescriptor = {key: resultKey, sparqlVar, expression};
     if (expression.kind === 'property_expr') {
@@ -362,24 +419,51 @@ function buildNestingDescriptor(query: IRSelectQuery): NestingDescriptor {
       field.maxCount = 1;
     }
 
+    // A computed value (an aggregate, an expression) with a row is computed per that row: a
+    // field of the row itself, whatever paths it reads.
+    const computed = expression.kind !== 'property_expr' && expression.kind !== 'alias_expr';
+
+    if (entry.keyed) {
+      const container = entry.container ?? rootAlias;
+      const chain = computed ? [] : buildAliasChain(sourceAliasOf(expression, rootAlias), container, traverseMap);
+      rowFor(container).keyed.push({
+        kind: 'value',
+        key: resultKey,
+        field,
+        plural:
+          chain.some((hop) => multiValued(hop.maxCount)) ||
+          (expression.kind === 'property_expr' && isMultiValueField(field)),
+      });
+      continue;
+    }
+
+    if (entry.container !== undefined) {
+      const row = rowFor(entry.container);
+      if (computed) row.flatFields.push(field);
+      else insertIntoTree(row, buildAliasChain(sourceAliasOf(expression, rootAlias), entry.container, traverseMap), field);
+      continue;
+    }
+
+    const sourceAlias = sourceAliasOf(expression, rootAlias);
     if (sourceAlias === rootAlias) {
       descriptor.flatFields.push(field);
     } else {
       // Build the full chain from root to sourceAlias and insert into tree
-      const chain = buildAliasChain(sourceAlias, rootAlias, traverseMap);
-      insertIntoTree(descriptor, chain, field);
+      insertIntoTree(descriptor, buildAliasChain(sourceAlias, rootAlias, traverseMap), field);
     }
   }
 
   // Defensive: lowering drops exact duplicate fields and refuses two different fields under one
   // key (`dedupeProjectionSeeds`), so a duplicate key here means an IR built some other way.
-  const flatKeys = descriptor.flatFields.map((f) => f.key);
-  const dupFlat = flatKeys.find((k, i) => flatKeys.indexOf(k) !== i);
-  if (dupFlat) {
-    throw new Error(
-      `Duplicate result key "${dupFlat}" in projection. ` +
-      `Two fields with the same local name cannot appear at the same level of a row.`,
-    );
+  for (const row of rows.values()) {
+    const keys = [...row.flatFields.map((f) => f.key), ...row.keyed.map((k) => k.key)];
+    const dup = keys.find((k, i) => keys.indexOf(k) !== i);
+    if (dup) {
+      throw new Error(
+        `Duplicate result key "${dup}" in projection. ` +
+        `Two fields with the same local name cannot appear at the same level of a row.`,
+      );
+    }
   }
 
   return descriptor;
@@ -429,15 +513,7 @@ export function mapSparqlSelectResult(
     return rows;
   }
 
-  const descriptor = buildNestingDescriptor(query);
-
-  // If there are no nested groups, produce flat rows
-  if (descriptor.nestedGroups.length === 0) {
-    return mapFlatRows(bindings, descriptor, query);
-  }
-
-  // Otherwise, group and nest
-  return mapNestedRows(bindings, descriptor, query);
+  return mapRows(bindings, buildNestingDescriptor(query), query);
 }
 
 /**
@@ -529,45 +605,6 @@ function populateFlatFields(
 }
 
 /**
- * Maps flat (non-nested) result rows — no traversals involved.
- * Groups bindings by root ID to collect multi-value flat fields into arrays.
- */
-function mapFlatRows(
-  bindings: SparqlBinding[],
-  descriptor: NestingDescriptor,
-  query: IRSelectQuery,
-): SelectResult {
-  // Group bindings by root entity id
-  const rootGroups = new Map<string, SparqlBinding[]>();
-
-  for (const binding of bindings) {
-    const rootBinding = binding[descriptor.rootVar];
-    if (!rootBinding) continue;
-    const id = rootBinding.value;
-
-    let group = rootGroups.get(id);
-    if (!group) {
-      group = [];
-      rootGroups.set(id, group);
-    }
-    group.push(binding);
-  }
-
-  const rows: ResultRow[] = [];
-
-  for (const [rootId, groupBindings] of rootGroups) {
-    const row: ResultRow = {id: rootId};
-    populateFlatFields(row, descriptor.flatFields, groupBindings);
-    rows.push(row);
-  }
-
-  if (query.singleResult) {
-    return rows.length > 0 ? rows[0] : null;
-  }
-  return rows;
-}
-
-/**
  * Scans bindings to identify which nested groups represent literal property
  * traversals (e.g. `p.hobby.where(h => h.equals('Jogging'))`) vs entity
  * traversals. Returns a set of traverse aliases that resolve to literals.
@@ -628,7 +665,7 @@ function assignNestedGroupValue(
   if (literalAliases.has(nestedGroup.traverseAlias)) {
     row[nestedGroup.key] = collectLiteralTraversalValue(nestedGroup, bindings);
   } else {
-    const collected = collectNestedGroup(nestedGroup, bindings);
+    const collected = collectEntityRows(nestedGroup.traverseAlias, nestedGroup, bindings, literalAliases);
     if (typeof nestedGroup.maxCount === 'number' && nestedGroup.maxCount <= 1) {
       row[nestedGroup.key] = collected.length > 0 ? collected[0] : null;
     } else {
@@ -638,52 +675,101 @@ function assignNestedGroupValue(
 }
 
 /**
- * Recursively collects entities for a nested group from a set of bindings.
- * Groups bindings by the nested entity's ID, populates fields, and recurses
- * into any deeper nested groups.
+ * The rows of the entities bound to `alias` in `bindings`: grouped by the entity's id, each
+ * built from its own bindings (a multi-valued field collects its values across them).
  */
-function collectNestedGroup(
-  nestedGroup: NestedGroup,
+function collectEntityRows(
+  alias: string,
+  spec: RowSpec,
   bindings: SparqlBinding[],
+  literalAliases: Set<string>,
 ): ResultRow[] {
-  const entityMap = new Map<string, {row: ResultRow; bindings: SparqlBinding[]}>();
-
+  const entityBindings = new Map<string, SparqlBinding[]>();
   for (const binding of bindings) {
-    const idBinding = binding[nestedGroup.traverseAlias];
+    const idBinding = binding[alias];
     if (!idBinding) continue;
-    const entityId = idBinding.value;
-
-    let entry = entityMap.get(entityId);
-    if (!entry) {
-      entry = {row: {id: entityId}, bindings: []};
-      entityMap.set(entityId, entry);
-    }
-    entry.bindings.push(binding);
+    let group = entityBindings.get(idBinding.value);
+    if (!group) entityBindings.set(idBinding.value, (group = []));
+    group.push(binding);
   }
+  return Array.from(entityBindings, ([id, group]) => buildRow(spec, id, group, literalAliases));
+}
 
-  // Fields from all of the entity's bindings: a multi-valued field collects its values across
-  // them, as on the root entity.
-  for (const entry of entityMap.values()) {
-    populateFlatFields(entry.row, nestedGroup.flatFields, entry.bindings);
+/** One row: its id, its unkeyed fields (flat and nested under their hops), its keyed fields. */
+function buildRow(
+  spec: RowSpec,
+  id: string,
+  bindings: SparqlBinding[],
+  literalAliases: Set<string>,
+): ResultRow {
+  const row: ResultRow = {id};
+  // Flat fields — single-value from first binding, multi-value collected across all
+  populateFlatFields(row, spec.flatFields, bindings);
+  // Nested groups — recursively collect traversed entities (or literal values)
+  for (const nestedGroup of spec.nestedGroups) {
+    assignNestedGroupValue(row, nestedGroup, bindings, literalAliases);
   }
-
-  // Recurse into deeper nested groups
-  const allNestedBindings = Array.from(entityMap.values()).flatMap((e) => e.bindings);
-  const deepLiteralAliases = detectLiteralTraversals(nestedGroup.nestedGroups, allNestedBindings);
-  for (const [, entry] of entityMap) {
-    for (const deeperGroup of nestedGroup.nestedGroups) {
-      assignNestedGroupValue(entry.row, deeperGroup, entry.bindings, deepLiteralAliases);
-    }
+  for (const keyed of spec.keyed) {
+    row[keyed.key] = keyed.kind === 'value'
+      ? keyedValue(keyed.field, keyed.plural, bindings)
+      : keyedMembers(keyed, bindings, literalAliases);
   }
-
-  return Array.from(entityMap.values()).map((e) => e.row);
+  return row;
 }
 
 /**
- * Maps nested result rows — groups flat SPARQL bindings by root entity,
- * then recursively collects traversed entities into nested arrays.
+ * A keyed value of a row, read across the row's bindings: through a multi-valued hop every
+ * distinct value (`[]` when none), otherwise the value or `null`.
  */
-function mapNestedRows(
+function keyedValue(field: FieldDescriptor, plural: boolean, bindings: SparqlBinding[]): ResultFieldValue {
+  if (!plural) {
+    for (const binding of bindings) {
+      const value = extractFieldValue(field, binding);
+      if (value !== null) return value;
+    }
+    return null;
+  }
+  const seen = new Set<string>();
+  const values: ResultFieldValue[] = [];
+  for (const binding of bindings) {
+    const val = binding[field.sparqlVar];
+    if (!val) continue;
+    const identity = `${val.type}|${val.datatype ?? ''}|${val['xml:lang'] ?? ''}|${val.value}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    values.push(extractFieldValue(field, binding));
+  }
+  return values as ResultFieldValue;
+}
+
+/** The member rows a keyed sub-select or preload holds: every member, or the one (or `null`). */
+function keyedMembers(
+  keyed: Extract<KeyedField, {kind: 'members'}>,
+  bindings: SparqlBinding[],
+  literalAliases: Set<string>,
+): ResultFieldValue {
+  const rows = collectEntityRows(keyed.alias, keyed.row, bindings, literalAliases);
+  if (keyed.plural) return rows;
+  return rows.length > 0 ? rows[0] : null;
+}
+
+/** Every nested group of the row tree, at any depth (through keyed members too). */
+function allNestedGroups(spec: RowSpec, out: NestedGroup[] = []): NestedGroup[] {
+  for (const group of spec.nestedGroups) {
+    out.push(group);
+    allNestedGroups(group, out);
+  }
+  for (const keyed of spec.keyed) {
+    if (keyed.kind === 'members') allNestedGroups(keyed.row, out);
+  }
+  return out;
+}
+
+/**
+ * Maps result rows — groups flat SPARQL bindings by root entity, then builds each row from its
+ * bindings: flat fields, nested traversed entities, keyed fields.
+ */
+function mapRows(
   bindings: SparqlBinding[],
   descriptor: NestingDescriptor,
   query: IRSelectQuery,
@@ -708,22 +794,11 @@ function mapNestedRows(
   // This must span all root groups because a specific root entity may have no
   // binding for the alias (OPTIONAL miss) — we need at least one bound value
   // to know the type.
-  const literalAliases = detectLiteralTraversals(descriptor.nestedGroups, bindings);
+  const literalAliases = detectLiteralTraversals(allNestedGroups(descriptor), bindings);
 
   const rows: ResultRow[] = [];
-
   for (const [rootId, groupBindings] of rootGroups) {
-    const row: ResultRow = {id: rootId};
-
-    // Flat fields — single-value from first binding, multi-value collected across all
-    populateFlatFields(row, descriptor.flatFields, groupBindings);
-
-    // Nested groups — recursively collect traversed entities (or literal values)
-    for (const nestedGroup of descriptor.nestedGroups) {
-      assignNestedGroupValue(row, nestedGroup, groupBindings, literalAliases);
-    }
-
-    rows.push(row);
+    rows.push(buildRow(descriptor, rootId, groupBindings, literalAliases));
   }
 
   if (query.singleResult) {

@@ -272,9 +272,10 @@ describeFuseki('inline filter outer references and filtered size', () => {
 
   test('a preloaded component: the best friend\'s friends named like the best friend', async () => {
     const rows = await run(preloaded());
-    const fr = (id: string) =>
-      ((((rows.find((r) => idOf(r) === id)!.bestFriend as ResultRow | undefined)?.friends as ResultRow[] | undefined) ?? [])).map(idOf);
-    expect(fr('anna')).toEqual(['bobby']);
+    // The component's key `fr` is a field of its row (the best friend): the names of the friends
+    // it keeps (bobby, named Bob like anna's best friend Bob).
+    const fr = (id: string) => (rows.find((r) => idOf(r) === id)!.bestFriend as ResultRow | null)?.fr;
+    expect(fr('anna')).toEqual(['Bob']);
     expect(fr('carl')).toEqual([]);
   });
 

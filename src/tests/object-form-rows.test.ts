@@ -4,38 +4,30 @@
  * appear in the row; a keyed sub-select or preload holds its member rows; the subject as a field
  * is `{id}`. A nested plain object and the key `id` are refused.
  *
- * Sections: the result map lowering writes (IR), the build-time refusals.
+ * Sections: the result map lowering writes (IR); the rows, mapped from recorded store answers
+ * (`fixtures/object-form-rows.bindings.json`) and, live, from a store; the build-time refusals.
  */
-import {describe, expect, test} from '@jest/globals';
+import {beforeAll, afterAll, describe, expect, test} from '@jest/globals';
+import {readFileSync} from 'fs';
 import {Person} from '../test-helpers/query-fixtures';
 import {lower} from '../queries/lower';
 import {QueryBuilder} from '../queries/QueryBuilder';
 import {FieldSet} from '../queries/FieldSet';
+import {selectToSparql} from '../sparql/irToAlgebra';
+import {mapSparqlSelectResult, type SparqlJsonResults} from '../sparql/resultMapping';
 import type {IRResultMapEntry, IRSelectQuery} from '../queries/IntermediateRepresentation';
+import {
+  nameCard,
+  normalizeRows,
+  objectFormCases,
+  objectFormData,
+  objectFormRows,
+  type ObjectFormCase,
+} from '../test-helpers/object-form-fixtures';
+import {createTestDataset, loadTestData, executeSparqlQuery, clearAllData} from '../test-helpers/fuseki-test-store';
+import {describeFuseki, fusekiLive} from '../test-helpers/fuseki-live';
 import '../ontologies/rdf';
 import '../ontologies/xsd';
-
-const card = {query: Person.select((p) => ({name: p.name}))};
-const isMoa = (f: any) => f.name.equals('Moa');
-
-/** The S8 cases, by name: each select as a user writes it. */
-export const objectFormCases = {
-  n: () => Person.select((p) => ({n: p.bestFriend.name})),
-  bb: () => Person.select((p) => ({bb: p.bestFriend.bestFriend})),
-  names: () => Person.select((p) => ({names: p.friends.name})),
-  fbf: () => Person.select((p) => ({fbf: p.friends.bestFriend.name})),
-  xFriends: () => Person.select((p) => ({x: p.friends.select((f) => ({bf: f.bestFriend, n: f.name}))})),
-  xFriendsArray: () => Person.select((p) => ({x: p.friends.select((f) => f.name)})),
-  xBestFriend: () => Person.select((p) => ({x: p.bestFriend.select((b) => ({n: b.name}))})),
-  w: () => Person.select((p) => ({w: p.friends.where(isMoa)})),
-  wName: () => Person.select((p) => ({w: p.friends.where(isMoa).name})),
-  pre: () => Person.select((p) => ({pre: p.bestFriend.preloadFor(card)})),
-  person: () => Person.select((p) => ({person: p})),
-  nAndB: () => Person.select((p) => ({n: p.bestFriend.name, b: p.bestFriend})),
-  subSize: () => Person.select((p) => ({x: p.friends.select((f) => ({c: f.friends.size()}))})),
-  subExpr: () => Person.select((p) => ({x: p.friends.select((f) => ({e: f.name.equals('Moa')}))})),
-  preloadBeside: () => Person.select((p) => ({n: p.hobby})).preload('bestFriend', card),
-};
 
 /** Lowers a select (tracing its callbacks), as running it would. */
 const build = (factory: () => unknown) => lower(factory() as any);
@@ -84,7 +76,7 @@ describe('object form: the result map (IR)', () => {
 
   test('size() and an expression inside a sub-select are per member', () => {
     expect(entries(objectFormCases.subSize)[1]).toMatchObject({key: 'c', container: 'a1', keyed: true});
-    expect(entries(objectFormCases.subExpr)[1]).toMatchObject({key: 'e', container: 'a1', keyed: true});
+    expect(entries(() => Person.select((p) => ({x: p.friends.select((f) => ({e: f.name.equals('Moa')}))})))[1]).toMatchObject({key: 'e', container: 'a1', keyed: true});
     // In the array form too: the count is computed per friend.
     const arrayForm = entries(() => Person.select((p) => p.friends.select((f) => f.friends.size())));
     expect(arrayForm).toEqual([{key: 'friends', alias: expect.any(String), container: 'a1'}]);
@@ -124,6 +116,52 @@ describe('object form: the result map (IR)', () => {
       ['n', true],
       [expect.stringMatching(/hobby$/), undefined],
     ]);
+  });
+});
+
+/** The store answers recorded for each case: the SPARQL they answer and the result set. */
+const recorded: Record<string, {sparql: string; results: SparqlJsonResults}> = JSON.parse(
+  readFileSync(new URL('./fixtures/object-form-rows.bindings.json', import.meta.url), 'utf8'),
+);
+
+const caseNames = Object.keys(objectFormCases) as ObjectFormCase[];
+
+describe('object form: the rows (recorded store answers)', () => {
+  test('every case has a recorded answer', () => {
+    expect(Object.keys(recorded).sort()).toEqual([...caseNames].sort());
+  });
+
+  test.each(caseNames)('%s', (name) => {
+    const ir = lower(objectFormCases[name]() as any) as IRSelectQuery;
+    // The recording answers this very SPARQL; when lowering changes it, re-record it.
+    expect(selectToSparql(ir)).toBe(recorded[name].sparql);
+    const rows = mapSparqlSelectResult(recorded[name].results, ir);
+    expect(normalizeRows(rows)).toEqual(normalizeRows(objectFormRows[name]));
+  });
+
+  test.each(caseNames)('%s round-trips through DSL-JSON', (name) => {
+    const query = objectFormCases[name]() as any;
+    const back = QueryBuilder.fromJSON(JSON.parse(JSON.stringify(query.toJSON())));
+    expect(selectToSparql(lower(back as any) as IRSelectQuery)).toBe(recorded[name].sparql);
+  });
+});
+
+beforeAll(async () => {
+  if (!fusekiLive) return;
+  await createTestDataset();
+  await clearAllData();
+  await loadTestData(objectFormData);
+}, 30000);
+
+afterAll(async () => {
+  if (fusekiLive) await clearAllData();
+});
+
+describeFuseki('object form rows', () => {
+  test.each(caseNames)('%s', async (name) => {
+    const ir = lower(objectFormCases[name]() as any) as IRSelectQuery;
+    const rows = mapSparqlSelectResult(await executeSparqlQuery(selectToSparql(ir)), ir);
+    expect(normalizeRows(rows)).toEqual(normalizeRows(objectFormRows[name]));
   });
 });
 

@@ -158,14 +158,26 @@ Full gate at review: the step's landing gate (plan 006 + task prompt).
   refusals (nested object/array value, key `id`, two names for one DSL-JSON key). Gate: typecheck
   exit 0; `object-form-rows` 14 passed; goldens 199/200 — the remaining failure is the
   ir-select-golden mapping test of a keyed sub-select, which needs phase 2's result mapping.
-- Phase 2: pending
+- Phase 2: done — rows built per container (`buildRow`: flat, nested, keyed values, keyed
+  members); per-member aggregates group by their member (its alias projected, also when an
+  aggregate's output name collided with it; a members entry is never renamed with a projection).
+  Cases + expected rows in `src/test-helpers/object-form-fixtures.ts`; store answers recorded on
+  oxigraph (`src/tests/fixtures/object-form-rows.bindings.json`, guarded by the SPARQL they
+  answer). All 21 buildable cases give the contract rows on oxigraph and round-trip through
+  DSL-JSON (same SPARQL); `allAndCarls`/`twoFilters` still refused until phase 3. Every
+  `[fuseki]` suite run on oxigraph (scratch jest config mapping the Fuseki helpers to an in-memory
+  oxigraph), compared with the integration branch: no new failure besides those two.
 - Phase 3: pending
 - Phase 4: pending
 - Phase 5: pending
 
 ## Deviations
 
-(none yet)
+- Goldens changed (encoded the bug): `sparql-select-golden` `countLabel` (a lone `size()` in a
+  sub-select now groups per friend: `?a1` projected, `GROUP BY ?a0 ?a1`); `ir-select-golden`
+  "nested array children do not inherit the enclosing custom result key" (a keyed sub-select now
+  has a `members` entry). `sparql-fuseki` `countLabel` and `inline-filter-outer-refs…` "a preloaded
+  component" assert the new rows.
 
 ## Autonomous decisions
 
@@ -175,4 +187,7 @@ Full gate at review: the step's landing gate (plan 006 + task prompt).
 | 2 | phase 1, refusals | An array as an object-form value (`{both: [p.name, p.hobby]}`) also threw `Unknown trace result type` | Refused like a nested object, naming the key | Support it as a nested multi-selection | No row field can hold an array of selections; same reason as decision 20 |
 | 3 | phase 1, DSL-JSON | A field with both `customKey` and `as` | Refused when they differ; either one names the key | `customKey` wins silently | Never a silent choice between two names the user wrote |
 | 4 | phase 1, IR | An object-form component under `preloadFor` in the array form (`p.bestFriend.preloadFor(c)`, c keyed) gets `container`/`keyed` entries | Accept: the component's keys are fields of its member row; the rows of the array form stay as they were | Strip keys inside unkeyed preloads | The contract places a sub-select's keys in its member row; rows unchanged, only the IR gains fields |
+| 6 | phase 2, tests | No store here; rows must be checked per case | Record oxigraph's answers per case in a fixture (guarded by the SPARQL text), map them in unit tests; same cases live in a `[fuseki]` block | Hand-written bindings | Real store answers for 23 cases with less hand work; the guard forces re-recording when lowering changes |
+| 7 | phase 2, mapping | Value of a keyed single-valued field when the first binding lacks it | First non-null over the row's bindings | First binding (as flat fields) | A later binding can hold it when other fields multiply rows; never a spurious `null` |
+| 8 | phase 2, scope | `{x: p.friends.select((f) => ({e: f.name.equals('Moa')}))}` drops a person without friends (the expression makes the hop required) | Leave to S9 (decision 22: same mechanism as `{e: p.bestFriend.name.concat('!')}`); re-check after rebasing over S9 | Fix here | Same lowering S9 owns; avoids conflicting edits |
 | 5 | phase 1, lowering | Container aliases must not change traversal order (array-form goldens) | Resolve a seed's container after its own path is lowered (`aliasAfterPath` then shares the traversal); a members seed lowers its steps with their inline filters | Resolve while collecting seeds | Eager resolution renumbers traversals of array-form selects |

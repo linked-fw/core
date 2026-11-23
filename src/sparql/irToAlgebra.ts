@@ -1514,9 +1514,10 @@ export function selectToAlgebra(
       if (traversalAliasSet.has(aggAlias)) {
         aggregateRenamedAliases.add(aggAlias);
         aggAlias = `${aggAlias}_agg`;
-        // Update resultMap so result mapping uses the renamed alias
+        // Update resultMap so result mapping uses the renamed alias (a members entry names the
+        // traversal itself, not this projection)
         for (const rm of query.resultMap) {
-          if (rm.alias === item.alias) rm.alias = aggAlias;
+          if (rm.alias === item.alias && !rm.members) rm.alias = aggAlias;
         }
       }
       projection.push({
@@ -1547,7 +1548,7 @@ export function selectToAlgebra(
           // triple. Rename the output so SPARQL doesn't reuse an in-scope var.
           exprAlias = `${exprAlias}_expr`;
           for (const rm of query.resultMap) {
-            if (rm.alias === item.alias) rm.alias = exprAlias;
+            if (rm.alias === item.alias && !rm.members) rm.alias = exprAlias;
           }
         }
         projection.push({kind: 'expression', expression: sparqlExpr, alias: exprAlias});
@@ -1575,11 +1576,23 @@ export function selectToAlgebra(
     const target = item.expression.kind === 'aggregate_expr' ? aggregateReadAliases : otherReadAliases;
     for (const alias of aliases) markAliasAndAncestors(alias, traversePatternMap, target);
   }
+  // The rows of keyed sub-selects and the members a field is computed per (`{x: p.friends.select((f)
+  // => ({c: f.friends.size()}))}` counts per friend) are told apart by their aliases: projected,
+  // so they are GROUP BY keys too, even when an aggregate's output name collided with one. A
+  // count beside them is a `COUNT(DISTINCT …)` of its own variable, which a finer group does not
+  // change.
+  const rowAliases = new Set<string>();
+  for (const entry of query.resultMap ?? []) {
+    for (const alias of [entry.container, entry.members ? entry.alias : undefined]) {
+      if (alias && alias !== rootAlias) markAliasAndAncestors(alias, traversePatternMap, rowAliases);
+    }
+  }
+  for (const alias of rowAliases) otherReadAliases.add(alias);
   for (const alias of grouped ? [] : collectTraversalAliases(query.patterns)) {
     if (aggregateReadAliases.has(alias) && !otherReadAliases.has(alias)) continue;
     // A filter's own traversal is bound only inside its block, and no field reads it.
     if (filterOwnedAliases.has(alias)) continue;
-    if (!projectedNames.has(alias) && !aggregateRenamedAliases.has(alias)) {
+    if (!projectedNames.has(alias) && (!aggregateRenamedAliases.has(alias) || rowAliases.has(alias))) {
       projection.push({kind: 'variable', name: alias});
       projectedNames.add(alias);
     }

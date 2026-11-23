@@ -829,7 +829,7 @@ GROUP BY ?a0`);
     const sparql = await goldenSelect(queryFactories.countLabel);
     expect(sparql).toBe(
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-SELECT ?a0 (COUNT(DISTINCT ?a1_friends) AS ?a1_agg)
+SELECT ?a0 (COUNT(DISTINCT ?a1_friends) AS ?a1_agg) ?a1
 WHERE {
   ?a0 rdf:type <${PT}> .
   OPTIONAL {
@@ -839,7 +839,7 @@ WHERE {
     }
   }
 }
-GROUP BY ?a0`);
+GROUP BY ?a0 ?a1`);
   });
 
   test('customResultNumFriends', async () => {

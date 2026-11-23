@@ -1255,16 +1255,15 @@ describeFuseki('Fuseki SELECT — aggregation', () => {
     expect(Array.isArray(mapped)).toBe(true);
     const rows = mapped as ResultRow[];
 
-    // Same SPARQL as countNestedFriends
-    expect(rows.length).toBe(2);
-
-    const p1 = findRowById(rows, 'p1');
-    expect(p1).toBeDefined();
-    expect(findCountValue(p1!)).toBe(2);
-
-    const p2 = findRowById(rows, 'p2');
-    expect(p2).toBeDefined();
-    expect(findCountValue(p2!)).toBe(0);
+    // A size() inside a sub-select counts per member: each friend carries the number of its own
+    // friends. p1→friends [p2 (friends p3, p4), p3 (none)]; p2→friends [p3, p4] (none each).
+    const friendsOf = (id: string) =>
+      Object.fromEntries(
+        ((findRowById(rows, id)?.friends ?? []) as ResultRow[]).map((f) => [f.id.split('/').pop(), f.numFriends]),
+      );
+    expect(friendsOf('p1')).toEqual({p2: 2, p3: 0});
+    expect(friendsOf('p2')).toEqual({p3: 0, p4: 0});
+    expect(findRowById(rows, 'p3')?.friends).toEqual([]);
   });
 
   test('customResultNumFriends — {numFriends: friends.size()}', async () => {
