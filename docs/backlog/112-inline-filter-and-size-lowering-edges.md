@@ -9,8 +9,8 @@ packages: [core]
 
 # 112 — Inline filter and size() lowering edges (what stays open)
 
-Source: reports 115, 118; items 1, 2, 5 and 6 fixed or refused by report 122 (plan 006 step S9).
-Item 3 (`size()` in a nested select, per member) moved to plan 006 step S8 (decision 21, the lone
+Source: reports 115, 118; items 1, 2, 5 and 6 fixed or refused by report 122 (plan 006 (report 125) step S9).
+Item 3 (`size()` in a nested select, per member) moved to plan 006 (report 125) step S8 (decision 21, the lone
 sub-select aggregate) and is answered by report 121. Numbers kept: reports cite 112.N.
 
 4. **A filtered size compared** (`where((p) => p.friends.where(…).size().equals(1))`) is refused

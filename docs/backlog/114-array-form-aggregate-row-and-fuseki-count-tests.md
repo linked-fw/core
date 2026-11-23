@@ -8,7 +8,7 @@ packages: [core]
 
 # 114 — Array-form count through a hop; Fuseki count test; computed field types
 
-Source: report 121 (plan 006 step S8). Neither changed there: S8's contract leaves the array form
+Source: report 121 (plan 006 (report 125) step S8). Neither changed there: S8's contract leaves the array form
 as it is, and the tests are not S8's.
 
 1. **An array-form `size()` through a hop sits on the root row, typed nested.**

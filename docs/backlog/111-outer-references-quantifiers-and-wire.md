@@ -8,9 +8,9 @@ packages: [core]
 
 # 111 — Outer references: wire form, deeper hops, routed reads
 
-Source: report 115 (backlog 108, plan 006 step S1). Report 115 resolves a path an inline filter
+Source: report 115 (backlog 108, plan 006 (report 125) step S1). Report 115 resolves a path an inline filter
 reads from the outer subject (`p.bestFriend.friends.where((f) => f.name.equals(p.name))`) to the
-outer alias; report 118 (plan 006 step S2) does the same for a quantifier
+outer alias; report 118 (plan 006 (report 125) step S2) does the same for a quantifier
 (`p.friends.some((f) => f.name.equals(p.name))`), in a top-level where and inside an inline filter,
 and for a nested quantifier reading an enclosing member (items 1 and 2 of this item, done). These
 edges remain (numbers kept, as reports cite them):

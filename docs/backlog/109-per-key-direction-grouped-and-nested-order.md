@@ -9,7 +9,7 @@ packages: [core]
 
 Report 116 added `SelectBuilder.thenBy(fn, direction)`: a select's sort keys can now each have
 their own direction (`orderBy(p => p.birthDate, 'DESC').thenBy(p => p.name)`). Two other sorts were
-left out of that step on purpose (plan 006, decision 5: "the grouped builder is out of scope"):
+left out of that step on purpose (plan 006 (report 125), decision 5: "the grouped builder is out of scope"):
 
 - **Grouped select** — `GroupedSelectBuilder.orderBy(fieldOrFields, direction)`
   (`src/queries/GroupedSelectBuilder.ts`) sorts groups by result fields; the array form shares one
