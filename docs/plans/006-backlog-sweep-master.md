@@ -110,6 +110,8 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 | 20 | S8 refusals | Nested plain object `{info: {…}}` (throws today), key `id` (silently overwrites the row id) | Refuse both, in the type and at build time | Support nested objects | No DSL-JSON form exists for a nested object; `id` is the row's identity |
 | 21 | S8 scope | DSL-JSON `"as"` is documented as aliasing the result key but ignored; a lone `size()`/expression in a sub-select lands at the root row (wrong data) | Both in S8 (same key handling and mapping) | Backlog | Same code, fixed together |
 | 22 | S9 scope | `{e: p.bestFriend.name.concat('!')}` makes the hop required and drops the instance | Sent to S9 (projection keeps every instance, report 107 rule) | Backlog | Silent wrong answer in S9's area |
+| 23 | S9 follow-up, backlog 113 | `||` in a delete/update where makes every triple required: fewer subjects change than should (silent, data-affecting) | New step S10 (report 123), run by the S9 agent (same required/optional split) | Leave in backlog | Correctness first; a mutation that silently skips rows is the most costly kind of wrong answer |
+| 24 | S9 ledger #10, backlog 112.7 | A where shares its traversal with a projection/count of the same relation (`{n: p.friends.size()}` + `where(p.friends.name = 'Anna')` → n counts only Annas) | Leave in backlog 112.7 for the owner | Give every where its own traversal | Long-standing documented-by-behaviour semantics; changing it changes many answers — an owner call |
 
 ## Contracts
 
@@ -235,6 +237,13 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
   f.bestFriend.friends.size()])`, `…f.friends.where(…).size()`: `?a2_agg` is projected, the
   member rows carry only `name`; oxigraph, report 122).
 
+### S10 — 113: `||` in a mutation's where
+- **Depends on:** S9 landed. **Report:** 123. **Size:** small. **Backlog:** 113.
+- **Goal:** decision 23: the required/optional split of a select's where (report 122) in
+  `deleteWhereToAlgebra`, `updateWhereToAlgebra`, `buildUpdateWhere`; `isNotDefined()` in a
+  mutation's where works. **Verify:** goldens in `sparql-mutation-golden.test.ts`; oxigraph check
+  that exactly the right subjects change.
+
 ### S9 — 112: inline-filter and nested size lowering edges
 - **Depends on:** S2 landed (same lowering). **Report:** 122. **Backlog:** 112.
   Plan-mode detail is filled in when wave 3 starts.
@@ -259,10 +268,11 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 | S6 | 049 keyed cached | – | done | c416562..b04ab29 | 117 | 13 new tests |
 | S7 | 070 measure | – | findings with owner | not landed (branch `--s7`, local) | – | delete-by-id 12 ms at 300 shapes; cache 4–11× |
 | S5 | 088 relation field type | – | done | b6aa386..448c188 | 120 | follow-up 110 → S8 |
-| S2 | 079 refuse agg in EXISTS + 111 items 1–2 | S1 | done | bb31db3..b9d4429 | 118 | refusal also covers inline filter + minus; toJSON refuses outer-reading quantifiers; review running |
+| S2 | 079 refuse agg in EXISTS + 111 items 1–2 | S1 | done | bb31db3..b9d4429, 2e2f82e | 118 | review: `.as()` cast regression, fixed |
 | S3 | 023 duplicate fields | S1 | done | 3e328a2..f462e96 | 119 | fix round: decision 17 |
 | S8 | 110 object-form rows follow their keys | S3 | in progress | | 121 | plan doc 007 |
-| S9 | 112 inline-filter / size lowering edges | S2 | in progress | | 122 | + decision 22 |
+| S9 | 112 inline-filter / size lowering edges | S2 | done | d81ff18..107a39a | 122 | 112 reduced to 4, 6 (refused half), 7; follow-up 113 → S10; review running |
+| S10 | 113 `||` in mutation where | S9 | in progress | | 123 | |
 | W1 | wave 1 run + review of S1 | – | done | fixes d208c9e | – | 2938 passed, 0 failed (Fuseki skipped); review: 3 wrong answers, fixed |
 
 ## Progress
