@@ -1603,6 +1603,11 @@ await Person.deleteWhere(p => p.status.equals('inactive'));
 A delete by id removes each node's triples, its blank values, its owned (`contains`) subtree and
 the links other nodes hold to it, in every graph that may hold one.
 
+A `deleteWhere` or `update(…).where(…)` condition reads like a select's where: a subject without a
+property one `or` branch reads still matches another branch
+(`deleteWhere((p) => p.name.equals('Bob').or(p.bestFriend.hobby.equals('Golf')))` deletes Bob
+without a best friend), and `p.hobby.isNotDefined()` matches the subjects without a hobby.
+
 **Shapeless delete.** On the base class, `Shape.delete(ids)` deletes nodes whose types the caller
 does not know: every triple whose subject is one of the ids, and every triple that links to one,
 in every data graph of the dataset: the default graph and each named graph, routed or not (never by

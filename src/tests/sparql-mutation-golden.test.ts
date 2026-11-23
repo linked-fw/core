@@ -774,3 +774,112 @@ WHERE {
   });
 });
 
+// ---------------------------------------------------------------------------
+// `||` and isNotDefined() in a mutation's where: only what every branch needs is required
+// ---------------------------------------------------------------------------
+
+describe('SPARQL golden — || and isNotDefined() in a mutation where', () => {
+  test('a delete where keeps a traversal only one || branch reads OPTIONAL', async () => {
+    const ir = (await captureQuery(() => (Person as any).deleteWhere((p: any) => p.name.equals('Bob').or(p.bestFriend.hobby.equals('Golf'))))) as IRDeleteWhereMutation;
+    expect(deleteWhereToSparql(ir)).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
+  ?a0 ?p ?o .
+}
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  ?a0 ?p ?o .
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  OPTIONAL {
+    ?a0 <${PROP}bestFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}hobby> ?a1_hobby .
+    }
+  }
+  FILTER(?a0_name = "Bob" || ?a1_hobby = "Golf")
+}`);
+  });
+
+  test('a delete where reads isNotDefined() OPTIONAL', async () => {
+    const ir = (await captureQuery(() => (Person as any).deleteWhere((p: any) => p.hobby.isNotDefined()))) as IRDeleteWhereMutation;
+    expect(deleteWhereToSparql(ir)).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
+  ?a0 ?p ?o .
+}
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  ?a0 ?p ?o .
+  OPTIONAL {
+    ?a0 <${PROP}hobby> ?a0_hobby .
+  }
+  FILTER(!(BOUND(?a0_hobby)))
+}`);
+  });
+
+  test('a conjunction stays required', async () => {
+    const ir = (await captureQuery(() => (Person as any).deleteWhere((p: any) => p.name.equals('Carl').and(p.bestFriend.hobby.equals('Golf'))))) as IRDeleteWhereMutation;
+    expect(deleteWhereToSparql(ir)).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
+  ?a0 ?p ?o .
+}
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  ?a0 ?p ?o .
+  ?a0 <${PROP}bestFriend> ?a1 .
+  ?a0 <${PROP}name> ?a0_name .
+  ?a1 <${PROP}hobby> ?a1_hobby .
+  FILTER(?a0_name = "Carl" && ?a1_hobby = "Golf")
+}`);
+  });
+
+  test('an update where keeps a property only one || branch reads OPTIONAL', async () => {
+    const ir = (await captureQuery(() => (Person as any).update({hobby: 'Jog'}).where((p: any) => p.name.equals('Bob').or(p.hobby.equals('Golf'))))) as IRUpdateWhereMutation;
+    expect(updateWhereToSparql(ir)).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
+  ?a0 <${PROP}hobby> ?old_hobby .
+}
+INSERT {
+  ?a0 <${PROP}hobby> "Jog" .
+}
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  OPTIONAL {
+    ?a0 <${PROP}hobby> ?a0_hobby .
+  }
+  FILTER(?a0_name = "Bob" || ?a0_hobby = "Golf")
+  OPTIONAL {
+    ?a0 <${PROP}hobby> ?old_hobby .
+  }
+}`);
+  });
+
+  test('an update where reads isNotDefined() OPTIONAL', async () => {
+    const ir = (await captureQuery(() => (Person as any).update({hobby: 'Jog'}).where((p: any) => p.hobby.isNotDefined()))) as IRUpdateWhereMutation;
+    expect(updateWhereToSparql(ir)).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
+  ?a0 <${PROP}hobby> ?old_hobby .
+}
+INSERT {
+  ?a0 <${PROP}hobby> "Jog" .
+}
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}hobby> ?a0_hobby .
+  }
+  FILTER(!(BOUND(?a0_hobby)))
+  OPTIONAL {
+    ?a0 <${PROP}hobby> ?old_hobby .
+  }
+}`);
+  });
+});

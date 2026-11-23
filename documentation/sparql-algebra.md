@@ -344,6 +344,14 @@ Converts an `IRDeleteMutation` to a `SparqlDeleteInsertPlan`:
 
 This removes all triples where the entity appears as subject or object, plus the type assertion.
 
+### Mutation where (`deleteWhereToAlgebra`, `updateWhereToAlgebra`)
+
+A delete or update where (`withMutationWhere`) follows a select's where: the traversals and property
+triples the filter needs in every `||` branch (`collectRequiredAliases`, `collectRequiredBindingKeys`)
+are joined; a property only some branches read, or one read under `BOUND`/`COALESCE`
+(`isNotDefined()`), is an OPTIONAL, and a traversal only some branches read is an OPTIONAL subtree
+holding the properties read on it. Then the FILTER.
+
 ---
 
 ## Layer 2: String serialization (`algebraToString.ts`)

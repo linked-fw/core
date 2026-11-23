@@ -4967,6 +4967,55 @@ export function deleteAllToAlgebra(
 }
 
 /**
+ * A delete or update where on `base` (the subject's pattern): as a select's where, only what the
+ * filter needs in every `||` branch is required (`collectRequiredBindingKeys`,
+ * `collectRequiredAliases`); a property or traversal only some branches read, or one read under
+ * `BOUND`/`COALESCE` (`isNotDefined()`), is OPTIONAL, so a subject without it can still match
+ * another branch. An optional traversal is a subtree holding the optional properties read on it
+ * (on an unbound node an OPTIONAL would range over every node). Then the FILTER.
+ */
+function withMutationWhere(
+  base: SparqlAlgebraNode,
+  where: IRExpression,
+  wherePatterns: readonly IRGraphPattern[],
+  registry: VariableRegistry,
+): SparqlAlgebraNode {
+  const traversals = collectTraversePatternsInOrder([...wherePatterns]);
+  for (const pattern of wherePatterns) processPattern(pattern, registry, [], []);
+  const byTo = new Map(traversals.map((t) => [t.to, t] as const));
+  const requiredAliases = new Set<string>();
+  for (const alias of collectRequiredAliases(where)) markAliasAndAncestors(alias, byTo, requiredAliases);
+
+  const requiredKeys = collectRequiredBindingKeys(where);
+  const requiredTriples: SparqlTriple[] = [];
+  const optionalTriples: SparqlTriple[] = [];
+  processExpressionForProperties(where, registry, optionalTriples, requiredTriples, requiredKeys);
+
+  const subjectOf = (t: SparqlTriple) => (t.subject.kind === 'variable' ? t.subject.name : undefined);
+  const isOptionalNode = (alias: string | undefined) => alias !== undefined && byTo.has(alias) && !requiredAliases.has(alias);
+  const optionalSubtree = (alias: string): SparqlAlgebraNode => {
+    let node: SparqlAlgebraNode = {type: 'bgp', triples: [buildTraverseTriple(byTo.get(alias)!)]};
+    for (const triple of optionalTriples) {
+      if (subjectOf(triple) === alias) node = wrapOptional(node, {type: 'bgp', triples: [triple]});
+    }
+    for (const t of traversals) if (t.from === alias) node = wrapOptional(node, optionalSubtree(t.to));
+    return node;
+  };
+
+  let algebra = base;
+  const requiredTraverseTriples = traversals.filter((t) => requiredAliases.has(t.to)).map(buildTraverseTriple);
+  if (requiredTraverseTriples.length > 0) algebra = joinNodes(algebra, {type: 'bgp', triples: requiredTraverseTriples});
+  for (const triple of requiredTriples) algebra = joinNodes(algebra, {type: 'bgp', triples: [triple]});
+  for (const triple of optionalTriples) {
+    if (!isOptionalNode(subjectOf(triple))) algebra = wrapOptional(algebra, {type: 'bgp', triples: [triple]});
+  }
+  for (const t of traversals) {
+    if (!requiredAliases.has(t.to) && !isOptionalNode(t.from)) algebra = wrapOptional(algebra, optionalSubtree(t.to));
+  }
+  return {type: 'filter', expression: convertExpression(where, registry, []), inner: algebra};
+}
+
+/**
  * Converts an IRDeleteWhereMutation to a SparqlDeleteInsertPlan.
  *
  * Like deleteAllToAlgebra but adds filter conditions from the where clause. The cleanup
@@ -4998,29 +5047,8 @@ export function deleteWhereToAlgebra(
     triples: union ? [typeTriple] : [typeTriple, rootWildcard],
   };
 
-  // Process where patterns (traversals from the where clause)
-  const traverseTriples: SparqlTriple[] = [];
-  const optionalPropertyTriples: SparqlTriple[] = [];
-  for (const pattern of query.wherePatterns) {
-    processPattern(pattern, registry, traverseTriples, optionalPropertyTriples);
-  }
-
-  // Add traverse triples to required BGP
-  if (traverseTriples.length > 0) {
-    whereAlgebra = joinNodes(whereAlgebra, {type: 'bgp', triples: traverseTriples});
-  }
-
-  // Process expression to discover property triples
-  processExpressionForProperties(query.where, registry, optionalPropertyTriples);
-
-  // Add optional property triples
-  for (const triple of optionalPropertyTriples) {
-    whereAlgebra = joinNodes(whereAlgebra, {type: 'bgp', triples: [triple]});
-  }
-
-  // Convert and add filter expression
-  const filterExpr = convertExpression(query.where, registry, []);
-  whereAlgebra = {type: 'filter', expression: filterExpr, inner: whereAlgebra};
+  // The where clause: its traversals and property triples, then the filter.
+  whereAlgebra = withMutationWhere(whereAlgebra, query.where, query.wherePatterns, registry);
 
   if (union) {
     whereAlgebra = {type: 'join', left: whereAlgebra, right: union};
@@ -5060,26 +5088,7 @@ export function updateWhereToAlgebra(
 
   // Process where filter conditions (if any)
   if (query.where && query.wherePatterns) {
-    const registry = new VariableRegistry();
-    const traverseTriples: SparqlTriple[] = [];
-    const optionalPropertyTriples: SparqlTriple[] = [];
-
-    for (const pattern of query.wherePatterns) {
-      processPattern(pattern, registry, traverseTriples, optionalPropertyTriples);
-    }
-
-    if (traverseTriples.length > 0) {
-      whereAlgebra = joinNodes(whereAlgebra, {type: 'bgp', triples: traverseTriples});
-    }
-
-    processExpressionForProperties(query.where, registry, optionalPropertyTriples);
-
-    for (const triple of optionalPropertyTriples) {
-      whereAlgebra = joinNodes(whereAlgebra, {type: 'bgp', triples: [triple]});
-    }
-
-    const filterExpr = convertExpression(query.where, registry, []);
-    whereAlgebra = {type: 'filter', expression: filterExpr, inner: whereAlgebra};
+    whereAlgebra = withMutationWhere(whereAlgebra, query.where, query.wherePatterns, new VariableRegistry());
   }
 
   // Old-value triples anchored on a traversal *target* belong INSIDE that
