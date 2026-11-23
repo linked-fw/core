@@ -361,25 +361,40 @@ export function graphRoutingFor(dataset: IDataset | object | undefined): ShapeGr
     }
     return [...out];
   };
+  // A shape's read set: the graphs of every shape reachable from it through ownersOf (itself
+  // included, `contains` cycles too), each contributing its own graph and its sub-shapes' graphs.
+  // One traversal with a set of reached shapes, so each shape is expanded once; a reached shape
+  // whose read set is already known contributes that set instead (it holds everything reachable
+  // from it). Every set computed is complete, so every one is kept.
   const readSets = new Map<string, string[]>();
-  const readGraphsForShape = (shapeId: string, visiting = new Set<string>()): string[] => {
+  const readGraphsForShape = (shapeId: string): string[] => {
     const cached = readSets.get(shapeId);
     if (cached) return cached;
-    visiting.add(shapeId);
-    const set = new Set<string>([graphForShape(shapeId)]);
-    for (const sub of getSubShapes(shapeId)) set.add(graphForShape(sub.id));
-    for (const owner of ownersOf(shapeId)) {
-      if (visiting.has(owner)) continue;
-      for (const graph of readGraphsForShape(owner, visiting)) set.add(graph);
+    const set = new Set<string>();
+    const reached = new Set<string>([shapeId]);
+    const pending = [shapeId];
+    while (pending.length) {
+      const current = pending.pop()!;
+      const known = readSets.get(current);
+      if (known) {
+        for (const graph of known) set.add(graph);
+        continue;
+      }
+      set.add(graphForShape(current));
+      for (const sub of getSubShapes(current)) set.add(graphForShape(sub.id));
+      for (const owner of ownersOf(current)) {
+        if (reached.has(owner)) continue;
+        reached.add(owner);
+        pending.push(owner);
+      }
     }
-    visiting.delete(shapeId);
     const sortedSet = sortGraphSet(set);
-    if (visiting.size === 0) readSets.set(shapeId, sortedSet);
+    readSets.set(shapeId, sortedSet);
     return sortedSet;
   };
   return {
     graphForShape,
-    readGraphsForShape: (shapeId: string) => readGraphsForShape(shapeId),
+    readGraphsForShape,
     allGraphs(): string[] {
       return sortGraphSet([graphs.default, ...table.values()]);
     },
