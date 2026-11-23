@@ -1991,3 +1991,139 @@ WHERE {
 }`);
   });
 });
+
+describe('SPARQL golden — inline filter, quantifier and computed-field lowering edges', () => {
+  test("an inline filter's traversal stays inside its block, OPTIONAL", async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.friends.where((f) => f.bestFriend.name.equals('Erik')).name) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a1_name ?a1
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}bestFriend> ?a2 .
+      OPTIONAL {
+        ?a2 <${PROP}name> ?a2_name .
+      }
+    }
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+    FILTER(?a2_name = "Erik")
+  }
+}`);
+  });
+
+  test('a where on a paged relation reads a traversal of its own', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.friends.select((f) => f.name).limit(1)).where((p) => p.friends.hobby.equals('Chess')).for({id: 'p1'}) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a1_name ?a1 ?a2
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  ?a0 <${PROP}hasFriend> ?a2 .
+  ?a2 <${PROP}hobby> ?a2_hobby .
+  OPTIONAL {
+    {
+      SELECT ?a1 WHERE {
+        <p1> <${PROP}hasFriend> ?a1 .
+      } ORDER BY ASC(?a1) LIMIT 1
+    }
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+  }
+  FILTER(?a2_hobby = "Chess")
+  FILTER(?a0 = <p1>)
+}`);
+  });
+
+  test('a quantifier keeps what only one || branch reads OPTIONAL', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select().where((p) => p.friends.some((f) => f.bestFriend.name.equals('Erik').or(f.hobby.equals('Golf')))) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  FILTER(EXISTS {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}hobby> ?a1_hobby .
+    }
+    OPTIONAL {
+      ?a1 <${PROP}bestFriend> ?a2 .
+      OPTIONAL {
+        ?a2 <${PROP}name> ?a2_name .
+      }
+    }
+    FILTER(?a2_name = "Erik" || ?a1_hobby = "Golf")
+  })
+}`);
+  });
+
+  test('a quantifier on a filtered relation tests the filter too', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select().where((p) => p.friends.where((f) => f.hobby.equals('Chess')).every((g) => g.name.equals('Carl'))) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  FILTER(!(EXISTS {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    ?a1 <${PROP}hobby> ?a1_hobby .
+    ?a1 <${PROP}name> ?a1_name .
+    FILTER(?a1_hobby = "Chess" && !(?a1_name = "Carl"))
+  }))
+}`);
+  });
+
+  test('a computed field keeps the hops it reads OPTIONAL', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => ({e: p.bestFriend.name.concat('!')})) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 (CONCAT(?a1_name, "!") AS ?a1_expr) ?a1
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}bestFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+  }
+}`);
+  });
+
+  test('a top-level where keeps a traversal only one || branch reads OPTIONAL', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select().where((p) => p.name.equals('Bob').or(p.bestFriend.hobby.equals('Golf'))) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a1
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}bestFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}hobby> ?a1_hobby .
+    }
+  }
+  OPTIONAL {
+    ?a0 <${PROP}name> ?a0_name .
+  }
+  FILTER(?a0_name = "Bob" || ?a1_hobby = "Golf")
+}`);
+  });
+});

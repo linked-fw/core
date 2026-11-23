@@ -336,7 +336,7 @@ DSL: `Person.select({id: 'node:1'}, (p) => p.name)`
 | `binary_expr` | `operator`, `left`, `right` | Comparison (`=`, `!=`, `>`, `>=`, `<`, `<=`) |
 | `logical_expr` | `operator`, `expressions[]` | Boolean combination (`and`, `or`) |
 | `not_expr` | `expression` | Boolean negation |
-| `exists_expr` | `pattern`, `filter?` | Existential check with optional filter |
+| `exists_expr` | `pattern`, `filter?`, `member?` | Existential check with optional filter. `member` (a quantifier's member alias) is set when `pattern` also holds traversals the predicate reads beyond the member path: only the traversals to the member are required, the others only where the filter requires them |
 | `aggregate_expr` | `name`, `args[]` | Aggregation (`count`, `sum`, `avg`, `min`, `max`) |
 | `function_expr` | `name`, `args[]` | Named function call |
 

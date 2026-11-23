@@ -989,7 +989,9 @@ It reads the node the filtered relation leaves from or the hop before it (`p.bes
 `p.name` above); a path that is not a hop above the filtered relation, or a node further up, is
 refused. A quantifier inside the filter may read the outer subject and the filter's member
 (`p.friends.where((f) => f.friends.some((g) => g.name.equals(f.name)))`), as below. Such a query
-has no DSL-JSON form yet: `toJSON()` refuses it.
+has no DSL-JSON form yet: `toJSON()` refuses it. A filter may read a path below its member
+(`p.friends.where((f) => f.bestFriend.name.equals('Erik'))`): a friend without a best friend is
+simply not a match, and still is through another `or` branch.
 
 #### Set filtering (some/every)
 ```typescript
@@ -1024,6 +1026,18 @@ Such a query has no DSL-JSON form yet: `toJSON()` refuses it. An aggregate insid
 (`p.knows.some((f) => f.knows.size().equals(1))`), an inline filter or a `minus()` is refused:
 SPARQL tests those conditions per member, where it cannot count. Compare a count at the top level
 of the where (`.where((p) => p.knows.size().equals(1))`), or select it and filter the rows.
+
+A member without a property one `or` branch reads still matches the other branch
+(`f.name.equals('x').or(f.hobby.equals('Chess'))` keeps a chess player without a name), and
+`f.name.isNotDefined()` finds the members without one; the same holds for a top-level where
+(`p.name.equals('Bob').or(p.bestFriend.hobby.equals('Golf'))` keeps Bob without a best friend).
+
+A quantifier on a filtered relation ranges over the members the filter keeps:
+`p.knows.where((f) => f.hobby.equals('Chess')).some((f) => f.name.equals('Carl'))` is a chess
+player named Carl (`every`: every chess player is named Carl). An inline filter on a path that is
+compared or computed (`p.knows.where(…).hobby.equals('y')`, also inside a quantifier, in a computed
+field or sort key, or under `min()`/`max()`) is refused, never dropped: write it as a quantifier,
+`p.knows.some((f) => f.name.equals('x').and(f.hobby.equals('y')))`.
 
 #### Outer where chaining
 ```typescript
@@ -1285,6 +1299,9 @@ const birthYear = await Person.select((p) => ({
   year: p.birthDate.year(),
 }));
 ```
+
+A computed field through a relation (`p.bestFriend.name.concat('!')`) is `null` for an instance
+without it; the instance is kept, as for a selected path.
 
 **Expression methods by type:**
 

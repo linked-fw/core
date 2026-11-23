@@ -122,6 +122,34 @@ class LoweringContext {
     return this.filterMap.has(toAlias);
   }
 
+  /** Whether a nested select's LIMIT/OFFSET/ORDER BY is attached to the traversal reaching `toAlias`. */
+  hasPagination(toAlias: string): boolean {
+    return this.innerPaginationMap.has(toAlias);
+  }
+
+  /**
+   * A resolver for a where or a sort key: it shares the projection's traversals, except one that
+   * holds only some members (a nested select's page, an inline filter's members), for which it
+   * makes a traversal of its own (shared among its own reads). Otherwise the condition would test
+   * only the page's members, and its triple would bind the paged variable outside the page.
+   */
+  conditionResolver(): (fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number) => string {
+    const own = new Map<string, string>();
+    return (fromAlias, propertyShapeId, pathExpr, maxCount) => {
+      const shared = this.existingTraversal(fromAlias, propertyShapeId);
+      if (shared === undefined || (!this.hasPagination(shared) && !this.hasFilter(shared))) {
+        return this.getOrCreateTraversal(fromAlias, propertyShapeId, pathExpr, maxCount);
+      }
+      const key = `${fromAlias}:${propertyShapeId}`;
+      let alias = own.get(key);
+      if (alias === undefined) {
+        alias = this.createTraversal(fromAlias, propertyShapeId, pathExpr, maxCount);
+        own.set(key, alias);
+      }
+      return alias;
+    };
+  }
+
   /** A traversal of its own, never shared through `getOrCreateTraversal`. */
   createTraversal(fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number): string {
     const toAlias = this.nextAlias();
@@ -362,6 +390,7 @@ const lowerExistsCondition = (
   for (const segmentId of condition.pathSegmentIds) {
     currentAlias = existsResolve(currentAlias, segmentId);
   }
+  const memberPathLength = traversals.length;
 
   // A path the predicate reads from outside its member: from the query root, along the nodes
   // bound where the EXISTS is tested, or from an enclosing member (bound there too, as EXISTS
@@ -427,6 +456,8 @@ const lowerExistsCondition = (
       ? existsTraversals[0]
       : {kind: 'join', patterns: existsTraversals},
     filter,
+    // The predicate's own traversals and the outer ones are needed only where the filter needs them.
+    ...(existsTraversals.length > memberPathLength ? {member: currentAlias} : {}),
   };
 
   // Wrap in NOT if negated (.none() or outer NOT of .every())
@@ -610,10 +641,25 @@ export const lowerSelectQuery = (
   // Inline filter handler: when a property step has `.where()`, canonicalize
   // and lower the where predicate, then attach it to the traverse pattern.
   const inlineFilterHandler = (traverseAlias: string, where: DesugaredWhere) => {
+    // A filtered traversal is shared only under an equal filter, already lowered and attached.
+    if (ctx.hasFilter(traverseAlias)) return;
     const ancestors = ancestorTraversalsOf(traverseAlias);
+    // A path the filter reads below its member (`f.bestFriend.name`) is a traversal of the filter's
+    // own, never shared with a projection's: it is placed inside the filtered block (OPTIONAL
+    // there), and a projected `f.bestFriend` keeps every best friend.
+    const own = new Map<string, string>();
+    const resolveOwnTraversal = (fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number) => {
+      const key = `${fromAlias}:${propertyShapeId}`;
+      let alias = own.get(key);
+      if (alias === undefined) {
+        alias = ctx.createTraversal(fromAlias, propertyShapeId, pathExpr, maxCount);
+        own.set(key, alias);
+      }
+      return alias;
+    };
     const filterExpr = lowerWhere(where, ctx, {
       rootAlias: traverseAlias,
-      resolveTraversal: pathOptions.resolveTraversal,
+      resolveTraversal: resolveOwnTraversal,
       resolveOuter: outerResolverFor(ancestors),
       boundOuterPrefix: (segments) => walkAncestors(ancestors, segments),
       scopeAliases: [traverseAlias],
@@ -684,7 +730,10 @@ export const lowerSelectQuery = (
     });
   }
 
-  const where = canonical.where ? lowerWhere(canonical.where, ctx, pathOptions) : undefined;
+  // The where shares the projection's traversals, except a nested select's page (see
+  // `conditionResolver`).
+  const conditionOptions: PathLoweringOptions = {...pathOptions, resolveTraversal: ctx.conditionResolver()};
+  const where = canonical.where ? lowerWhere(canonical.where, ctx, conditionOptions) : undefined;
 
   // A grouped select: its keys, group filter and order name result fields; each resolves to
   // the expression that field projects, so GROUP BY, HAVING and ORDER BY bind the same variables.
@@ -696,11 +745,11 @@ export const lowerSelectQuery = (
     return item.expression;
   };
   const groupBy = group ? group.keys.map((key) => projectionOfKey(key, 'groupBy')) : undefined;
-  const having = group?.having ? lowerWhere(group.having, ctx, pathOptions) : undefined;
+  const having = group?.having ? lowerWhere(group.having, ctx, conditionOptions) : undefined;
 
   // A sort key shares the traversals of the projection and the where, except where the filters
   // differ: a step the key filters (`p.friends.where(…).hobby`), or one whose shared traversal a
-  // filtered projection holds, gets a traversal of its own. Otherwise the key would sort by
+  // filtered or paginated projection holds, gets a traversal of its own. Otherwise the key would sort by
   // members another filter chose, or filter the projection by its own.
   const lowerSortKey = (key: DesugaredSelectionPath | DesugaredExpressionSelect): IRExpression => {
     const steps = key.kind === 'selection_path' ? key.steps : [];
@@ -709,7 +758,7 @@ export const lowerSelectQuery = (
       const step = steps[call++];
       const filtered = step?.kind === 'property_step' && !!step.where;
       const shared = ctx.existingTraversal(fromAlias, propertyShapeId);
-      return filtered || (shared !== undefined && ctx.hasFilter(shared))
+      return filtered || (shared !== undefined && (ctx.hasFilter(shared) || ctx.hasPagination(shared)))
         ? ctx.createTraversal(fromAlias, propertyShapeId, pathExpr, maxCount)
         : ctx.getOrCreateTraversal(fromAlias, propertyShapeId, pathExpr, maxCount);
     };

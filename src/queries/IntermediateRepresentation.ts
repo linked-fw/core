@@ -323,6 +323,13 @@ export type IRExistsExpression = {
   kind: 'exists_expr';
   pattern: IRGraphPattern;
   filter?: IRExpression;
+  /**
+   * A quantifier's member, when `pattern` also holds traversals its predicate reads beyond the
+   * member path (`f.bestFriend.name`, `p.bestFriend.name`): the traversals up to the member are
+   * required, the others are needed only where the filter requires them (an `||` branch may not
+   * read them). Absent: every traversal of `pattern` is required.
+   */
+  member?: IRAlias;
 };
 
 export type IRCreateMutation = {

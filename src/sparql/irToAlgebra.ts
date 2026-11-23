@@ -18,6 +18,7 @@ import type {
   IRSetModificationValue,
   IRTraversePattern,
   IRAliasExpression,
+  IRExistsExpression,
   IRPropertyExpression,
 } from '../queries/IntermediateRepresentation.js';
 import {RegistryCache} from '../utils/registryCache.js';
@@ -494,17 +495,46 @@ function collectRequiredTraversalAliases(
   query: IRSelectQuery,
   traversePatternMap: ReadonlyMap<string, IRTraversePattern>,
 ): Set<string> {
-  const directAliases = new Set<string>();
-
-  if (query.where) {
-    collectExpressionAliases(query.where, directAliases);
-  }
+  // Only the nodes the where cannot hold without: a node only one `||` branch reads (or BOUND,
+  // COALESCE) is OPTIONAL, as a property only one branch reads is (`collectRequiredBindingKeys`).
+  const directAliases = query.where ? collectRequiredAliases(query.where) : new Set<string>();
 
   const requiredAliases = new Set<string>();
   for (const alias of directAliases) {
     markAliasAndAncestors(alias, traversePatternMap, requiredAliases);
   }
   return requiredAliases;
+}
+
+/**
+ * The nodes (traversal targets) a FILTER needs bound to keep a row: as `collectRequiredBindingKeys`,
+ * for the nodes a property or the node itself is read from.
+ */
+function collectRequiredAliases(expr: IRExpression): Set<string> {
+  switch (expr.kind) {
+    case 'property_expr':
+      return new Set([expr.sourceAlias]);
+    case 'alias_expr':
+      return new Set([expr.alias]);
+    case 'in_expr':
+      return collectRequiredAliases(expr.value);
+    case 'binary_expr':
+      return mergeKeySets(collectRequiredAliases(expr.left), collectRequiredAliases(expr.right));
+    case 'function_expr': {
+      const fn = expr.name.toUpperCase();
+      if (fn === 'BOUND' || fn === 'COALESCE') return new Set<string>();
+      if (fn === 'IF') return expr.args.length > 0 ? collectRequiredAliases(expr.args[0]) : new Set<string>();
+      return mergeKeySets(...expr.args.map(collectRequiredAliases));
+    }
+    case 'not_expr':
+      return collectRequiredAliases(expr.expression);
+    case 'logical_expr': {
+      const childSets = expr.expressions.map(collectRequiredAliases);
+      return expr.operator === 'and' ? mergeKeySets(...childSets) : intersectKeySets(childSets);
+    }
+    default:
+      return new Set<string>();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1039,10 +1069,11 @@ export function selectToAlgebra(
     }
   }
   // A counted path's traversals (`p.bestFriend.friends.size()`, filtered or not) are OPTIONAL
-  // like a projected one's: an instance without them is kept, with a count of 0.
+  // like a projected one's: an instance without them is kept, with a count of 0. So are a computed
+  // field's (`p.bestFriend.name.concat('!')`): an instance without them is kept, the field unbound.
   if (!grouped) {
     for (const item of query.projection) {
-      if (item.expression.kind !== 'aggregate_expr') continue;
+      if (item.expression.kind === 'property_expr' || item.expression.kind === 'alias_expr') continue;
       const aliases = new Set<string>();
       collectExpressionAliases(item.expression, aliases);
       for (const alias of aliases) if (alias !== rootAlias) directProjectionAliases.add(alias);
@@ -1056,6 +1087,14 @@ export function selectToAlgebra(
       collectExpressionAliases(item.expression, aliases);
       for (const alias of aliases) if (alias !== rootAlias) directProjectionAliases.add(alias);
     }
+  }
+  // A traversal only some branches of the where read (`p.name.equals('x').or(p.bestFriend.hobby
+  // .equals('y'))`) is OPTIONAL too: required, it would drop an instance without it from the
+  // branch that does not read it. (The ones the where requires stay required, below.)
+  if (query.where) {
+    const whereAliases = new Set<string>();
+    collectExpressionAliases(query.where, whereAliases);
+    for (const alias of whereAliases) if (alias !== rootAlias) directProjectionAliases.add(alias);
   }
   for (const alias of directProjectionAliases) {
     markAliasAndAncestors(alias, traversePatternMap, projectedTraversalAliases);
@@ -1083,9 +1122,29 @@ export function selectToAlgebra(
     }),
   );
 
+  // The traversals an inline filter reads below its member (`f.bestFriend.name` in
+  // `p.friends.where((f) => f.bestFriend.name.equals('x'))`): the filter's own (lowering never
+  // shares them), so nothing else reads them. They go inside the filter's block, each an OPTIONAL
+  // subtree holding the properties read on it: required at the top level, they would range over
+  // every node, the block's member being unbound there.
+  const filterOwnedAliases = new Set<string>();
+  const filterOwnedChildrenByParent = new Map<string, string[]>();
+  {
+    const filteredAliases = new Set(filteredTraverseBlocks.map((b) => b.toAlias));
+    for (const pattern of traversePatternsInOrder) {
+      if (pattern.filter || subSelectAliases.has(pattern.to)) continue;
+      if (!filteredAliases.has(pattern.from) && !filterOwnedAliases.has(pattern.from)) continue;
+      if (projectedTraversalAliases.has(pattern.to) || requiredTraversalAliases.has(pattern.to)) continue;
+      filterOwnedAliases.add(pattern.to);
+      const siblings = filterOwnedChildrenByParent.get(pattern.from) ?? [];
+      siblings.push(pattern.to);
+      filterOwnedChildrenByParent.set(pattern.from, siblings);
+    }
+  }
+
   const requiredTraverseTriples = traverseTriples.filter((triple) =>
     !(triple.object.kind === 'variable' &&
-      optionalTraversalAliases.has(triple.object.name))
+      (optionalTraversalAliases.has(triple.object.name) || filterOwnedAliases.has(triple.object.name)))
   );
 
   const nestedOptionalPropertyTriplesByAlias = new Map<string, SparqlTriple[]>();
@@ -1289,13 +1348,34 @@ export function selectToAlgebra(
     return wrapFilteredChildren(subtree, alias);
   };
 
+  // A traversal the filter owns, with the filter's reads on it and the traversals below it.
+  const buildFilterOwnedSubtree = (alias: string, ownedTriples: readonly SparqlTriple[]): SparqlAlgebraNode => {
+    let subtree: SparqlAlgebraNode = {type: 'bgp', triples: [buildTraverseTriple(traversePatternMap.get(alias)!)]};
+    for (const propTriple of ownedTriples) {
+      if (propTriple.subject.kind === 'variable' && propTriple.subject.name === alias) {
+        subtree = wrapOptional(subtree, {type: 'bgp', triples: [propTriple]});
+      }
+    }
+    for (const child of filterOwnedChildrenByParent.get(alias) ?? []) {
+      subtree = wrapOptional(subtree, buildFilterOwnedSubtree(child, ownedTriples));
+    }
+    return subtree;
+  };
+
   function buildFilteredBlock(i: number): SparqlFilter {
     const block = filteredTraverseBlocks[i];
     // Start with the traverse triple as the required BGP
     let blockInner: SparqlAlgebraNode = {type: 'bgp', triples: [block.traverseTriple]};
-    // Wrap each filter property triple in its own nested OPTIONAL
-    for (const propTriple of filterPropertyTriplesMap.get(i) || []) {
+    // Wrap each filter property triple in its own nested OPTIONAL; one on a traversal the filter
+    // owns goes inside that traversal's subtree.
+    const filterTriples = filterPropertyTriplesMap.get(i) || [];
+    const onOwned = (t: SparqlTriple) => t.subject.kind === 'variable' && filterOwnedAliases.has(t.subject.name);
+    for (const propTriple of filterTriples) {
+      if (onOwned(propTriple)) continue;
       blockInner = wrapOptional(blockInner, {type: 'bgp', triples: [propTriple]});
+    }
+    for (const child of filterOwnedChildrenByParent.get(block.toAlias) ?? []) {
+      blockInner = wrapOptional(blockInner, buildFilterOwnedSubtree(child, filterTriples.filter(onOwned)));
     }
     // Projected property triples on the filtered alias that aren't part of the
     // filter (e.g. `.where(name=...).select(pp => [pp.hobby])`)
@@ -1477,6 +1557,8 @@ export function selectToAlgebra(
   }
   for (const alias of grouped ? [] : collectTraversalAliases(query.patterns)) {
     if (aggregateReadAliases.has(alias) && !otherReadAliases.has(alias)) continue;
+    // A filter's own traversal is bound only inside its block, and no field reads it.
+    if (filterOwnedAliases.has(alias)) continue;
     if (!projectedNames.has(alias) && !aggregateRenamedAliases.has(alias)) {
       projection.push({kind: 'variable', name: alias});
       projectedNames.add(alias);
@@ -2411,28 +2493,30 @@ function convertExpression(
       // Convert exists expression with inner pattern + filter.
       // Filter property triples must live INSIDE the EXISTS block
       // (not in the outer scope), so we collect them locally.
-      let innerAlgebra = convertExistsPattern(
-        expr.pattern,
-        registry,
-      );
-
       if (expr.filter) {
         // First, discover and register filter property references,
         // collecting their triples into a local array (NOT the outer scope).
-        const existsPropertyTriples: SparqlTriple[] = [];
-        const filter = bindOuterReadsInExists(expr.filter, expr.pattern, registry, existsPropertyTriples);
-        processExpressionForProperties(filter, registry, existsPropertyTriples);
+        // As in a top-level where, a property only some branches read (`f.name.equals('x')
+        // .or(f.hobby.equals('Chess'))`, `isNotDefined()`) is OPTIONAL: required, it would drop a
+        // member without it from the branch that does not read it.
+        const outerReadTriples: SparqlTriple[] = [];
+        const filter = bindOuterReadsInExists(expr.filter, expr.pattern, registry, outerReadTriples);
+        const requiredKeys = collectRequiredBindingKeys(filter);
+        const optionalTriples: SparqlTriple[] = [];
+        const requiredTriples: SparqlTriple[] = [];
+        for (const triple of outerReadTriples) {
+          const key = triple.object.kind === 'variable' ? registryKeyOfVariable(registry, triple.object.name) : undefined;
+          (key !== undefined && requiredKeys.has(key) ? requiredTriples : optionalTriples).push(triple);
+        }
+        processExpressionForProperties(filter, registry, optionalTriples, requiredTriples, requiredKeys);
 
         // Now convert the filter expression (variables are registered above).
         const filterExpr = convertExpression(
           filter,
           registry,
-          existsPropertyTriples, // unused — properties already registered
+          optionalTriples, // unused — properties already registered
         );
-        // Add filter property triples inside the EXISTS
-        for (const propTriple of existsPropertyTriples) {
-          innerAlgebra = joinNodes(innerAlgebra, {type: 'bgp', triples: [propTriple]})!;
-        }
+        const innerAlgebra = buildExistsBody(expr, registry, requiredKeys, requiredTriples, optionalTriples);
         // Wrap the inner pattern with a filter
         const filteredInner: SparqlFilter = {
           type: 'filter',
@@ -2448,7 +2532,7 @@ function convertExpression(
 
       return {
         kind: 'exists_expr',
-        pattern: innerAlgebra,
+        pattern: convertExistsPattern(expr.pattern, registry),
         negated: false,
       };
     }
@@ -2491,6 +2575,69 @@ function bindOuterReadsInExists(
     }
     return {...read, sourceAlias: key};
   });
+}
+
+/** The `bindingKey` a variable of the registry was made for. */
+function registryKeyOfVariable(registry: VariableRegistry, variable: string): string | undefined {
+  const binding = registry.bindings().find((b) => b.variable === variable);
+  return binding ? bindingKey(binding.alias, binding.property) : undefined;
+}
+
+/**
+ * An EXISTS's pattern with its filter's property triples: the traversals to the member and those
+ * the filter requires are joined with the required triples; every other traversal is an OPTIONAL
+ * subtree holding the optional triples read on it, and the remaining optional triples are
+ * OPTIONALs on the bound part. (An OPTIONAL on a node bound only later would range over every node.)
+ */
+function buildExistsBody(
+  expr: IRExistsExpression,
+  registry: VariableRegistry,
+  requiredKeys: ReadonlySet<string>,
+  requiredTriples: readonly SparqlTriple[],
+  optionalTriples: readonly SparqlTriple[],
+): SparqlAlgebraNode {
+  const traversals = collectTraversePatternsInOrder([expr.pattern]);
+  const flat = expr.pattern.kind === 'traverse' ||
+    (expr.pattern.kind === 'join' && expr.pattern.patterns.every((p) => p.kind === 'traverse'));
+  const byTo = new Map(traversals.map((t) => [t.to, t] as const));
+  const required = new Set<string>();
+  const markRequired = (alias: string) => {
+    for (let a: string | undefined = alias; a !== undefined && byTo.has(a) && !required.has(a); a = byTo.get(a)?.from) {
+      required.add(a);
+    }
+  };
+  if (expr.member === undefined || !flat) {
+    // Every traversal is required (no traversal beyond the member path, or a pattern of another form).
+    for (const t of traversals) required.add(t.to);
+  } else {
+    markRequired(expr.member);
+    for (const key of requiredKeys) markRequired(key.slice(0, key.indexOf('::')));
+  }
+  const subjectOf = (t: SparqlTriple) => (t.subject.kind === 'variable' ? t.subject.name : undefined);
+  const optionalSubtree = (alias: string): SparqlAlgebraNode => {
+    let node: SparqlAlgebraNode = {type: 'bgp', triples: [buildTraverseTriple(byTo.get(alias)!)]};
+    for (const triple of optionalTriples) {
+      if (subjectOf(triple) === alias) node = wrapOptional(node, {type: 'bgp', triples: [triple]});
+    }
+    for (const t of traversals) {
+      if (t.from === alias && !required.has(t.to)) node = wrapOptional(node, optionalSubtree(t.to));
+    }
+    return node;
+  };
+
+  let body: SparqlAlgebraNode = required.size === traversals.length
+    ? convertExistsPattern(expr.pattern, registry)
+    : {type: 'bgp', triples: traversals.filter((t) => required.has(t.to)).map(buildTraverseTriple)};
+  if (requiredTriples.length > 0) body = joinNodes(body, {type: 'bgp', triples: [...requiredTriples]});
+  for (const triple of optionalTriples) {
+    const subject = subjectOf(triple);
+    if (subject !== undefined && byTo.has(subject) && !required.has(subject)) continue;
+    body = wrapOptional(body, {type: 'bgp', triples: [triple]});
+  }
+  for (const t of traversals) {
+    if (!required.has(t.to) && (required.has(t.from) || !byTo.has(t.from))) body = wrapOptional(body, optionalSubtree(t.to));
+  }
+  return body;
 }
 
 /** The aliases a pattern binds (its traversals' targets, a scan's subject). */

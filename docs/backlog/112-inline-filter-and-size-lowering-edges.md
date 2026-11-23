@@ -1,52 +1,42 @@
 ---
 summary: >
-  Older lowering edges found while fixing backlog 108: a filtered path beside a top-level where on
-  the same relation answers under one result key with one list lost; a traversal inside an inline filter is emitted as
-  a required top-level triple; size() in a nested select counts across all members; a filtered
-  size() cannot be compared (refused); an `||` inside a quantifier drops members without one of
-  the properties; an inline filter in a where path is dropped.
+  What stays open of the inline-filter and size() lowering edges after report 122: comparing a
+  filtered size (refused), answering an inline filter on a path read as a value (refused, needs a
+  wire form), and a where that narrows a projected or counted relation it shares (a design
+  question).
 packages: [core]
 ---
 
-# 112 — Inline filter and size() lowering edges
+# 112 — Inline filter and size() lowering edges (what stays open)
 
-Source: report 115 (plan 006 step S1). Each is older than report 115 and gives a silent wrong
-answer unless noted.
+Source: reports 115, 118; items 1, 2, 5 and 6 fixed or refused by report 122 (plan 006 step S9).
+Item 3 (`size()` in a nested select, per member) moved to plan 006 step S8 (decision 21, the lone
+sub-select aggregate). Numbers kept: reports cite 112.N.
 
-1. **A filtered path beside a top-level where on that relation** answers under the one key
-   with one list lost (found with report 115's review fixes; a where is not a projection field, so
-   report 119's duplicate-field check does not see it). Two projection fields reading one relation
-   in different ways (`[p.friends.name, p.friends.where(…).hobby]`, a paginated and an unpaginated
-   sub-select of one relation) are refused at lowering since report 119
-   (`src/queries/projectionDuplicates.ts`); a paginated sub-select still has no traversal of its
-   own, so that refusal does not point at the object form (`refuse` there).
-2. **A traversal inside an inline filter.** `p.friends.where((f) => f.bestFriend.name.equals('x'))`
-   emits `?a1 :bestFriend ?a2` as a required triple of the top-level pattern while `?a1` is bound
-   only inside the filtered OPTIONAL block (`lowerWhere` resolves the filter's traversals through
-   the select's resolver, `irToAlgebra` treats them as ordinary required traversals). It belongs
-   inside the filtered block, OPTIONAL, like the filter's property triples.
-3. **size() in a nested select.** `p.friends.select((f) => ({n: f.friends.size()}))` groups by
-   `?a0` only (`countLabel` golden), so `n` counts the friends of all of a person's friends, not
-   per friend. Grouping by the sub-select's alias (`?a1`) is the per-member count.
 4. **A filtered size compared** (`where((p) => p.friends.where(…).size().equals(1))`) is refused
    since report 115 (it counted every member before). Answering it needs the filtered block inside
-   the HAVING's pattern, or a sub-SELECT count per subject (related: backlog 042).
+   the HAVING's pattern, or a sub-SELECT count per subject (related: backlog 042). Report 122's
+   fixes do not give it: the HAVING still counts over the where's own traversal.
 
-Found by report 118 (plan 006 step S2), equally older:
+6. **An inline filter on a path read as a value is refused** (report 122):
+   `p.friends.where(F).hobby.equals('y')` in a where, inside a quantifier's callback, in a computed
+   field or sort expression, under `min()`/`max()`, and a filter on a hop above a quantified relation
+   (`p.friends.where(F).friends.some(…)`). Each dropped the filter before. A quantifier on the
+   filtered relation itself (`p.friends.where(F).some(P)`) is answered (`F and P`). Answering the
+   refused forms needs (a) the semantics under `not`/`or`: the filter restricts which members bind
+   the traversal (a filtered traversal of its own, as a projection's), not an `EXISTS` per
+   comparison; and (b) a DSL-JSON form for a filtered step inside an expression path (expression
+   refs carry property ids only). Suggested start: lower the where's filtered step through
+   `getOrCreateFilteredTraversal` and emit the block as a required (or, under `||`, OPTIONAL)
+   filtered group.
 
-5. **`||` inside a quantifier.** `p.friends.some((f) => f.name.equals('x').or(f.hobby.equals('Chess')))`
-   emits `EXISTS { ?a0 :hasFriend ?a1 . ?a1 :name ?a1_name . ?a1 :hobby ?a1_hobby . FILTER(… || …) }`:
-   the property triples inside an `EXISTS` are required, so a friend who plays chess but has no
-   name is not a match. A top-level where keeps such triples OPTIONAL
-   (`collectRequiredBindingKeys`); the `EXISTS` conversion (`convertExpression`, `exists_expr`)
-   joins them all as required. The same holds for an outer read inside a quantifier
-   (`f.name.equals(p.name).or(…)`: a subject without a name matches nothing) and for
-   `isNotDefined()` inside a quantifier. Likely fix: the same required/optional split inside the
-   `EXISTS` (required only for bindings every branch needs).
-6. **An inline filter in a where path is dropped.**
-   `Person.select().where((p) => p.friends.where((f) => f.name.equals('x')).hobby.equals('y'))`
-   emits `?a0 :hasFriend ?a1 . ?a1 :hobby ?a1_hobby . FILTER(?a1_hobby = "y")`: the `f.name`
-   filter is gone. The same inside a quantifier's callback
-   (`p.friends.some((f) => f.friends.where(…).hobby.equals('y'))`). The where-path lowering
-   (`resolveExpressionRefs` through the traversal resolver) has no inline-filter handler. Fix
-   (filter the traversal there) or refuse.
+7. **A where narrows a relation the projection or a count also reads.** A where and a projection
+   share an unfiltered traversal (`select((p) => p.friends.name).where((p) => p.friends.hobby.equals('Golf'))`
+   lists only the golf-playing friends), and so does a plain count:
+   `select((p) => ({n: p.friends.size()})).where((p) => p.friends.name.equals('Anna'))` gives bob
+   `n: 1` although he has three friends (oxigraph, report 122). Long-standing for paths and
+   possibly intended ("the where filters the rows"); for a count it reads as a wrong answer. A
+   paginated sub-select and a filtered path already have traversals of their own (reports 115,
+   122). Decide whether a where shares traversals with fields at all; if not, give the where its
+   own (`LoweringContext.conditionResolver` is the place) and update the goldens that encode the
+   sharing.

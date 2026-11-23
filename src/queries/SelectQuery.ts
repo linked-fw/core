@@ -829,6 +829,7 @@ function toExpressionNode(qbo: QueryBuilderObject): ExpressionNode {
     return new ExpressionNode(ir);
   }
 
+  assertNoInlineFilterOnPath(qbo, 'read in an expression (a where, a quantifier, a computed field or sort key)');
   const segments = FieldSet.collectPropertySegments(qbo);
   const segmentIds = segments.map((s) => s.id);
   // Inside an inline filter or a quantifier, a path from another callback's proxy reads the outer
@@ -846,6 +847,25 @@ function toExpressionNode(qbo: QueryBuilderObject): ExpressionNode {
     return tracedAliasExpression([]);
   }
   return tracedPropertyExpression(segmentIds);
+}
+
+/**
+ * A path read as a value (compared, computed, `min()`/`max()`) has no place for an inline filter on
+ * one of its steps (`p.friends.where((f) => …).hobby.equals('y')`): an expression reads a property
+ * through plain traversals. Refused, never read with the filter dropped. A quantifier on the
+ * filtered relation itself takes the filter (`p.friends.where(F).some(P)`).
+ */
+function assertNoInlineFilterOnPath(qbo: QueryBuilderObject, use: string): void {
+  for (let current: QueryBuilderObject | undefined = qbo; current; current = current.subject as QueryBuilderObject | undefined) {
+    if (current.wherePath) {
+      throw new Error(
+        `An inline filter (\`.where()\` on a relation) on a path ${use} is not supported: the filter ` +
+        'would be dropped. Write it as a quantifier on the filtered relation instead: ' +
+        "`p.friends.some((f) => f.name.equals('x').and(f.hobby.equals('y')))` for " +
+        "`p.friends.where((f) => f.name.equals('x')).hobby.equals('y')`, or select the filtered path.",
+      );
+    }
+  }
 }
 
 /**
@@ -1032,6 +1052,11 @@ function memberShapeClass(set: QueryShapeSet<any>): ShapeConstructor | undefined
  * `p.pets.as(Dog).some(…)`). A function, not a member, so it reserves no name on the query proxies.
  */
 function quantified(set: QueryShapeSet<any>, predicate: ExpressionNode | ExistsCondition, negated: boolean): ExistsCondition {
+  // A quantifier on a filtered relation (`p.friends.where(F).some(P)`) ranges over the members the
+  // filter keeps: its predicate is `F and P` (for every, `F and not P` under NOT EXISTS).
+  // A filter on a hop above the quantified relation has no place in the EXISTS path: refused.
+  assertNoInlineFilterOnPath(set.subject as QueryBuilderObject, 'leading to a quantifier (some/every/none)');
+  if (set.wherePath) predicate = withMemberFilter(set.wherePath, predicate);
   const pathSegmentIds = FieldSet.collectPropertySegments(set).map((s) => s.id);
   // Inside another callback, a relation of the outer subject (`p.pets.some(…)` inside
   // `p.friends.some((f) => …)`) starts there, never at that callback's member.
@@ -1042,6 +1067,13 @@ function quantified(set: QueryShapeSet<any>, predicate: ExpressionNode | ExistsC
       ? {prefix: scope.prefix}
       : scope.kind === 'enclosing' ? {up: scope.up} : 'unscoped' as const;
   return new ExistsCondition(pathSegmentIds, predicate, negated, [], memberShapeClass(set)?.shape?.id, outerRoot);
+}
+
+/** A quantifier's predicate restricted to the members an inline filter keeps. */
+function withMemberFilter(filter: WherePath, predicate: ExpressionNode | ExistsCondition): ExpressionNode | ExistsCondition {
+  if ('existsCondition' in filter) return filter.existsCondition.and(predicate);
+  if (isExistsCondition(predicate)) return predicate.and(filter.expressionNode);
+  return filter.expressionNode.and(predicate);
 }
 
 /**
@@ -1718,6 +1750,7 @@ export class QueryPrimitiveSet<
 
   /** The values as one traced expression (the property, reached through the path). */
   private valuesExpression(): ExpressionNode {
+    assertNoInlineFilterOnPath(this, 'aggregated with min() or max()');
     assertOwnAggregatePath(this);
     return tracedPropertyExpression(FieldSet.collectPropertySegments(this).map((s) => s.id));
   }
