@@ -181,15 +181,41 @@ const refuse = (key: string, a: ProjectionSeed, b: ProjectionSeed, at: 'position
  * A row holds one value per key, at the position its path gives it. Two fields at the same
  * position that select the same thing (same steps, filters, sub-select pagination) are one
  * field: the later one is dropped. Two that select different things there, or a field whose
- * key is also a relation another field nests under (`[p.friends, p.friends.select(…)]`), have
- * no row that can hold both, and are refused here, naming the key — never a duplicate SPARQL
+ * key is also a relation another field nests under in a different way (`[p.friends.size(),
+ * p.friends.name]`, `[p.friends, p.friends.where(…).name]`), have no row that can hold both,
+ * and are refused here, naming the key — never a duplicate SPARQL
  * variable or a throw while mapping the results. Fields at different positions that share a
  * relation (`[p.bestFriend.name, p.bestFriend.hobby]`) are not duplicates: they nest together,
+ * and so does the bare relation beside them (`[p.bestFriend, p.bestFriend.name]`),
  * unless they read that relation in different ways (`[p.friends.name, p.friends.where(…).hobby]`):
  * the row has one `friends` list, so that is refused too.
  */
+type Entry = {seed: ProjectionSeed; groups: DesugaredPropertyStep[]; position: string[]; signature: string};
+
+/**
+ * Whether `nested` already answers the bare relation `bare` (`p.bestFriend` beside
+ * `p.bestFriend.name`): a bare relation only asks for the node's id, which the nested object
+ * carries, so the row merges them into `{bestFriend: {id, name}}`. Only for an unkeyed, unfiltered
+ * relation that the nested field reads through the same step, without sub-select pagination on
+ * it; the steps above are compared by the shared-relation check.
+ */
+const subsumes = (nested: Entry, bare: Entry): boolean => {
+  if (bare.seed.kind !== 'path' || bare.seed.key) return false;
+  const last = bare.seed.path.steps[bare.seed.path.steps.length - 1];
+  if (last?.kind !== 'property_step' || last.where) return false;
+  const depth = bare.position.length - 1;
+  const through = nested.groups[depth];
+  return (
+    !!through &&
+    JSON.stringify(canonicalStep(through)) === JSON.stringify(canonicalStep(last)) &&
+    nested.seed.context[depth + 1] === undefined &&
+    JSON.stringify(bare.seed.context) === JSON.stringify(
+      Object.fromEntries(Object.entries(nested.seed.context).filter(([d]) => Number(d) <= depth)),
+    )
+  );
+};
+
 export const dedupeProjectionSeeds = (seeds: ProjectionSeed[]): ProjectionSeed[] => {
-  type Entry = {seed: ProjectionSeed; groups: DesugaredPropertyStep[]; position: string[]; signature: string};
   const kept: Entry[] = [];
   const byPosition = new Map<string, Entry>();
   for (const seed of seeds) {
@@ -209,9 +235,14 @@ export const dedupeProjectionSeeds = (seeds: ProjectionSeed[]): ProjectionSeed[]
 
   for (const [i, a] of kept.entries()) {
     for (const b of kept.slice(i + 1)) {
-      // A key that is both a field and a relation the other field nests under.
+      // A key that is both a field and a relation the other field nests under, unless the field
+      // is the bare relation the nested one already answers.
       const [short, long] = a.position.length <= b.position.length ? [a, b] : [b, a];
-      if (short.position.length < long.position.length && short.position.every((name, j) => long.position[j] === name)) {
+      if (
+        short.position.length < long.position.length &&
+        short.position.every((name, j) => long.position[j] === name) &&
+        !subsumes(long, short)
+      ) {
         refuse(shown(short.position), short.seed, long.seed, 'nested');
       }
       // A relation both nest under, read two ways (another filter, path expression, property

@@ -138,8 +138,10 @@ entry (groups = all its steps, empty key): the row holds it as the `friends` lis
 whatever key it has (today's mapping drops the key).
 
 Rules: same position and signature → later seed dropped. Same position, different signature →
-refused. A position that is also a relation another seed nests under (`[p.friends,
-p.friends.select((f) => f.name)]`, `[p.friends.size(), p.friends.name]`) → refused. Two seeds
+refused. A position that is also a relation another seed nests under (`[p.friends.size(),
+p.friends.name]`, `[p.friends, p.friends.where(…).name]`) → refused, unless it is the bare,
+unkeyed, unfiltered relation the nested seed reads through the same step without pagination
+(`[p.bestFriend, p.bestFriend.name]`): that is subsumed and merges as before (addendum). Two seeds
 nesting under the same relation key at the same depth that read it differently (property, filter,
 path expression, or sub-select pagination at that depth) → refused, naming the relation key: the
 row has one list there and would keep only one of them.
@@ -166,7 +168,8 @@ by advice:
 | `[p.friends.size(), p.friends.size()]` | two COUNTs, mapping throws | one COUNT |
 | `select(['name','name'])`, `FieldSet.for(…, ['name','name'])`, DSL-JSON of it | duplicate variable, mapping throws | one field |
 | `{a: p.name, b: p.name}` | `?a0_name ?a0_name` (syntax error in oxigraph) | `?a0_name` once, both keys filled |
-| `[p.friends, p.friends.select((f) => f.name)]` | merged silently | refused, key `friends` |
+| `[p.friends, p.friends.select((f) => f.name)]`, `[p.bestFriend, p.bestFriend.name]` | merged | unchanged (addendum) |
+| `[p.friends, p.friends.where(…).name]`, `[p.friends, p.friends.select(…).limit(1)]` | merged, bare relation filtered / limited | refused |
 | `[p.friends.where(A), p.friends.where(B)]` | only B applied, duplicate variable | refused |
 | `[p.friends.name, p.friends.where(…).name]` | filter applied to both (112 item 1) | refused, key `friends.name` |
 | `[p.friends.size(), p.friends]` | mapping throws | refused |
@@ -176,9 +179,8 @@ by advice:
 | `[p.friends.where(A), p.friends.where(A).hobby]` | one filtered traversal | unchanged (nest together) |
 | `[p.bestFriend.name, p.bestFriend.hobby]`, `[p.friends.select(f=>f.name), p.friends.select(f=>f.hobby)]` | nested together | unchanged |
 
-Backward compatibility: `[p.bestFriend, p.bestFriend.name]`-style selects (a relation and a field
-under it) used to merge into one group; they are now refused per decision 4. No test or fixture
-in the repo used that shape.
+Backward compatibility: a bare relation beside unfiltered fields under it keeps merging exactly
+as before (master decision 17, addendum below).
 
 ### Files
 
@@ -191,8 +193,9 @@ in the repo used that shape.
   a field read through the same filter); (flat, nested, across path
   and sub-select, object-form sub-selects, inline filter, quantifier filter, size, preloadFor,
   FieldSet, label select and its DSL-JSON round trip); non-duplicates (object form on one path,
-  shared relation, same key at different depths); refusals (relation + sub-select, relation +
-  preloadFor, two filters, filtered + unfiltered leaf, size + relation, conflicting keys inside a
+  shared relation, same key at different depths); bare relation subsumed by fields under it (flat, multi-valued,
+  sub-select, deeper, preloadFor — SPARQL and rows as at 448c188); refusals (bare relation +
+  filtered or paginated read of it, two filters, filtered + unfiltered leaf, size + relation, conflicting keys inside a
   sub-select, relation + nested field inside a sub-select, pagination mismatch, message text,
   object-form pointer for a non-filter conflict); the mapping assertion on a hand-built IR.
 
@@ -231,7 +234,7 @@ in the repo used that shape.
 | # | Where | Problem | Choice | Alternative | Rationale |
 |---|-------|---------|--------|-------------|-----------|
 | 1 | design | What "same key" means when nested paths share a relation | Row position (relations + key), mirroring result mapping; shared-relation paths are not duplicates | Top-level selection key (would refuse `[p.bestFriend.name, p.bestFriend.hobby]`, an existing golden) | Correctness and backward compatibility; matches decision 4's examples |
-| 2 | design | `[p.friends, p.friends.select(…)]` merges fine today | Refuse a key that is both a field and a relation others nest under | Keep merging | Decision 4 names it; ⚠ risky: `[p.bestFriend, p.bestFriend.name]` now throws (no in-repo user) |
+| 2 | design | `[p.friends, p.friends.select(…)]` merges fine today | Overridden by master decision 17: a bare relation is subsumed by unfiltered, unpaginated fields under it; refused only when the readings differ | Refuse every relation + nested field (first landing) | Backward compatibility; the bare relation only asks for the id the nested object carries |
 | 3 | design | Comparing inline filters | Canonical form with placeholders replaced by their paths | Reference identity (refuses identical rewritten lambdas) | Exact duplicates written twice must dedupe; anything unsure is refused |
 | 4 | design | Explicit vs derived key on the same field (preloadFor's `{name}` vs `p.bestFriend.name`) | Key not part of the signature: one field | Refuse | Same value at the same position; nothing to choose |
 | 5 | scope | Object form `{a: p.name, b: p.name}` emits a duplicate SELECT variable (oxigraph rejects) | Fix in `irToAlgebra` (project once, as grouped selects did) | Leave to S8 | Task requires the object form keep working; one-line, no row change |
@@ -240,3 +243,39 @@ in the repo used that shape.
 | 10 | design | Where a filtered relation leaf (`p.friends.where(…)`) sits | As the relation's own entry, key dropped, as today's rows place it | At its custom key | Mirrors the row; lets equal filters nest and differing ones refuse |
 | 8 | timing | Refuse at `toJSON()` too? | Lowering only | Validate in the builder | One check point for all inputs (DSL, FieldSet, builder, DSL-JSON) |
 | 9 | changeset | Bump level | patch | minor | Bug fix; refusals replace a later throw or a wrong answer |
+
+### Addendum — bare relation subsumed (master decision 17)
+
+The first landing refused `[p.bestFriend, p.bestFriend.name]` (a field whose key is also a
+relation another field nests under). Master decision 17 overrides that for backward
+compatibility: a bare relation only asks for the node's id, which the nested object carries, so
+`subsumes` in `projectionDuplicates.ts` lets it through when the bare field is an unkeyed,
+unfiltered property step, the nested field reads the same step (canonical form equal) with no
+sub-select pagination on it, and the steps above match (checked by the shared-relation rule).
+Both seeds are kept, so lowering and mapping are byte-for-byte what they were.
+
+Still refused: `[p.friends, p.friends.where(…).name]` (the nested read is filtered),
+`[p.friends, p.friends.select(…).limit(1)]` (paginated), `[p.friends.size(), p.friends.name]`
+(not a bare relation).
+
+Checked against base 448c188 (a detached worktree, removed after): SPARQL text and rows mapped
+from oxigraph results (p1 → bestFriend p2, friends p2, p3; p2 → bestFriend p3) were identical for
+`[p.bestFriend, p.bestFriend.name]`, `[p.friends, p.friends.name]`,
+`[p.friends, p.friends.select((f) => f.name)]`, `p.friends.select((f) => [f.bestFriend,
+f.bestFriend.name])`, `[p.friends.bestFriend, p.friends.bestFriend.name, p.friends]` and
+`[p.bestFriend, p.bestFriend.preloadFor(c)]`:
+
+```
+bf sparql same: true rows same: true  [...,{"id":"http://x/p1","bestFriend":{"id":"http://x/p2","name":"Moa"}}]
+fr sparql same: true rows same: true  [...,{"id":"http://x/p1","friends":[{"id":"http://x/p3","name":"Carl"},{"id":"http://x/p2","name":"Moa"}]}]
+frSub sparql same: true rows same: true
+deep sparql same: true rows same: true
+deep2 sparql same: true rows same: true
+pre sparql same: true rows same: true
+```
+
+Goldens for the first three and the deeper case are in `duplicate-projection-fields.test.ts`
+(32 tests). Gate: typecheck exit 0 (`real 0m11.527s`); that file with the select/IR goldens,
+result-mapping, inline-filter, FieldSet, DSL-JSON round-trip and query-builder tests:
+`Tests: 11 skipped, 585 passed, 596 total` (`real 0m8.648s`). Also: `docs/backlog/README.md` marks 019 retired (→ report 116); 049, 088 and 108 are
+not in that index (it lists only the old `docs/ideas` numbers), so nothing to mark.

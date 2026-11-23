@@ -40,7 +40,7 @@ following an old `docs/ideas/NNN` reference in a historical report:
 | 016 aggregations | backlog 016, merged into backlog **006** |
 | 017 upsert | backlog 017, **retired** → plan 002 (`Shape.upsert`, implemented) |
 | 018 transactions | backlog **018** |
-| 019 multi-column-sorting | backlog **019** |
+| 019 multi-column-sorting | backlog 019, **retired** → report 116 (implemented) |
 | 020 distinct | backlog **020** |
 | 021 computed-properties | backlog **021** |
 | 022 negation | **retired** → report 013 (implemented) |

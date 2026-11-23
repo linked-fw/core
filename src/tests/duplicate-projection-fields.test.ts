@@ -110,6 +110,55 @@ describe('exact duplicates are one field', () => {
   });
 });
 
+// A bare relation only asks for the node's id, which a field nested under the same (unfiltered,
+// unpaginated) relation carries: the row merges them, exactly as before duplicate checks existed.
+describe('a bare relation beside fields under it is answered by them', () => {
+  const bothOnA1 = (prop: string) => `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a1 ?a1_name
+WHERE {
+  ?a0 rdf:type <https://example.org/types/Person> .
+  OPTIONAL {
+    ?a0 <https://example.org/props/${prop}> ?a1 .
+    OPTIONAL {
+      ?a1 <https://example.org/props/name> ?a1_name .
+    }
+  }
+}`;
+
+  test('[p.bestFriend, p.bestFriend.name] → {bestFriend: {id, name}}', () => {
+    const ir = irOf(Person.select((p) => [p.bestFriend, p.bestFriend.name]));
+    expect(selectToSparql(ir)).toBe(bothOnA1('bestFriend'));
+    expect(rows(ir, [{a0: uri('p1'), a1: uri('p2'), a1_name: lit('Moa')}])).toEqual([
+      {id: 'p1', bestFriend: {id: 'p2', name: 'Moa'}},
+    ]);
+  });
+
+  test('[p.friends, p.friends.name] and [p.friends, p.friends.select((f) => f.name)]', () => {
+    for (const ir of [
+      irOf(Person.select((p) => [p.friends, p.friends.name])),
+      irOf(Person.select((p) => [p.friends, p.friends.select((f) => f.name)])),
+    ]) {
+      expect(selectToSparql(ir)).toBe(bothOnA1('hasFriend'));
+      expect(rows(ir, [{a0: uri('p1'), a1: uri('p2'), a1_name: lit('Moa')}])).toEqual([
+        {id: 'p1', friends: [{id: 'p2', name: 'Moa'}]},
+      ]);
+    }
+  });
+
+  test('deeper: p.friends.select((f) => [f.bestFriend, f.bestFriend.name])', () => {
+    const ir = irOf(Person.select((p) => p.friends.select((f) => [f.bestFriend, f.bestFriend.name])));
+    expect(selectLine(ir)).toBe('SELECT DISTINCT ?a0 ?a2 ?a2_name ?a1');
+    expect(rows(ir, [{a0: uri('p1'), a1: uri('p2'), a2: uri('p3'), a2_name: lit('Carl')}])).toEqual([
+      {id: 'p1', friends: [{id: 'p2', bestFriend: {id: 'p3', name: 'Carl'}}]},
+    ]);
+  });
+
+  test('[p.bestFriend, p.bestFriend.preloadFor(c)]', () => {
+    const ir = irOf(Person.select((p) => [p.bestFriend, p.bestFriend.preloadFor(componentLike)]));
+    expect(selectLine(ir)).toBe('SELECT DISTINCT ?a0 ?a1 ?a1_name');
+  });
+});
+
 describe('fields that are not duplicates', () => {
   test('a filtered relation and a field read through the same filter nest together', () => {
     const ir = irOf(Person.select((p) => [
@@ -141,16 +190,14 @@ describe('fields that are not duplicates', () => {
 });
 
 describe('one key selected in two different ways is refused at lowering', () => {
-  test('[p.friends, p.friends.select((f) => f.name)]', () => {
-    expect(() => irOf(Person.select((p) => [p.friends, p.friends.select((f) => f.name)]))).toThrow(
-      refusalFor('friends'),
-    );
+  test('a bare relation beside a filtered field under it: [p.friends, p.friends.where(…).name]', () => {
+    expect(() => irOf(Person.select((p) => [p.friends, p.friends.where((f) => f.name.equals('Moa')).name])))
+      .toThrow(refusalFor('friends'));
   });
 
-  test('[p.bestFriend, p.bestFriend.preloadFor(c)]', () => {
-    expect(() => irOf(Person.select((p) => [p.bestFriend, p.bestFriend.preloadFor(componentLike)]))).toThrow(
-      refusalFor('bestFriend'),
-    );
+  test('a bare relation beside a paginated sub-select of it', () => {
+    expect(() => irOf(Person.select((p) => [p.friends, p.friends.select((f) => f.name).limit(1)]).for({id: 'p1'})))
+      .toThrow(paginationRefusalFor('friends'));
   });
 
   test('two different filters on one relation', () => {
@@ -204,10 +251,6 @@ describe('one key selected in two different ways is refused at lowering', () => 
     ]))).toThrow(/result key "friends\.x" is selected twice.*give each a key of its own/);
   });
 
-  test('inside a sub-select: a relation and a field nested under it', () => {
-    expect(() => irOf(Person.select((p) => p.friends.select((f) => [f.bestFriend, f.bestFriend.name]))))
-      .toThrow(refusalFor('friends.bestFriend'));
-  });
 
   test('the same sub-select with and without inner pagination', () => {
     expect(() => irOf(Person.select((p) => [
