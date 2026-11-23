@@ -30,9 +30,12 @@ const rows = (ir: IRSelectQuery, bindings: Record<string, {type: 'uri' | 'litera
 /** The refusal for a key selected in two different ways, pointing at the object form. */
 const refusalFor = (key: string) =>
   new RegExp(`result key "${key.replace(/\./g, '\\.')}" is selected twice with different paths or sub-selections.*object form`);
-/** The refusal when the two read one relation with different filters or paginations. */
-const filterRefusalFor = (key: string) =>
-  new RegExp(`result key "${key.replace(/\./g, '\\.')}" is selected twice.*cannot yet read a relation with two different filters or paginations`);
+/** The refusal when the two read one relation with different paginations. */
+const paginationRefusalFor = (key: string) =>
+  new RegExp(`result key "${key.replace(/\./g, '\\.')}" is selected twice.*cannot yet read a relation with two different paginations`);
+/** The refusal when keys of the object form would not keep two reads of a relation apart. */
+const keyedRefusalFor = (key: string) =>
+  new RegExp(`result key "${key.replace(/\./g, '\\.')}" is selected twice.*keys of the object form nest under the relation`);
 
 describe('exact duplicates are one field', () => {
   test('[p.name, p.name] projects ?a0_name once and maps to {id, name}', () => {
@@ -108,6 +111,14 @@ describe('exact duplicates are one field', () => {
 });
 
 describe('fields that are not duplicates', () => {
+  test('a filtered relation and a field read through the same filter nest together', () => {
+    const ir = irOf(Person.select((p) => [
+      p.friends.where((f) => f.name.equals('Moa')),
+      p.friends.where((f) => f.name.equals('Moa')).hobby,
+    ]));
+    expect(ir.resultMap).toHaveLength(2);
+  });
+
   test('the object form keeps two keys on the same path', () => {
     const ir = irOf(Person.select((p) => ({a: p.name, b: p.name})));
     expect(ir.resultMap.map((e) => e.key)).toEqual(['a', 'b']);
@@ -146,12 +157,40 @@ describe('one key selected in two different ways is refused at lowering', () => 
     expect(() => irOf(Person.select((p) => [
       p.friends.where((f) => f.name.equals('Moa')),
       p.friends.where((f) => f.name.equals('Jinx')),
-    ]))).toThrow(filterRefusalFor('friends'));
+    ]))).toThrow(refusalFor('friends'));
   });
 
   test('a filtered and an unfiltered leaf under one key', () => {
     expect(() => irOf(Person.select((p) => [p.friends.name, p.friends.where((f) => f.hobby.equals('x')).name])))
-      .toThrow(filterRefusalFor('friends.name'));
+      .toThrow(refusalFor('friends.name'));
+  });
+
+  test('a filtered and an unfiltered read of one relation under different leaves', () => {
+    expect(() => irOf(Person.select((p) => [
+      p.friends.name,
+      p.friends.where((f) => f.name.equals('Carl')).hobby,
+    ]))).toThrow(refusalFor('friends'));
+  });
+
+  test('…and its object form, whose keys nest under the relation today', () => {
+    expect(() => irOf(Person.select((p) => ({
+      all: p.friends.name,
+      carls: p.friends.where((f) => f.name.equals('Carl')).hobby,
+    })))).toThrow(keyedRefusalFor('friends'));
+  });
+
+  test('two filters on one relation in the object form, whose keys the row drops today', () => {
+    expect(() => irOf(Person.select((p) => ({
+      a: p.friends.where((f) => f.name.equals('Carl')),
+      b: p.friends.where((f) => f.name.equals('Moa')),
+    })))).toThrow(keyedRefusalFor('friends'));
+  });
+
+  test('two sub-selects of one relation, one paginated', () => {
+    expect(() => irOf(Person.select((p) => [
+      p.friends.select((f) => f.name).limit(1),
+      p.friends.select((f) => f.hobby),
+    ]).for({id: 'p1'}))).toThrow(paginationRefusalFor('friends'));
   });
 
   test('a size() and the relation itself: [p.friends.size(), p.friends]', () => {
@@ -162,7 +201,7 @@ describe('one key selected in two different ways is refused at lowering', () => 
     expect(() => irOf(Person.select((p) => [
       p.friends.select((f) => ({x: f.name})),
       p.friends.select((f) => ({x: f.hobby})),
-    ]))).toThrow(refusalFor('friends.x'));
+    ]))).toThrow(/result key "friends\.x" is selected twice.*give each a key of its own/);
   });
 
   test('inside a sub-select: a relation and a field nested under it', () => {
@@ -174,7 +213,7 @@ describe('one key selected in two different ways is refused at lowering', () => 
     expect(() => irOf(Person.select((p) => [
       p.friends.select((f) => f.name).limit(1),
       p.friends.select((f) => f.name),
-    ]).for({id: 'p1'}))).toThrow(filterRefusalFor('friends.name'));
+    ]).for({id: 'p1'}))).toThrow(paginationRefusalFor('friends.name'));
   });
 
   test('the refusal names both fields as written', () => {

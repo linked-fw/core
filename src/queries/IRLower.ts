@@ -404,13 +404,13 @@ export const lowerSelectQuery = (
     return currentAlias;
   };
 
-  // `context` names the inner pagination of the sub-selects around a field, so a field is a
-  // duplicate of another only when that matches too.
+  // `context` holds the inner pagination of the sub-selects around a field, by the depth of the
+  // relation it applies to, so a field is a duplicate of another only when that matches too.
   const collectProjectionSeeds = (
     selection: DesugaredSelection,
     key?: string,
     parentPath: DesugaredStep[] = [],
-    context = '',
+    context: Record<number, string> = {},
   ): ProjectionSeed[] => {
     if (selection.kind === 'selection_path') {
       return [{
@@ -443,7 +443,7 @@ export const lowerSelectQuery = (
           })),
         };
         ctx.attachInnerPagination(childAlias, pagination);
-        innerContext += JSON.stringify({depth: combinedParentPath.length, ...pagination});
+        innerContext = {...context, [combinedParentPath.length]: JSON.stringify(pagination)};
       }
       return collectProjectionSeeds(
         selection.selections,

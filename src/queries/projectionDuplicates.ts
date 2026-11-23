@@ -8,21 +8,22 @@ import {labelOfId} from './castPaths.js';
  * One field of a select's projection, before lowering: a selection path, or an expression
  * already resolved against the query's aliases. `groupPath` holds the steps of the sub-selects
  * that enclose it (an expression's own path is resolved already); `context` records their
- * inner LIMIT/OFFSET/ORDER BY, which belongs to the field as much as its path does.
+ * inner LIMIT/OFFSET/ORDER BY by the depth of the relation it applies to (1 = the first step),
+ * which belongs to the field as much as its path does.
  */
 export type ProjectionSeed =
   | {
       kind: 'path';
       path: DesugaredSelectionPath;
       key?: string;
-      context: string;
+      context: Record<number, string>;
     }
   | {
       kind: 'expression';
       expression: IRExpression;
       key: string;
       groupPath: DesugaredStep[];
-      context: string;
+      context: Record<number, string>;
     };
 
 /** The local name a result key is written with in a row (`…/Person/name` → `name`). */
@@ -38,12 +39,15 @@ const localName = (uri: string): string => {
  * row nests a path's value under each relation it traverses (`p.bestFriend.name` →
  * `{bestFriend: {name}}`), so the groups are the path's steps before its last.
  */
-const positionOf = (seed: ProjectionSeed): {groups: string[]; key: string} => {
+const positionOf = (seed: ProjectionSeed): {groups: DesugaredPropertyStep[]; key: string} => {
   if (seed.kind === 'expression') {
-    return {groups: stepNames(seed.groupPath), key: localName(seed.key)};
+    return {groups: propertySteps(seed.groupPath), key: localName(seed.key)};
   }
   const steps = seed.path.steps;
   const last = steps[steps.length - 1];
+  // A filtered relation as the field itself (`p.friends.where(…)`) is read through a traversal
+  // of its own, and the row holds it as that relation's list of `{id}`s, whatever key it has.
+  if (last?.kind === 'property_step' && last.where) return {groups: propertySteps(steps), key: ''};
   const ownKey = !last
     ? 'value'
     : last.kind === 'property_step'
@@ -51,11 +55,11 @@ const positionOf = (seed: ProjectionSeed): {groups: string[]; key: string} => {
       : last.kind === 'count_step'
         ? last.label || 'count'
         : last.shapeId;
-  return {groups: stepNames(steps.slice(0, -1)), key: localName(seed.key || ownKey)};
+  return {groups: propertySteps(steps.slice(0, -1)), key: localName(seed.key || ownKey)};
 };
 
-const stepNames = (steps: DesugaredStep[]): string[] =>
-  steps.flatMap((step) => (step.kind === 'property_step' ? [localName(step.propertyShapeId)] : []));
+const propertySteps = (steps: DesugaredStep[]): DesugaredPropertyStep[] =>
+  steps.filter((step): step is DesugaredPropertyStep => step.kind === 'property_step');
 
 /**
  * A structural form of an expression: placeholders (`__ref_12__`, numbered per build) are
@@ -131,46 +135,44 @@ const written = (seed: ProjectionSeed): string => {
         : `as(${labelOfId(step.shapeId)})`,
   );
   if (seed.kind === 'expression') parts.push(`${seed.key}: <expression>`);
-  if (seed.context && parts.length > 0) parts[parts.length - 1] += ' (paginated sub-select)';
+  if (Object.keys(seed.context).length > 0 && parts.length > 0) parts[parts.length - 1] += ' (paginated sub-select)';
   return parts.join('.') || 'the subject';
 };
 
-/** What a relation step reads beyond its property: its filter and its path expression. */
-const filterOf = (step: DesugaredPropertyStep): string =>
-  JSON.stringify({where: step.where ? canonicalWhere(step.where) : undefined, pathExpr: step.pathExpr});
+/**
+ * Whether two seeds read a relation they share with different sub-select pagination. Lowering
+ * gives such a relation one traversal with one pagination, so separate keys in the object form
+ * would not keep them apart either (backlog 112). A relation read with different filters gets a
+ * traversal per filter, so the object form can keep those apart.
+ */
+const paginationDiffers = (a: ProjectionSeed, b: ProjectionSeed): boolean =>
+  JSON.stringify(a.context) !== JSON.stringify(b.context);
 
-/** The relations a seed traverses, in order (a size()'s counted relation included). */
-const hopsOf = (seed: ProjectionSeed): DesugaredPropertyStep[] =>
-  (seed.kind === 'path' ? seed.path.steps : seed.groupPath).flatMap((step) =>
-    step.kind === 'property_step' ? [step] : step.kind === 'count_step' ? step.path : [],
-  );
+/** A position as a dotted key (a filtered relation's own entry has no key of its own). */
+const shown = (position: string[]): string => position.filter(Boolean).join('.');
+
+/** Whether a seed already carries a key of the object form. */
+const keyed = (seed: ProjectionSeed): boolean => seed.kind === 'expression' || !!seed.key;
 
 /**
- * Whether two seeds read a relation they share with different filters or sub-select
- * pagination. Lowering gives such a relation one traversal, which carries one filter and one
- * pagination, so separate keys in the object form would not keep them apart either.
+ * `at` is where the two meet: one `position`, one key `nested` under the other, or one
+ * `relation` both nest under but read differently.
  */
-const sharedRelationDiffers = (a: ProjectionSeed, b: ProjectionSeed): boolean => {
-  if (a.context !== b.context) return true;
-  const [hopsA, hopsB] = [hopsOf(a), hopsOf(b)];
-  for (let i = 0; i < Math.min(hopsA.length, hopsB.length); i++) {
-    if (hopsA[i].propertyShapeId !== hopsB[i].propertyShapeId) return false;
-    if (filterOf(hopsA[i]) !== filterOf(hopsB[i])) return true;
-  }
-  return false;
-};
-
-const refuse = (key: string, a: ProjectionSeed, b: ProjectionSeed): never => {
+const refuse = (key: string, a: ProjectionSeed, b: ProjectionSeed, at: 'position' | 'nested' | 'relation'): never => {
   const conflict =
     `Select: the result key "${key}" is selected twice with different paths or sub-selections ` +
     `(${written(a)} and ${written(b)}); a row holds one value per key.`;
-  throw new Error(
-    sharedRelationDiffers(a, b)
-      ? `${conflict} Select it once: one select cannot yet read a relation with two different ` +
-        'filters or paginations, not even under separate keys.'
-      : `${conflict} Select it once, or give each its own key with the object form: ` +
-        'select((p) => ({a: …, b: …})).',
-  );
+  let advice = 'Select it once, or give each its own key with the object form: select((p) => ({a: …, b: …})).';
+  if (paginationDiffers(a, b)) {
+    advice = 'Select it once: one select cannot yet read a relation with two different paginations, ' +
+      'not even under separate keys.';
+  } else if (keyed(a) || keyed(b)) {
+    advice = at === 'position'
+      ? 'Select it once, or give each a key of its own.'
+      : 'Select it once: keys of the object form nest under the relation their path reads, so they ' +
+        'cannot yet keep two reads of one relation apart.';
+  }
+  throw new Error(`${conflict} ${advice}`);
 };
 
 /**
@@ -182,33 +184,50 @@ const refuse = (key: string, a: ProjectionSeed, b: ProjectionSeed): never => {
  * key is also a relation another field nests under (`[p.friends, p.friends.select(…)]`), have
  * no row that can hold both, and are refused here, naming the key — never a duplicate SPARQL
  * variable or a throw while mapping the results. Fields at different positions that share a
- * relation (`[p.bestFriend.name, p.bestFriend.hobby]`) are not duplicates: they nest together.
+ * relation (`[p.bestFriend.name, p.bestFriend.hobby]`) are not duplicates: they nest together,
+ * unless they read that relation in different ways (`[p.friends.name, p.friends.where(…).hobby]`):
+ * the row has one `friends` list, so that is refused too.
  */
 export const dedupeProjectionSeeds = (seeds: ProjectionSeed[]): ProjectionSeed[] => {
-  const kept: {seed: ProjectionSeed; position: string[]; signature: string}[] = [];
-  const byPosition = new Map<string, (typeof kept)[number]>();
+  type Entry = {seed: ProjectionSeed; groups: DesugaredPropertyStep[]; position: string[]; signature: string};
+  const kept: Entry[] = [];
+  const byPosition = new Map<string, Entry>();
   for (const seed of seeds) {
     const {groups, key} = positionOf(seed);
-    const position = [...groups, key];
+    const position = [...groups.map((step) => localName(step.propertyShapeId)), key];
     const positionKey = JSON.stringify(position);
     const signature = signatureOf(seed);
     const existing = byPosition.get(positionKey);
     if (existing) {
       if (existing.signature === signature) continue;
-      refuse(position.join('.'), existing.seed, seed);
+      refuse(shown(position), existing.seed, seed, key === '' ? 'relation' : 'position');
     }
-    const entry = {seed, position, signature};
+    const entry = {seed, groups, position, signature};
     byPosition.set(positionKey, entry);
     kept.push(entry);
   }
 
-  // A key that is both a field and a relation other fields nest under.
-  for (const field of kept) {
-    const nested = kept.find((other) => {
-      if (other === field || other.position.length <= field.position.length) return false;
-      return field.position.every((name, i) => other.position[i] === name);
-    });
-    if (nested) refuse(field.position.join('.'), field.seed, nested.seed);
+  for (const [i, a] of kept.entries()) {
+    for (const b of kept.slice(i + 1)) {
+      // A key that is both a field and a relation the other field nests under.
+      const [short, long] = a.position.length <= b.position.length ? [a, b] : [b, a];
+      if (short.position.length < long.position.length && short.position.every((name, j) => long.position[j] === name)) {
+        refuse(shown(short.position), short.seed, long.seed, 'nested');
+      }
+      // A relation both nest under, read two ways (another filter, path expression, property
+      // or pagination): the row has one list under that key, so one of them would be lost.
+      for (let depth = 0; depth < Math.min(a.groups.length, b.groups.length); depth++) {
+        if (a.position[depth] !== b.position[depth]) break;
+        const [stepA, stepB] = [a.groups[depth], b.groups[depth]];
+        if (
+          stepA.propertyShapeId !== stepB.propertyShapeId ||
+          JSON.stringify(canonicalStep(stepA)) !== JSON.stringify(canonicalStep(stepB)) ||
+          a.seed.context[depth + 1] !== b.seed.context[depth + 1]
+        ) {
+          refuse(shown(a.position.slice(0, depth + 1)), a.seed, b.seed, 'relation');
+        }
+      }
+    }
   }
 
   return kept.map((entry) => entry.seed);

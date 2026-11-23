@@ -49,3 +49,10 @@ The grouped select states the subject key as `{id: string}` itself (`GroupKeyVal
   two keys the user kept apart can be refused, or two that collide let through to the result
   mapping's assertion. The same holds for an expression inside a sub-select and a filtered
   `size()` below the root, which today's rows place at the root.
+  Until the rows move, the check refuses object-form selects whose keys today's rows would drop or
+  merge, e.g. `({all: p.friends.name, carls: p.friends.where((f) => f.name.equals('Carl')).hobby})`
+  (both keys land under one `friends` list, holding only Carl — run on oxigraph: bob
+  `{friends: [{id: carl, carls: 'Golf'}]}`) and `({a: p.friends.where(…A), b: p.friends.where(…B)})`
+  (one `friends` list, keys dropped). The array form of the first is refused pointing at the
+  object form, which is the answer once the object form keeps `all` and `carls` apart; then lift
+  these refusals (`keyed` / `refuse` advice there) and test both lists on a store.
