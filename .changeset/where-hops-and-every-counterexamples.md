@@ -2,6 +2,8 @@
 '@_linked/core': patch
 ---
 
+**Behaviour change:** `every` now returns fewer subjects than before when a member lacks a relation the condition reads: such a member counts against it. For example, `Person.select().where((p) => p.friends.every((f) => f.bestFriend.name.equals('Erik')))` no longer returns a person with a friend who has no best friend. Review such queries (and mutations whose where uses `every`) before upgrading.
+
 Follow-up fixes to the inline-filter / quantifier / mutation-where changes:
 
 - A relation on the way to a property under `isNotDefined()` or `defaultTo()` must exist again: `Person.select().where((p) => p.bestFriend.name.isNotDefined())` (and its count, `deleteWhere`, `update(…).where`, and the same inside a quantifier) matches a person whose best friend has no name, not every person without a best friend. Only an `or` branch the other branches do not need makes a relation optional.
