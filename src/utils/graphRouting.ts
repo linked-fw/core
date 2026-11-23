@@ -58,7 +58,14 @@ import {
 } from '../ontologies/graphs.js';
 import {GraphQueryError} from '../queries/graphQuery.js';
 import {defaultReadGraphsOf} from '../queries/readGraphs.js';
-import {getAllNodeShapes, getRegisteredShapeClass, getSubShapes, getSuperShapes} from './ShapeClass.js';
+import {
+  getActiveShapeCatalog,
+  getAllNodeShapes,
+  getRegisteredShapeClass,
+  getRegistryVersion,
+  getSubShapes,
+  getSuperShapes,
+} from './ShapeClass.js';
 import {getPropertyShapes} from '../shapes/nodeShapeData.js';
 import {packageNameToSlug} from '../shapes/SHACL.js';
 
@@ -248,6 +255,15 @@ export function setShapeGraphs(
     if (stored) table.set(shape, stored);
     else table.delete(shape);
   }
+  bumpRoutesVersion();
+}
+
+/**
+ * Bumped on every route change, on the shared global like the table itself (a second copy of
+ * this module writes the same table, so it must move the same version).
+ */
+function bumpRoutesVersion(): void {
+  routingGlobal.__linkedGraphRoutesVersion = (routingGlobal.__linkedGraphRoutesVersion ?? 0) + 1;
 }
 
 /** The graph IRI of one stored route of `dataset`. */
@@ -297,7 +313,7 @@ export function getShapeGraphs(dataset: IDataset | object): Record<string, strin
 
 /** Drop the graph route of `shape` in `dataset`. */
 export function unsetShapeGraph(shape: string, dataset: IDataset | object): void {
-  routes.get(dataset)?.delete(shape);
+  if (routes.get(dataset)?.delete(shape)) bumpRoutesVersion();
 }
 
 /** The graph routing of one dataset, as the SPARQL compiler and the live-query matcher read it. */
@@ -320,7 +336,101 @@ export interface ShapeGraphRouting {
  * a route that needs a root the dataset lacks throws.
  */
 export function graphRoutingFor(dataset: IDataset | object | undefined): ShapeGraphRouting | undefined {
+  const prof: RoutingProfile | undefined = routingGlobal.__linkedRoutingProf;
+  if (!prof) return cachedRouting(dataset);
+  prof.routingCalls++;
+  const t0 = performance.now();
+  try {
+    const routing = cachedRouting(dataset);
+    return routing ? profiled(routing, prof) : routing;
+  } finally {
+    prof.routingMs += performance.now() - t0;
+  }
+}
+
+/** Profiling counters (benchmark only). */
+export interface RoutingProfile {
+  routingCalls: number;
+  routingBuilds: number;
+  routingMs: number;
+  methodCalls: number;
+  methodMs: number;
+  ownerScans: number;
+  referringCalls: number;
+  referringScans: number;
+  referringMs: number;
+  depth: number;
+}
+
+function profiled(routing: ShapeGraphRouting, prof: RoutingProfile): ShapeGraphRouting {
+  const wrap =
+    <A extends unknown[], R>(fn: (...args: A) => R) =>
+    (...args: A): R => {
+      if (prof.depth > 0) return fn(...args);
+      prof.methodCalls++;
+      prof.depth++;
+      const t0 = performance.now();
+      try {
+        return fn(...args);
+      } finally {
+        prof.depth--;
+        prof.methodMs += performance.now() - t0;
+      }
+    };
+  return {
+    ...routing,
+    graphForShape: wrap(routing.graphForShape),
+    readGraphsForShape: wrap(routing.readGraphsForShape),
+    allGraphs: wrap(routing.allGraphs),
+  };
+}
+
+/** The cache entry of one dataset: the routing and what it was built from. */
+type RoutingCacheEntry = {
+  routesVersion: number;
+  registryVersion: number;
+  catalog: object | undefined;
+  root: string | undefined;
+  routing: ShapeGraphRouting | undefined;
+};
+
+const routingCache = new WeakMap<object, RoutingCacheEntry>();
+
+/**
+ * The routing of `dataset`, rebuilt only when its inputs moved: a route was set or unset (any
+ * dataset's: one shared version), the shape registry changed, another catalog is active, or the
+ * dataset's data root (read late, every call) differs.
+ */
+function cachedRouting(dataset: IDataset | object | undefined): ShapeGraphRouting | undefined {
   if (!dataset) return undefined;
+  if (routingGlobal.__linkedRoutingCacheOff) return buildRouting(dataset);
+  const routesVersion: number = routingGlobal.__linkedGraphRoutesVersion ?? 0;
+  const registryVersion = getRegistryVersion();
+  const catalog = getActiveShapeCatalog();
+  const root = dataRootOf(dataset);
+  const entry = routingCache.get(dataset);
+  if (
+    entry &&
+    entry.routesVersion === routesVersion &&
+    entry.registryVersion === registryVersion &&
+    entry.catalog === catalog &&
+    entry.root === root
+  ) {
+    return entry.routing;
+  }
+  const routing = buildRouting(dataset);
+  routingCache.set(dataset, {routesVersion, registryVersion, catalog, root, routing});
+  return routing;
+}
+
+/** Internal: the shapes declaring a property whose value shape is the key (no storedInGraph shapes). */
+const REFERRERS = Symbol('referrers');
+type WithReferrers = ShapeGraphRouting & {[REFERRERS]?: () => Map<string, string[]>};
+const foreignReferrers = new WeakMap<object, Map<string, string[]>>();
+
+function buildRouting(dataset: IDataset | object): WithReferrers | undefined {
+  const prof: RoutingProfile | undefined = routingGlobal.__linkedRoutingProf;
+  if (prof) prof.routingBuilds++;
   const table = resolvedTable(dataset);
   if (!table) return undefined;
   const graphForShape = (shapeId: string): string => {
@@ -337,6 +447,8 @@ export function graphRoutingFor(dataset: IDataset | object | undefined): ShapeGr
   let ownersByValueShape: Map<string, Set<string>> | undefined;
   const ownersOf = (shapeId: string): string[] => {
     if (!ownersByValueShape) {
+      const prof: RoutingProfile | undefined = routingGlobal.__linkedRoutingProf;
+      if (prof) prof.ownerScans++;
       ownersByValueShape = new Map();
       for (const shape of getAllNodeShapes().values()) {
         for (const ps of getPropertyShapes(shape)) {
@@ -377,9 +489,14 @@ export function graphRoutingFor(dataset: IDataset | object | undefined): ShapeGr
     if (visiting.size === 0) readSets.set(shapeId, sortedSet);
     return sortedSet;
   };
+  const frozen = routingGlobal.__linkedRoutingCacheOff
+    ? <T>(value: T): T => value
+    : <T>(value: T): T => Object.freeze(value) as T;
+  let referrers: Map<string, string[]> | undefined;
   return {
+    [REFERRERS]: () => (referrers ??= referrerIndex()),
     graphForShape,
-    readGraphsForShape: (shapeId: string) => readGraphsForShape(shapeId),
+    readGraphsForShape: (shapeId: string) => frozen(readGraphsForShape(shapeId)),
     allGraphs(): string[] {
       return sortGraphSet([graphs.default, ...table.values()]);
     },
@@ -402,6 +519,62 @@ export function sortGraphSet(set: Iterable<string>): string[] {
  * left out: mutations never write those graphs.
  */
 export function referringGraphsForShape(routing: ShapeGraphRouting, shapeId: string): string[] {
+  const prof: RoutingProfile | undefined = routingGlobal.__linkedRoutingProf;
+  if (!prof) return referringGraphs(routing, shapeId);
+  prof.referringCalls++;
+  prof.depth++;
+  const t0 = performance.now();
+  try {
+    return referringGraphs(routing, shapeId);
+  } finally {
+    prof.depth--;
+    prof.referringMs += performance.now() - t0;
+  }
+}
+
+/** Value shape → the shapes declaring a property with it (own properties; storedInGraph shapes left out). */
+function referrerIndex(): Map<string, string[]> {
+  const prof: RoutingProfile | undefined = routingGlobal.__linkedRoutingProf;
+  if (prof) prof.referringScans++;
+  const index = new Map<string, string[]>();
+  for (const shape of getAllNodeShapes().values()) {
+    const storedIn = (getRegisteredShapeClass(shape.id) as {storedInGraph?: unknown} | undefined)?.storedInGraph;
+    if (typeof storedIn === 'string' && storedIn) continue;
+    const seen = new Set<string>();
+    for (const ps of getPropertyShapes(shape)) {
+      const valueShape = ps.valueShape?.id;
+      if (valueShape === undefined || seen.has(valueShape)) continue;
+      seen.add(valueShape);
+      let list = index.get(valueShape);
+      if (!list) index.set(valueShape, (list = []));
+      list.push(shape.id);
+    }
+  }
+  return index;
+}
+
+function referringGraphs(routing: ShapeGraphRouting, shapeId: string): string[] {
+  if (routingGlobal.__linkedRoutingCacheOff) return referringGraphsScan(routing, shapeId);
+  // The routing object is cached per registry version (graphRoutingFor), so an index kept on it
+  // lives exactly as long as the registry it was built from. A routing from elsewhere (a store
+  // that overrides graphRouting()) gets one too, for its own lifetime.
+  const own = (routing as WithReferrers)[REFERRERS];
+  let index = own?.();
+  if (!index) {
+    index = foreignReferrers.get(routing);
+    if (!index) foreignReferrers.set(routing, (index = referrerIndex()));
+  }
+  const targets = [shapeId, ...getSuperShapes(shapeId).map((s) => s.id), ...getSubShapes(shapeId).map((s) => s.id)];
+  const out = new Set<string>();
+  const referrers = new Set<string>();
+  for (const target of targets) for (const shape of index.get(target) ?? []) referrers.add(shape);
+  for (const shape of referrers) for (const graph of routing.readGraphsForShape(shape)) out.add(graph);
+  return sortGraphSet(out);
+}
+
+function referringGraphsScan(routing: ShapeGraphRouting, shapeId: string): string[] {
+  const prof: RoutingProfile | undefined = routingGlobal.__linkedRoutingProf;
+  if (prof) prof.referringScans++;
   const targets = new Set<string>([
     shapeId,
     ...getSuperShapes(shapeId).map((s) => s.id),
