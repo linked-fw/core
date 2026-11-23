@@ -986,9 +986,10 @@ const namesakes = await Person.select((p) =>
 ```
 
 It reads the node the filtered relation leaves from or the hop before it (`p.bestFriend.name`,
-`p.name` above); a path that is not a hop above the filtered relation, a node further up, or a
-quantifier inside the filter that reads outside its own member is refused. Such a query has no
-DSL-JSON form yet: `toJSON()` refuses it.
+`p.name` above); a path that is not a hop above the filtered relation, or a node further up, is
+refused. A quantifier inside the filter may read the outer subject and the filter's member
+(`p.friends.where((f) => f.friends.some((g) => g.name.equals(f.name)))`), as below. Such a query
+has no DSL-JSON form yet: `toJSON()` refuses it.
 
 #### Set filtering (some/every)
 ```typescript
@@ -1001,7 +1002,23 @@ const explicitSome = await Person.select().where((p) =>
 const every = await Person.select().where((p) =>
   p.knows.every((f) => f.name.equals('Moa').or(f.name.equals('Jinx'))),
 );
+// The callback may read the outer subject, or an enclosing quantifier's member:
+const knowsNamesake = await Person.select().where((p) =>
+  p.knows.some((f) => f.name.equals(p.name)),
+);
+const knowsSomeoneWhoKnowsANamesake = await Person.select().where((p) =>
+  p.knows.some((f) => f.knows.some((g) => g.name.equals(f.name))),
+);
 ```
+
+`p.name` inside the callback is the person's name, not the member's (`none` and `every` alike). A
+path below the outer subject (`p.bestFriend.name`) is read inside the quantifier's own `EXISTS`, and
+a quantifier on the outer subject's relation written inside another one
+(`p.friends.some((f) => p.bestFriend.friends.some((x) => x.equals(f)))`) starts at the subject.
+Such a query has no DSL-JSON form yet: `toJSON()` refuses it. An aggregate inside a quantifier
+(`p.knows.some((f) => f.knows.size().equals(1))`), an inline filter or a `minus()` is refused:
+SPARQL tests those conditions per member, where it cannot count. Compare a count at the top level
+of the where (`.where((p) => p.knows.size().equals(1))`), or select it and filter the rows.
 
 #### Outer where chaining
 ```typescript

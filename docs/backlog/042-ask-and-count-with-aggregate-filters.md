@@ -1,9 +1,9 @@
 ---
-summary: An ASK whose where clause contains an aggregate (`.friends.size().gt(2)`) used to drop the filter and answer the unfiltered question. It now refuses loudly, like `countToAlgebra` — answering it properly needs a nested sub-SELECT carrying GROUP BY/HAVING, which `SparqlSubSelect` cannot express.
+summary: An ASK or COUNT whose where clause contains an aggregate (`.friends.size().gt(2)`), and an aggregate inside a quantifier (`p.friends.some((f) => f.friends.size().equals(1))`), an inline filter or a minus(), are refused loudly. Answering them needs a nested sub-SELECT carrying GROUP BY/HAVING, which `SparqlSubSelect` cannot express.
 packages: [core]
 ---
 
-# 042 — `ASK` and `COUNT` over an aggregate-filtered where clause
+# 042 — Aggregate filters that need a sub-SELECT (`ASK`, `COUNT`, inside `EXISTS`)
 
 **Status:** the silent-wrong-answer half is fixed — `askToAlgebra` now refuses, matching
 `countToAlgebra`. What remains open is *answering* these queries, which needs a sub-SELECT
@@ -76,16 +76,43 @@ ASK { SELECT ?a0 WHERE { … } GROUP BY ?a0 HAVING(COUNT(?a0_friends) > 2) }
 
 — the same nested sub-SELECT, equally inexpressible today.
 
+## Aggregates inside a per-member condition (was backlog 079)
+
+`Person.select().where((p) => p.friends.some((f) => f.friends.size().equals(1)))` used to emit
+`FILTER(EXISTS { ?a0 :hasFriend ?a1 . ?a1 :hasFriend ?a1_friends . FILTER(COUNT(DISTINCT
+?a1_friends) = 1) })`: an aggregate in a FILTER, invalid SPARQL. The same for `every`/`none`, a
+nested quantifier, an inline filter (`p.friends.where((f) => f.friends.size().equals(1))`, a FILTER
+in an OPTIONAL block) and `minus((p) => p.friends.size().equals(1))`. Since report 118 lowering
+refuses each (`refuseAggregateIn` in `IRLower.ts`), naming the construct and pointing at the
+top-level form (`.where((p) => p.friends.size().equals(1))`, a GROUP BY/HAVING over the subject).
+
+Answering it needs the count per member as a sub-SELECT inside the `EXISTS`:
+
+```sparql
+FILTER(EXISTS {
+  ?a0 :hasFriend ?a1 .
+  { SELECT ?a1 WHERE { ?a1 :hasFriend ?x } GROUP BY ?a1 HAVING(COUNT(DISTINCT ?x) = 1) }
+})
+```
+
+(a count of 0 needs the member side OPTIONAL in the sub-SELECT, or `NOT EXISTS` for `= 0`). For an
+inline filter, the same sub-SELECT joined inside the filtered block; for `minus()`, inside the
+MINUS block. An aggregate over the outer subject inside such a condition
+(`p.friends.some(() => p.friends.size().equals(1))`) is refused while tracing; it is a top-level
+HAVING moved inside the condition, not a per-member count.
+
 ## What is left open
 
-Answering, rather than refusing, both cases. That is one piece of work, not two:
+Answering, rather than refusing, all of these. That is one piece of work:
 
 1. extend `SparqlSubSelect` with `groupBy`, `having` and projected aggregate bindings, and emit them
    in `algebraToString`;
 2. have `askToAlgebra` / `countToAlgebra` wrap `inner` in such a sub-SELECT when `inner.having` is
    present, instead of throwing;
-3. goldens for both, plus Fuseki coverage — the semantics of an aggregate inside a nested select are
-   exactly where a golden-only test is not enough.
+3. lower an aggregate inside a quantifier, an inline filter or a minus() to such a sub-SELECT per
+   member (above), instead of `refuseAggregateIn`;
+4. goldens for each, plus Fuseki coverage — the semantics of an aggregate inside a nested select
+   are exactly where a golden-only test is not enough.
 
 Related: **012** (aggregate group filtering) and **016** (aggregations) cover the select-side
 aggregate surface, not this lowering gap.

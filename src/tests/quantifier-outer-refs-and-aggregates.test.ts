@@ -214,6 +214,16 @@ describe('a quantifier reading the outer subject (backlog 111 items 1–2)', () 
     )).toThrow(/more than one hop above the relation it filters/);
   });
 
+  test('in a preloaded component, the component\'s subject (where the host preloads it)', () => {
+    const component = (fn: (c: any) => unknown) => ({query: Person.select((c) => ({fr: fn(c)}))}) as never;
+    expect(sparqlOf(Person.select((p) => p.bestFriend.preloadFor(component((c) =>
+      c.friends.where((f: any) => f.friends.some((g: any) => g.name.equals(c.name))).name)))))
+      .toContain('FILTER(?a3_name = ?a1_name)');
+    expect(sparqlOf(Person.select((p) => p.bestFriend.preloadFor(component((c) =>
+      c.friends.where((f: any) => c.friends.some((g: any) => g.bestFriend.equals(f))).name)))))
+      .toMatch(/FILTER\(EXISTS \{\n\s+\?a1 <[^>]*hasFriend> \?a3 \.[\s\S]*FILTER\(\?a3_bestFriend = \?a2\)/);
+  });
+
   test('a mutation where and an ask read the outer subject too', async () => {
     const del = deleteWhereToSparql(
       lower(DeleteBuilder.from(Person).where((p: any) => p.friends.some((f: any) => f.name.equals(p.name)))) as IRDeleteWhereMutation,

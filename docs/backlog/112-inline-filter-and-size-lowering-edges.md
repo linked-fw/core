@@ -3,7 +3,8 @@ summary: >
   Older lowering edges found while fixing backlog 108: a filtered path beside a top-level where on
   the same relation answers under one result key with one list lost; a traversal inside an inline filter is emitted as
   a required top-level triple; size() in a nested select counts across all members; a filtered
-  size() cannot be compared (refused).
+  size() cannot be compared (refused); an `||` inside a quantifier drops members without one of
+  the properties; an inline filter in a where path is dropped.
 packages: [core]
 ---
 
@@ -30,3 +31,22 @@ answer unless noted.
 4. **A filtered size compared** (`where((p) => p.friends.where(…).size().equals(1))`) is refused
    since report 115 (it counted every member before). Answering it needs the filtered block inside
    the HAVING's pattern, or a sub-SELECT count per subject (related: backlog 042).
+
+Found by report 118 (plan 006 step S2), equally older:
+
+5. **`||` inside a quantifier.** `p.friends.some((f) => f.name.equals('x').or(f.hobby.equals('Chess')))`
+   emits `EXISTS { ?a0 :hasFriend ?a1 . ?a1 :name ?a1_name . ?a1 :hobby ?a1_hobby . FILTER(… || …) }`:
+   the property triples inside an `EXISTS` are required, so a friend who plays chess but has no
+   name is not a match. A top-level where keeps such triples OPTIONAL
+   (`collectRequiredBindingKeys`); the `EXISTS` conversion (`convertExpression`, `exists_expr`)
+   joins them all as required. The same holds for an outer read inside a quantifier
+   (`f.name.equals(p.name).or(…)`: a subject without a name matches nothing) and for
+   `isNotDefined()` inside a quantifier. Likely fix: the same required/optional split inside the
+   `EXISTS` (required only for bindings every branch needs).
+6. **An inline filter in a where path is dropped.**
+   `Person.select().where((p) => p.friends.where((f) => f.name.equals('x')).hobby.equals('y'))`
+   emits `?a0 :hasFriend ?a1 . ?a1 :hobby ?a1_hobby . FILTER(?a1_hobby = "y")`: the `f.name`
+   filter is gone. The same inside a quantifier's callback
+   (`p.friends.some((f) => f.friends.where(…).hobby.equals('y'))`). The where-path lowering
+   (`resolveExpressionRefs` through the traversal resolver) has no inline-filter handler. Fix
+   (filter the traversal there) or refuse.

@@ -158,9 +158,11 @@ any other `aggregation` value is refused. A filtered size carries its filter as 
 (`{ "bestFriend.friends": { "aggregation": "count", "where": { "name": "Carl" }, "whereIndex": 1 } }`)
 and counts only the members the filter keeps.
 
-An inline filter that reads the outer subject (`p.friends.where((f) => f.name.equals(p.name))`) has
-no DSL-JSON form yet: its paths are written relative to the member, so `toJSON()` refuses it rather
-than write a condition that compares the member with itself.
+An inline filter or a quantifier that reads the outer subject
+(`p.friends.where((f) => f.name.equals(p.name))`, `p.friends.some((f) => f.name.equals(p.name))`), or
+a nested quantifier that reads an enclosing member, has no DSL-JSON form yet: its paths are written
+relative to the member, so `toJSON()` refuses it rather than write a condition that compares the
+member with itself.
 
 ## Paths
 
