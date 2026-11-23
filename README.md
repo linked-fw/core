@@ -1031,6 +1031,17 @@ A member without a property one `or` branch reads still matches the other branch
 (`f.name.equals('x').or(f.hobby.equals('Chess'))` keeps a chess player without a name), and
 `f.name.isNotDefined()` finds the members without one; the same holds for a top-level where
 (`p.name.equals('Bob').or(p.bestFriend.hobby.equals('Golf'))` keeps Bob without a best friend).
+Under `isNotDefined()` or `defaultTo()` only the last property may be missing: the relations on the
+way must exist (`p.bestFriend.name.isNotDefined()` is a person whose best friend has no name, not a
+person without a best friend; `p.bestFriend.isNotDefined()` is the latter), in a select, a count, a
+delete or update where and a quantifier alike.
+
+`every` asks that each member satisfies the condition. A member that lacks a relation the condition
+reads does not (`p.friends.every((f) => f.bestFriend.name.equals('Erik'))` is false for a person
+with a friend who has no best friend), unless the condition holds anyway through another `or`
+branch. A member without the last property alone does not count against it, as before
+(`every((f) => f.name.equals('Carl'))` ignores a friend without a name). `some` and `none` are
+unaffected.
 
 A quantifier on a filtered relation ranges over the members the filter keeps:
 `p.knows.where((f) => f.hobby.equals('Chess')).some((f) => f.name.equals('Carl'))` is a chess

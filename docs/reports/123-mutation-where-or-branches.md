@@ -104,3 +104,21 @@ None found.
 |---|-------|---------|--------|-------------|-----------|
 | 1 | design | Duplicate the select's logic or share it | One helper for both mutation builders, reusing the select's `collectRequiredAliases` / `collectRequiredBindingKeys` | Route mutations through `selectToAlgebra` | Mutation wheres have their own base pattern (root wildcard, old values); the helper keeps them as they are |
 | 2 | scope | `buildUpdateWhere` named in the plan | Unchanged (Deviations) | Move the where into it | Its triples were already OPTIONAL; moving code adds risk with no change in answers |
+
+## Addendum — review fixes
+
+- **Premise checked (review HIGH 2).** At 107a39a, `deleteWhereToAlgebra` and
+  `updateWhereToAlgebra` joined every traversal and property triple. Mutations compile through
+  `deleteWhereToSparql` / `updateWhereToSparql`, never `selectToAlgebra`. Report 122 changed only
+  the EXISTS conversion that a quantifier inside a mutation's where shares. So "base all-required"
+  above is accurate, and nothing is applied twice. The goldens here still describe what runs and
+  still pass.
+- **Changed (review HIGH 1, decision 26).** `withMutationWhere` made a hop under a bare
+  `isNotDefined()` OPTIONAL. `deleteWhere((p) => p.bestFriend.name.isNotDefined())` then deleted
+  every person without a best friend; at 2e2f82e it deleted no one. Through
+  `collectRequiredAliases` (report 122's addendum) the hop is required again and only the leaf is
+  OPTIONAL: on oxigraph, erik alone is deleted or updated. Two goldens in
+  `sparql-mutation-golden.test.ts`; live tests in
+  `src/tests/where-hops-and-every-counterexamples.test.ts`.
+- The table above (`hobby isNotDefined`) reads a property of the subject itself, so it is
+  unaffected.

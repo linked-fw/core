@@ -2127,3 +2127,110 @@ WHERE {
 }`);
   });
 });
+
+describe('SPARQL golden — hops under isNotDefined(), every with a hop, filtered sub-select fields', () => {
+  test('a hop under isNotDefined() stays required, only the leaf is OPTIONAL', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select().where((p) => p.bestFriend.name.isNotDefined()) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a1
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  ?a0 <${PROP}bestFriend> ?a1 .
+  OPTIONAL {
+    ?a1 <${PROP}name> ?a1_name .
+  }
+  FILTER(!(BOUND(?a1_name)))
+}`);
+  });
+
+  test('inside a quantifier too', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select().where((p) => p.friends.some((f) => f.bestFriend.name.isNotDefined())) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  FILTER(EXISTS {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    ?a1 <${PROP}bestFriend> ?a2 .
+    OPTIONAL {
+      ?a2 <${PROP}name> ?a2_name .
+    }
+    FILTER(!(BOUND(?a2_name)))
+  })
+}`);
+  });
+
+  test('every: a member without the hop is a counterexample unless the predicate holds', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select().where((p) => p.friends.every((f) => f.bestFriend.name.equals('Erik'))) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT DISTINCT ?a0
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  FILTER(!(EXISTS {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}bestFriend> ?a2 .
+      OPTIONAL {
+        ?a2 <${PROP}name> ?a2_name .
+      }
+    }
+    FILTER(!(?a2_name = "Erik") || !(BOUND(?a2)) && !(COALESCE(?a2_name = "Erik", "false"^^xsd:boolean)))
+  }))
+}`);
+  });
+
+  test("a computed field of a filtered relation's sub-select keeps the filter", async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.friends.where((f) => f.hobby.equals('Chess')).select((f) => ({x: f.name.concat('!')}))) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 (CONCAT(?a1_name, "!") AS ?a1_expr) ?a1
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}hobby> ?a1_hobby .
+    }
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+    FILTER(?a1_hobby = "Chess")
+  }
+}`);
+  });
+
+  test('a hop both || branches need stays required', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select().where((p) => p.bestFriend.name.equals('Erik').or(p.bestFriend.bestFriend.name.equals('Erik'))) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a1 ?a2
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  ?a0 <${PROP}bestFriend> ?a1 .
+  OPTIONAL {
+    ?a1 <${PROP}bestFriend> ?a2 .
+    OPTIONAL {
+      ?a2 <${PROP}name> ?a2_name .
+    }
+  }
+  OPTIONAL {
+    ?a1 <${PROP}name> ?a1_name .
+  }
+  FILTER(?a1_name = "Erik" || ?a2_name = "Erik")
+}`);
+  });
+});

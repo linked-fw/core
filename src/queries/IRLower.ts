@@ -357,6 +357,78 @@ const filterSignature = (where: DesugaredWhere): string | undefined => {
   }
 };
 
+/** The nodes in `hops` an expression reads (a property of, or the node itself); not inside an EXISTS. */
+const hopsReadBy = (expr: IRExpression, hops: ReadonlySet<string>, out: Set<string> = new Set()): Set<string> => {
+  switch (expr.kind) {
+    case 'property_expr':
+      if (hops.has(expr.sourceAlias)) out.add(expr.sourceAlias);
+      break;
+    case 'alias_expr':
+      if (hops.has(expr.alias)) out.add(expr.alias);
+      break;
+    case 'binary_expr':
+      hopsReadBy(expr.left, hops, out);
+      hopsReadBy(expr.right, hops, out);
+      break;
+    case 'in_expr':
+      hopsReadBy(expr.value, hops, out);
+      for (const e of expr.source.list) hopsReadBy(e, hops, out);
+      break;
+    case 'logical_expr':
+      for (const e of expr.expressions) hopsReadBy(e, hops, out);
+      break;
+    case 'not_expr':
+      hopsReadBy(expr.expression, hops, out);
+      break;
+    case 'function_expr':
+    case 'aggregate_expr':
+      for (const e of expr.args) hopsReadBy(e, hops, out);
+      break;
+    default:
+      break;
+  }
+  return out;
+};
+
+/**
+ * Under a negated quantifier (`every` is `NOT EXISTS(member, NOT P)`; also a filtered `every`,
+ * `F AND NOT P`), each `NOT P` that reads a hop of the predicate's own becomes
+ * `NOT P || (hop missing && NOT COALESCE(P, false))`: a member without the hop, for which P is not
+ * true, is a counterexample (P on an unbound hop is an error, which `NOT P` would let pass). A `NOT`
+ * conjunct reading no hop, and a member without a leaf property, are unchanged.
+ */
+const guardMissingHops = (filter: IRExpression, hops: ReadonlySet<string>): IRExpression => {
+  if (hops.size === 0) return filter;
+  if (filter.kind === 'logical_expr' && filter.operator === 'and') {
+    return {...filter, expressions: filter.expressions.map((e) => guardMissingHops(e, hops))};
+  }
+  if (filter.kind !== 'not_expr') return filter;
+  const read = [...hopsReadBy(filter.expression, hops)];
+  if (read.length === 0) return filter;
+  const missing: IRExpression[] = read.map((alias) => ({
+    kind: 'not_expr',
+    expression: {kind: 'function_expr', name: 'BOUND', args: [{kind: 'alias_expr', alias}]},
+  }));
+  return {
+    kind: 'logical_expr',
+    operator: 'or',
+    expressions: [
+      filter,
+      {
+        kind: 'logical_expr',
+        operator: 'and',
+        expressions: [
+          missing.length === 1 ? missing[0] : {kind: 'logical_expr', operator: 'or', expressions: missing},
+          {
+            kind: 'not_expr',
+            expression: {kind: 'function_expr', name: 'COALESCE', args: [filter.expression, {kind: 'literal_expr', value: false}]},
+          },
+        ],
+      },
+    ],
+  };
+};
+
 /**
  * Lower an ExistsCondition to IRExistsExpression with proper traversal patterns.
  */
@@ -438,7 +510,7 @@ const lowerExistsCondition = (
 
   // Resolve the inner predicate's property refs against the EXISTS scope; an inner quantifier
   // is an EXISTS of its own, rooted at the member.
-  const filter = isLinkedInstance(condition.predicate, ExistsCondition)
+  let filter = isLinkedInstance(condition.predicate, ExistsCondition)
     ? lowerExistsCondition(condition.predicate, ctx, predicateOptions)
     : resolveExpressionRefs(
       condition.predicate.ir,
@@ -448,6 +520,12 @@ const lowerExistsCondition = (
       resolveOuter,
     );
   refuseAggregateIn('a quantifier (some/every/none)', filter);
+  // `every` (NOT EXISTS a member where the predicate fails): a member that lacks a hop the
+  // predicate reads (`f.bestFriend` in `f.bestFriend.name.equals('Erik')`) does not satisfy it, so
+  // it is a counterexample unless the predicate holds anyway (another `||` branch).
+  if (condition.negated && filter) {
+    filter = guardMissingHops(filter, new Set(traversals.slice(memberPathLength).map((t) => t.to)));
+  }
 
   const existsTraversals = [...traversals, ...outerTraversals];
   let existsExpr: IRExpression = {
@@ -529,6 +607,9 @@ export const lowerSelectQuery = (
     for (const step of steps) {
       if (step.kind === 'property_step') {
         currentAlias = pathOptions.resolveTraversal(currentAlias, step.propertyShapeId, step.pathExpr, step.maxCount, step.where);
+        // A filtered step (a sub-select of `p.friends.where(…)` whose fields are computed, or
+        // paginated): its traversal carries the filter, whichever field lowers it first.
+        if (step.where) inlineFilterHandler(currentAlias, step.where);
       }
     }
     return currentAlias;
@@ -640,7 +721,7 @@ export const lowerSelectQuery = (
 
   // Inline filter handler: when a property step has `.where()`, canonicalize
   // and lower the where predicate, then attach it to the traverse pattern.
-  const inlineFilterHandler = (traverseAlias: string, where: DesugaredWhere) => {
+  function inlineFilterHandler(traverseAlias: string, where: DesugaredWhere): void {
     // A filtered traversal is shared only under an equal filter, already lowered and attached.
     if (ctx.hasFilter(traverseAlias)) return;
     const ancestors = ancestorTraversalsOf(traverseAlias);
@@ -666,7 +747,7 @@ export const lowerSelectQuery = (
     });
     refuseAggregateIn('an inline filter (`.where()` on a relation)', filterExpr);
     ctx.attachFilter(traverseAlias, filterExpr);
-  };
+  }
 
   // The traversals that lead to a filtered one (from its source up to the root): the aliases
   // bound around the filter's block.

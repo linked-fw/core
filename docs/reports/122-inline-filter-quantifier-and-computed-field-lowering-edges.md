@@ -218,3 +218,97 @@ noname Chess bf carl; zed's friends noname and carl2 Carl; see the test file):
 | 9 | follow-up | `||` in mutation wheres (older, required triples) | Backlog 113 | Fix here | Different builders (delete/update where), outside 112 |
 | 10 | follow-up | A where narrows a shared projected/counted relation (`n: 1` for bob's three friends) | Backlog 112.7 as a design question | Change sharing here | Long-standing path semantics; changing it moves many rows |
 | 11 | wrapup | Phases share `selectToAlgebra` bookkeeping | One implementation commit | Split by hand | The splits would not build or pass independently |
+
+## Addendum — review fixes (with report 123)
+
+An independent review (oxigraph, about 85 probes against base 2e2f82e) found two high-severity
+issues, two medium and one low. Master decisions 26 and 27 settle the semantics.
+
+### Found and changed
+
+1. **High, introduced here and in report 123: a hop under a bare `isNotDefined()` / `defaultTo()`
+   became OPTIONAL.** `collectRequiredAliases` returned nothing for `BOUND`/`COALESCE`, so every
+   person without a best friend matched `p.bestFriend.name.isNotDefined()`. On the review's
+   dataset, its count went from 1 to 7, and the same where in a delete or update changed 7 subjects
+   instead of 1.
+   - Decision 26: under `BOUND`/`COALESCE` the nodes the leaf is read from stay required. Only an
+     `||` branch the others do not need makes a hop optional. `collectRequiredAliases` returns the
+     property's source alias there; an `alias_expr` (the relation itself, `p.bestFriend.isNotDefined()`)
+     stays optional.
+   - The EXISTS body uses the same rule (`buildExistsBody` marks those aliases required).
+   - Mutation wheres use it through `withMutationWhere`.
+2. **High (check): did S9 already change mutation wheres?** No. At 107a39a, `deleteWhereToAlgebra`
+   and `updateWhereToAlgebra` still joined every traversal and property triple (`git show
+   107a39a:src/sparql/irToAlgebra.ts`, the `joinNodes` loop before the FILTER). Mutations go
+   straight through `deleteWhereToSparql` / `updateWhereToSparql` (`SparqlDataset`), never
+   `selectToAlgebra`.
+   - The one place S9 reached a mutation's where was a quantifier inside it: the EXISTS conversion
+     is shared, and it is applied once.
+   - S10's `withMutationWhere` builds the top level only. The two are consistent, and S10's
+     goldens describe what runs; they still pass.
+3. **Medium: an inline filter was dropped from a sub-select of the filtered relation with a computed
+   field** (`p.friends.where(F).select((f) => ({x: f.name.concat('!')}))`; carl got `"Anna!"` from
+   a golfer).
+   - Cause: `aliasAfterPath` (used for expression fields and pagination) resolved the filtered
+     traversal without attaching its filter.
+   - Fix: it now calls the inline-filter handler, which became a hoisted function. The handler
+     skips an alias that is already filtered.
+   - Where the value lands (on the parent row) is step S8's (decision 21) and is unchanged here.
+4. **Medium, older: `every` let a member without a hop pass** (decision 27).
+   - `guardMissingHops` in `IRLower.ts`: under a negated quantifier, each `NOT P` conjunct that
+     reads one of the predicate's own hops becomes `NOT P || (!BOUND(?hop) && !COALESCE(P, false))`.
+     A member lacking the hop is a counterexample unless P holds through another `||` branch.
+   - A filtered `every` guards only its predicate.
+   - `none(P)` with P not a negation, `some`, and a member missing only a leaf property are
+     unchanged. `none((f) => X.not())`, which is `every(X)`, gets the same guard.
+5. **Low: `||` branches were intersected without their ancestors**
+   (`bestFriend.name = 'Erik' || bestFriend.bestFriend.name = 'Erik'` made `?a1` optional).
+   - `collectRequiredAliases` takes `parentOf` and closes each branch over its hops before the
+     intersection.
+   - The answers were unchanged (the FILTER rejected the row anyway); the SPARQL is tighter.
+
+### Verification
+
+- Typecheck: exit 0 (9.8 s).
+- New file `src/tests/where-hops-and-every-counterexamples.test.ts` (13 tests, 8 `[fuseki]`), seven
+  new goldens (`sparql-select-golden`: five; `sparql-mutation-golden`: two), and the S9/S10/115/118/119
+  test files with the select/IR/ask/count/mutation goldens and DSL-JSON round trip:
+  `Tests: 46 skipped, 524 passed, 570 total` (7.4 s). No earlier golden changed.
+- Full regular set: `51 failed, 656 skipped, 2995 passed`. The 51 are the three suites that need
+  `lib/`, as before.
+
+The new file's live block, run against oxigraph:
+
+| Live test | Here | 027d44c (before) | 2e2f82e (before S9) |
+|---|---|---|---|
+| select / defaultTo / count: erik only | ✓ | ✕ (5 persons) | ✓ |
+| quantifier: none | ✓ | ✕ (bob, carl) | ✓ |
+| delete / update where: erik only | ✓ | ✕ (5 changed) | ✕ (none changed) |
+| every with a hop: bob, carl fail | ✓ | ✕ (all pass) | ✕ (all pass) |
+| every with `||`: bob fails | ✓ | ✕ | ✕ |
+| filtered every: bob fails | ✓ | ✕ | ✕ |
+| none unchanged | ✓ | ✓ | ✓ |
+| computed field of a filtered sub-select: no `"Anna!"` | ✓ | ✕ | ✕ |
+
+Probes on oxigraph, same dataset:
+
+```
+H1 select bf.name isNotDefined   [erik]                  (027d44c: ann, bob, carl2, erik, zed)
+H1 bf isNotDefined               [ann, bob, carl2, zed]  (unchanged)
+M3 x per person                  carl: null              (before: carl "Anna!")
+M4 every bf Erik                 [ann, carl2, erik, nameless, zed]
+M4 none bf Erik                  [ann, carl, carl2, nameless]   (unchanged)
+L5 bf Erik || bf.bf Erik         [carl, erik, nameless], ?a0 :bestFriend ?a1 required
+```
+
+### Deviations
+
+- **`every` answers change** (decision 27). A person with a member that lacks a hop the condition
+  reads no longer passes. This is listed in the changeset `where-hops-and-every-counterexamples.md`.
+
+### Decisions
+
+| # | Where | Problem | Choice | Alternative | Rationale |
+|---|-------|---------|--------|-------------|-----------|
+| 12 | review 4 | How to tell `every` at lowering (it is `NOT EXISTS(NOT P)`; a filtered one is `F AND NOT P`) | Guard each `NOT P` conjunct of a negated quantifier | A flag on `ExistsCondition` | No IR/wire change. `none(NOT X)` is `every(X)` logically, so the same answer either way |
+| 13 | review 4 | Missing leaf property under `every` | Unchanged (not a counterexample) | Count it too (`!COALESCE(P,false)` alone) | Decision 27 names hops; report 118 documented the leaf case |

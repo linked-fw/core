@@ -15,6 +15,7 @@ import {queryFactories, tmpEntityBase,
   Person,
 } from '../test-helpers/query-fixtures';
 import {captureQuery} from '../test-helpers/query-capture-store';
+import {DeleteBuilder} from '../queries/DeleteBuilder';
 import {
   createToSparql,
   updateToSparql,
@@ -877,6 +878,49 @@ WHERE {
     ?a0 <${PROP}hobby> ?a0_hobby .
   }
   FILTER(!(BOUND(?a0_hobby)))
+  OPTIONAL {
+    ?a0 <${PROP}hobby> ?old_hobby .
+  }
+}`);
+  });
+});
+
+describe('SPARQL golden — a hop under isNotDefined() in a mutation where', () => {
+  test('a delete where keeps a hop under isNotDefined() required', async () => {
+    const ir = (await captureQuery(() => DeleteBuilder.from(Person).where((p: any) => p.bestFriend.name.isNotDefined()))) as IRDeleteWhereMutation;
+    expect(deleteWhereToSparql(ir)).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
+  ?a0 ?p ?o .
+}
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  ?a0 ?p ?o .
+  ?a0 <${PROP}bestFriend> ?a1 .
+  OPTIONAL {
+    ?a1 <${PROP}name> ?a1_name .
+  }
+  FILTER(!(BOUND(?a1_name)))
+}`);
+  });
+
+  test('an update where keeps a hop under isNotDefined() required', async () => {
+    const ir = (await captureQuery(() => (Person as any).update({hobby: 'Jog'}).where((p: any) => p.bestFriend.name.isNotDefined()))) as IRUpdateWhereMutation;
+    expect(updateWhereToSparql(ir)).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+DELETE {
+  ?a0 <${PROP}hobby> ?old_hobby .
+}
+INSERT {
+  ?a0 <${PROP}hobby> "Jog" .
+}
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  ?a0 <${PROP}bestFriend> ?a1 .
+  OPTIONAL {
+    ?a1 <${PROP}name> ?a1_name .
+  }
+  FILTER(!(BOUND(?a1_name)))
   OPTIONAL {
     ?a0 <${PROP}hobby> ?old_hobby .
   }

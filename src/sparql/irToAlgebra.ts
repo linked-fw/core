@@ -497,7 +497,9 @@ function collectRequiredTraversalAliases(
 ): Set<string> {
   // Only the nodes the where cannot hold without: a node only one `||` branch reads (or BOUND,
   // COALESCE) is OPTIONAL, as a property only one branch reads is (`collectRequiredBindingKeys`).
-  const directAliases = query.where ? collectRequiredAliases(query.where) : new Set<string>();
+  const directAliases = query.where
+    ? collectRequiredAliases(query.where, (alias) => traversePatternMap.get(alias)?.from)
+    : new Set<string>();
 
   const requiredAliases = new Set<string>();
   for (const alias of directAliases) {
@@ -508,29 +510,47 @@ function collectRequiredTraversalAliases(
 
 /**
  * The nodes (traversal targets) a FILTER needs bound to keep a row: as `collectRequiredBindingKeys`,
- * for the nodes a property or the node itself is read from.
+ * for the nodes a property or the node itself is read from. Under `BOUND`/`COALESCE`
+ * (`isNotDefined()`, `defaultTo()`) only the leaf property may be missing: the nodes the path
+ * reads it from stay required (`p.bestFriend.name.isNotDefined()` is a best friend without a name),
+ * while the node itself under `BOUND` (`p.bestFriend.isNotDefined()`) may be. Only an `||` branch
+ * the other branches do not need makes a node optional; `parentOf` closes each branch over the
+ * hops above its nodes before the branches are intersected.
  */
-function collectRequiredAliases(expr: IRExpression): Set<string> {
+function collectRequiredAliases(expr: IRExpression, parentOf: (alias: string) => string | undefined = () => undefined): Set<string> {
+  const recurse = (e: IRExpression) => collectRequiredAliases(e, parentOf);
   switch (expr.kind) {
     case 'property_expr':
       return new Set([expr.sourceAlias]);
     case 'alias_expr':
       return new Set([expr.alias]);
     case 'in_expr':
-      return collectRequiredAliases(expr.value);
+      return recurse(expr.value);
     case 'binary_expr':
-      return mergeKeySets(collectRequiredAliases(expr.left), collectRequiredAliases(expr.right));
+      return mergeKeySets(recurse(expr.left), recurse(expr.right));
     case 'function_expr': {
       const fn = expr.name.toUpperCase();
-      if (fn === 'BOUND' || fn === 'COALESCE') return new Set<string>();
-      if (fn === 'IF') return expr.args.length > 0 ? collectRequiredAliases(expr.args[0]) : new Set<string>();
-      return mergeKeySets(...expr.args.map(collectRequiredAliases));
+      if (fn === 'BOUND' || fn === 'COALESCE') {
+        const sources = new Set<string>();
+        for (const arg of expr.args) if (arg.kind === 'property_expr') sources.add(arg.sourceAlias);
+        return sources;
+      }
+      if (fn === 'IF') return expr.args.length > 0 ? recurse(expr.args[0]) : new Set<string>();
+      return mergeKeySets(...expr.args.map(recurse));
     }
     case 'not_expr':
-      return collectRequiredAliases(expr.expression);
+      return recurse(expr.expression);
     case 'logical_expr': {
-      const childSets = expr.expressions.map(collectRequiredAliases);
-      return expr.operator === 'and' ? mergeKeySets(...childSets) : intersectKeySets(childSets);
+      const childSets = expr.expressions.map(recurse);
+      if (expr.operator === 'and') return mergeKeySets(...childSets);
+      const closed = childSets.map((set) => {
+        const out = new Set<string>();
+        for (const alias of set) {
+          for (let a: string | undefined = alias; a !== undefined && !out.has(a); a = parentOf(a)) out.add(a);
+        }
+        return out;
+      });
+      return intersectKeySets(closed);
     }
     default:
       return new Set<string>();
@@ -2612,6 +2632,9 @@ function buildExistsBody(
   } else {
     markRequired(expr.member);
     for (const key of requiredKeys) markRequired(key.slice(0, key.indexOf('::')));
+    // The nodes a property is read from under BOUND/COALESCE stay required (only the leaf may be
+    // missing), as in a top-level where.
+    if (expr.filter) for (const alias of collectRequiredAliases(expr.filter, (a) => byTo.get(a)?.from)) markRequired(alias);
   }
   const subjectOf = (t: SparqlTriple) => (t.subject.kind === 'variable' ? t.subject.name : undefined);
   const optionalSubtree = (alias: string): SparqlAlgebraNode => {
@@ -4984,7 +5007,7 @@ function withMutationWhere(
   for (const pattern of wherePatterns) processPattern(pattern, registry, [], []);
   const byTo = new Map(traversals.map((t) => [t.to, t] as const));
   const requiredAliases = new Set<string>();
-  for (const alias of collectRequiredAliases(where)) markAliasAndAncestors(alias, byTo, requiredAliases);
+  for (const alias of collectRequiredAliases(where, (a) => byTo.get(a)?.from)) markAliasAndAncestors(alias, byTo, requiredAliases);
 
   const requiredKeys = collectRequiredBindingKeys(where);
   const requiredTriples: SparqlTriple[] = [];
