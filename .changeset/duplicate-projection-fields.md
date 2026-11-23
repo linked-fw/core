@@ -1,0 +1,5 @@
+---
+"@_linked/core": patch
+---
+
+A field selected twice in a select is now one field: `Person.select((p) => [p.name, p.name])` projects `?a0_name` once and returns `{id, name}` (it emitted the variable twice, which stores reject, and then threw "Duplicate result key" while mapping the rows). The same holds inside a sub-select, for two identical sub-selects or filters, and for a `FieldSet`, a label select (`select(['name', 'name'])`, also from DSL-JSON) or a `preloadFor` component that selects a field you also select. One key selected in two different ways is refused when the query is lowered, naming the key and pointing at the object form for explicit keys: `[p.friends, p.friends.select((f) => f.name)]`, two different inline filters on one relation, a field and a `size()` under one key, or a sub-select with and without `.limit()`. Paths that only share a relation (`[p.bestFriend.name, p.bestFriend.hobby]`) still nest together. In the object form, two keys over one path (`{a: p.name, b: p.name}`) now project the variable once (the duplicate `SELECT` variable was a syntax error).

@@ -919,6 +919,12 @@ const missing = await Person.select((p) => p.name).for({id: 'https://my.app/miss
 const mixed = await Person.select((p) => [p.name, p.knows, p.bestFriend.name]);
 const deep = await Person.select((p) => p.knows.bestFriend.name);
 ```
+Paths that share a relation nest together (`[p.bestFriend.name, p.bestFriend.hobby]` →
+`bestFriend: {id, name, hobby}`). A field selected twice in the same way (`[p.name, p.name]`,
+also from a `FieldSet`, a label select or a `preloadFor` component) is one field. One key selected
+in two different ways — `[p.knows, p.knows.select((f) => f.name)]`, two different filters on one
+relation, a sub-select with and without `.limit()` — is refused when the query is lowered, before it runs, naming
+the key: select it once, or give each its own key with the object form below.
 
 #### Custom keys (object form)
 ```typescript

@@ -30,6 +30,7 @@ import {attachCatalog} from '../utils/ShapeClass.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
 import {isLinkedInstance} from '../utils/linkedError.js';
 import {featuresOfExpressions, type QueryFeature} from './queryFeatures.js';
+import {dedupeProjectionSeeds, type ProjectionSeed} from './projectionDuplicates.js';
 
 /**
  * Creates a memoized traversal resolver that deduplicates (fromAlias, propertyShapeId)
@@ -362,18 +363,6 @@ const lowerExistsCondition = (
   return existsExpr;
 };
 
-type ProjectionSeed =
-  | {
-      kind: 'path';
-      path: DesugaredSelectionPath;
-      key?: string;
-    }
-  | {
-      kind: 'expression';
-      expression: IRExpression;
-      key: string;
-    };
-
 const combineWithParentPath = (
   parentPath: DesugaredStep[],
   path: DesugaredSelectionPath,
@@ -415,16 +404,20 @@ export const lowerSelectQuery = (
     return currentAlias;
   };
 
+  // `context` names the inner pagination of the sub-selects around a field, so a field is a
+  // duplicate of another only when that matches too.
   const collectProjectionSeeds = (
     selection: DesugaredSelection,
     key?: string,
     parentPath: DesugaredStep[] = [],
+    context = '',
   ): ProjectionSeed[] => {
     if (selection.kind === 'selection_path') {
       return [{
         kind: 'path',
         path: combineWithParentPath(parentPath, selection),
         key,
+        context,
       }];
     }
 
@@ -438,16 +431,19 @@ export const lowerSelectQuery = (
         typeof selection.innerLimit === 'number' ||
         typeof selection.innerOffset === 'number' ||
         (selection.innerOrderBy && selection.innerOrderBy.length > 0);
+      let innerContext = context;
       if (hasInnerPagination) {
         const childAlias = aliasAfterPath(combinedParentPath);
-        ctx.attachInnerPagination(childAlias, {
+        const pagination = {
           limit: selection.innerLimit,
           offset: selection.innerOffset,
           orderBy: selection.innerOrderBy?.map((o) => ({
             property: o.propertyShapeId,
             direction: o.direction,
           })),
-        });
+        };
+        ctx.attachInnerPagination(childAlias, pagination);
+        innerContext += JSON.stringify({depth: combinedParentPath.length, ...pagination});
       }
       return collectProjectionSeeds(
         selection.selections,
@@ -457,12 +453,13 @@ export const lowerSelectQuery = (
         // intentionally collapses to a single selection.
         undefined,
         combinedParentPath,
+        innerContext,
       );
     }
 
     if (selection.kind === 'custom_object_select') {
       return selection.entries.flatMap((entry) =>
-        collectProjectionSeeds(entry.value, entry.key, parentPath),
+        collectProjectionSeeds(entry.value, entry.key, parentPath, context),
       );
     }
 
@@ -472,11 +469,9 @@ export const lowerSelectQuery = (
         // replace the individual keys of an array/multi-selection. Each child
         // derives its own key from its terminal property (or carries its own
         // explicit custom key).
-        collectProjectionSeeds(nestedSelection, undefined, parentPath),
+        collectProjectionSeeds(nestedSelection, undefined, parentPath, context),
       );
     }
-
-
 
     if (selection.kind === 'expression_select') {
       const exprSelect = selection as DesugaredExpressionSelect;
@@ -494,15 +489,19 @@ export const lowerSelectQuery = (
         kind: 'expression',
         key: key || 'expr',
         expression: resolved,
+        groupPath: parentPath,
+        context,
       }];
     }
 
     return [];
   };
 
-  const projectionSeeds = canonical.selections.flatMap((selection) =>
+  // An exact duplicate field is dropped; two different fields under one key are refused here,
+  // before their paths are lowered (and their inline filters attached).
+  const projectionSeeds = dedupeProjectionSeeds(canonical.selections.flatMap((selection) =>
     collectProjectionSeeds(selection),
-  );
+  ));
 
   const projectionScope = new IRAliasScope('projection');
   projectionScope.registerAlias(ctx.rootAlias, 'root');

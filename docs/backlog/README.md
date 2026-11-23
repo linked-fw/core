@@ -44,7 +44,7 @@ following an old `docs/ideas/NNN` reference in a historical report:
 | 020 distinct | backlog **020** |
 | 021 computed-properties | backlog **021** |
 | 022 negation | **retired** → report 013 (implemented) |
-| 023 duplicate-projection-fields | backlog **023** |
+| 023 duplicate-projection-fields | backlog 023, **retired** → report 119 (implemented) |
 | 024 fulltext-search-primitive | backlog **024** |
 
 (Historical reports 005/008/010/011/013/016 still cite the old `docs/ideas/NNN`

@@ -1409,8 +1409,9 @@ export function selectToAlgebra(
       // For property_expr, the variable is the resolved name from registry
       const varName = resolveExpressionVariable(item.expression, registry);
       if (varName && (varName !== rootAlias || grouped)) {
-        // Two fields over one path (`{a: p.hobby, b: p.hobby}`) read one variable: project it once.
-        if (grouped && projection.some((p) => p.kind === 'variable' && p.name === varName)) continue;
+        // Two fields over one path (`{a: p.hobby, b: p.hobby}`) read one variable: project it once
+        // (a variable listed twice in SELECT is a syntax error).
+        if (projection.some((p) => p.kind === 'variable' && p.name === varName)) continue;
         projection.push({kind: 'variable', name: varName});
       } else if (!varName) {
         // Non-variable expression (binary_expr, function_expr, etc.)

@@ -371,13 +371,14 @@ function buildNestingDescriptor(query: IRSelectQuery): NestingDescriptor {
     }
   }
 
-  // Validate: no duplicate keys at the flat level
+  // Defensive: lowering drops exact duplicate fields and refuses two different fields under one
+  // key (`dedupeProjectionSeeds`), so a duplicate key here means an IR built some other way.
   const flatKeys = descriptor.flatFields.map((f) => f.key);
   const dupFlat = flatKeys.find((k, i) => flatKeys.indexOf(k) !== i);
   if (dupFlat) {
     throw new Error(
       `Duplicate result key "${dupFlat}" in projection. ` +
-      `Two properties with the same local name cannot appear in the same projection.`,
+      `Two fields with the same local name cannot appear at the same level of a row.`,
     );
   }
 

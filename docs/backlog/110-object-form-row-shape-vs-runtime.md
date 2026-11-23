@@ -43,3 +43,9 @@ The grouped select states the subject key as `{id: string}` itself (`GroupKeyVal
 - Subject as a field: the root `QueryShape<S, null, ''>` reaches `CreateQResult` with
   `Source = null`, which matches `QueryShape<…>` without strict null checks (see backlog 028).
 - A nested plain object: refuse it in the `QueryBuildFn` type, or support it at runtime.
+- Duplicate-field checks (report 119): `positionOf` in `src/queries/projectionDuplicates.ts`
+  places a field where today's rows put it (a custom key on a deeper path nests under the path's
+  relations; a sub-select's key is not used). When the rows move, move `positionOf` with them, or
+  two keys the user kept apart can be refused, or two that collide let through to the result
+  mapping's assertion. The same holds for an expression inside a sub-select and a filtered
+  `size()` below the root, which today's rows place at the root.
