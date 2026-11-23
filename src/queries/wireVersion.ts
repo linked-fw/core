@@ -19,8 +19,11 @@
  * which of the listed terms occur).
  * 1.10: a terms read is `kind: 'triples_terms'` (a `kind: 'triples'` with `objects` or
  * `predicates` is refused); every read goes to `readQuery`.
+ * 1.11: a select's `sortBy` may mix directions across its keys (`orderBy(…).thenBy(…, 'DESC')`).
+ * The entry forms are unchanged, and every reader since per-key directions already sorts each
+ * key in its own direction; the bump marks senders that produce such envelopes.
  */
-export const WIRE_VERSION = '1.10';
+export const WIRE_VERSION = '1.11';
 
 /**
  * Validate an incoming envelope's `v`. A missing `v` is tolerated (pre-versioned /

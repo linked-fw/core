@@ -913,32 +913,41 @@ function wrapWithExpressionProxy<T>(qp: QueryPrimitive<T>): QueryPrimitive<T> {
 /**
  * Evaluate a sort callback through the proxy and extract a SortByPath.
  * This is a standalone helper that replaces the need for the former SelectQueryFactory.sortBy().
+ * `method` names the builder call in errors; a `thenBy` callback adds one key, so an array is
+ * refused there.
  */
 export const evaluateSortCallback = <S extends Shape>(
   shape: ShapeConstructor<S>,
   sortFn: (p: any) => any,
   direction: 'ASC' | 'DESC' = 'ASC',
+  method: 'orderBy' | 'thenBy' = 'orderBy',
 ): SortByPath => {
   const proxy = createProxiedPathBuilder(shape);
   const response = sortFn(proxy);
-  const keys = (Array.isArray(response) ? response : [response]).map((item) => sortKeyOf(shape.shape, item));
-  // The DSL callback carries a single direction for all its keys; per-key directions come
-  // from the wire form (deserializeSortByPath).
+  if (method === 'thenBy' && Array.isArray(response)) {
+    throw new Error(
+      'thenBy() adds one sort key: return one path or expression, and call thenBy() again for the ' +
+      'next key (`.thenBy((p) => p.a).thenBy((p) => p.b, \'DESC\')`).',
+    );
+  }
+  const keys = (Array.isArray(response) ? response : [response]).map((item) => sortKeyOf(shape.shape, item, method));
+  // One callback carries one direction for all its keys; `thenBy` adds keys with their own,
+  // and the wire form carries one per key (deserializeSortByPath).
   return {keys, directions: keys.map(() => direction)};
 };
 
-const AGGREGATE_SORT_REFUSAL =
-  'orderBy() on a select sorts by property paths and expressions; it cannot sort by an aggregate ' +
+const aggregateSortRefusal = (method: string) =>
+  `${method}() on a select sorts by property paths and expressions; it cannot sort by an aggregate ` +
   '(`.size()`, `.max()`, `Expr.count()`, …), which it would read as the path itself. ' +
   'Group the select and sort the groups: ' +
   "`Shape.select((s) => ({node: s, n: s.items.size()})).groupBy('node').orderBy('n', 'DESC')`.";
 
-/** One item an orderBy callback returned, as a sort key. Anything else is refused, never dropped. */
-function sortKeyOf(nodeShape: NodeShapeData, item: unknown): SortKey {
+/** One item an orderBy/thenBy callback returned, as a sort key. Anything else is refused, never dropped. */
+function sortKeyOf(nodeShape: NodeShapeData, item: unknown, method: string): SortKey {
   if (isLinkedInstance(item, SetSize) || isLinkedInstance(item, AggregateExpression)) {
     // A SetSize is a QueryPrimitive over the counted path, so it used to be read as that path:
     // `orderBy(p => p.friends.size())` sorted by the friends' ids, not by how many there are.
-    throw new Error(AGGREGATE_SORT_REFUSAL);
+    throw new Error(aggregateSortRefusal(method));
   }
   if (isLinkedInstance(item, QueryBuilderObject)) {
     const segments = FieldSet.collectPropertySegments(item);
@@ -956,12 +965,13 @@ function sortKeyOf(nodeShape: NodeShapeData, item: unknown): SortKey {
     return key;
   }
   if (isExpressionNode(item)) {
-    if (containsAggregate(item.ir)) throw new Error(AGGREGATE_SORT_REFUSAL);
+    if (containsAggregate(item.ir)) throw new Error(aggregateSortRefusal(method));
     return {expression: item};
   }
   throw new Error(
-    'orderBy(): the callback must return a property path, an expression (`p.name.strlen()`) or ' +
-    `an array of them; it returned ${item === null ? 'null' : typeof item}.`,
+    `${method}(): the callback must return a property path, an expression (\`p.name.strlen()\`)` +
+    (method === 'orderBy' ? ' or an array of them' : '') +
+    `; it returned ${item === null ? 'null' : typeof item}.`,
   );
 }
 

@@ -96,6 +96,12 @@ interface MinusEntry<S extends Shape> {
   whereFn?: WhereClause<S>;
 }
 
+/** One key appended by `.thenBy()`: its callback and its own direction. */
+interface ThenByKey<S extends Shape> {
+  fn: QueryBuildFn<S, any>;
+  direction: 'ASC' | 'DESC';
+}
+
 /** Internal state bag for SelectBuilder. */
 interface QueryBuilderInit<S extends Shape, R> {
   shape: ShapeConstructor<S>;
@@ -105,6 +111,8 @@ interface QueryBuilderInit<S extends Shape, R> {
   whereFn?: WhereClause<S>;
   sortByFn?: QueryBuildFn<S, any>;
   sortDirection?: 'ASC' | 'DESC';
+  /** The keys `.thenBy()` appended after the `orderBy` sort, in call order. */
+  thenByKeys?: ThenByKey<S>[];
   limit?: number;
   offset?: number;
   subject?: S | QResult<S> | NodeReferenceValue;
@@ -145,6 +153,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   private readonly _whereFn?: WhereClause<S>;
   private readonly _sortByFn?: QueryBuildFn<S, any>;
   private readonly _sortDirection?: 'ASC' | 'DESC';
+  private readonly _thenByKeys?: ThenByKey<S>[];
   private readonly _limit?: number;
   private readonly _offset?: number;
   private readonly _subject?: S | QResult<S> | NodeReferenceValue;
@@ -170,6 +179,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     this._whereFn = init.whereFn;
     this._sortByFn = init.sortByFn;
     this._sortDirection = init.sortDirection;
+    this._thenByKeys = init.thenByKeys;
     this._limit = init.limit;
     this._offset = init.offset;
     this._subject = init.subject;
@@ -195,6 +205,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       whereFn: this._whereFn,
       sortByFn: this._sortByFn,
       sortDirection: this._sortDirection,
+      thenByKeys: this._thenByKeys,
       limit: this._limit,
       offset: this._offset,
       subject: this._subject,
@@ -300,12 +311,35 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   }
 
   /**
-   * Set sort order. Sorting never drops an instance: one without a value for the path sorts
-   * after every instance with one, ascending and descending, for direct and nested paths. See
-   * the README, "Sorting, limiting, one".
+   * Set sort order, replacing any earlier sort (its `thenBy` keys included). The callback may
+   * return an array of keys (`p => [p.a, p.b]`), all sorted in `direction`; add a key with its
+   * own direction with {@link thenBy}. Sorting never drops an instance: one without a value for
+   * the path sorts after every instance with one, ascending and descending, for direct and
+   * nested paths. See the README, "Sorting, limiting, one".
    */
   orderBy<OR>(fn: QueryBuildFn<S, OR>, direction: 'ASC' | 'DESC' = 'ASC'): SelectBuilder<S, R, Result> {
-    return this.clone({sortByFn: fn as any, sortDirection: direction});
+    // A sort restored from DSL-JSON (`_sortBy`) is replaced too, not kept under the new one.
+    return this.clone({sortByFn: fn as any, sortDirection: direction, thenByKeys: undefined, _sortBy: undefined});
+  }
+
+  /**
+   * Add one more sort key after the current sort, with its own direction: it orders the
+   * instances that tie on every earlier key.
+   *
+   * ```ts
+   * Person.select((p) => [p.name, p.age]).orderBy((p) => p.age, 'DESC').thenBy((p) => p.name);
+   * ```
+   *
+   * Each call appends one key (the callback returns one path or expression, not an array),
+   * sorted by the same rules as an `orderBy` key: missing values last, a multi-valued path by
+   * its first value in that direction, aggregates refused. Needs a preceding `orderBy`, which
+   * it extends; a later `orderBy` replaces the whole sort.
+   */
+  thenBy<OR>(fn: QueryBuildFn<S, OR>, direction: 'ASC' | 'DESC' = 'ASC'): SelectBuilder<S, R, Result> {
+    if (!this._sortByFn && !this._sortBy) {
+      throw new Error('thenBy() adds a key to an existing sort: call orderBy() first, e.g. `.orderBy((p) => p.name).thenBy((p) => p.age, \'DESC\')`.');
+    }
+    return this.clone({thenByKeys: [...(this._thenByKeys ?? []), {fn, direction}]});
   }
 
   /**
@@ -773,6 +807,25 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
     return fs;
   }
 
+  /**
+   * The select's sort keys, in precedence order: the `orderBy` keys (from its callback, or
+   * restored from DSL-JSON), then one key per `thenBy`, each with its own direction.
+   */
+  private _evaluateSort(): SortByPath | undefined {
+    const base: SortByPath | undefined = this._sortByFn
+      ? evaluateSortCallback(this._shape, this._sortByFn as unknown as (p: any) => any, this._sortDirection || 'ASC')
+      : this._sortBy;
+    if (!base || !this._thenByKeys?.length) return base;
+    const keys = [...base.keys];
+    const directions = [...base.directions];
+    for (const {fn, direction} of this._thenByKeys) {
+      const added = evaluateSortCallback(this._shape, fn as unknown as (p: any) => any, direction, 'thenBy');
+      keys.push(...added.keys);
+      directions.push(...added.directions);
+    }
+    return {keys, directions};
+  }
+
   /** Evaluate minus entry callbacks into RawMinusEntry[] (plain data). */
   private _evaluateMinusEntries(): RawMinusEntry[] {
     const proxy = createProxiedPathBuilder(this._shape);
@@ -867,12 +920,9 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       json.where = serializeWherePath(this._where, this._shape.shape);
     }
 
-    if (this._sortByFn) {
-      json.sortBy = serializeSortByPath(
-        evaluateSortCallback(this._shape, this._sortByFn as unknown as (p: any) => any, this._sortDirection || 'ASC'),
-      );
-    } else if (this._sortBy) {
-      json.sortBy = serializeSortByPath(this._sortBy);
+    const sortBy = this._evaluateSort();
+    if (sortBy) {
+      json.sortBy = serializeSortByPath(sortBy);
     }
 
     if (this._minusEntries && this._minusEntries.length > 0) {
@@ -1027,16 +1077,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       where = this._where;
     }
 
-    let sortBy: SortByPath | undefined;
-    if (this._sortByFn) {
-      sortBy = evaluateSortCallback(
-        this._shape,
-        this._sortByFn as unknown as (p: any) => any,
-        this._sortDirection || 'ASC',
-      );
-    } else if (this._sortBy) {
-      sortBy = this._sortBy;
-    }
+    const sortBy = this._evaluateSort();
 
     const input: RawSelectInput = {
       entries,

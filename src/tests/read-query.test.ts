@@ -193,7 +193,9 @@ describe('the read features', () => {
   });
 
   test('DSL-JSON 1.10', () => {
-    expect(WIRE_VERSION).toBe('1.10');
+    // 1.10 made the terms read its own kind; later minors keep it.
+    expect(WIRE_VERSION.split('.')[0]).toBe('1');
+    expect(Number(WIRE_VERSION.split('.')[1])).toBeGreaterThanOrEqual(10);
     expect(parseTriplesTermsQuery({v: '1.9', kind: 'triples_terms', objects: [O]})).toEqual({
       kind: 'triples_terms',
       objects: [O],

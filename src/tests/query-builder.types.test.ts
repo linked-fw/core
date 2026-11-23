@@ -148,6 +148,22 @@ describe.skip('QueryBuilder result type inference (compile only)', () => {
     expectType<string | null | undefined>(first.name);
   });
 
+  test('select with orderBy and thenBy preserves result type', () => {
+    const qb = QueryBuilder.from(Person)
+      .select((p) => [p.name, p.hobby])
+      .orderBy((p) => p.hobby, 'DESC')
+      .thenBy((p) => p.name);
+    type Result = Awaited<typeof qb>;
+    const first = (null as unknown as Result)[0];
+    expectType<string | null | undefined>(first.name);
+    expectType<string | null | undefined>(first.hobby);
+    // thenBy returns the same builder type as orderBy, so .one() still unwraps.
+    const single = QueryBuilder.from(Person).select((p) => p.name).orderBy((p) => p.name).thenBy((p) => p.hobby, 'DESC').one();
+    expectType<string | null | undefined>((null as unknown as Awaited<typeof single>).name);
+    // @ts-expect-error thenBy takes 'ASC' | 'DESC' only
+    QueryBuilder.from(Person).select((p) => p.name).orderBy((p) => p.name).thenBy((p) => p.hobby, 'UP');
+  });
+
   test('one() unwraps array to single result', () => {
     const qb = QueryBuilder.from(Person)
       .select((p) => p.name)
