@@ -12,8 +12,8 @@ import {
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import type {WherePath} from './SelectQuery.js';
 import {createProxiedPathBuilder} from './ProxiedPathBuilder.js';
-import {registerSubSelectRoot} from './traceScopes.js';
-import {isExpressionNode, ExpressionNode} from '../expressions/ExpressionNode.js';
+import {pathFromQueryRoot, registerSubSelectRoot} from './traceScopes.js';
+import {isExpressionNode, ExpressionNode, ExistsCondition, reRootOuterReferences} from '../expressions/ExpressionNode.js';
 import {encodeValueExpr, decodeValueExpr, type DslJsonValue} from './DslJsonExpression.js';
 import {
   serializeWherePath,
@@ -928,6 +928,37 @@ export class FieldSet<R = any, Source = any> {
   }
 
   /**
+   * `fs` with every path its inline filters read from the outer subject moved under `prefix`
+   * (see `reRootOuterReferences`). The same FieldSet when none reads one: a component's FieldSet
+   * is shared by every host that preloads it, so it is never changed in place.
+   */
+  private static withOuterPrefix(fs: FieldSet, prefix: readonly string[]): FieldSet {
+    if (prefix.length === 0) return fs;
+    let changed = false;
+    const entries = (fs.entries as FieldSetEntry[]).map((entry) => {
+      const next: FieldSetEntry = {...entry};
+      if (entry.scopedFilter) {
+        const wp = entry.scopedFilter as {expressionNode?: ExpressionNode; existsCondition?: ExistsCondition};
+        next.scopedFilter = (wp.expressionNode
+          ? {expressionNode: reRootOuterReferences(wp.expressionNode, prefix)}
+          : {existsCondition: reRootOuterReferences(wp.existsCondition!, prefix)}) as WherePath;
+        changed ||= wp.expressionNode
+          ? (next.scopedFilter as {expressionNode: ExpressionNode}).expressionNode !== wp.expressionNode
+          : (next.scopedFilter as {existsCondition: ExistsCondition}).existsCondition !== wp.existsCondition;
+      }
+      for (const key of ['subSelect', 'preloadSubSelect'] as const) {
+        const sub = entry[key];
+        if (sub) {
+          next[key] = FieldSet.withOuterPrefix(sub, prefix);
+          changed ||= next[key] !== sub;
+        }
+      }
+      return next;
+    });
+    return changed ? new FieldSet(fs.shape, entries, fs._catalog) : fs;
+  }
+
+  /**
    * Walks from leaf to root to find the `wherePath` on any object in the chain, and records which
    * segment it belongs to so desugarEntry attaches the filter correctly.
    */
@@ -969,7 +1000,9 @@ export class FieldSet<R = any, Source = any> {
       const componentFieldSet = FieldSet.extractComponentFieldSet(obj.originalValue);
       return {
         path: new PropertyPath(rootShape, segments),
-        preloadSubSelect: componentFieldSet,
+        // The component's inline filters read its own subject, which sits at this path in the host.
+        preloadSubSelect: componentFieldSet &&
+          FieldSet.withOuterPrefix(componentFieldSet, pathFromQueryRoot(obj.source as QueryBuilderObjectLike)),
       };
     }
 

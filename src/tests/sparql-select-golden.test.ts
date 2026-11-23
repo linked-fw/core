@@ -1806,3 +1806,125 @@ WHERE {
 GROUP BY ?a0`);
   });
 });
+
+describe('SPARQL golden — filtered traversals of their own, outer subjects in components', () => {
+  test('a plain and a filtered size of one relation read different traversals', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => ({n: p.friends.size(), c: p.friends.where((f) => f.name.equals('Carl')).size()})) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT ?a0 (COUNT(DISTINCT ?a0_friends) AS ?a1_agg) (COUNT(DISTINCT ?a1) AS ?a2)
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+    FILTER(?a1_name = "Carl")
+  }
+  OPTIONAL {
+    ?a0 <${PROP}hasFriend> ?a0_friends .
+  }
+}
+GROUP BY ?a0`);
+  });
+
+  test('two filtered sizes of one relation keep their own filters', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => ({carls: p.friends.where((f) => f.name.equals('Carl')).size(), annas: p.friends.where((f) => f.name.equals('Anna')).size()})) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT ?a0 (COUNT(DISTINCT ?a1) AS ?a1_agg) (COUNT(DISTINCT ?a2) AS ?a2_agg)
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+    FILTER(?a1_name = "Carl")
+  }
+  OPTIONAL {
+    ?a0 <${PROP}hasFriend> ?a2 .
+    OPTIONAL {
+      ?a2 <${PROP}name> ?a2_name .
+    }
+    FILTER(?a2_name = "Anna")
+  }
+}
+GROUP BY ?a0`);
+  });
+
+  test("a preloaded component's filter reads the component's subject", async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.bestFriend.preloadFor({query: Person.select((c) => ({fr: c.friends.where((f) => f.name.equals(c.name)).name}))} as never)) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a2_name ?a1 ?a2
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}bestFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+    OPTIONAL {
+      ?a1 <${PROP}hasFriend> ?a2 .
+      OPTIONAL {
+        ?a2 <${PROP}name> ?a2_name .
+      }
+      FILTER(?a2_name = ?a1_name)
+    }
+  }
+}`);
+  });
+
+  test('a where on the relation a filtered size counts does not take its filter', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => ({c: p.friends.where((f) => f.name.equals('Carl')).size()})).where((p) => p.friends.name.equals('Anna')) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT ?a0 (COUNT(DISTINCT ?a1) AS ?a1_agg) ?a2
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  ?a0 <${PROP}hasFriend> ?a2 .
+  ?a2 <${PROP}name> ?a2_name .
+  OPTIONAL {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+    FILTER(?a1_name = "Carl")
+  }
+  FILTER(?a2_name = "Anna")
+}
+GROUP BY ?a0 ?a2`);
+  });
+
+  test('a member compared with the outer subject', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.friends.where((f) => f.bestFriend.equals(p)).name) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a1_name ?a1
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}bestFriend> ?a1_bestFriend .
+    }
+    OPTIONAL {
+      ?a1 <${PROP}name> ?a1_name .
+    }
+    FILTER(?a1_bestFriend = ?a0)
+  }
+}`);
+  });
+});

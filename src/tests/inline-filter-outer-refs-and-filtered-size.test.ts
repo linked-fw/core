@@ -28,16 +28,18 @@ const node = (id: string, o: {name?: string; hobby?: string; bestFriend?: string
     ...(o.friends ?? []).map((f) => `<${ENT}${id}> <${PROP}hasFriend> <${ENT}${f}> .`),
   ].join('\n');
 
-// anna → best friend Bob, whose friends are Carl (Chess) and a second "Anna" (ann).
+// anna → best friend Bob, whose friends are Carl (Chess), a second "Anna" (ann) and a second
+// "Bob" (bobby, whose best friend is bob).
 // dirk (no name) → best friend Bob. carl → best friend Erik, whose only friend is Dirk.
 // bob, erik, ann → no best friend.
 const DATA = [
   node('anna', {name: 'Anna', bestFriend: 'bob'}),
-  node('bob', {name: 'Bob', friends: ['carl', 'ann']}),
+  node('bob', {name: 'Bob', friends: ['carl', 'ann', 'bobby']}),
   node('carl', {name: 'Carl', hobby: 'Chess', bestFriend: 'erik', friends: ['anna']}),
   node('dirk', {bestFriend: 'bob'}),
   node('erik', {name: 'Erik', friends: ['dirk']}),
   node('ann', {name: 'Anna'}),
+  node('bobby', {name: 'Bob', bestFriend: 'bob'}),
 ].join('\n');
 
 const irOf = (q: unknown) => lower(q as never) as IRSelectQuery;
@@ -177,6 +179,54 @@ describe('a filtered size()', () => {
   });
 });
 
+const isCarl = (f: {name: {equals(v: string): unknown}}) => f.name.equals('Carl');
+const friendsAndCarls = () => Person.select((p) => ({n: p.friends.size(), c: p.friends.where(isCarl as never).size()}));
+const carlsAndAnnas = () =>
+  Person.select((p) => ({
+    carls: p.friends.where(isCarl as never).size(),
+    annas: p.friends.where((f) => f.name.equals('Anna')).size(),
+  }));
+// A component whose filter reads its own subject, preloaded on the best friend.
+const namesakeCard = {query: Person.select((c) => ({fr: c.friends.where((f) => f.name.equals(c.name)).name}))};
+const preloaded = () => Person.select((p) => p.bestFriend.preloadFor(namesakeCard as never));
+const carlsOfAnnaFriends = () =>
+  Person.select((p) => ({c: p.friends.where(isCarl as never).size()})).where((p) => p.friends.name.equals('Anna'));
+const friendsWithMeAsBest = () => Person.select((p) => p.friends.where((f) => f.bestFriend.equals(p)).name);
+
+describe('filtered traversals of their own (review fixes)', () => {
+  test('a plain and a filtered size of one relation read different traversals', () => {
+    const sparql = sparqlOf(friendsAndCarls());
+    expect(sparql).toContain('(COUNT(DISTINCT ?a0_friends) AS ?a1_agg) (COUNT(DISTINCT ?a1) AS ?a2)');
+  });
+
+  test('two filtered sizes keep their own filters', () => {
+    const sparql = sparqlOf(carlsAndAnnas());
+    expect(sparql).toContain('FILTER(?a1_name = "Carl")');
+    expect(sparql).toContain('FILTER(?a2_name = "Anna")');
+  });
+
+  test('equal filters still share one traversal', () => {
+    const sparql = sparqlOf(Person.select((p) => [p.friends.where(isCarl as never).name, p.friends.where(isCarl as never).hobby]));
+    expect(sparql.match(/hasFriend>/g)).toHaveLength(1);
+  });
+
+  test('a top-level where on the same relation gets its own traversal', () => {
+    const sparql = sparqlOf(carlsOfAnnaFriends());
+    expect(sparql).toMatch(/\?a0 <[^>]*hasFriend> \?a2 \.\n  \?a2 <[^>]*name> \?a2_name \./);
+    expect(sparql).toContain('FILTER(?a1_name = "Carl")');
+  });
+
+  test('a preloaded component reads its own subject, not the host root (preloadFor and preload())', () => {
+    expect(sparqlOf(preloaded())).toContain('FILTER(?a2_name = ?a1_name)');
+    expect(sparqlOf(Person.select((p) => p.name).preload('bestFriend' as never, namesakeCard as never)))
+      .toContain('FILTER(?a2_name = ?a1_name)');
+  });
+
+  test('a member compared with the outer subject', () => {
+    expect(sparqlOf(friendsWithMeAsBest())).toContain('FILTER(?a1_bestFriend = ?a0)');
+  });
+});
+
 beforeAll(async () => {
   if (!fusekiLive) return;
   await createTestDataset();
@@ -191,7 +241,7 @@ afterAll(async () => {
 describeFuseki('inline filter outer references and filtered size', () => {
   test('namesakes: Anna gets ann; every person is kept', async () => {
     const rows = await run(namesakes());
-    expect(rows.map(idOf).sort()).toEqual(['ann', 'anna', 'bob', 'carl', 'dirk', 'erik']);
+    expect(rows.map(idOf).sort()).toEqual(['ann', 'anna', 'bob', 'bobby', 'carl', 'dirk', 'erik']);
     const anna = rows.find((r) => idOf(r) === 'anna')!;
     expect(((anna.bestFriend as ResultRow).friends as ResultRow[]).map(idOf)).toEqual(['ann']);
     const dirk = rows.find((r) => idOf(r) === 'dirk')!;
@@ -206,9 +256,41 @@ describeFuseki('inline filter outer references and filtered size', () => {
     expect(friendsOf('dirk')).toEqual(['carl']);
   });
 
-  test('filtered size: 1 for Anna and Dirk, 0 for everyone else (kept)', async () => {
+  test('a plain and a filtered size of one relation: bob 3 friends, 1 Carl', async () => {
+    const rows = await run(friendsAndCarls());
+    const counts = Object.fromEntries(rows.map((r) => [idOf(r), [Number(r.n), Number(r.c)]]));
+    expect(counts.bob).toEqual([3, 1]);
+    expect(counts.carl).toEqual([1, 0]);
+  });
+
+  test('two filtered sizes: bob 1 Carl and 1 Anna, carl 0 and 1', async () => {
+    const rows = await run(carlsAndAnnas());
+    const counts = Object.fromEntries(rows.map((r) => [idOf(r), [Number(r.carls), Number(r.annas)]]));
+    expect(counts.bob).toEqual([1, 1]);
+    expect(counts.carl).toEqual([0, 1]);
+  });
+
+  test('a preloaded component: the best friend\'s friends named like the best friend', async () => {
+    const rows = await run(preloaded());
+    const fr = (id: string) =>
+      ((((rows.find((r) => idOf(r) === id)!.bestFriend as ResultRow | undefined)?.friends as ResultRow[] | undefined) ?? [])).map(idOf);
+    expect(fr('anna')).toEqual(['bobby']);
+    expect(fr('carl')).toEqual([]);
+  });
+
+  test('a where on the counted relation: bob 1, carl 0', async () => {
+    const rows = await run(carlsOfAnnaFriends());
+    expect(Object.fromEntries(rows.map((r) => [idOf(r), Number(r.c)]))).toEqual({bob: 1, carl: 0});
+  });
+
+  test('a member compared with the outer subject: bob gets bobby', async () => {
+    const rows = await run(friendsWithMeAsBest());
+    expect(((rows.find((r) => idOf(r) === 'bob')!.friends as ResultRow[]) ?? []).map(idOf)).toEqual(['bobby']);
+  });
+
+  test('filtered size: 1 for anna, dirk and bobby (best friend bob), 0 for everyone else (kept)', async () => {
     const rows = await run(carlCount());
     const counts = Object.fromEntries(rows.map((r) => [idOf(r), Number(r.carls)]));
-    expect(counts).toEqual({anna: 1, dirk: 1, bob: 0, carl: 0, erik: 0, ann: 0});
+    expect(counts).toEqual({anna: 1, dirk: 1, bobby: 1, bob: 0, carl: 0, erik: 0, ann: 0});
   });
 });

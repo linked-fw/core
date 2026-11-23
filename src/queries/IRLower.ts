@@ -59,6 +59,7 @@ class LoweringContext {
   private counter = 0;
   private patterns: IRGraphPattern[] = [];
   private traverseMap = new Map<string, string>();
+  private filteredTraverseMap = new Map<string, string>();
   private filterMap = new Map<string, IRExpression>();
   private innerPaginationMap = new Map<
     string,
@@ -80,6 +81,27 @@ class LoweringContext {
     if (existing) return existing;
     const toAlias = this.createTraversal(fromAlias, propertyShapeId, pathExpr, maxCount);
     this.traverseMap.set(key, toAlias);
+    return toAlias;
+  }
+
+  /**
+   * A filtered step's traversal (`p.friends.where(…)`): shared only with a step under the same
+   * filter (`signature`, the lowered filter), never with an unfiltered one or another filter's, so
+   * each filter keeps its own members. An undefined signature always gets a traversal of its own.
+   */
+  getOrCreateFilteredTraversal(
+    fromAlias: string,
+    propertyShapeId: string,
+    signature: string | undefined,
+    pathExpr?: PathExpr,
+    maxCount?: number,
+  ): string {
+    if (signature === undefined) return this.createTraversal(fromAlias, propertyShapeId, pathExpr, maxCount);
+    const key = `${fromAlias}:${propertyShapeId}#${signature}`;
+    const existing = this.filteredTraverseMap.get(key);
+    if (existing) return existing;
+    const toAlias = this.createTraversal(fromAlias, propertyShapeId, pathExpr, maxCount);
+    this.filteredTraverseMap.set(key, toAlias);
     return toAlias;
   }
 
@@ -168,7 +190,8 @@ type AliasGenerator = {
 
 type PathLoweringOptions = {
   rootAlias: string;
-  resolveTraversal: (fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number) => string;
+  /** `where`: the step's inline filter (a projection's filtered step), see `getOrCreateFilteredTraversal`. */
+  resolveTraversal: (fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number, where?: DesugaredWhere) => string;
   /** An inline filter's: resolves a path it reads from the outer subject. */
   resolveOuter?: OuterReferenceResolver;
 };
@@ -245,6 +268,25 @@ const lowerWhere = (
     default:
       const _exhaustive: never = where;
       throw new Error(`Unknown canonical where kind: ${(_exhaustive as {kind: string}).kind}`);
+  }
+};
+
+/**
+ * A filter's identity for sharing its traversal: the filter lowered on placeholder aliases (`$m`
+ * for the member). Two steps under equal filters share a traversal, as they did when every step
+ * shared one; undefined (never shared) when it cannot be lowered here, which the real lowering
+ * then reports.
+ */
+const filterSignature = (where: DesugaredWhere): string | undefined => {
+  let counter = 0;
+  try {
+    return JSON.stringify(lowerWhere(where as CanonicalWhereExpression, {generateAlias: () => `$x${counter++}`}, {
+      rootAlias: '$m',
+      resolveTraversal: (from, property) => `${from}/${property}`,
+      resolveOuter: (segments) => `$outer/${segments.join('/')}`,
+    }));
+  } catch {
+    return undefined;
   }
 };
 
@@ -351,8 +393,10 @@ export const lowerSelectQuery = (
   const ctx = new LoweringContext();
   const pathOptions: PathLoweringOptions = {
     rootAlias: ctx.rootAlias,
-    resolveTraversal: (fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number) =>
-      ctx.getOrCreateTraversal(fromAlias, propertyShapeId, pathExpr, maxCount),
+    resolveTraversal: (fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number, where?: DesugaredWhere) =>
+      where
+        ? ctx.getOrCreateFilteredTraversal(fromAlias, propertyShapeId, filterSignature(where), pathExpr, maxCount)
+        : ctx.getOrCreateTraversal(fromAlias, propertyShapeId, pathExpr, maxCount),
   };
 
   const root: IRShapeScanPattern = {
@@ -365,7 +409,7 @@ export const lowerSelectQuery = (
     let currentAlias = pathOptions.rootAlias;
     for (const step of steps) {
       if (step.kind === 'property_step') {
-        currentAlias = pathOptions.resolveTraversal(currentAlias, step.propertyShapeId, step.pathExpr, step.maxCount);
+        currentAlias = pathOptions.resolveTraversal(currentAlias, step.propertyShapeId, step.pathExpr, step.maxCount, step.where);
       }
     }
     return currentAlias;

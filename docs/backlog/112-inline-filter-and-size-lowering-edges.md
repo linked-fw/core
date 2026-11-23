@@ -1,7 +1,7 @@
 ---
 summary: >
   Older lowering edges found while fixing backlog 108: a filtered and an unfiltered path over the
-  same relation share one (filtered) traversal; a traversal inside an inline filter is emitted as
+  same relation answer under one result key with one list lost; a traversal inside an inline filter is emitted as
   a required top-level triple; size() in a nested select counts across all members; a filtered
   size() cannot be compared (refused).
 packages: [core]
@@ -12,11 +12,14 @@ packages: [core]
 Source: report 115 (plan 006 step S1). Each is older than report 115 and gives a silent wrong
 answer unless noted.
 
-1. **Shared filtered traversal.** `Person.select((p) => [p.friends.name, p.friends.where((f) =>
-   f.name.equals('Moa')).name])` lowers both paths onto one traversal `?a1` carrying the filter, so
-   the unfiltered `friends.name` is filtered too. The same with a filtered `size()` beside the
-   relation's projection. A sort key already gets a traversal of its own when the filters differ
-   (`lowerSortKey` in `IRLower.ts`); projection seeds use `getOrCreateTraversal` for every step.
+1. **One result key, two traversals.** Since report 115's review fixes, a filtered step has a
+   traversal of its own (shared only with an equal filter), so the SPARQL of
+   `Person.select((p) => [p.friends.name, p.friends.where((f) => f.name.equals('Carl')).hobby])`
+   is right, but both paths answer under the one key `friends` and the result mapping keeps only
+   one of the two lists (bob: `[{carl, hobby}]`; his other friends and their names are lost). The
+   same holds for a filtered path beside a top-level where on that relation. Either refuse two
+   different traversals under one key (as backlog 023 / plan 006 decision 4 refuses a key with a
+   different path) or nest them apart.
 2. **A traversal inside an inline filter.** `p.friends.where((f) => f.bestFriend.name.equals('x'))`
    emits `?a1 :bestFriend ?a2` as a required triple of the top-level pattern while `?a1` is bound
    only inside the filtered OPTIONAL block (`lowerWhere` resolves the filter's traversals through

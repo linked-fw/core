@@ -278,3 +278,112 @@ filtered traversal (112.1), which also holds for a filtered size beside the rela
 | 7 | review | A quantifier reading the outer subject in a top-level where is a silent self-comparison (older) | Unchanged, backlog 111.1 | Refuse or resolve it here | Outside S1's scope (inline filters); changing quantifier semantics is S1-adjacent, not S1 |
 | 8 | review | The query error wrapper threw the encoding refusal over the real error | Catch it, write `(not serializable: …)` | Leave it | Needed so the new refusals are readable; no other behaviour changes |
 | 9 | wrapup | Phases share hunks | One implementation commit | Split by hand | The split would not build on its own between the two |
+
+## Addendum — review fixes
+
+An independent review (checked on oxigraph against base `448c188`) found four bugs this step
+introduced or left in reach, and one older one.
+
+### Found
+
+1. **High, introduced here:** a plain and a filtered size of one relation
+   (`{n: p.friends.size(), c: p.friends.where(Carl).size()}`, also under `p.bestFriend`) shared one
+   traversal: the filtered count reused the `getOrCreateTraversal` alias, and the plain count's
+   `property_expr(a0, hasFriend)` resolved to the filtered `?a1` through the variable registry.
+   Both counts were filtered (bob n=1, should be 3 on the review dataset).
+2. **High:** two filtered sizes of one relation (`{carls: …where(Carl).size(), annas:
+   …where(Anna).size()}`) shared one traversal, and `attachFilter` replaced the first filter with
+   the second.
+3. **High, introduced here:** a preloaded component's filter reading its own subject
+   (`{query: Person.select((c) => ({fr: c.friends.where((f) => f.name.equals(c.name)).name}))}`
+   under `p.bestFriend.preloadFor(…)` or `.preload('bestFriend', …)`) read the host root
+   (`?a0_name`): the component's outer paths run from the component's root and were never moved
+   under the preload's path.
+4. **Medium:** a top-level where on the relation a filtered size counts
+   (`.where((p) => p.friends.name.equals('Anna'))`) took the size's filter on the same `?a1`: no
+   rows. The same sharing for filtered paths is older (backlog 112.1).
+5. **Low, older:** comparing a node with a query path (`f.bestFriend.equals(p)`) threw
+   "Converting circular structure to JSON" (the `{id}` check stringified the proxy).
+
+### Changed
+
+- `src/queries/IRLower.ts`: a filtered step's traversal comes from
+  `LoweringContext.getOrCreateFilteredTraversal`, keyed by the step and its filter's signature
+  (`filterSignature`: the filter lowered on placeholder aliases). Equal filters still share one
+  traversal (`[p.friends.where(A).name, p.friends.where(A).hobby]`, a filtered sub-select's
+  children); a different filter, an unfiltered step, a top-level where or a sort key never share
+  it. The projection resolver and `aliasAfterPath` pass the step's `where`
+  (`IRProjection.ts` passes it for filtered path and count steps).
+- `src/sparql/irToAlgebra.ts`: a filtered traversal is recorded for routing
+  (`VariableRegistry.record`) but is not what `(from, property)` resolves to, so a plain read of
+  that property gets its own variable.
+- `src/expressions/ExpressionNode.ts` `reRootOuterReferences`, `src/queries/FieldSet.ts`
+  `withOuterPrefix`, `src/queries/traceScopes.ts` `pathFromQueryRoot`: a preloaded component's
+  FieldSet is copied with its outer paths moved under the preload's path from the query root
+  (never changed in place: a component is shared by its hosts). `.preload()` goes through the same
+  `preloadFor` branch.
+- `src/queries/SelectQuery.ts` `nodeEquals`: a query path as the value is compared as a traced
+  node before the `{id}` check. `p.friends.where((f) => f.bestFriend.equals(p))` lowers to
+  `FILTER(?a1_bestFriend = ?a0)`.
+- Backlog 112.1 rewritten: the SPARQL of a filtered and an unfiltered path over one relation is
+  right now, but both answer under one result key and the mapping keeps one list
+  (`[p.friends.name, p.friends.where(Carl).hobby]` → bob `[{carl, hobby}]`); refuse or nest apart
+  (close to backlog 023 / decision 4).
+- Tests: five goldens in `sparql-select-golden.test.ts` ("filtered traversals of their own,
+  outer subjects in components"); six lowering and five live tests in
+  `inline-filter-outer-refs-and-filtered-size.test.ts`; the live dataset gained `bobby` (named
+  Bob, best friend bob, a friend of bob).
+
+### Verification
+
+```
+$ time npx tsc -p tsconfig-tests.json --noEmit
+real	0m12.423s                (no diagnostics)
+
+$ time NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs \
+    src/tests/inline-filter-outer-refs-and-filtered-size.test.ts \
+    src/tests/sparql-select-golden.test.ts src/tests/ir-select-golden.test.ts
+Test Suites: 3 passed, 3 total
+Tests:       8 skipped, 208 passed, 216 total
+real	0m6.281s
+
+$ time NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs
+Test Suites: 3 failed, 19 skipped, 159 passed, 162 of 181 total
+Tests:       51 failed, 634 skipped, 2898 passed, 3583 total
+real	0m37.549s
+```
+
+The three failing suites are the build-dependent ones (no `lib/`), as before.
+
+On oxigraph, the test file with its live block run against oxigraph instead of Fuseki (a copy in a
+scratch directory, `executeSparqlQuery` swapped for an in-memory oxigraph store):
+`Tests: 32 passed, 32 total`, including
+
+```
+✓ a plain and a filtered size of one relation: bob 3 friends, 1 Carl
+✓ two filtered sizes: bob 1 Carl and 1 Anna, carl 0 and 1
+✓ a preloaded component: the best friend's friends named like the best friend
+✓ a where on the counted relation: bob 1, carl 0
+✓ a member compared with the outer subject: bob gets bobby
+✓ filtered size: 1 for anna, dirk and bobby (best friend bob), 0 for everyone else (kept)
+```
+
+and per person (a probe on the same store):
+
+```
+1 n+c          {"carl":[1,0],"bob":[3,1],"anna":[0,0],"ann":[0,0],"bobby":[0,0],"erik":[1,0],"dirk":[0,0]}
+1b nested d+c  {"carl":[1,0],"bob":[0,0],"anna":[3,1],"ann":[0,0],"bobby":[3,1],"erik":[0,0],"dirk":[3,1]}
+2 carls+annas  {"carl":[0,1],"bob":[1,1],"anna":[0,0],"ann":[0,0],"bobby":[0,0],"erik":[0,0],"dirk":[0,0]}
+3 preloadFor   anna → bestFriend bob → friends [{id: bobby, fr: "Bob"}]
+4 size+where   {"carl":0,"bob":1}
+4b path+where  {"carl":[],"bob":["carl"]}
+6 equals outer {"bob":["bobby"], everyone else []}
+```
+
+### Decisions
+
+| # | Where | Problem | Choice | Alternative | Rationale |
+|---|-------|---------|--------|-------------|-----------|
+| 10 | review fixes | When may two filtered steps share a traversal | When their filters lower to the same IR (signature on placeholder aliases) | Never share | Never sharing splits `[p.friends.where(A).name, p.friends.where(A).hobby]` into two lists under one key; equal filters select equal members |
+| 11 | review fixes | 4's filtered-path half | Fixed by the same change (a filtered path's traversal is its own); the one-key result shape stays in backlog 112.1 | Leave it in 112 | One mechanism; the remaining part is result mapping, not SPARQL |
+| 12 | review fixes | Re-rooting a preloaded component | Copy its FieldSet with outer paths prefixed at the preload | Re-root at desugar | One place (the `preloadFor` branch covers `.preload()`); components stay unchanged for other hosts |

@@ -79,3 +79,12 @@ const outerPathOf = (root: object): string[] | undefined => {
   const prefix = outerPathOf(chainRootOf(source));
   return prefix && [...prefix, ...segmentIdsOf(source)];
 };
+
+/**
+ * The property ids from the query root to `obj`, through the sub-selects it is traced in: where a
+ * preloaded component's subject sits in the host query.
+ */
+export const pathFromQueryRoot = (obj: TraceObject): string[] => [
+  ...(outerPathOf(chainRootOf(obj)) ?? []),
+  ...segmentIdsOf(obj),
+];

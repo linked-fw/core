@@ -499,6 +499,27 @@ export const isOuterReference = (placeholder: string): boolean =>
   placeholder.startsWith(OUTER_REF_PREFIX) || placeholder.startsWith(UNSCOPED_REF_PREFIX);
 
 /**
+ * `node` with the paths it reads from the outer subject moved under `prefix` (property ids): an
+ * outer path runs from the root of the query it was traced in, and a preloaded component's query
+ * becomes part of a host query at `prefix`. Unchanged (the same object) when it reads none.
+ */
+export function reRootOuterReferences<T extends ExpressionNode | ExistsCondition>(node: T, prefix: readonly string[]): T {
+  if (prefix.length === 0) return node;
+  if (isLinkedInstance(node, ExistsCondition)) {
+    const ec = node as ExistsCondition;
+    const predicate = reRootOuterReferences(ec.predicate, prefix);
+    const chain = ec.chain.map(({op, condition}) => ({op, condition: reRootOuterReferences(condition, prefix)}));
+    if (predicate === ec.predicate && chain.every((c, i) => c.condition === ec.chain[i].condition)) return node;
+    return new ExistsCondition(ec.pathSegmentIds, predicate, ec.negated, chain, ec.memberShapeId) as T;
+  }
+  const en = node as ExpressionNode;
+  if (![...en._refs.keys()].some((k) => k.startsWith(OUTER_REF_PREFIX))) return node;
+  const refs = new Map<string, readonly string[]>();
+  for (const [k, v] of en._refs) refs.set(k, k.startsWith(OUTER_REF_PREFIX) ? [...prefix, ...v] : v);
+  return new ExpressionNode(en.ir, refs) as T;
+}
+
+/**
  * Resolves the traversal part of an outer reference (property ids from the query root) to the
  * alias it reaches, or throws when that alias is not in scope.
  */

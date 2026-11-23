@@ -543,6 +543,12 @@ class VariableRegistry {
     this.entries.push({alias, property, variable});
   }
 
+  /** A binding listed by `bindings()` (graph routing), never returned by `get`. */
+  record(alias: string, property: string, variable: string): void {
+    this.usedVarNames.add(variable);
+    this.entries.push({alias, property, variable});
+  }
+
   /**
    * Binds `key` (an alias that is not a subject: an outer reference's own key) to a fresh variable
    * named after `alias` and `property`, as `getOrCreate` names one.
@@ -1992,8 +1998,11 @@ function processPattern(
       break;
 
     case 'traverse': {
-      // Register the traverse variable: (from, property) → to
-      registry.set(pattern.from, pattern.property, pattern.to);
+      // Register the traverse variable: (from, property) → to. A filtered traversal holds only
+      // its filter's members, so a plain read of the same property (`p.friends.size()` beside
+      // `p.friends.where(…).size()`) must not resolve to it: it is recorded, not looked up.
+      if (pattern.filter) registry.record(pattern.from, pattern.property, pattern.to);
+      else registry.set(pattern.from, pattern.property, pattern.to);
       // Traversals wrapped in a sub-SELECT (inner LIMIT/OFFSET) are emitted
       // separately — don't add their triple to the required BGP here.
       if (subSelectAliases?.has(pattern.to)) {

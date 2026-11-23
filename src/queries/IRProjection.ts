@@ -15,7 +15,8 @@ export type InlineFilterCallback = (
 
 export type ProjectionPathLoweringOptions = {
   rootAlias: string;
-  resolveTraversal: (fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number) => string;
+  /** `where`: the step's inline filter; a filtered step's traversal is not shared with others. */
+  resolveTraversal: (fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number, where?: DesugaredWhere) => string;
 };
 
 export type CanonicalProjectionResult = {
@@ -67,7 +68,7 @@ export const lowerSelectionPathExpression = (
     if (step.kind === 'property_step') {
       if (step.where && onInlineFilter) {
         // Force traversal creation for step with inline where
-        currentAlias = options.resolveTraversal(currentAlias, step.propertyShapeId, step.pathExpr, step.maxCount);
+        currentAlias = options.resolveTraversal(currentAlias, step.propertyShapeId, step.pathExpr, step.maxCount, step.where);
         onInlineFilter(currentAlias, step.where);
         if (isLast) {
           return {kind: 'alias_expr', alias: currentAlias};
@@ -100,7 +101,7 @@ export const lowerSelectionPathExpression = (
       // nodes. (A plain size counts the property's values.)
       const filtered = step.path.length === 1 && step.path[0].where ? step.path[0] : undefined;
       if (filtered && onInlineFilter) {
-        const memberAlias = options.resolveTraversal(currentAlias, filtered.propertyShapeId, filtered.pathExpr, filtered.maxCount);
+        const memberAlias = options.resolveTraversal(currentAlias, filtered.propertyShapeId, filtered.pathExpr, filtered.maxCount, filtered.where);
         onInlineFilter(memberAlias, filtered.where!);
         return {kind: 'aggregate_expr', name: 'count', args: [{kind: 'alias_expr', alias: memberAlias}]};
       }

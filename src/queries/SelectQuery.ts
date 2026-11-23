@@ -871,13 +871,16 @@ function nodeEquals(
   if (isLinkedInstance(otherValue, PendingQueryContext)) {
     return self.eq(otherValue as any);
   }
+  // Another query path (`f.bestFriend.equals(p)`, a node of the query itself): compared as a
+  // traced node, before the `{id}` check (a query object has no id, and is not JSON).
+  if (isLinkedInstance(otherValue, QueryBuilderObject)) {
+    return self.eq(toExpressionNode(otherValue as unknown as QueryBuilderObject) as any);
+  }
   //validate the value is formed correctly
   if (!otherValue?.id) {
     throw Error(`Invalid value for .equals(). ${JSON.stringify(otherValue)}`);
   }
-  const arg = isLinkedInstance(otherValue, QueryBuilderObject)
-    ? toExpressionNode(otherValue)
-    : otherValue;
+  const arg = otherValue;
   return self.eq(arg as any);
 }
 
