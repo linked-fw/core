@@ -173,7 +173,8 @@ const RELATION_OPTION_KEYS = new Set([
 
 /**
  * A result key the object form cannot use: `id` is the identity of the row the key is a field of
- * (a field under it would overwrite the row's id).
+ * (a field under it would overwrite the row's id); `__proto__` is not a field of a plain object
+ * (assigning it would replace the row's prototype). A key from DSL-JSON may come from anywhere.
  */
 const assertResultKey = (key: string): void => {
   if (key === 'id') {
@@ -182,19 +183,30 @@ const assertResultKey = (key: string): void => {
       '`id`. Name the field differently.',
     );
   }
+  if (key === '__proto__') {
+    throw new Error(
+      'Select: "__proto__" cannot be a key of the object form: it is not a field of a plain ' +
+      'object. Name the field differently.',
+    );
+  }
 };
 
 /**
- * A DSL-JSON field's key: `customKey` and `as` both name it. Two different names for one field
- * are refused.
+ * A DSL-JSON field's key: `customKey` and `as` both name it, each a string (an empty one names
+ * nothing, as before). Two different names for one field are refused.
  */
-const checkJsonKey = (customKey: string | undefined, as: string | undefined): void => {
+const checkJsonKey = (customKey: unknown, as: unknown): void => {
+  for (const [name, value] of [['customKey', customKey], ['as', as]] as const) {
+    if (value !== undefined && typeof value !== 'string') {
+      throw new Error(`A DSL-JSON field's "${name}" must be a string, not ${JSON.stringify(value)}.`);
+    }
+  }
   if (customKey && as && customKey !== as) {
     throw new Error(
       `A DSL-JSON field names its key twice: "customKey": "${customKey}" and "as": "${as}". Use one.`,
     );
   }
-  const key = customKey || as;
+  const key = (customKey || as) as string | undefined;
   if (key) assertResultKey(key);
 };
 
@@ -719,9 +731,9 @@ export class FieldSet<R = any, Source = any> {
         path: new PropertyPath(shape, []),
         expressionNode: new ExpressionNode(ir, refs),
       };
+      checkJsonKey(computed.customKey, computed.as);
       if (computed.as) entry.alias = computed.as;
       if (computed.customKey) entry.customKey = computed.customKey;
-      checkJsonKey(computed.customKey, computed.as);
       return entry;
     }
     // Relation-keyed: the single non-option key is the relation path.
@@ -736,9 +748,9 @@ export class FieldSet<R = any, Source = any> {
     const entry: FieldSetEntry = {path};
     const subFields = Array.isArray(spec) ? spec : spec.fields;
     const opts = Array.isArray(spec) ? ({} as FieldSetRelationOptionsJSON) : spec;
+    checkJsonKey(opts.customKey, opts.as);
     if (opts.as) entry.alias = opts.as;
     if (opts.customKey) entry.customKey = opts.customKey;
-    checkJsonKey(opts.customKey, opts.as);
     if (opts.aggregation) {
       // `count` (`.size()`) is the only aggregation a relation field carries; min/max and the
       // rest travel as computed fields. Anything else would be read as the bare path.

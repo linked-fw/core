@@ -114,6 +114,11 @@ function warnInlineFunction(fn: () => any, fnIsNew: boolean) {
  * not re-invoked — but it is re-thrown to the caller, never returned as if it were a value; a
  * rejected promise likewise stays cached. Without it, a promise that rejects is evicted, so the
  * next call runs `fn` again (the caller still receives the rejection).
+ *
+ * Entries are held until they are looked up again after expiring, or invalidated: an expired
+ * entry that is never asked for again stays in memory (the keyed form holds its keys strongly).
+ * With args from an open-ended set (request input, ids), pass a `cacheTimeMs` and call
+ * {@link invalidateCached}, or keep such values out of the args.
  */
 export function cached<T>(
   key: string,

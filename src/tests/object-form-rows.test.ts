@@ -317,4 +317,29 @@ describe('object form: refused at build time', () => {
       FieldSet.fromJSON({shape: Person.shape.id, fields: [{name: {as: 'a', customKey: 'b'}}]}),
     ).toThrow(/names its key twice/);
   });
+
+  // A key from DSL-JSON may come from anywhere: `__proto__` would replace the row's prototype
+  // (the field lost, the member row's fields inherited), a non-string would name a field oddly.
+  test('the key __proto__ and a key that is not a string', () => {
+    expect(() =>
+      build(() => Person.select((p) => ({['__proto__']: p.friends.select((f) => ({n: f.name}))}) as any)),
+    ).toThrow(/"__proto__" cannot be a key/);
+    expect(() => build(() => Person.select((p) => p.friends.select((f) => ({['__proto__']: f.name}) as any)))).toThrow(
+      /"__proto__" cannot be a key/,
+    );
+    expect(() => FieldSet.fromJSON({shape: Person.shape.id, fields: [{name: {as: '__proto__'}}]})).toThrow(
+      /"__proto__" cannot be a key/,
+    );
+    expect(() =>
+      FieldSet.fromJSON(JSON.parse(`{"shape": ${JSON.stringify(Person.shape.id)}, "fields": [{"name": {"customKey": "__proto__"}}]}`)),
+    ).toThrow(/"__proto__" cannot be a key/);
+    expect(() => FieldSet.fromJSON({shape: Person.shape.id, fields: [{name: {as: 5 as any}}]})).toThrow(
+      /"as" must be a string/,
+    );
+    expect(() => FieldSet.fromJSON({shape: Person.shape.id, fields: [{name: {customKey: {} as any}}]})).toThrow(
+      /"customKey" must be a string/,
+    );
+    // `constructor` is an ordinary own field of a row.
+    expect(() => build(() => Person.select((p) => ({constructor: p.name}) as any))).not.toThrow();
+  });
 });
