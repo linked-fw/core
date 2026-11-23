@@ -58,6 +58,8 @@ export const objectFormCases = {
   subSizeFiltered: () =>
     Person.select((p) => p.friends.select((f) => [f.name, f.friends.where((g) => g.name.equals('Jinx')).size()])),
   subExpr: () => Person.select((p) => ({x: p.friends.select((f) => ({e: f.name.equals('Moa')}))})),
+  subExprFiltered: () =>
+    Person.select((p) => p.friends.where((f) => f.hobby.equals('Golf')).select((f) => ({x: f.name.concat('!')}))),
   subExprFilteredBeside: () =>
     Person.select((p) =>
       p.friends.where((f) => f.hobby.equals('Golf')).select((f) => ({x: f.name.concat('!'), n: f.name})),
@@ -138,6 +140,7 @@ export const objectFormRows: Record<ObjectFormCase, ResultRow[] | ResultRow | nu
     {id: p2, x: [{id: p3, e: false}]},
     {id: p3, x: []},
   ],
+  subExprFiltered: [{id: p1, friends: [{id: p2, x: 'Moa!'}]}, {id: p2, friends: []}, {id: p3, friends: []}],
   subExprFilteredBeside: [
     {id: p1, friends: [{id: p2, x: 'Moa!', n: 'Moa'}]},
     {id: p2, friends: []},

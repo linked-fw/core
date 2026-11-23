@@ -285,7 +285,7 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 - [x] S6 — report 117
 - [x] S2 — report 118
 - [x] S3 — report 119
-- [ ] S8 — report 121
+- [x] S8 — report 121
 - [x] S9 — report 122
 - [x] S5 — report 120
 - [x] S10 — report 123

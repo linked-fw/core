@@ -1115,6 +1115,48 @@
    }
   }
  },
+ "subExprFiltered": {
+  "sparql": "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\nSELECT DISTINCT ?a0 (CONCAT(?a1_name, \"!\") AS ?a1_expr) ?a1\nWHERE {\n  ?a0 rdf:type <https://example.org/types/Person> .\n  OPTIONAL {\n    ?a0 <https://example.org/props/hasFriend> ?a1 .\n    OPTIONAL {\n      ?a1 <https://example.org/props/hobby> ?a1_hobby .\n    }\n    OPTIONAL {\n      ?a1 <https://example.org/props/name> ?a1_name .\n    }\n    FILTER(?a1_hobby = \"Golf\")\n  }\n}",
+  "results": {
+   "head": {
+    "vars": [
+     "a0",
+     "a1_expr",
+     "a1"
+    ]
+   },
+   "results": {
+    "bindings": [
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p1"
+      },
+      "a1_expr": {
+       "type": "literal",
+       "value": "Moa!"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      }
+     }
+    ]
+   }
+  }
+ },
  "subExprFilteredBeside": {
   "sparql": "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\nSELECT DISTINCT ?a0 (CONCAT(?a1_name, \"!\") AS ?a1_expr) ?a1_name ?a1\nWHERE {\n  ?a0 rdf:type <https://example.org/types/Person> .\n  OPTIONAL {\n    ?a0 <https://example.org/props/hasFriend> ?a1 .\n    OPTIONAL {\n      ?a1 <https://example.org/props/hobby> ?a1_hobby .\n    }\n    OPTIONAL {\n      ?a1 <https://example.org/props/name> ?a1_name .\n    }\n    FILTER(?a1_hobby = \"Golf\")\n  }\n}",
   "results": {
