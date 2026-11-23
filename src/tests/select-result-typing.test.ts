@@ -2,7 +2,9 @@
  * Select result types and runtime agree:
  * - a multi-valued literal (`string[]`, no maxCount) is typed as an array field of the row;
  * - the expression methods of a path (`isDefined()`, `strlen()`, …) are in its type, and run;
- * - a relation projected bare next to a where that traverses it returns its `{id}`.
+ * - a relation projected bare next to a where that traverses it returns its `{id}`;
+ * - a relation field in the object form of select is a node reference (`{id}` / `{id}[]`), as in
+ *   the array form, while a sub-select keeps the object of its selected fields.
  */
 import {describe, expect, test, beforeAll, afterAll} from '@jest/globals';
 import {Person, tmpEntityBase, personClass, propBase} from '../test-helpers/query-fixtures';
@@ -28,6 +30,8 @@ const DATA = `
 <${ENT}p1> <${PROP}nickName> "Sem1" .
 <${ENT}p1> <${PROP}nickName> "Sem" .
 <${ENT}p1> <${PROP}bestFriend> <${ENT}p2> .
+<${ENT}p1> <${PROP}hasFriend> <${ENT}p2> .
+<${ENT}p1> <${PROP}hasFriend> <${ENT}p3> .
 <${ENT}p2> <${RDF_TYPE}> <${personClass.id}> .
 <${ENT}p2> <${PROP}name> "Moa" .
 <${ENT}p2> <${PROP}bestFriend> <${ENT}p3> .
@@ -46,6 +50,14 @@ const queries = {
   bestFriendNotDefined: () => Person.select((p) => [p.name]).where((p) => p.bestFriend.isNotDefined()),
   bareRelationWithWhere: () =>
     Person.select((p) => [p.name, p.bestFriend]).where((p) => p.bestFriend.name.equals('Jinx')),
+  keyedRelations: () => Person.select((p) => ({friend: p.bestFriend, all: p.friends, name: p.name})),
+  keyedRelationOne: () => Person.select((p) => ({friend: p.bestFriend})).one(),
+  keyedRelationsFor: () =>
+    Person.select((p) => ({friend: p.bestFriend, all: p.friends})).for({id: `${ENT}p1`}),
+  keyedRelationInSubSelect: () =>
+    Person.select((p) => p.friends.select((f) => ({friend: f.bestFriend, name: f.name}))),
+  keyedSubSelect: () =>
+    Person.select((p) => ({info: p.bestFriend.select((bf) => ({friend: bf.bestFriend, name: bf.name}))})),
 };
 
 describe('select result types (compile-time)', () => {
@@ -60,6 +72,37 @@ describe('select result types (compile-time)', () => {
   test('a bare relation is a node reference', () => {
     type Row = Awaited<ReturnType<typeof queries.bareRelationWithWhere>>[number];
     assertType<Equals<Row['bestFriend'], {id: string}>>();
+  });
+
+  test('a relation field in the object form is a node reference', () => {
+    type Row = Awaited<ReturnType<typeof queries.keyedRelations>>[number];
+    assertType<Equals<Row['friend'], {id: string}>>();
+    assertType<Equals<Row['all'], {id: string}[]>>();
+    assertType<Equals<Row['name'], string>>();
+    // the row holds the friend's id only, not the shape's fields
+    assertType<Equals<'name' extends keyof Row['friend'] ? true : false, false>>();
+  });
+
+  test('.one() and .for(id) keep the node reference', () => {
+    type One = Awaited<ReturnType<typeof queries.keyedRelationOne>>;
+    assertType<Equals<One['friend'], {id: string}>>();
+    type For = Awaited<ReturnType<typeof queries.keyedRelationsFor>>;
+    assertType<Equals<For['friend'], {id: string}>>();
+    assertType<Equals<For['all'], {id: string}[]>>();
+  });
+
+  test('a relation field in the object of a sub-select is a node reference', () => {
+    type Row = Awaited<ReturnType<typeof queries.keyedRelationInSubSelect>>[number];
+    type Friend = Row['friends'][number];
+    assertType<Equals<Friend['friend'], {id: string}>>();
+    assertType<Equals<Friend['name'], string>>();
+  });
+
+  test('a sub-select keeps the object of its selected fields', () => {
+    type Row = Awaited<ReturnType<typeof queries.keyedSubSelect>>[number];
+    type Info = Row['info']['bestFriend'];
+    assertType<Equals<Info['name'], string>>();
+    assertType<Equals<Info['friend'], {id: string}>>();
   });
 });
 
@@ -110,6 +153,32 @@ describe('a bare relation next to a where that traverses it (unit)', () => {
   });
 });
 
+describe('a relation field in the object form (unit)', () => {
+  test('holds the node reference, one per value', async () => {
+    const ir = (await captureQuery(queries.keyedRelations)) as IRSelectQuery;
+    const sparql = selectToSparql(ir);
+    expect(sparql).toMatch(/SELECT DISTINCT \?a0 \?a0_bestFriend \?a0_friends \?a0_name\b/);
+    const binding = (friend: string) => ({
+      a0: {type: 'uri' as const, value: `${ENT}p1`},
+      a0_bestFriend: {type: 'uri' as const, value: `${ENT}p2`},
+      a0_friends: {type: 'uri' as const, value: `${ENT}${friend}`},
+      a0_name: {type: 'literal' as const, value: 'Semmy'},
+    });
+    const rows = mapSparqlSelectResult(
+      {
+        head: {vars: ['a0', 'a0_bestFriend', 'a0_friends', 'a0_name']},
+        results: {bindings: [binding('p2'), binding('p3')]},
+      },
+      ir,
+    ) as ResultRow[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].friend).toEqual({id: `${ENT}p2`});
+    expect(rows[0].all).toEqual(expect.arrayContaining([{id: `${ENT}p2`}, {id: `${ENT}p3`}]));
+    expect((rows[0].all as unknown[]).length).toBe(2);
+    expect(rows[0].name).toBe('Semmy');
+  });
+});
+
 beforeAll(async () => {
   if (!fusekiLive) return;
   await createTestDataset();
@@ -148,5 +217,20 @@ describeFuseki('select result typing', () => {
     expect(await runLive(queries.bareRelationWithWhere)).toEqual([
       {id: `${ENT}p2`, name: 'Moa', bestFriend: {id: `${ENT}p3`}},
     ]);
+  });
+
+  test('a relation field in the object form returns node references', async () => {
+    const rows = await runLive(queries.keyedRelations);
+    const p1 = rows.find((r) => r.id === `${ENT}p1`);
+    expect(p1?.friend).toEqual({id: `${ENT}p2`});
+    expect(p1?.all).toEqual(expect.arrayContaining([{id: `${ENT}p2`}, {id: `${ENT}p3`}]));
+    expect((p1?.all as unknown[]).length).toBe(2);
+    expect(rows.find((r) => r.id === `${ENT}p3`)?.all).toEqual([]);
+  });
+
+  test('a relation field in the object of a sub-select returns a node reference', async () => {
+    const rows = await runLive(queries.keyedRelationInSubSelect);
+    const friends = rows.find((r) => r.id === `${ENT}p1`)?.friends as ResultRow[];
+    expect(friends.find((f) => f.id === `${ENT}p2`)).toEqual({id: `${ENT}p2`, name: 'Moa', friend: {id: `${ENT}p3`}});
   });
 });

@@ -421,7 +421,12 @@ export type CreateQResult<
     ? //if the parent source is null, that means this is the final source-node in the query
       ParentSource extends null
       ? HasName extends true
-        ? Value
+        ? //a named field (object form of select): the key is known, so the value is returned unwrapped.
+          //A relation (Value is the shape) holds a node reference at runtime, `{id}`, plus what a
+          //preloadFor component selects (SubProperties); never the shape instance itself.
+          Value extends Shape
+          ? QResult<Value, SubProperties>
+          : Value
         : //TODO: this must be simplified and rewritten
           // it is likely the most complex part of the type system currently
           // It turns out that sub-.select() on a QueryShapeSet ends up here with Value being null, and sub properties need to be added to the QResult itself
@@ -497,11 +502,12 @@ export type CreateShapeSetQResult<
 > =
   Source extends QueryShape<infer SourceShapeType, infer ParentSource>
     ? //if HasName is true and source is a QueryShape, but ITS source (ParentSource) is null
-      //then we don't want to create a nested QResult, but instead we ignore this last property and we return an array of QResults of this source
-      //This is used by custom object keys with values like: p.friends, which should return an array of QResult<Person> Objects, not a {friends:...} QResult
+      //then we don't want to create a nested QResult, but instead we ignore this last property and we return an array of the members
+      //This is used by custom object keys with values like: p.friends, which hold node references at runtime ({id}[], plus what a
+      //preloadFor component selects), not a {friends:...} QResult
       //NOTE: this notation check if 2 statements are true: HasName is true, and ParentSource is null
       [HasName, ParentSource] extends [true, null]
-      ? CreateQResult<Source, null, never>[]
+      ? QResult<ShapeType extends Shape ? ShapeType : Shape, SubProperties>[]
       : ParentSource extends null
         ? QResult<
             SourceShapeType,

@@ -920,6 +920,14 @@ const mixed = await Person.select((p) => [p.name, p.knows, p.bestFriend.name]);
 const deep = await Person.select((p) => p.knows.bestFriend.name);
 ```
 
+#### Custom keys (object form)
+```typescript
+/* Result: Array<{id: string; friend: {id: string}; contacts: Array<{id: string}>; label: string}> */
+const keyed = await Person.select((p) => ({friend: p.bestFriend, contacts: p.knows, label: p.name}));
+```
+A relation selected bare holds node references (`{id}`), in both forms; select its fields with a
+sub-select (`p.bestFriend.select((f) => ({name: f.name}))`).
+
 #### Sub-queries
 ```typescript
 const detailed = await Person.select((p) =>
