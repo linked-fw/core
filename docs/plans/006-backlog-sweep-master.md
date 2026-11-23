@@ -112,6 +112,9 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 | 22 | S9 scope | `{e: p.bestFriend.name.concat('!')}` makes the hop required and drops the instance | Sent to S9 (projection keeps every instance, report 107 rule) | Backlog | Silent wrong answer in S9's area |
 | 23 | S9 follow-up, backlog 113 | `||` in a delete/update where makes every triple required: fewer subjects change than should (silent, data-affecting) | New step S10 (report 123), run by the S9 agent (same required/optional split) | Leave in backlog | Correctness first; a mutation that silently skips rows is the most costly kind of wrong answer |
 | 24 | S9 ledger #10, backlog 112.7 | A where shares its traversal with a projection/count of the same relation (`{n: p.friends.size()}` + `where(p.friends.name = 'Anna')` → n counts only Annas) | Leave in backlog 112.7 for the owner | Give every where its own traversal | Long-standing documented-by-behaviour semantics; changing it changes many answers — an owner call |
+| 25 ⚠ risky | S10 | A delete/update where with `||` or `isNotDefined()` used to change too few subjects (or none) | Match what a select's where matches; the changeset calls out that such mutations now delete/update more | Keep the old (wrong) matching | Correctness; but apps relying on the no-op now lose rows — flagged for the owner |
+| 26 ⚠ risky | S9 review HIGH 1 | A hop under a bare `isNotDefined()`/`defaultTo()` became OPTIONAL: `deleteWhere(p.bestFriend.name.isNotDefined())` deleted 7 instead of 1 | Keep base semantics: the path's relations must exist, only the leaf may be missing; only an `||` branch makes a hop optional | "No value at the path" reading | Safety (destructive in mutations) and backward compatibility; consistent with `.equals()` requiring the hop |
+| 27 | S9 review MEDIUM 4 | Under `every`, a member lacking the predicate's hop passes | It is a counterexample (fails the predicate), for plain and filtered `every`; `some`/`none` unchanged | Document today's behaviour | Correctness: "every friend's best friend is Erik" is false for a friend without one |
 
 ## Contracts
 
@@ -271,8 +274,8 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 | S2 | 079 refuse agg in EXISTS + 111 items 1–2 | S1 | done | bb31db3..b9d4429, 2e2f82e | 118 | review: `.as()` cast regression, fixed |
 | S3 | 023 duplicate fields | S1 | done | 3e328a2..f462e96 | 119 | fix round: decision 17 |
 | S8 | 110 object-form rows follow their keys | S3 | in progress | | 121 | plan doc 007 |
-| S9 | 112 inline-filter / size lowering edges | S2 | done | d81ff18..107a39a | 122 | 112 reduced to 4, 6 (refused half), 7; follow-up 113 → S10; review running |
-| S10 | 113 `||` in mutation where | S9 | in progress | | 123 | |
+| S9 | 112 inline-filter / size lowering edges | S2 | done | d81ff18..107a39a | 122 | 112 reduced to 4, 6 (refused half), 7; follow-up 113 → S10; review: destructive isNotDefined hop regression + every → fix round (decisions 26, 27) |
+| S10 | 113 `||` in mutation where | S9 | done | 027d44c | 123 | ⚠ deletes more (decision 25) |
 | W1 | wave 1 run + review of S1 | – | done | fixes d208c9e | – | 2938 passed, 0 failed (Fuseki skipped); review: 3 wrong answers, fixed |
 
 ## Progress
