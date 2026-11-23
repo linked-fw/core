@@ -11,7 +11,7 @@ import type {
   DesugaredStep,
   DesugaredWhere,
 } from './IRDesugar.js';
-import {resolveExpressionRefs, ExistsCondition} from '../expressions/ExpressionNode.js';
+import {resolveExpressionRefs, ExistsCondition, type OuterReferenceResolver} from '../expressions/ExpressionNode.js';
 import {resolveContextId} from './ContextRef.js';
 import type {
   IRExpression,
@@ -25,6 +25,7 @@ import type {
 } from './IntermediateRepresentation.js';
 import {lowerSelectionPathExpression, projectionKeyFromPath} from './IRProjection.js';
 import {IRAliasScope} from './IRAliasScope.js';
+import {labelOfId} from './castPaths.js';
 import {attachCatalog} from '../utils/ShapeClass.js';
 import type {PathExpr} from '../paths/PropertyPathExpr.js';
 import {isLinkedInstance} from '../utils/linkedError.js';
@@ -85,6 +86,11 @@ class LoweringContext {
   /** The traversal `getOrCreateTraversal` would share for this step, if there is one. */
   existingTraversal(fromAlias: string, propertyShapeId: string): string | undefined {
     return this.traverseMap.get(`${fromAlias}:${propertyShapeId}`);
+  }
+
+  /** The traversal reaching `toAlias`, if `toAlias` is a traversal's target. */
+  traversalTo(toAlias: string): IRTraversePattern | undefined {
+    return this.patterns.find((p): p is IRTraversePattern => p.kind === 'traverse' && p.to === toAlias);
   }
 
   /** Whether an inline filter is attached to the traversal reaching `toAlias`. */
@@ -163,6 +169,8 @@ type AliasGenerator = {
 type PathLoweringOptions = {
   rootAlias: string;
   resolveTraversal: (fromAlias: string, propertyShapeId: string, pathExpr?: PathExpr, maxCount?: number) => string;
+  /** An inline filter's: resolves a path it reads from the outer subject. */
+  resolveOuter?: OuterReferenceResolver;
 };
 
 /**
@@ -226,6 +234,7 @@ const lowerWhere = (
         exprWhere.expressionNode._refs,
         options.rootAlias,
         options.resolveTraversal,
+        options.resolveOuter,
       ));
     }
     case 'where_exists_condition': {
@@ -296,6 +305,7 @@ const lowerExistsCondition = (
           link.condition._refs,
           options.rootAlias,
           options.resolveTraversal,
+          options.resolveOuter,
         );
       }
       result = {
@@ -461,9 +471,40 @@ export const lowerSelectQuery = (
     const filterExpr = lowerWhere(where, ctx, {
       rootAlias: traverseAlias,
       resolveTraversal: pathOptions.resolveTraversal,
+      resolveOuter: outerResolverFor(traverseAlias),
     });
     ctx.attachFilter(traverseAlias, filterExpr);
   };
+
+  // A path an inline filter reads from the outer subject (`p.name`, `p.bestFriend`) resolves along
+  // the traversals that lead to the filtered one, never a traversal of its own: those are the
+  // aliases bound around the filter's block. Anything else is refused, never compared with the
+  // member itself.
+  function outerResolverFor(filteredAlias: string): OuterReferenceResolver {
+    const ancestors: IRTraversePattern[] = [];
+    for (let from = ctx.traversalTo(filteredAlias)?.from; from && from !== ctx.rootAlias; ) {
+      const pattern = ctx.traversalTo(from);
+      if (!pattern) break;
+      ancestors.push(pattern);
+      from = pattern.from;
+    }
+    return (segments) => {
+      let alias = ctx.rootAlias;
+      for (const segment of segments) {
+        const next = ancestors.find((p) => p.from === alias && p.property === segment);
+        if (!next) {
+          throw new Error(
+            `A filter reads a path from outside its own member (${segments.map(labelOfId).join('.')}) ` +
+            'that is not a hop above the filtered relation. An inline filter can read the outer ' +
+            'subject and the hops above the filtered relation (`p.bestFriend.friends.where((f) => ' +
+            'f.name.equals(p.bestFriend.name))`), not another path.',
+          );
+        }
+        alias = next.to;
+      }
+      return alias;
+    };
+  }
 
   for (const seed of projectionSeeds) {
     const key = seed.kind === 'path'

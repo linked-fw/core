@@ -1184,7 +1184,15 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       // defineProperty rather than `new Error(msg, {cause})` because this
       // package targets es6, where that overload is not typed; the property
       // shape (own, non-enumerable) is identical.
-      const wrapped = Error(`Error while executing query: ${(err as Error).stack}.\n\nQuery related to this error: ${JSON.stringify(this.toJSON())}`);
+      // A query with no DSL-JSON form (an inline filter reading the outer subject) still names
+      // the original error, not the serialization's.
+      let queryJson: string;
+      try {
+        queryJson = JSON.stringify(this.toJSON());
+      } catch (jsonErr) {
+        queryJson = `(not serializable: ${(jsonErr as Error).message})`;
+      }
+      const wrapped = Error(`Error while executing query: ${(err as Error).stack}.\n\nQuery related to this error: ${queryJson}`);
       Object.defineProperty(wrapped, 'cause', {
         value: err,
         writable: true,

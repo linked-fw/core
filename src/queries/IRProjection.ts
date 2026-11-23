@@ -95,6 +95,18 @@ export const lowerSelectionPathExpression = (
     }
 
     if (step.kind === 'count_step') {
+      // A filtered size (`p.friends.where(…).size()`) counts the members the filter keeps: the
+      // members are a traversal of their own, filtered like any filtered step, and counted as
+      // nodes. (A plain size counts the property's values.)
+      const filtered = step.path.length === 1 && step.path[0].where ? step.path[0] : undefined;
+      if (filtered && onInlineFilter) {
+        const memberAlias = options.resolveTraversal(currentAlias, filtered.propertyShapeId, filtered.pathExpr, filtered.maxCount);
+        onInlineFilter(memberAlias, filtered.where!);
+        return {kind: 'aggregate_expr', name: 'count', args: [{kind: 'alias_expr', alias: memberAlias}]};
+      }
+      if (step.path.some((s) => s.where)) {
+        throw new Error('A filtered size() can only be lowered with its filter: this path has none to attach it to.');
+      }
       return {
         kind: 'aggregate_expr',
         name: 'count',

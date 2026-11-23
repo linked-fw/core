@@ -206,12 +206,20 @@ const desugarEntry = (entry: FieldSetEntry): DesugaredSelection => {
       return {kind: 'selection_path', steps: []};
     }
     const lastSegment = segments[segments.length - 1];
+    const counted: DesugaredPropertyStep = {kind: 'property_step', propertyShapeId: lastSegment.id};
     const countStep: DesugaredCountStep = {
       kind: 'count_step',
-      path: [{kind: 'property_step', propertyShapeId: lastSegment.id}],
+      path: [counted],
       label: entry.customKey || lastSegment.label,
     };
     const parentSteps = segmentsToSteps(segments.slice(0, -1));
+    // A filtered size: the filter sits on the counted relation or on a hop above it.
+    if (entry.scopedFilter) {
+      const filterIndex = entry.scopedFilterIndex ?? (segments.length - 1);
+      const filtered = filterIndex === segments.length - 1 ? counted : parentSteps[filterIndex];
+      if (!filtered) throw new Error(`A size() filter names segment ${filterIndex}, which its path does not have.`);
+      filtered.where = toWhere(entry.scopedFilter);
+    }
     return {
       kind: 'selection_path',
       steps: [...parentSteps, countStep],

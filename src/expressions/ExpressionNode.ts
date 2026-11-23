@@ -469,6 +469,48 @@ export function tracedAliasExpression(
   return new ExpressionNode(ir, refs);
 }
 
+/** Placeholder prefixes of a path an inline filter reads from outside its member. */
+const OUTER_REF_PREFIX = '__outer_ref_';
+const UNSCOPED_REF_PREFIX = '__unscoped_ref_';
+
+/**
+ * A traced path an inline filter reads from outside its member (`p.name` in
+ * `p.friends.where((f) => f.name.equals(p.name))`).
+ * - `outer`: `segmentIds` run from the query root; lowering resolves them to the outer alias.
+ * - `unscoped`: the path starts at an enclosing filter's member, read from a quantifier inside
+ *   it; lowering refuses it.
+ * `kind` is `property` (the last segment is the property read) or `alias` (the node itself).
+ */
+export function tracedOuterExpression(
+  segmentIds: readonly string[],
+  kind: 'property' | 'alias',
+  scope: 'outer' | 'unscoped',
+): ExpressionNode {
+  const placeholder = `${scope === 'outer' ? OUTER_REF_PREFIX : UNSCOPED_REF_PREFIX}${_refCounter++}__`;
+  const ir: IRExpression = kind === 'property'
+    ? {kind: 'property_expr', sourceAlias: placeholder, property: segmentIds[segmentIds.length - 1]}
+    : {kind: 'alias_expr', alias: placeholder};
+  const refs = new Map<string, readonly string[]>([[placeholder, segmentIds]]);
+  return new ExpressionNode(ir, refs);
+}
+
+/** Whether a placeholder is a path read from outside an inline filter's member. */
+export const isOuterReference = (placeholder: string): boolean =>
+  placeholder.startsWith(OUTER_REF_PREFIX) || placeholder.startsWith(UNSCOPED_REF_PREFIX);
+
+/**
+ * Resolves the traversal part of an outer reference (property ids from the query root) to the
+ * alias it reaches, or throws when that alias is not in scope.
+ */
+export type OuterReferenceResolver = (traversalSegmentIds: readonly string[]) => string;
+
+const outerReferenceRefusal = (segments: readonly string[], why: string): Error =>
+  new Error(
+    `A filter reads a path from outside its own member (${segments.map(labelOfSegmentId).join('.') || 'the subject itself'}): ${why}`,
+  );
+
+const labelOfSegmentId = (id: string): string => id.slice(Math.max(id.lastIndexOf('/'), id.lastIndexOf('#')) + 1);
+
 /**
  * Resolve unresolved property references in an IRExpression tree.
  * Walks the tree and replaces placeholder sourceAlias values with
@@ -479,14 +521,41 @@ export function resolveExpressionRefs(
   refs: PropertyRefMap,
   rootAlias: string,
   resolveTraversal: (fromAlias: string, propertyShapeId: string) => string,
+  /** Given, an outer reference resolves through it; else an outer reference is refused. */
+  resolveOuter?: OuterReferenceResolver,
 ): IRExpression {
   if (refs.size === 0) return expr;
+
+  // An outer reference: the alias its traversal reaches, from the query root.
+  const outerAlias = (placeholder: string, traversal: readonly string[]): string => {
+    const path = refs.get(placeholder)!;
+    if (placeholder.startsWith(UNSCOPED_REF_PREFIX)) {
+      throw outerReferenceRefusal(
+        path,
+        'a quantifier (some/every/none) inside an inline filter can read only its own member.',
+      );
+    }
+    if (!resolveOuter) {
+      throw outerReferenceRefusal(
+        path,
+        'only an inline filter on a projected or sorted path can read the outer subject, not a quantifier inside it.',
+      );
+    }
+    return resolveOuter(traversal);
+  };
 
   const resolve = (e: IRExpression): IRExpression => {
     switch (e.kind) {
       case 'property_expr': {
         const segments = refs.get(e.sourceAlias);
         if (!segments) return e;
+        if (isOuterReference(e.sourceAlias)) {
+          return {
+            kind: 'property_expr',
+            sourceAlias: outerAlias(e.sourceAlias, segments.slice(0, -1)),
+            property: segments[segments.length - 1],
+          };
+        }
         // Resolve: first N-1 segments are traversals, last is property
         let currentAlias = rootAlias;
         for (let i = 0; i < segments.length - 1; i++) {
@@ -501,6 +570,7 @@ export function resolveExpressionRefs(
       case 'alias_expr': {
         const segments = refs.get(e.alias);
         if (!segments) return e;
+        if (isOuterReference(e.alias)) return {kind: 'alias_expr', alias: outerAlias(e.alias, segments)};
         // Resolve all segments as traversals, return alias_expr for the final alias
         let currentAlias = rootAlias;
         for (const seg of segments) {

@@ -963,6 +963,23 @@ const orQuery = await Person.select((p) =>
 );
 ```
 
+#### A filter that reads the outer subject
+
+An inline filter may compare its member with the subject it starts from, or with a hop above the
+filtered relation: the filter reads that node, never its own member.
+
+```typescript
+// The best friend's friends who share the person's name
+const namesakes = await Person.select((p) =>
+  p.bestFriend.friends.where((f) => f.name.equals(p.name)).name,
+);
+```
+
+It reads the node the filtered relation leaves from or the hop before it (`p.bestFriend.name`,
+`p.name` above); a path that is not a hop above the filtered relation, a node further up, or a
+quantifier inside the filter that reads outside its own member is refused. Such a query has no
+DSL-JSON form yet: `toJSON()` refuses it.
+
 #### Set filtering (some/every)
 ```typescript
 const implicitSome = await Person.select().where((p) =>
@@ -1004,6 +1021,16 @@ const matching = await Person.select().where((p) => p.name.equals('Semmy')).coun
 ```typescript
 /* Result: Array<{id: string; knows: number}> */
 const perPerson = await Person.select((p) => p.knows.size());
+```
+
+A filtered size counts only the members its filter keeps, and keeps every instance: one without
+the path (no best friend here) counts `0`. It can be selected, not compared (`.where((p) =>
+p.knows.where(…).size().equals(1))` is refused); compare a quantifier instead.
+
+```typescript
+const joggers = await Person.select((p) => ({
+  joggingFriends: p.bestFriend.knows.where((f) => f.hobby.equals('Jogging')).size(),
+}));
 ```
 
 A count resolves to a real number and **rejects on failure** — it never reports an unreachable store

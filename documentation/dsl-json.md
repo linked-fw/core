@@ -154,7 +154,13 @@ fields in object form (every field named), and three more keys:
 A grouped envelope cannot also carry `sortBy`, `subject`, `one` or `nullSubject`.
 Aggregates are computed fields: `["count", x]` (a count always counts distinct values),
 `["min", x]`, `["max", x]`. `.size()` on a relation stays `{ "<path>": { "aggregation": "count" } }`;
-any other `aggregation` value is refused.
+any other `aggregation` value is refused. A filtered size carries its filter as a field does
+(`{ "bestFriend.friends": { "aggregation": "count", "where": { "name": "Carl" }, "whereIndex": 1 } }`)
+and counts only the members the filter keeps.
+
+An inline filter that reads the outer subject (`p.friends.where((f) => f.name.equals(p.name))`) has
+no DSL-JSON form yet: its paths are written relative to the member, so `toJSON()` refuses it rather
+than write a condition that compares the member with itself.
 
 ## Paths
 

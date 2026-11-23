@@ -815,9 +815,11 @@ GROUP BY ?a0`);
 SELECT ?a0 (COUNT(DISTINCT ?a1_friends) AS ?a1_agg)
 WHERE {
   ?a0 rdf:type <${PT}> .
-  ?a0 <${PROP}hasFriend> ?a1 .
   OPTIONAL {
-    ?a1 <${PROP}hasFriend> ?a1_friends .
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}hasFriend> ?a1_friends .
+    }
   }
 }
 GROUP BY ?a0`);
@@ -830,9 +832,11 @@ GROUP BY ?a0`);
 SELECT ?a0 (COUNT(DISTINCT ?a1_friends) AS ?a1_agg)
 WHERE {
   ?a0 rdf:type <${PT}> .
-  ?a0 <${PROP}hasFriend> ?a1 .
   OPTIONAL {
-    ?a1 <${PROP}hasFriend> ?a1_friends .
+    ?a0 <${PROP}hasFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}hasFriend> ?a1_friends .
+    }
   }
 }
 GROUP BY ?a0`);
@@ -1750,5 +1754,55 @@ WHERE {
     })
   })
 }`);
+  });
+});
+
+describe('SPARQL golden — inline filters reading the outer subject, filtered size', () => {
+  test('an outer reference reads the outer node, bound beside the filtered block', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.bestFriend.friends.where((f) => f.name.equals(p.name)).name) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT DISTINCT ?a0 ?a2_name ?a1 ?a2
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}bestFriend> ?a1 .
+    OPTIONAL {
+      ?a0 <${PROP}name> ?a0_name .
+    }
+    OPTIONAL {
+      ?a1 <${PROP}hasFriend> ?a2 .
+      OPTIONAL {
+        ?a2 <${PROP}name> ?a2_name .
+      }
+      FILTER(?a2_name = ?a0_name)
+    }
+  }
+}`);
+  });
+
+  test('a filtered size counts the members the filter keeps, every instance kept', async () => {
+    const sparql = await goldenSelect(() =>
+      Person.select((p) => p.bestFriend.friends.where((f) => f.name.equals('Moa')).size()) as never,
+    );
+    expect(sparql).toBe(
+`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT ?a0 (COUNT(DISTINCT ?a2) AS ?a1_agg)
+WHERE {
+  ?a0 rdf:type <${PT}> .
+  OPTIONAL {
+    ?a0 <${PROP}bestFriend> ?a1 .
+    OPTIONAL {
+      ?a1 <${PROP}hasFriend> ?a2 .
+      OPTIONAL {
+        ?a2 <${PROP}name> ?a2_name .
+      }
+      FILTER(?a2_name = "Moa")
+    }
+  }
+}
+GROUP BY ?a0`);
   });
 });

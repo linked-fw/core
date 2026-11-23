@@ -26,6 +26,7 @@ import {
   type PropertyRefMap,
   tracedPropertyExpression,
   tracedAliasExpression,
+  isOuterReference,
 } from '../expressions/ExpressionNode.js';
 import type {NodeShapeData} from '../shapes/SHACL.js';
 import type {WherePath} from './SelectQuery.js';
@@ -118,6 +119,20 @@ function pathOfSegments(segmentIds: readonly string[], shape: NodeShapeData | un
 // refs merging
 // ---------------------------------------------------------------------------
 
+/**
+ * A path an inline filter reads from the outer subject has no DSL-JSON form yet: written as a
+ * member path, it would decode to the member comparing with itself. Refused.
+ */
+function assertEncodable(placeholder: string): string {
+  if (isOuterReference(placeholder)) {
+    throw new Error(
+      'An inline filter that reads the outer subject (`p.friends.where((f) => f.name.equals(p.name))`) ' +
+      'has no DSL-JSON form yet: it can be run, not serialized (toJSON).',
+    );
+  }
+  return placeholder;
+}
+
 function mergeRefs(into: Map<string, readonly string[]>, from: PropertyRefMap): void {
   for (const [k, v] of from) into.set(k, v);
 }
@@ -146,11 +161,11 @@ export function encodeValueExpr(
     case 'context_property_expr':
       return {'@ctx': ir.contextName as string, '@path': labelOf(ir.property)};
     case 'property_expr': {
-      const segs = refs.get(ir.sourceAlias);
+      const segs = refs.get(assertEncodable(ir.sourceAlias));
       return {'@path': segs ? pathOfSegments(segs, shape) : labelOf(ir.property)};
     }
     case 'alias_expr': {
-      const segs = refs.get(ir.alias);
+      const segs = refs.get(assertEncodable(ir.alias));
       // A bare alias_expr as a value is the node at the end of the traversal.
       return {'@path': segs ? pathOfSegments(segs, shape) : ir.alias};
     }
@@ -383,11 +398,11 @@ function pathKeyOf(ir: IRExpression, refs: PropertyRefMap, shape: NodeShapeData)
 
 function pathKeyOfOperand(ir: IRExpression, refs: PropertyRefMap, shape: NodeShapeData): string | null {
   if (ir.kind === 'property_expr') {
-    const segs = refs.get(ir.sourceAlias);
+    const segs = refs.get(assertEncodable(ir.sourceAlias));
     return segs ? pathOfSegments(segs, shape) : labelOf(ir.property);
   }
   if (ir.kind === 'alias_expr') {
-    const segs = refs.get(ir.alias);
+    const segs = refs.get(assertEncodable(ir.alias));
     return segs ? pathOfSegments(segs, shape) : null;
   }
   if (ir.kind === 'context_property_expr') {

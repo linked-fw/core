@@ -18,7 +18,8 @@ import {createProxiedPathBuilder} from './ProxiedPathBuilder.js';
 import {FieldSet} from './FieldSet.js';
 import {PropertyPath} from './PropertyPath.js';
 import type {QueryBuilder, QueryBuilderJSON} from './QueryBuilder.js';
-import {AggregateExpression, ExpressionNode, ExistsCondition, isExpressionNode, isExistsCondition, tracedPropertyExpression, tracedAliasExpression} from '../expressions/ExpressionNode.js';
+import {AggregateExpression, ExpressionNode, ExistsCondition, isExpressionNode, isExistsCondition, tracedPropertyExpression, tracedAliasExpression, tracedOuterExpression} from '../expressions/ExpressionNode.js';
+import {inTraceScope, traceScopeOf, withTraceScope} from './traceScopes.js';
 import {PendingQueryContext} from './QueryContext.js';
 import type {
   AggregateMethods,
@@ -763,13 +764,15 @@ const convertQueryContext = (shape: QueryShape): ShapeReferenceValue => {
 export const processWhereClause = (
   validation: WhereClause<any>,
   shape?,
+  /** An inline filter (`p.friends.where(…)`): its callback is a scope, outer paths are marked. */
+  inline = false,
 ): WherePath => {
   if (validation instanceof Function) {
     if (!shape) {
       throw new Error('Cannot process where clause without shape');
     }
     const proxy = createProxiedPathBuilder(shape);
-    const result = validation(proxy);
+    const result = inline ? withTraceScope(proxy, () => validation(proxy)) : validation(proxy);
     if (isExpressionNode(result)) {
       return {expressionNode: result};
     }
@@ -827,12 +830,34 @@ function toExpressionNode(qbo: QueryBuilderObject): ExpressionNode {
   }
 
   const segments = FieldSet.collectPropertySegments(qbo);
+  const segmentIds = segments.map((s) => s.id);
+  // Inside an inline filter, a path from another callback's proxy reads the outer subject.
+  const scope = traceScopeOf(qbo);
+  if (scope.kind !== 'own') {
+    return tracedOuterExpression(
+      [...(scope.kind === 'outer' ? scope.prefix : []), ...segmentIds],
+      segments.length === 0 ? 'alias' : 'property',
+      scope.kind,
+    );
+  }
   if (segments.length === 0) {
     // Root shape or entity reference — produce alias expression (the entity itself)
     return tracedAliasExpression([]);
   }
-  const segmentIds = segments.map((s) => s.id);
   return tracedPropertyExpression(segmentIds);
+}
+
+/**
+ * An aggregate (`size()`, `min()`, `max()`) traced inside an inline filter over a path from outside
+ * its member would be counted on the member: refused.
+ */
+function assertOwnAggregatePath(qbo: QueryBuilderObject): void {
+  if (traceScopeOf(qbo).kind !== 'own') {
+    throw new Error(
+      'An aggregate (size, min, max) inside an inline filter can be taken only over its own ' +
+      "member's paths, not the outer subject's.",
+    );
+  }
 }
 
 /** `node = value` for a relation (single- or multi-valued) or the subject itself. */
@@ -1243,7 +1268,7 @@ export class QueryShapeSet<
         'You cannot call where() from within a where() clause. Consider using some() or every() instead',
       );
     }
-    this.wherePath = processWhereClause(validation, memberShapeClassOrBase(this));
+    this.wherePath = processWhereClause(validation, memberShapeClassOrBase(this), true);
     //return this.proxy because after Shape.friends.where() we can call other methods of Shape.friends
     //and for that we need the proxy
     return this.proxy;
@@ -1297,7 +1322,9 @@ export class QueryShapeSet<
   private buildPredicateExpression(validation: WhereClause<S>): ExpressionNode | ExistsCondition {
     if (validation instanceof Function) {
       const proxy = createProxiedPathBuilder(memberShapeClassOrBase(this)) as any;
-      const result = validation(proxy);
+      // Inside an inline filter, the quantifier's member is a scope of its own: a path from the
+      // filter's member or the outer subject is marked, and lowering refuses it.
+      const result = inTraceScope() ? withTraceScope(proxy, () => validation(proxy)) : validation(proxy);
       // A quantifier on the member's own path (`f.$type().equals(C)`, `f.friends.some(…)`) is an
       // EXISTS inside this one.
       if (isExpressionNode(result) || isExistsCondition(result)) {
@@ -1675,6 +1702,7 @@ export class QueryPrimitiveSet<
 
   /** The values as one traced expression (the property, reached through the path). */
   private valuesExpression(): ExpressionNode {
+    assertOwnAggregatePath(this);
     return tracedPropertyExpression(FieldSet.collectPropertySegments(this).map((s) => s.id));
   }
 }
@@ -1695,6 +1723,18 @@ export class SetSize<Source = null> extends QueryPrimitive<number, Source> {
 
   // Build an aggregate_expr(count, …) ExpressionNode for the counted property.
   private toCountExpr(): ExpressionNode {
+    // A comparison on the count lowers to HAVING over the counted path, which has no place for
+    // an inline filter: refused rather than counting every member.
+    for (let current: QueryBuilderObject | undefined = this.subject; current; current = current.subject) {
+      if ((current as QueryShapeSet).wherePath) {
+        throw new Error(
+          'A filtered size() (`p.friends.where(…).size()`) can be selected, not compared: a comparison ' +
+          'on it (in a where or having) would count every member. Compare a quantifier instead ' +
+          '(`p.friends.some((f) => …)`), or select the count.',
+        );
+      }
+    }
+    assertOwnAggregatePath(this.subject);
     const countedSegments = FieldSet.collectPropertySegments(this.subject);
     const countedIds = countedSegments.map((s) => s.id);
     const countedNode = tracedPropertyExpression(countedIds);

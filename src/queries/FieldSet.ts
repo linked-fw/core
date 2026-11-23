@@ -12,6 +12,7 @@ import {
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import type {WherePath} from './SelectQuery.js';
 import {createProxiedPathBuilder} from './ProxiedPathBuilder.js';
+import {registerSubSelectRoot} from './traceScopes.js';
 import {isExpressionNode, ExpressionNode} from '../expressions/ExpressionNode.js';
 import {encodeValueExpr, decodeValueExpr, type DslJsonValue} from './DslJsonExpression.js';
 import {
@@ -306,6 +307,8 @@ export class FieldSet<R = any, Source = any> {
     const nodeShape = shapeClass.shape || shapeClass;
     // Trace once: get both the raw response (for type carriers) and the entries
     const proxy = createProxiedPathBuilder(shapeClass);
+    // An inline filter inside the sub-select may read this proxy's paths: they run from `source`.
+    registerSubSelectRoot(proxy, source);
     const traceResponse = fn(proxy as any);
     const entries = FieldSet.extractSubSelectEntries(nodeShape, traceResponse);
     const fs = new FieldSet(nodeShape, entries) as FieldSet<R, Source>;
@@ -925,6 +928,24 @@ export class FieldSet<R = any, Source = any> {
   }
 
   /**
+   * Walks from leaf to root to find the `wherePath` on any object in the chain, and records which
+   * segment it belongs to so desugarEntry attaches the filter correctly.
+   */
+  private static attachScopedFilter(entry: FieldSetEntry, leaf: QueryBuilderObjectLike, segmentCount: number): void {
+    let current: QueryBuilderObjectLike | undefined = leaf;
+    let leafDistance = 0;
+    while (current) {
+      if (current.wherePath) {
+        entry.scopedFilter = current.wherePath as WherePath;
+        entry.scopedFilterIndex = segmentCount - 1 - leafDistance;
+        return;
+      }
+      current = current.subject;
+      leafDistance++;
+    }
+  }
+
+  /**
    * Convert a single proxy trace result (QueryBuilderObject, SetSize, or FieldSet sub-select)
    * into a FieldSetEntry.
    */
@@ -932,10 +953,13 @@ export class FieldSet<R = any, Source = any> {
     // SetSize → aggregation: 'count'
     if (isSetSize(obj)) {
       const segments = FieldSet.collectPropertySegments(obj.subject);
-      return {
+      const entry: FieldSetEntry = {
         path: new PropertyPath(rootShape, segments),
         aggregation: 'count',
       };
+      // A filtered size (`p.friends.where(…).size()`) counts only the members the filter keeps.
+      FieldSet.attachScopedFilter(entry, obj.subject as QueryBuilderObjectLike, segments.length);
+      return entry;
     }
 
     // BoundComponent → preload composition (e.g. p.bestFriend.preloadFor(component))
@@ -955,19 +979,7 @@ export class FieldSet<R = any, Source = any> {
       const entry: FieldSetEntry = {
         path: new PropertyPath(rootShape, segments),
       };
-      // Walk from leaf to root to find wherePath on any object in the chain.
-      // Track which segment it belongs to so desugarEntry attaches the filter correctly.
-      let current: QueryBuilderObjectLike | undefined = obj;
-      let leafDistance = 0;
-      while (current) {
-        if (current.wherePath) {
-          entry.scopedFilter = current.wherePath as WherePath;
-          entry.scopedFilterIndex = segments.length - 1 - leafDistance;
-          break;
-        }
-        current = current.subject;
-        leafDistance++;
-      }
+      FieldSet.attachScopedFilter(entry, obj, segments.length);
       return entry;
     }
 

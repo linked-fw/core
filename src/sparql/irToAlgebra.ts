@@ -17,6 +17,8 @@ import type {
   IRNodeData,
   IRSetModificationValue,
   IRTraversePattern,
+  IRAliasExpression,
+  IRPropertyExpression,
 } from '../queries/IntermediateRepresentation.js';
 import {RegistryCache} from '../utils/registryCache.js';
 import {ontologyHierarchyVersion, subClassesOf, superClassesOf} from '../ontology/classHierarchy.js';
@@ -541,6 +543,18 @@ class VariableRegistry {
     this.entries.push({alias, property, variable});
   }
 
+  /**
+   * Binds `key` (an alias that is not a subject: an outer reference's own key) to a fresh variable
+   * named after `alias` and `property`, as `getOrCreate` names one.
+   */
+  createAs(key: string, alias: string, property: string): string {
+    const base = `${sanitizeVarName(alias)}_${propertySuffix(property)}`;
+    let varName = base;
+    for (let counter = 2; this.usedVarNames.has(varName); counter++) varName = `${base}_${counter}`;
+    this.set(key, property, varName);
+    return varName;
+  }
+
   getOrCreate(alias: string, property: string): string {
     const existing = this.get(alias, property);
     if (existing) return existing;
@@ -718,6 +732,67 @@ function propertyExpressionsIn(value: unknown): {sourceAlias: string; property: 
   return out;
 }
 
+/** A property an inline filter reads from a hop above its traversal (`p.name`). */
+type OuterRead = {
+  /** The registry alias of this read's own variable (`a0@a2`): never a subject. */
+  key: string;
+  /** The hop it is read from. */
+  alias: string;
+  property: string;
+  pathExpr?: PathExpr;
+};
+
+/**
+ * `expr` with each read of a node in `aliases` (a property of it, or the node itself) replaced.
+ * An `EXISTS` is left as it is: it sees the outer bindings where it is evaluated.
+ */
+function mapOuterReads(
+  expr: IRExpression,
+  aliases: ReadonlySet<string>,
+  replace: (expr: IRPropertyExpression | IRAliasExpression) => IRExpression,
+): IRExpression {
+  const map = (e: IRExpression): IRExpression => mapOuterReads(e, aliases, replace);
+  switch (expr.kind) {
+    case 'property_expr':
+      return aliases.has(expr.sourceAlias) ? replace(expr) : expr;
+    case 'alias_expr':
+      return aliases.has(expr.alias) ? replace(expr) : expr;
+    case 'binary_expr':
+      return {...expr, left: map(expr.left), right: map(expr.right)};
+    case 'logical_expr':
+      return {...expr, expressions: expr.expressions.map(map)};
+    case 'not_expr':
+      return {...expr, expression: map(expr.expression)};
+    case 'function_expr':
+    case 'aggregate_expr':
+      return {...expr, args: expr.args.map(map)};
+    case 'in_expr':
+      return {...expr, value: map(expr.value), source: {list: expr.source.list.map(map)}};
+    default:
+      return expr;
+  }
+}
+
+/**
+ * Refuses an inline filter whose outer reads are not bound where its block is evaluated: a nested
+ * OPTIONAL is evaluated before it is joined, so a node further up is unbound there, and the filter
+ * would compare with any node's value. Never compiled to a wrong answer.
+ */
+function assertOuterReadsInScope(
+  {reads, nodes}: {reads: OuterRead[]; nodes: ReadonlySet<string>},
+  inScope: ReadonlySet<string>,
+): void {
+  const outOfScope = [...reads.map((r) => r.alias), ...nodes].find((alias) => !inScope.has(alias));
+  if (outOfScope === undefined) return;
+  const read = reads.find((r) => r.alias === outOfScope);
+  throw new Error(
+    `An inline filter reads ${read ? `"${propertySuffix(read.property)}" of ` : ''}a node more than one ` +
+    'hop above the relation it filters, which is not bound where its OPTIONAL block is evaluated ' +
+    '(the hops above it stay optional). An inline filter can read the node its relation leaves ' +
+    'from and the hop before that (`p.bestFriend.friends.where((f) => f.name.equals(p.name))`).',
+  );
+}
+
 /**
  * Converts an IRSelectQuery to a SparqlSelectPlan.
  */
@@ -830,13 +905,50 @@ export function selectToAlgebra(
     );
   }
 
-  // 3. Pre-register filter property references BEFORE processing projections.
+  // 3a. Outer references: a filter that reads a property of a hop above its traversal
+  //     (`p.bestFriend.friends.where((f) => f.name.equals(p.name))` reads `?a0`'s name). That
+  //     value must be bound where the filter is evaluated, on the left of the block's OPTIONAL
+  //     (a triple inside the block would range over every subject, as the block is evaluated
+  //     before it is joined): it gets a variable of its own, never the projection's, bound by an
+  //     OPTIONAL just before the block is attached (3b, 5b).
+  const outerReadsByBlock = filteredTraverseBlocks.map((block) => {
+    const ancestors = new Set<string>();
+    for (let alias: string | undefined = traversePatternMap.get(block.toAlias)?.from; alias !== undefined; alias = traversePatternMap.get(alias)?.from) {
+      ancestors.add(alias);
+    }
+    const reads: OuterRead[] = [];
+    const nodes = new Set<string>();
+    block.filter = mapOuterReads(block.filter, ancestors, (expr) => {
+      if (expr.kind === 'alias_expr') {
+        nodes.add(expr.alias);
+        return expr;
+      }
+      const key = `${expr.sourceAlias}@${block.toAlias}`;
+      if (!reads.some((r) => r.key === key && r.property === expr.property)) {
+        reads.push({key, alias: expr.sourceAlias, property: expr.property, pathExpr: expr.pathExpr});
+      }
+      return {...expr, sourceAlias: key};
+    });
+    return {reads, nodes};
+  });
+  const isOuterReadKey = (idx: number, alias: string) => outerReadsByBlock[idx].reads.some((r) => r.key === alias);
+
+  // 3b. Pre-register filter property references BEFORE processing projections.
   //    This ensures that property triples needed by inline where filters are
   //    co-located inside the filtered OPTIONAL block, not in separate OPTIONALs.
+  //    An outer read is bound after the projections are (5b), so a projected value keeps its name.
   const filterPropertyTriplesMap = new Map<number, SparqlTriple[]>();
   filteredTraverseBlocks.forEach((block, idx) => {
     const filterPropertyTriples: SparqlTriple[] = [];
-    processExpressionForProperties(block.filter, registry, filterPropertyTriples);
+    // The outer reads are left out here: they are not the member's properties.
+    const ownReads = mapOuterReads(
+      block.filter,
+      new Set(outerReadsByBlock[idx].reads.map((r) => r.key)),
+      (expr) => (expr.kind === 'property_expr' && isOuterReadKey(idx, expr.sourceAlias)
+        ? {kind: 'literal_expr', value: true}
+        : expr),
+    );
+    processExpressionForProperties(ownReads, registry, filterPropertyTriples);
     filterPropertyTriplesMap.set(idx, filterPropertyTriples);
   });
 
@@ -892,6 +1004,16 @@ export function selectToAlgebra(
     // without them is still a member of its group, and is still counted by `Expr.count()`.
     for (const item of query.projection) {
       if (item.expression.kind === 'property_expr' || item.expression.kind === 'alias_expr') continue;
+      const aliases = new Set<string>();
+      collectExpressionAliases(item.expression, aliases);
+      for (const alias of aliases) if (alias !== rootAlias) directProjectionAliases.add(alias);
+    }
+  }
+  // A counted path's traversals (`p.bestFriend.friends.size()`, filtered or not) are OPTIONAL
+  // like a projected one's: an instance without them is kept, with a count of 0.
+  if (!grouped) {
+    for (const item of query.projection) {
+      if (item.expression.kind !== 'aggregate_expr') continue;
       const aliases = new Set<string>();
       collectExpressionAliases(item.expression, aliases);
       for (const alias of aliases) if (alias !== rootAlias) directProjectionAliases.add(alias);
@@ -1067,7 +1189,15 @@ export function selectToAlgebra(
   //     Each block contains: traverse triple + OPTIONAL property triples + FILTER.
   //     Filter property triples are nested as OPTIONALs so that OR filters work
   //     even when some entities lack certain properties.
-  // The filter expressions first, in block order (they register variables).
+  // The outer reads' variables, then the filter expressions, in block order (they register
+  // variables).
+  const outerTriplesByBlock = outerReadsByBlock.map(({reads}) =>
+    reads.map((read) => tripleOf(
+      varTerm(read.alias),
+      buildPredicateTerm(read),
+      varTerm(registry.createAs(read.key, read.alias, read.property)),
+    )),
+  );
   const filteredBlockExprs = filteredTraverseBlocks.map((block, i) =>
     convertExpression(block.filter, registry, filterPropertyTriplesMap.get(i) || []),
   );
@@ -1088,6 +1218,12 @@ export function selectToAlgebra(
       parent !== undefined &&
       ((parentIdx !== undefined && parentIdx !== i) || optionalTraversalAliases.has(parent) || subSelectAliases.has(parent))
     ) {
+      // Nested: the block is evaluated against its parent's group only, which binds the parent
+      // and, unless the parent is a sub-SELECT's child, the node the parent's hop leaves from.
+      const inScope = new Set([parent]);
+      const grandparent = traversePatternMap.get(parent)?.from;
+      if (grandparent !== undefined && !subSelectAliases.has(parent)) inScope.add(grandparent);
+      assertOuterReadsInScope(outerReadsByBlock[i], inScope);
       const children = filteredChildrenByParent.get(parent) ?? [];
       children.push(i);
       filteredChildrenByParent.set(parent, children);
@@ -1096,9 +1232,16 @@ export function selectToAlgebra(
     }
   }
 
+  // A block, after the OPTIONALs binding its outer reads (3a) on the same left side.
+  const attachFilteredBlock = (node: SparqlAlgebraNode, i: number): SparqlAlgebraNode => {
+    let wrapped = node;
+    for (const triple of outerTriplesByBlock[i]) wrapped = wrapOptional(wrapped, {type: 'bgp', triples: [triple]});
+    return wrapOptional(wrapped, buildFilteredBlock(i));
+  };
+
   const wrapFilteredChildren = (node: SparqlAlgebraNode, alias: string): SparqlAlgebraNode => {
     let wrapped = node;
-    for (const i of filteredChildrenByParent.get(alias) ?? []) wrapped = wrapOptional(wrapped, buildFilteredBlock(i));
+    for (const i of filteredChildrenByParent.get(alias) ?? []) wrapped = attachFilteredBlock(wrapped, i);
     return wrapped;
   };
 
@@ -1147,7 +1290,7 @@ export function selectToAlgebra(
   }
 
   for (const i of rootFilteredBlockIdx) {
-    algebra = wrapOptional(algebra, buildFilteredBlock(i));
+    algebra = attachFilteredBlock(algebra, i);
   }
 
   for (const alias of rootOptionalTraversalAliases) {
@@ -1292,7 +1435,18 @@ export function selectToAlgebra(
     if (p.kind === 'variable') projectedNames.add(p.name);
     else if (p.kind === 'aggregate' || p.kind === 'expression') projectedNames.add(p.alias);
   }
+  // A traversal only a count reads (`p.bestFriend.friends.where(…).size()`: the best friend and
+  // the counted friends) is not projected: it would become a GROUP BY key and split the count.
+  const aggregateReadAliases = new Set<string>();
+  const otherReadAliases = new Set<string>();
+  for (const item of query.projection) {
+    const aliases = new Set<string>();
+    collectExpressionAliases(item.expression, aliases);
+    const target = item.expression.kind === 'aggregate_expr' ? aggregateReadAliases : otherReadAliases;
+    for (const alias of aliases) markAliasAndAncestors(alias, traversePatternMap, target);
+  }
   for (const alias of grouped ? [] : collectTraversalAliases(query.patterns)) {
+    if (aggregateReadAliases.has(alias) && !otherReadAliases.has(alias)) continue;
     if (!projectedNames.has(alias) && !aggregateRenamedAliases.has(alias)) {
       projection.push({kind: 'variable', name: alias});
       projectedNames.add(alias);
