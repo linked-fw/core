@@ -501,6 +501,17 @@ registers them on the store it forwards to); `getShapeGraphs(dataset)` returns t
 `graphRoutingFor(dataset)` is what reads and writes compile with. Routes are kept per dataset
 object, by shape IRI.
 
+The routing object of a dataset is kept and handed out again until one of its inputs moves, then
+rebuilt whole on its next use: a route is set or unset (any dataset's: one shared version), a shape
+is registered or re-registered (the registry version), or the dataset's data root changes (read on
+every call). A shape edited in place, without registering it again, is not seen: change a shape,
+then re-register it. A routing that throws (a root the store lacks) is not kept. What the routing
+derives from the registry (owners, read sets, the shapes that may link to a shape) is kept per
+shape catalog, so a compile inside `withShapeCatalog` never shares sets with the global registry.
+Read sets are frozen arrays shared by every caller. A copy of core older than this cache writes the
+shared route table without moving the version, so a route it sets is seen only after another
+change.
+
 - **A shape's graph** (where its instances are written): its own route, else its nearest routed
   super-shape's, else the default graph.
 - **A shape's read set**: its graph, every registered sub-shape's graph, and the read set of every

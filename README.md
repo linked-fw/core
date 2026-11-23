@@ -762,6 +762,19 @@ from `loadStores` and routes nothing.
 
 Each store class must accept a single config-object argument (`new StoreClass(config)`). `@_linked/fuseki`'s `FusekiStore` and `@_linked/server`'s `BackendAPIStore` both follow this contract.
 
+### Graph routing
+
+Within a dataset, a route sends a shape's instances to one named graph:
+`LinkedStorage.setDatasetForShapes(store, [Article], {graph: 'own'})`, `{graph: dataGraph('taxonomy')}`
+or a graph IRI (`setShapeGraphs(dataset, {<shape IRI>: route})` records routes directly). Reads of a
+shape cover its graph, its sub-shapes' graphs and the graphs of the shapes that own it through
+`contains`. See `docs/architecture/ontologies.md`, Graph routing, for the forms and rules.
+
+The routing of each dataset is computed once and kept. It is rebuilt on its next use when a route
+is set or unset, when any shape is registered or re-registered, or when the dataset's data root
+changes. A shape changed in place (its `NodeShapeData` edited without registering it again) is not
+seen: **change a shape, then re-register it** (`registerRuntimeShape`, or the class registration).
+
 ## File storage
 
 `LinkedStorage` routes *quads*; `LinkedFileStorage` routes *files*. Files are addressed by **purpose** — a short string naming what the files are for (`uploads`, `appAssets`, …) — so an app can send release bundles to a CDN bucket and user uploads to another store without any caller knowing which.

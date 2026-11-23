@@ -58,7 +58,14 @@ import {
 } from '../ontologies/graphs.js';
 import {GraphQueryError} from '../queries/graphQuery.js';
 import {defaultReadGraphsOf} from '../queries/readGraphs.js';
-import {getAllNodeShapes, getRegisteredShapeClass, getSubShapes, getSuperShapes} from './ShapeClass.js';
+import {
+  getActiveShapeCatalog,
+  getAllNodeShapes,
+  getRegisteredShapeClass,
+  getRegistryVersion,
+  getSubShapes,
+  getSuperShapes,
+} from './ShapeClass.js';
 import {getPropertyShapes} from '../shapes/nodeShapeData.js';
 import {packageNameToSlug} from '../shapes/SHACL.js';
 
@@ -248,6 +255,16 @@ export function setShapeGraphs(
     if (stored) table.set(shape, stored);
     else table.delete(shape);
   }
+  bumpRoutesVersion();
+}
+
+/**
+ * Every route change moves this version, which every cached routing is keyed on. It lives on the
+ * shared global with the routes themselves: a second copy of this module writes the same table.
+ * (A copy of core older than the routing cache writes the table without moving it.)
+ */
+function bumpRoutesVersion(): void {
+  routingGlobal.__linkedGraphRoutesVersion = (routingGlobal.__linkedGraphRoutesVersion ?? 0) + 1;
 }
 
 /** The graph IRI of one stored route of `dataset`. */
@@ -297,7 +314,7 @@ export function getShapeGraphs(dataset: IDataset | object): Record<string, strin
 
 /** Drop the graph route of `shape` in `dataset`. */
 export function unsetShapeGraph(shape: string, dataset: IDataset | object): void {
-  routes.get(dataset)?.delete(shape);
+  if (routes.get(dataset)?.delete(shape)) bumpRoutesVersion();
 }
 
 /** The graph routing of one dataset, as the SPARQL compiler and the live-query matcher read it. */
@@ -306,23 +323,91 @@ export interface ShapeGraphRouting {
   graphForShape(shapeId: string): string;
   /**
    * The graphs a read of the shape covers: its graph and every registered sub-shape's, without
-   * duplicates, sorted (`graphs.default` first when present), so the query text is stable.
+   * duplicates, sorted (`graphs.default` first when present), so the query text is stable. The
+   * array is frozen: the routing keeps it and hands the same one to every later caller.
    */
   readGraphsForShape(shapeId: string): string[];
   /** Every graph the routing names, and the default graph: where a node of unknown shape may be. */
   allGraphs(): string[];
 }
 
+/** What a routing object was built from: it is reused while all of them are unchanged. */
+type CachedRouting = {
+  routesVersion: number;
+  registryVersion: number;
+  root: string | undefined;
+  routing: ShapeGraphRouting;
+};
+
+/** Dataset → its routing, rebuilt whole on the next use once an input moved (see graphRoutingFor). */
+const routingCache = new WeakMap<object, CachedRouting>();
+
 /**
  * The routing of `dataset`, or `undefined` when it has no routes (its reads and writes are then
  * exactly what they were before routing: everything in the default graph). Routes stated as
  * `'own'` or `dataGraph()` are resolved here, under the dataset's data root ({@link dataRootOf});
  * a route that needs a root the dataset lacks throws.
+ *
+ * The routing object is kept per dataset and returned again until one of its inputs moves; it is
+ * then rebuilt whole on its next use (ownership crosses shapes, so no part of it is patched):
+ *
+ * - a route is set or unset ({@link setShapeGraphs}, {@link unsetShapeGraph}; any dataset's),
+ * - a shape is registered or re-registered (the registry version, `getRegistryVersion()`),
+ * - the dataset's data root ({@link dataRootOf}, read on every call, so a root the store learns
+ *   later is the one used).
+ *
+ * A shape changed in place (its `NodeShapeData` edited without registering it again) is not seen:
+ * change a shape, then re-register it. A routing that throws is not kept. What the routing derives
+ * from the registry (owners, read sets, referring shapes) is kept per shape catalog, so a read
+ * inside `withShapeCatalog` never sees the global registry's sets, nor the reverse.
  */
 export function graphRoutingFor(dataset: IDataset | object | undefined): ShapeGraphRouting | undefined {
   if (!dataset) return undefined;
-  const table = resolvedTable(dataset);
-  if (!table) return undefined;
+  const stored = routes.get(dataset);
+  if (!stored || stored.size === 0) return undefined;
+  const routesVersion: number = routingGlobal.__linkedGraphRoutesVersion ?? 0;
+  const registryVersion = getRegistryVersion();
+  const root = dataRootOf(dataset);
+  const cached = routingCache.get(dataset);
+  if (
+    cached &&
+    cached.routesVersion === routesVersion &&
+    cached.registryVersion === registryVersion &&
+    cached.root === root
+  ) {
+    return cached.routing;
+  }
+  const routing = buildRouting(resolvedTable(dataset)!);
+  routingCache.set(dataset, {routesVersion, registryVersion, root, routing});
+  return routing;
+}
+
+/** What a routing derives from the registry, for one catalog (or the global registry). */
+type RegistryMemo = {
+  /** Value shape → the shapes that own it (declare a `contains` property with it). */
+  owners?: Map<string, Set<string>>;
+  /** Value shape → the shapes that declare any property with it (storedInGraph shapes left out). */
+  referrers?: Map<string, string[]>;
+  readSets: Map<string, string[]>;
+  referringGraphs: Map<string, string[]>;
+};
+
+/** The routing's own answer to {@link referringGraphsForShape}, memoized with its read sets. */
+const REFERRING_GRAPHS = Symbol('referringGraphs');
+type BuiltRouting = ShapeGraphRouting & {[REFERRING_GRAPHS](shapeId: string): string[]};
+
+function buildRouting(table: Map<string, string>): BuiltRouting {
+  const globalMemo: RegistryMemo = {readSets: new Map(), referringGraphs: new Map()};
+  const catalogMemos = new WeakMap<object, RegistryMemo>();
+  // Read when a method runs, not when the routing is built: a routing obtained outside a catalog
+  // scope is used inside one when an IR captured in that catalog is compiled.
+  const memo = (): RegistryMemo => {
+    const catalog = getActiveShapeCatalog();
+    if (catalog === undefined) return globalMemo;
+    let forCatalog = catalogMemos.get(catalog);
+    if (!forCatalog) catalogMemos.set(catalog, (forCatalog = {readSets: new Map(), referringGraphs: new Map()}));
+    return forCatalog;
+  };
   const graphForShape = (shapeId: string): string => {
     const own = table.get(shapeId);
     if (own) return own;
@@ -332,32 +417,15 @@ export function graphRoutingFor(dataset: IDataset | object | undefined): ShapeGr
     }
     return graphs.default;
   };
-  // The shapes that own instances of a shape (declare a `contains` property whose value shape is
-  // the shape or one of its super-shapes), computed once per routing object.
-  let ownersByValueShape: Map<string, Set<string>> | undefined;
-  const ownersOf = (shapeId: string): string[] => {
-    if (!ownersByValueShape) {
-      ownersByValueShape = new Map();
-      for (const shape of getAllNodeShapes().values()) {
-        for (const ps of getPropertyShapes(shape)) {
-          const valueShape = ps.contains ? ps.valueShape?.id : undefined;
-          if (!valueShape) continue;
-          let owners = ownersByValueShape.get(valueShape);
-          if (!owners) ownersByValueShape.set(valueShape, (owners = new Set()));
-          owners.add(shape.id);
-        }
-      }
-    }
+  // The shapes that own instances of a shape: those declaring a `contains` property whose value
+  // shape is the shape, one of its super-shapes or one of its sub-shapes (a select of the shape
+  // returns its sub-shapes' instances too, so the owners of a sub-shape, an album that contains a
+  // panorama read as a photo, hold nodes this shape reads).
+  const ownersOf = (shapeId: string, m: RegistryMemo): string[] => {
+    const owners = (m.owners ??= ownerIndex());
     const out = new Set<string>();
-    // A select of the shape returns its sub-shapes' instances too, so the owners of a sub-shape
-    // (an album that contains a panorama, read as a photo) hold nodes this shape reads.
-    const targets = [
-      shapeId,
-      ...getSuperShapes(shapeId).map((s) => s.id),
-      ...getSubShapes(shapeId).map((s) => s.id),
-    ];
-    for (const target of targets) {
-      for (const owner of ownersByValueShape.get(target) ?? []) out.add(owner);
+    for (const target of withRelatedShapes(shapeId)) {
+      for (const owner of owners.get(target) ?? []) out.add(owner);
     }
     return [...out];
   };
@@ -365,32 +433,42 @@ export function graphRoutingFor(dataset: IDataset | object | undefined): ShapeGr
   // included, `contains` cycles too), each contributing its own graph and its sub-shapes' graphs.
   // One traversal with a set of reached shapes, so each shape is expanded once; a reached shape
   // whose read set is already known contributes that set instead (it holds everything reachable
-  // from it). Every set computed is complete, so every one is kept.
-  const readSets = new Map<string, string[]>();
+  // from it). Every set computed is complete, so every one is kept, frozen: the same array is
+  // handed to every later caller.
   const readGraphsForShape = (shapeId: string): string[] => {
-    const cached = readSets.get(shapeId);
+    const m = memo();
+    const cached = m.readSets.get(shapeId);
     if (cached) return cached;
     const set = new Set<string>();
     const reached = new Set<string>([shapeId]);
     const pending = [shapeId];
     while (pending.length) {
       const current = pending.pop()!;
-      const known = readSets.get(current);
+      const known = m.readSets.get(current);
       if (known) {
         for (const graph of known) set.add(graph);
         continue;
       }
       set.add(graphForShape(current));
       for (const sub of getSubShapes(current)) set.add(graphForShape(sub.id));
-      for (const owner of ownersOf(current)) {
+      for (const owner of ownersOf(current, m)) {
         if (reached.has(owner)) continue;
         reached.add(owner);
         pending.push(owner);
       }
     }
-    const sortedSet = sortGraphSet(set);
-    readSets.set(shapeId, sortedSet);
+    const sortedSet = Object.freeze(sortGraphSet(set)) as string[];
+    m.readSets.set(shapeId, sortedSet);
     return sortedSet;
+  };
+  const referringGraphs = (shapeId: string): string[] => {
+    const m = memo();
+    const cached = m.referringGraphs.get(shapeId);
+    if (cached) return cached;
+    const referrers = (m.referrers ??= referrerIndex());
+    const out = Object.freeze(referringGraphsVia(referrers, readGraphsForShape, shapeId)) as string[];
+    m.referringGraphs.set(shapeId, out);
+    return out;
   };
   return {
     graphForShape,
@@ -398,7 +476,66 @@ export function graphRoutingFor(dataset: IDataset | object | undefined): ShapeGr
     allGraphs(): string[] {
       return sortGraphSet([graphs.default, ...table.values()]);
     },
+    [REFERRING_GRAPHS]: referringGraphs,
   };
+}
+
+/** The shape, its super-shapes and its sub-shapes. */
+function withRelatedShapes(shapeId: string): string[] {
+  return [shapeId, ...getSuperShapes(shapeId).map((s) => s.id), ...getSubShapes(shapeId).map((s) => s.id)];
+}
+
+/** Value shape → the shapes declaring a `contains` property with it (own properties). */
+function ownerIndex(): Map<string, Set<string>> {
+  const index = new Map<string, Set<string>>();
+  for (const shape of getAllNodeShapes().values()) {
+    for (const ps of getPropertyShapes(shape)) {
+      const valueShape = ps.contains ? ps.valueShape?.id : undefined;
+      if (!valueShape) continue;
+      let owners = index.get(valueShape);
+      if (!owners) index.set(valueShape, (owners = new Set()));
+      owners.add(shape.id);
+    }
+  }
+  return index;
+}
+
+/**
+ * Value shape → the shapes declaring any property with it (own properties), leaving out shapes
+ * whose class stores its instances in a graph of its own (`storedInGraph`, the graph registry's
+ * records): mutations never write those graphs.
+ */
+function referrerIndex(): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  for (const shape of getAllNodeShapes().values()) {
+    const storedIn = (getRegisteredShapeClass(shape.id) as {storedInGraph?: unknown} | undefined)?.storedInGraph;
+    if (typeof storedIn === 'string' && storedIn) continue;
+    const valueShapes = new Set<string>();
+    for (const ps of getPropertyShapes(shape)) {
+      if (ps.valueShape?.id !== undefined) valueShapes.add(ps.valueShape.id);
+    }
+    for (const valueShape of valueShapes) {
+      let referrers = index.get(valueShape);
+      if (!referrers) index.set(valueShape, (referrers = []));
+      referrers.push(shape.id);
+    }
+  }
+  return index;
+}
+
+/** The read sets of the shapes `referrers` lists for the shape, a super- or a sub-shape of it. */
+function referringGraphsVia(
+  referrers: Map<string, string[]>,
+  readGraphsForShape: (shapeId: string) => string[],
+  shapeId: string,
+): string[] {
+  const shapes = new Set<string>();
+  for (const target of withRelatedShapes(shapeId)) {
+    for (const shape of referrers.get(target) ?? []) shapes.add(shape);
+  }
+  const out = new Set<string>();
+  for (const shape of shapes) for (const graph of readGraphsForShape(shape)) out.add(graph);
+  return sortGraphSet(out);
 }
 
 /** A graph set in its stable order: `graphs.default` first, then the named graphs sorted. */
@@ -417,19 +554,8 @@ export function sortGraphSet(set: Iterable<string>): string[] {
  * left out: mutations never write those graphs.
  */
 export function referringGraphsForShape(routing: ShapeGraphRouting, shapeId: string): string[] {
-  const targets = new Set<string>([
-    shapeId,
-    ...getSuperShapes(shapeId).map((s) => s.id),
-    ...getSubShapes(shapeId).map((s) => s.id),
-  ]);
-  const out = new Set<string>();
-  for (const shape of getAllNodeShapes().values()) {
-    if (!getPropertyShapes(shape).some((ps) => ps.valueShape?.id !== undefined && targets.has(ps.valueShape.id))) {
-      continue;
-    }
-    const storedIn = (getRegisteredShapeClass(shape.id) as {storedInGraph?: unknown} | undefined)?.storedInGraph;
-    if (typeof storedIn === 'string' && storedIn) continue;
-    for (const graph of routing.readGraphsForShape(shape.id)) out.add(graph);
-  }
-  return sortGraphSet(out);
+  const own = (routing as Partial<BuiltRouting>)[REFERRING_GRAPHS];
+  if (own) return own(shapeId);
+  // A routing from elsewhere (a store that overrides its graphRouting()): nothing kept.
+  return referringGraphsVia(referrerIndex(), (id) => routing.readGraphsForShape(id), shapeId);
 }
