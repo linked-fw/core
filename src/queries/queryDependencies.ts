@@ -307,6 +307,25 @@ class DependencyCollector {
     }
   }
 
+  /**
+   * An object-form key read through hops below its row (`{n: p.bestFriend.name}`): the row holds
+   * the value, not the ids of the nodes it was read on, so the hops below the row and the value's
+   * own predicate are hidden (matched by predicate); the hops above the row are narrow.
+   */
+  collectKeyed(expr: IRExpression, container: string): void {
+    const source = expr.kind === 'property_expr' ? expr.sourceAlias : expr.kind === 'alias_expr' ? expr.alias : undefined;
+    if (source === undefined || source === container) {
+      this.collectProjection(expr);
+      return;
+    }
+    addAll(this.deps.narrow, this.chain(container));
+    if (expr.kind === 'property_expr') {
+      addAll(this.deps.hidden, this.propertyExprPredicates(expr, container));
+    } else {
+      addAll(this.deps.hidden, this.chain(source, container));
+    }
+  }
+
   private collectHidden(expr: IRExpression): void {
     switch (expr.kind) {
       case 'property_expr':
@@ -419,7 +438,12 @@ export function queryDependencies(
   for (const pattern of ir.patterns) collector.walkPattern(pattern, false);
 
   if (ir.kind === 'select') {
-    for (const item of ir.projection) collector.collectProjection(item.expression);
+    const entryOf = new Map((ir.resultMap ?? []).map((entry) => [entry.alias, entry]));
+    for (const item of ir.projection) {
+      const entry = entryOf.get(item.alias);
+      if (entry?.keyed) collector.collectKeyed(item.expression, entry.container ?? ir.root.alias);
+      else collector.collectProjection(item.expression);
+    }
   }
   if (ir.where) collector.collectFilter(ir.where);
   if (ir.kind === 'select') {

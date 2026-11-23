@@ -1,7 +1,7 @@
 ---
 summary: Step S8 of plan 006 (backlog 110) — object-form select rows follow the keys the user wrote; the types match; nested objects and the key `id` are refused; DSL-JSON `as` names the key.
 packages: [core]
-status: Implementation
+status: Review
 ---
 
 # 007 — Object-form rows follow their keys
@@ -183,7 +183,15 @@ Full gate at review: the step's landing gate (plan 006 + task prompt).
   Pinned old shapes updated: `select-result-typing` (keyed sub-select), `type-probe-deep-nesting`
   TEST 2/19 (TEST 3/20 compile unchanged and now match the rows), one test helper typed `any`
   instead of `unknown` (`quantifier-outer-refs…`). Typecheck exit 0.
-- Phase 5: pending
+- Phase 5: done — `queryDependencies`: a keyed value read through hops below its row is hidden
+  (hops below + leaf), the chain above narrow; `object-form-live.test.ts` (renaming the best
+  friend refetches `{n: p.bestFriend.name}`, not `{n: p.name}`; fails without the change);
+  `query-dependencies` case. Docs: README (custom keys), `intermediate-representation.md` (object
+  form section, sub-select example), `sparql-algebra.md` (result mapping), `dsl-json.md` (keys).
+  Minor changeset `object-form-rows-follow-keys.md` with every moved row. `SelectResponse` exported.
+  Coordinator's case `p.friends.where(F).select((f) => ({x: f.name.concat('!'), n: f.name}))`:
+  per member (fixture `subExprFilteredBeside`); the lone-expression variant loses the filter (S9
+  fix round) — re-check at landing.
 
 ## Deviations
 
@@ -208,4 +216,6 @@ Full gate at review: the step's landing gate (plan 006 + task prompt).
 | 10 | phase 3, scope (S9 note, 112.3) | A count through a hop or a filter in a sub-select beside a sibling field was missing from member rows | Covered by phase 2's per-member placement: the count is a field of the member row (key = counted relation's label, as for a direct count) | Nest it under the hop (`bestFriend: {friends}`) | It is computed per member (grouped by the member), so the member row is where it is true; the array form had no row for it before |
 | 11 | phase 4, types | How to refuse a nested object / key `id` in the type | A constraint `SelectResponse` on the select callback's response (top-level select, sub-selects); violations fail to compile at the offending key | An error-branded result type | A compile error at the call is a refusal; a branded type compiles and fails only on use |
 | 12 | phase 4, types | A callback typed to return `unknown` (generic helpers) no longer satisfies the constraint | Accept; such helpers type their callback `any` (one test helper changed) | Leave the constraint off `unknown` | The constraint is what refuses nested objects; `unknown` cannot be checked |
+| 13 | phase 5, live | Which predicates a collapsed key depends on | Hops below the row and the value's predicate hidden, hops above narrow | Mark the first hop narrow (it is read on the row's node) | Hidden is a superset; simplest correct rule, never stale |
+| 14 | phase 5, wire | `as` now names the key (a reader change, no format change) | No wire-version bump; documented | Bump to 1.12 | `toJSON()` writes `customKey`, which every reader honours; the format is unchanged |
 | 5 | phase 1, lowering | Container aliases must not change traversal order (array-form goldens) | Resolve a seed's container after its own path is lowered (`aliasAfterPath` then shares the traversal); a members seed lowers its steps with their inline filters | Resolve while collecting seeds | Eager resolution renumbers traversals of array-form selects |

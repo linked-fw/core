@@ -58,6 +58,10 @@ export const objectFormCases = {
   subSizeFiltered: () =>
     Person.select((p) => p.friends.select((f) => [f.name, f.friends.where((g) => g.name.equals('Jinx')).size()])),
   subExpr: () => Person.select((p) => ({x: p.friends.select((f) => ({e: f.name.equals('Moa')}))})),
+  subExprFilteredBeside: () =>
+    Person.select((p) =>
+      p.friends.where((f) => f.hobby.equals('Golf')).select((f) => ({x: f.name.concat('!'), n: f.name})),
+    ),
   deepSub: () =>
     Person.select((p) => ({x: p.friends.select((f) => ({y: f.bestFriend.select((b) => ({n: b.name}))}))})),
   twoSubsOneRelation: () =>
@@ -133,6 +137,11 @@ export const objectFormRows: Record<ObjectFormCase, ResultRow[] | ResultRow | nu
     {id: p1, x: [{id: p2, e: true}, {id: p3, e: false}]},
     {id: p2, x: [{id: p3, e: false}]},
     {id: p3, x: []},
+  ],
+  subExprFilteredBeside: [
+    {id: p1, friends: [{id: p2, x: 'Moa!', n: 'Moa'}]},
+    {id: p2, friends: []},
+    {id: p3, friends: []},
   ],
   deepSub: [
     {id: p1, x: [{id: p2, y: {id: p3, n: 'Jinx'}}, {id: p3, y: null}]},

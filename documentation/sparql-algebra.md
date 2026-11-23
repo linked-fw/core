@@ -416,16 +416,16 @@ Maps SPARQL JSON result bindings back to `SelectResult` (array of `ResultRow` or
 
 **Algorithm:**
 
-1. **Build nesting descriptor** — analyzes `query.resultMap` and `query.projection` to build a tree of `NestedGroup` nodes that describes how flat bindings should be grouped into nested objects.
+1. **Build nesting descriptor** — analyzes `query.resultMap` and `query.projection` to build a tree of row specs: the root row, the entities its traversals reach (`NestedGroup`, array form), and the member rows of keyed sub-selects. An entry without `container` nests under each traversal of its path from the root (the array form). An entry with `container` is a field of that row: `keyed` collapses the hops between the row and the value into one field (`{n: p.bestFriend.name}` → `n`; an array of distinct values through a multi-valued hop), `members` holds the rows of a keyed sub-select or preload (`{x: p.friends.select(…)}` → `x: [{id, …}]`).
 
-2. **Flat vs nested path** — if no traversals exist, use `mapFlatRows()` (simple per-row mapping). Otherwise, use `mapNestedRows()` (grouping + recursive collection).
+2. **Rows** — bindings are grouped by root id and each row built from its bindings (`buildRow`): flat fields, nested groups (grouped by the traversal's id), keyed values and keyed members.
 
 3. **Variable name resolution** — maps IR projection expressions to the SPARQL variable names that appear in bindings:
    - `property_expr(a0, prop:name)` → `a0_name`
    - `alias_expr(a1)` → `a1`
    - `aggregate_expr` → projection alias
 
-   The nesting descriptor also decides *which* entity group an `aggregate_expr` field belongs to: it is anchored to its property argument's `sourceAlias` (the entity the aggregate is grouped by in the SPARQL `GROUP BY`), not unconditionally to the root. A nested aggregate like `p.friends.select(f => ({numFriends: f.friends.size()}))` is grouped per friend (`sourceAlias: 'a1'`) and lands inside each friend object; a root-level `p.friends.size()` has `sourceAlias` equal to the root and lands on the root row. Getting this wrong silently misattributes the count to the wrong entity rather than erroring — see report 020 bug 4 for the concrete case that surfaced it.
+   An aggregate or computed field inside a sub-select carries the sub-select's member as its `container` and is a field of that member's row, computed per member: `irToAlgebra` projects the member alias, so it is a `GROUP BY` key (`p.friends.select(f => ({numFriends: f.friends.size()}))` → `GROUP BY ?a0 ?a1`, each friend with its own count; also beside other fields, through a hop or a filter). A root-level `p.friends.size()` lands on the root row. A count beside the finer groups is a `COUNT(DISTINCT …)` of its own variable and does not change. Getting this wrong silently misattributes the count to the wrong entity rather than erroring — see report 020 bug 4 and report 121.
 
 4. **Value coercion** — converts SPARQL binding values to JS types based on XSD datatype:
    - `xsd:boolean` → `boolean`

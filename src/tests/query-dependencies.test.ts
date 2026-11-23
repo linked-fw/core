@@ -79,6 +79,19 @@ describe('queryDependencies — projection', () => {
     expect(d.unbound).toBe(false);
   });
 
+  test('object form: a key through a hop is read on a node the row does not hold', () => {
+    // `{n: p.bestFriend.name}`: the row holds the name, not the best friend's id, so the name
+    // and the hop are hidden (a rename of the best friend must refetch by predicate).
+    const d = deps(Person.select((p) => ({n: p.bestFriend.name})).for(ids.P1));
+    expect(d.narrow).toEqual([]);
+    expect(d.hidden).toEqual(p('bestFriend', 'name'));
+    // A key on the row's own property stays narrow; a keyed sub-select's rows hold their ids.
+    expect(deps(Person.select((p) => ({n: p.name})).for(ids.P1)).narrow).toEqual(p('name'));
+    const sub = deps(Person.select((p) => ({x: p.friends.select((f) => ({n: f.name}))})).for(ids.P1));
+    expect(sub.narrow).toEqual(p('friend', 'name'));
+    expect(sub.hidden).toEqual([]);
+  });
+
   test('as() cast', () => {
     const d = deps(Person.select((p) => p.friends.as(Employee).employeeId));
     expect(d.shapes).toEqual(expect.arrayContaining([EMPLOYEE]));

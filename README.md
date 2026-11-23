@@ -938,6 +938,24 @@ const keyed = await Person.select((p) => ({friend: p.bestFriend, contacts: p.kno
 A relation selected bare holds node references (`{id}`), in both forms; select its fields with a
 sub-select (`p.bestFriend.select((f) => ({name: f.name}))`).
 
+A key names a top-level field of the object it is written in (the row, or a sub-select's member
+row), holding the value its expression yields; the hops of a deeper path do not appear:
+
+```typescript
+/* Array<{id: string; friendName: string; friendNames: string[]; best: {id: string; name: string}}> */
+const rows = await Person.select((p) => ({
+  friendName: p.bestFriend.name,                        // 'Moa', or null without a best friend
+  friendNames: p.knows.name,                            // distinct names through a plural hop ([] when none)
+  best: p.bestFriend.select((f) => ({name: f.name})),   // the best friend's row, or null
+}));
+```
+
+Through single-valued hops a key holds the value (or `null`); through any multi-valued hop, the
+array of distinct values. A sub-select or `preloadFor` under a key holds the member row(s), and a
+`size()` or expression inside a sub-select is computed per member. A key's value must be a path,
+sub-select, preload, `size()` or expression — a nested plain object (`{info: {friend: …}}`) and the
+key `id` (every row's identity) are refused, by the type and when the select is built.
+
 #### Sub-queries
 ```typescript
 const detailed = await Person.select((p) =>

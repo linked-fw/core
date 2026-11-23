@@ -72,7 +72,7 @@ type SelectQuery = {
   offset?: number;
   subjectId?: string;             // target a specific node
   singleResult?: boolean;         // true if .one() or specific subject
-  resultMap?: IRResultMapEntry[]; // maps projection aliases to result keys
+  resultMap?: IRResultMapEntry[]; // maps projection aliases to result keys (and, in the object form, rows)
 };
 ```
 
@@ -253,7 +253,8 @@ baseline the query uses (`'groupBy'`, `'min'`, `'max'`); see the implementer gui
 
 DSL: `Person.select((p) => p.friends.select((f) => ({name: f.name, hobby: f.hobby})))`
 
-The sub-select's custom keys appear in the `resultMap`:
+The sub-select's custom keys appear in the `resultMap`, as fields of the friends' rows
+(`container: 'a1'`, the members' alias):
 
 ```ts
 {
@@ -265,11 +266,40 @@ The sub-select's custom keys appear in the `resultMap`:
     {alias: 'a3', expression: {kind: 'property_expr', sourceAlias: 'a1', property: 'prop:hobby'}}
   ],
   resultMap: [
-    {key: 'name', alias: 'a2'},
-    {key: 'hobby', alias: 'a3'}
+    {key: 'name', alias: 'a2', container: 'a1', keyed: true},
+    {key: 'hobby', alias: 'a3', container: 'a1', keyed: true}
   ]
 }
 ```
+
+### Object form: where a key sits
+
+A key of the object form names a top-level field of the object it is written in: the root row,
+or a sub-select's member row. Its value is the expression's yield; the hops of its path never
+appear in the row. A result-map entry says so with three optional fields (an array-form entry
+has none of them and nests under each traversal of its path):
+
+- `container` — the row's alias: the root, or the sub-select's member alias. Set for keyed
+  fields, fields inside a keyed sub-select, and expressions/aggregates inside any sub-select (they
+  are computed per member).
+- `keyed: true` — the value through the hops below the container, as one field: the value or
+  `null` through single-valued hops, the array of distinct values through any multi-valued one.
+- `members: true` — a keyed sub-select or preload: `alias` is the members' traversal target, the
+  key holds their rows; the fields of those rows are the entries whose `container` is `alias`.
+  Has no projection item.
+
+DSL: `Person.select((p) => ({n: p.bestFriend.name, x: p.friends.select((f) => ({c: f.friends.size()}))}))`
+
+```ts
+resultMap: [
+  {key: 'n', alias: 'a2', container: 'a0', keyed: true},           // row.n: string | null
+  {key: 'x', alias: 'a3', container: 'a0', keyed: true, members: true}, // row.x: [{id, c}]
+  {key: 'c', alias: 'a4', container: 'a3', keyed: true},           // per friend
+]
+```
+
+A nested plain object or an array as a value, and the key `id` (the row's identity), are refused
+when the select is built.
 
 ### Type casting (as)
 

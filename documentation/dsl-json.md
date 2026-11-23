@@ -243,6 +243,17 @@ an alias projects under its dotted call string as the key (`"friends.size()"`) �
 clean result key. Because `fields` is an array, the **same relation may be projected more than
 once** (different filters/aliases) without a key collision.
 
+**A key** — `"as"` or `"customKey"` (what `toJSON()` writes for the object form; the two are the
+same, and a field naming two different keys is refused) — names a top-level field of the row the
+field is listed in: the root row, or the member row of the relation whose `fields` list it. The
+value is what the path yields, without its hops: `{ "bestFriend.name": { "as": "n" } }` gives
+`n: "Moa"` (or `null`), `{ "friends.name": { "as": "names" } }` the array of distinct names, and a
+keyed relation with `fields` (`{ "friends": { "as": "x", "fields": ["name"] } }`) holds the member
+rows (`x: [{id, name}]`). An unkeyed field nests under each relation of its path
+(`"bestFriend.name"` → `bestFriend: {id, name}`). The key `id` is refused (every row's identity).
+`"as"` named nothing before report 121 (the field kept its property key): same wire version,
+since `toJSON()` writes `customKey`.
+
 ## Conditions (`where`) — the path-keyed object tier
 
 A condition is an object. Its keys are **paths** (or the combinators `and`/`or`/`not`); its
