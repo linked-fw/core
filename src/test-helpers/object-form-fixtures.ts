@@ -54,6 +54,10 @@ export const objectFormCases = {
   nAndB: () => Person.select((p) => ({n: p.bestFriend.name, b: p.bestFriend})),
   subSize: () => Person.select((p) => ({x: p.friends.select((f) => ({c: f.friends.size()}))})),
   subSizeArray: () => Person.select((p) => p.friends.select((f) => ({c: f.friends.size()}))),
+  subSizeThroughHop: () => Person.select((p) => p.friends.select((f) => [f.name, f.bestFriend.friends.size()])),
+  subSizeFiltered: () =>
+    Person.select((p) => p.friends.select((f) => [f.name, f.friends.where((g) => g.name.equals('Jinx')).size()])),
+  subExpr: () => Person.select((p) => ({x: p.friends.select((f) => ({e: f.name.equals('Moa')}))})),
   deepSub: () =>
     Person.select((p) => ({x: p.friends.select((f) => ({y: f.bestFriend.select((b) => ({n: b.name}))}))})),
   twoSubsOneRelation: () =>
@@ -114,6 +118,21 @@ export const objectFormRows: Record<ObjectFormCase, ResultRow[] | ResultRow | nu
     {id: p1, friends: [{id: p2, c: 1}, {id: p3, c: 0}]},
     {id: p2, friends: [{id: p3, c: 0}]},
     {id: p3, friends: []},
+  ],
+  subSizeThroughHop: [
+    {id: p1, friends: [{id: p2, name: 'Moa', friends: 0}, {id: p3, name: 'Jinx', friends: 0}]},
+    {id: p2, friends: [{id: p3, name: 'Jinx', friends: 0}]},
+    {id: p3, friends: []},
+  ],
+  subSizeFiltered: [
+    {id: p1, friends: [{id: p2, name: 'Moa', friends: 1}, {id: p3, name: 'Jinx', friends: 0}]},
+    {id: p2, friends: [{id: p3, name: 'Jinx', friends: 0}]},
+    {id: p3, friends: []},
+  ],
+  subExpr: [
+    {id: p1, x: [{id: p2, e: true}, {id: p3, e: false}]},
+    {id: p2, x: [{id: p3, e: false}]},
+    {id: p3, x: []},
   ],
   deepSub: [
     {id: p1, x: [{id: p2, y: {id: p3, n: 'Jinx'}}, {id: p3, y: null}]},

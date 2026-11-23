@@ -33,9 +33,6 @@ const refusalFor = (key: string) =>
 /** The refusal when the two read one relation with different paginations. */
 const paginationRefusalFor = (key: string) =>
   new RegExp(`result key "${key.replace(/\./g, '\\.')}" is selected twice.*cannot yet read a relation with two different paginations`);
-/** The refusal when keys of the object form would not keep two reads of a relation apart. */
-const keyedRefusalFor = (key: string) =>
-  new RegExp(`result key "${key.replace(/\./g, '\\.')}" is selected twice.*keys of the object form nest under the relation`);
 
 describe('exact duplicates are one field', () => {
   test('[p.name, p.name] projects ?a0_name once and maps to {id, name}', () => {
@@ -65,7 +62,7 @@ describe('exact duplicates are one field', () => {
       p.friends.select((f) => ({x: f.name})),
       p.friends.select((f) => ({x: f.name})),
     ]));
-    expect(ir.resultMap).toEqual([{key: 'x', alias: 'a1'}]);
+    expect(ir.resultMap).toEqual([{key: 'x', alias: 'a1', container: 'a1', keyed: true}]);
   });
 
   test('the same inline filter written twice is one field', () => {
@@ -219,18 +216,34 @@ describe('one key selected in two different ways is refused at lowering', () => 
     ]))).toThrow(refusalFor('friends'));
   });
 
-  test('…and its object form, whose keys nest under the relation today', () => {
-    expect(() => irOf(Person.select((p) => ({
+  test('…and its object form keeps the two reads apart (rows: object-form-rows, allAndCarls)', () => {
+    const ir = irOf(Person.select((p) => ({
       all: p.friends.name,
       carls: p.friends.where((f) => f.name.equals('Carl')).hobby,
-    })))).toThrow(keyedRefusalFor('friends'));
+    })));
+    expect(ir.resultMap.map((e) => [e.key, e.container, e.keyed])).toEqual([['all', 'a0', true], ['carls', 'a0', true]]);
   });
 
-  test('two filters on one relation in the object form, whose keys the row drops today', () => {
-    expect(() => irOf(Person.select((p) => ({
+  test('two filters on one relation in the object form are two keys (rows: object-form-rows, twoFilters)', () => {
+    const ir = irOf(Person.select((p) => ({
       a: p.friends.where((f) => f.name.equals('Carl')),
       b: p.friends.where((f) => f.name.equals('Moa')),
-    })))).toThrow(keyedRefusalFor('friends'));
+    })));
+    expect(ir.resultMap.map((e) => e.key)).toEqual(['a', 'b']);
+  });
+
+  test('a keyed sub-select and a keyed path over one relation, one paginated', () => {
+    expect(() => irOf(Person.select((p) => ({
+      x: p.friends.select((f) => f.name).limit(1),
+      n: p.friends.name,
+    })).for({id: 'p1'}))).toThrow(/selected twice.*cannot yet read a relation with two different paginations/);
+  });
+
+  test('two sub-selects under one key (DSL-JSON)', () => {
+    expect(() => irOf(QueryBuilder.fromJSON({
+      v: '1.11', op: 'select', shape: Person.shape.id,
+      fields: [{friends: {customKey: 'x', fields: ['name']}}, {bestFriend: {customKey: 'x', fields: ['name']}}],
+    } as any))).toThrow(/result key "x" is selected twice/);
   });
 
   test('two sub-selects of one relation, one paginated', () => {

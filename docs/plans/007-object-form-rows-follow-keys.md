@@ -167,7 +167,15 @@ Full gate at review: the step's landing gate (plan 006 + task prompt).
   DSL-JSON (same SPARQL); `allAndCarls`/`twoFilters` still refused until phase 3. Every
   `[fuseki]` suite run on oxigraph (scratch jest config mapping the Fuseki helpers to an in-memory
   oxigraph), compared with the integration branch: no new failure besides those two.
-- Phase 3: pending
+- Phase 3: done — `positionOf` gives row paths (keyed groups, hops inside the innermost keyed
+  row, the key), each level with its reading; a members seed is a position too (two sub-selects
+  under one key refused). Pagination refused per shared traversal whatever the keys. Lifted:
+  `{all: p.friends.name, moa: p.friends.where(…).hobby}` and two filters under two keys (rows on
+  oxigraph: fixtures `allAndCarls`, `twoFilters`). Rebased over S9 (d81ff18..107a39a): its 112.3
+  cases (`p.friends.select((f) => [f.name, f.bestFriend.friends.size()])`, `…f.friends.where(…).size()`)
+  and `subExpr` now give per-member rows (fixtures). All 26 cases OK on oxigraph; all `[fuseki]`
+  suites on oxigraph: no new failure vs the integration branch (only lib-dependent suites differ,
+  the worktree has no build).
 - Phase 4: pending
 - Phase 5: pending
 
@@ -190,4 +198,6 @@ Full gate at review: the step's landing gate (plan 006 + task prompt).
 | 6 | phase 2, tests | No store here; rows must be checked per case | Record oxigraph's answers per case in a fixture (guarded by the SPARQL text), map them in unit tests; same cases live in a `[fuseki]` block | Hand-written bindings | Real store answers for 23 cases with less hand work; the guard forces re-recording when lowering changes |
 | 7 | phase 2, mapping | Value of a keyed single-valued field when the first binding lacks it | First non-null over the row's bindings | First binding (as flat fields) | A later binding can hold it when other fields multiply rows; never a spurious `null` |
 | 8 | phase 2, scope | `{x: p.friends.select((f) => ({e: f.name.equals('Moa')}))}` drops a person without friends (the expression makes the hop required) | Leave to S9 (decision 22: same mechanism as `{e: p.bestFriend.name.concat('!')}`); re-check after rebasing over S9 | Fix here | Same lowering S9 owns; avoids conflicting edits |
+| 9 | phase 3, messages | The "keys of the object form nest under the relation" advice no longer holds | Dropped; keyed position conflicts say "give each a key of its own", others point at the object form, pagination conflicts keep their own advice | Keep three keyed variants | The object form now keeps reads apart; one advice per real remedy |
+| 10 | phase 3, scope (S9 note, 112.3) | A count through a hop or a filter in a sub-select beside a sibling field was missing from member rows | Covered by phase 2's per-member placement: the count is a field of the member row (key = counted relation's label, as for a direct count) | Nest it under the hop (`bestFriend: {friends}`) | It is computed per member (grouped by the member), so the member row is where it is true; the array form had no row for it before |
 | 5 | phase 1, lowering | Container aliases must not change traversal order (array-form goldens) | Resolve a seed's container after its own path is lowered (`aliasAfterPath` then shares the traversal); a members seed lowers its steps with their inline filters | Resolve while collecting seeds | Eager resolution renumbers traversals of array-form selects |

@@ -878,6 +878,243 @@
    }
   }
  },
+ "subSizeThroughHop": {
+  "sparql": "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\nSELECT ?a0 ?a1_name (COUNT(DISTINCT ?a2_friends) AS ?a2_agg) ?a1\nWHERE {\n  ?a0 rdf:type <https://example.org/types/Person> .\n  OPTIONAL {\n    ?a0 <https://example.org/props/hasFriend> ?a1 .\n    OPTIONAL {\n      ?a1 <https://example.org/props/name> ?a1_name .\n    }\n    OPTIONAL {\n      ?a1 <https://example.org/props/bestFriend> ?a2 .\n      OPTIONAL {\n        ?a2 <https://example.org/props/hasFriend> ?a2_friends .\n      }\n    }\n  }\n}\nGROUP BY ?a0 ?a1_name ?a1",
+  "results": {
+   "head": {
+    "vars": [
+     "a0",
+     "a1_name",
+     "a2_agg",
+     "a1"
+    ]
+   },
+   "results": {
+    "bindings": [
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p1"
+      },
+      "a1_name": {
+       "type": "literal",
+       "value": "Moa"
+      },
+      "a2_agg": {
+       "type": "literal",
+       "value": "0",
+       "datatype": "http://www.w3.org/2001/XMLSchema#integer"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p1"
+      },
+      "a1_name": {
+       "type": "literal",
+       "value": "Jinx"
+      },
+      "a2_agg": {
+       "type": "literal",
+       "value": "0",
+       "datatype": "http://www.w3.org/2001/XMLSchema#integer"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      },
+      "a1_name": {
+       "type": "literal",
+       "value": "Jinx"
+      },
+      "a2_agg": {
+       "type": "literal",
+       "value": "0",
+       "datatype": "http://www.w3.org/2001/XMLSchema#integer"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      },
+      "a2_agg": {
+       "type": "literal",
+       "value": "0",
+       "datatype": "http://www.w3.org/2001/XMLSchema#integer"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "subSizeFiltered": {
+  "sparql": "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\nSELECT ?a0 ?a1_name (COUNT(DISTINCT ?a2) AS ?a2_agg) ?a1\nWHERE {\n  ?a0 rdf:type <https://example.org/types/Person> .\n  OPTIONAL {\n    ?a0 <https://example.org/props/hasFriend> ?a1 .\n    OPTIONAL {\n      ?a1 <https://example.org/props/name> ?a1_name .\n    }\n    OPTIONAL {\n      ?a1 <https://example.org/props/hasFriend> ?a2 .\n      OPTIONAL {\n        ?a2 <https://example.org/props/name> ?a2_name .\n      }\n      FILTER(?a2_name = \"Jinx\")\n    }\n  }\n}\nGROUP BY ?a0 ?a1_name ?a1",
+  "results": {
+   "head": {
+    "vars": [
+     "a0",
+     "a1_name",
+     "a2_agg",
+     "a1"
+    ]
+   },
+   "results": {
+    "bindings": [
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p1"
+      },
+      "a1_name": {
+       "type": "literal",
+       "value": "Moa"
+      },
+      "a2_agg": {
+       "type": "literal",
+       "value": "1",
+       "datatype": "http://www.w3.org/2001/XMLSchema#integer"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p1"
+      },
+      "a1_name": {
+       "type": "literal",
+       "value": "Jinx"
+      },
+      "a2_agg": {
+       "type": "literal",
+       "value": "0",
+       "datatype": "http://www.w3.org/2001/XMLSchema#integer"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      },
+      "a1_name": {
+       "type": "literal",
+       "value": "Jinx"
+      },
+      "a2_agg": {
+       "type": "literal",
+       "value": "0",
+       "datatype": "http://www.w3.org/2001/XMLSchema#integer"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      },
+      "a2_agg": {
+       "type": "literal",
+       "value": "0",
+       "datatype": "http://www.w3.org/2001/XMLSchema#integer"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "subExpr": {
+  "sparql": "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\nSELECT DISTINCT ?a0 (?a1_name = \"Moa\" AS ?a1_expr) ?a1\nWHERE {\n  ?a0 rdf:type <https://example.org/types/Person> .\n  OPTIONAL {\n    ?a0 <https://example.org/props/hasFriend> ?a1 .\n    OPTIONAL {\n      ?a1 <https://example.org/props/name> ?a1_name .\n    }\n  }\n}",
+  "results": {
+   "head": {
+    "vars": [
+     "a0",
+     "a1_expr",
+     "a1"
+    ]
+   },
+   "results": {
+    "bindings": [
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      },
+      "a1_expr": {
+       "type": "literal",
+       "value": "false",
+       "datatype": "http://www.w3.org/2001/XMLSchema#boolean"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p1"
+      },
+      "a1_expr": {
+       "type": "literal",
+       "value": "false",
+       "datatype": "http://www.w3.org/2001/XMLSchema#boolean"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p1"
+      },
+      "a1_expr": {
+       "type": "literal",
+       "value": "true",
+       "datatype": "http://www.w3.org/2001/XMLSchema#boolean"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      }
+     }
+    ]
+   }
+  }
+ },
  "deepSub": {
   "sparql": "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\nSELECT DISTINCT ?a0 ?a2_name ?a1 ?a2\nWHERE {\n  ?a0 rdf:type <https://example.org/types/Person> .\n  OPTIONAL {\n    ?a0 <https://example.org/props/hasFriend> ?a1 .\n    OPTIONAL {\n      ?a1 <https://example.org/props/bestFriend> ?a2 .\n      OPTIONAL {\n        ?a2 <https://example.org/props/name> ?a2_name .\n      }\n    }\n  }\n}",
   "results": {
@@ -1047,6 +1284,134 @@
       "a1": {
        "type": "uri",
        "value": "linked://tmp/entities/p2"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "allAndCarls": {
+  "sparql": "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\nSELECT DISTINCT ?a0 ?a1_name ?a2_hobby ?a1 ?a2\nWHERE {\n  ?a0 rdf:type <https://example.org/types/Person> .\n  OPTIONAL {\n    ?a0 <https://example.org/props/hasFriend> ?a2 .\n    OPTIONAL {\n      ?a2 <https://example.org/props/name> ?a2_name .\n    }\n    OPTIONAL {\n      ?a2 <https://example.org/props/hobby> ?a2_hobby .\n    }\n    FILTER(?a2_name = \"Moa\")\n  }\n  OPTIONAL {\n    ?a0 <https://example.org/props/hasFriend> ?a1 .\n    OPTIONAL {\n      ?a1 <https://example.org/props/name> ?a1_name .\n    }\n  }\n}",
+  "results": {
+   "head": {
+    "vars": [
+     "a0",
+     "a1_name",
+     "a2_hobby",
+     "a1",
+     "a2"
+    ]
+   },
+   "results": {
+    "bindings": [
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      },
+      "a1_name": {
+       "type": "literal",
+       "value": "Jinx"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p1"
+      },
+      "a1_name": {
+       "type": "literal",
+       "value": "Jinx"
+      },
+      "a2_hobby": {
+       "type": "literal",
+       "value": "Golf"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      },
+      "a2": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p1"
+      },
+      "a1_name": {
+       "type": "literal",
+       "value": "Moa"
+      },
+      "a2_hobby": {
+       "type": "literal",
+       "value": "Golf"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      },
+      "a2": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "twoFilters": {
+  "sparql": "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\nSELECT DISTINCT ?a0 ?a1 ?a2\nWHERE {\n  ?a0 rdf:type <https://example.org/types/Person> .\n  OPTIONAL {\n    ?a0 <https://example.org/props/hasFriend> ?a1 .\n    OPTIONAL {\n      ?a1 <https://example.org/props/name> ?a1_name .\n    }\n    FILTER(?a1_name = \"Moa\")\n  }\n  OPTIONAL {\n    ?a0 <https://example.org/props/hasFriend> ?a2 .\n    OPTIONAL {\n      ?a2 <https://example.org/props/name> ?a2_name .\n    }\n    FILTER(?a2_name = \"Jinx\")\n  }\n}",
+  "results": {
+   "head": {
+    "vars": [
+     "a0",
+     "a1",
+     "a2"
+    ]
+   },
+   "results": {
+    "bindings": [
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      },
+      "a2": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
+      }
+     },
+     {
+      "a0": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p1"
+      },
+      "a1": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p2"
+      },
+      "a2": {
+       "type": "uri",
+       "value": "linked://tmp/entities/p3"
       }
      }
     ]
