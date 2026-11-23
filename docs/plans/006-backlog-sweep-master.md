@@ -104,6 +104,12 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 | 14 | S1 follow-up, backlog 111 items 1–2 | A quantifier reading the outer subject compares the member with itself (silent wrong answer) | Add to S2 (same EXISTS lowering): resolve to the outer alias, which EXISTS sees in scope; refuse what cannot resolve | Leave in backlog 111 | Silent wrong answer in the code S2 already touches |
 | 15 | S1 follow-up, backlog 112 | Older silent wrong answers in inline-filter / nested size lowering | New step S9 (wave 3): fix each, or refuse it loudly where a fix needs design | Leave in backlog | Correctness first; same area, context fresh |
 | 16 | S4 deviation | Wire version bumped to 1.11 with no wire change | Accept | Revert to 1.10 | Harmless; reverting churns the docs and tests again |
+| 17 | S3 ledger #2 | `[p.bestFriend, p.bestFriend.name]` was refused by S3 | Merge as before (bare relation subsumed by unfiltered nested fields) | Refuse | Backward compatibility; the merge was well-defined |
+| 18 ⚠ risky | S8 contract | Object-form rows nest a key under the path's hops (`{n: p.bestFriend.name}` → `row.bestFriend.n`); the types promise otherwise | A key names a top-level field of the object it is written in; its value is the expression's yield; intermediate hops never appear. Minor bump; the changeset lists every moved row | Make the types follow today's rows | Neither side matched, so typed code could not read today's rows without a cast; the keys are what users wrote and what grouped selects already do. Consumers reading `row.bestFriend.n` (untyped / cast) break |
+| 19 | S8 plural values | A key through a multi-valued hop | An array of distinct values (`[]` when empty) | One entry per member (a bag) | Same set semantics as every multi-valued value today (`SELECT DISTINCT`); a sub-select keeps per-member association when it is wanted |
+| 20 | S8 refusals | Nested plain object `{info: {…}}` (throws today), key `id` (silently overwrites the row id) | Refuse both, in the type and at build time | Support nested objects | No DSL-JSON form exists for a nested object; `id` is the row's identity |
+| 21 | S8 scope | DSL-JSON `"as"` is documented as aliasing the result key but ignored; a lone `size()`/expression in a sub-select lands at the root row (wrong data) | Both in S8 (same key handling and mapping) | Backlog | Same code, fixed together |
+| 22 | S9 scope | `{e: p.bestFriend.name.concat('!')}` makes the hop required and drops the instance | Sent to S9 (projection keeps every instance, report 107 rule) | Backlog | Silent wrong answer in S9's area |
 
 ## Contracts
 
@@ -179,8 +185,49 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
   registry version and data root; measure again; list invalidation risks.
 
 ### S8 — 110: object-form rows follow their keys
-- **Depends on:** S3 landed (both touch result mapping). **Report:** 121. **Backlog:** 110.
-  Plan-mode detail is filled in when wave 3 starts.
+- **Depends on:** S3 landed. **Report:** 121. **Plan doc:** 007. **Backlog:** 110.
+  **Size:** large (5 phases).
+- **Goal:** decisions 13, 18–21. Contract:
+  - A key names a top-level field of the object it is written in: the root row, or a sub-select's
+    member row. Its value is the expression's yield: through single-valued hops only, the leaf or
+    `null`; through any multi-valued hop, an array of distinct values (`[]` when empty). A
+    sub-select or preload under a key is the member row(s) `{id, …fields}`. Intermediate hops never
+    appear in the row. The subject as a field is `{id}`. Expressions and `size()` inside a sub-select
+    are per member. Keys are honoured per entry (`.preload()` beside keyed fields). DSL-JSON `"as"`
+    names the key.
+  - Refused in the type and at build time: a nested plain object; the key `id`.
+  - The array form is unchanged.
+- **Today vs proposed** (planning probe, oxigraph-checked): `{n: p.bestFriend.name}` row
+  `bestFriend:{id,n}` → `n: string|null`; `{bb: p.bestFriend.bestFriend}` → `bb: {id}|null`;
+  `{names: p.friends.name}` → `string[]`; `{fbf: p.friends.bestFriend.name}` → `string[]`;
+  `{x: p.friends.select(f => …)}` (key dropped today) → `x: [{id,…}]`; `{x: p.bestFriend.select(…)}`
+  → `{id,…}|null`; `{w: p.friends.where(…)}` → `{id}[]`; `{w: p.friends.where(…).name}` →
+  `string[]`; `{pre: p.bestFriend.preloadFor(c)}` → `{id, …c's fields}|null` (array form: add the
+  component's fields to the type too); `{person: p}` → type `{id}` (row already right);
+  `{n: p.bestFriend.name, b: p.bestFriend}` → no extra `bestFriend` key.
+- **Files:** `IntermediateRepresentation.ts` (`IRResultMapEntry` optional container alias, keyed
+  group entries; additive so array-form goldens do not change), `IRLower.ts` ~410–497 (keep the
+  sub-select key, dropped at ~447–455), `IRDesugar.ts` ~292/315 (keys per entry),
+  `resultMapping.ts` (tree from containers, collapse hops), `irToAlgebra.ts` (lone sub-select
+  aggregate grouping), `projectionDuplicates.ts` `positionOf` (container row path + key; lift the
+  keyed refusals — the Carl case and two filters under two keys; keep the pagination refusal),
+  `SelectQuery.ts` (`ObjectToPlainResult` plurality walk, subject `{id}`, `BoundComponent` fields,
+  nested object → error type), `GroupedSelectBuilder.ts` (`GroupKeyValue` shrinks), `FieldSet.ts`
+  ~913/1157 (refusals), `queryDependencies.ts` ~296 + `LiveQueryStore.ts` ~898 (collapsed hops'
+  ids leave the row, so their predicates are `hidden`, not `narrow`, or live results go stale).
+- **Pitfalls:** pinned old shapes to update (Deviations): `select-result-typing.test.ts:103-104`,
+  `type-probe-deep-nesting.ts` TEST 2/19 (and 3/20 only compile via `any`),
+  `inline-filter-outer-refs-and-filtered-size.test.ts:273-278`,
+  `duplicate-projection-fields.test.ts:222-235`; docs `documentation/intermediate-representation.md`
+  ~250–275, `sparql-algebra.md` ~420 (claims sub-select size groups per friend), `dsl-json.md` ~229.
+  Grouped selects already put keys at the top (`resultMapping.ts` ~448); fix their types only.
+- **Verify:** per case above: rows (unit bindings + a `[fuseki]` block run against oxigraph) and
+  strict `Equals` types for root, `.one()`, `.for()` and grouped; DSL-JSON round trip of each;
+  lifted refusals answer both lists on a store; refusals for nested object and `id`; `.preload()`
+  beside keys; live: renaming p2 refreshes `{n: p.bestFriend.name}`; full typecheck.
+- **Phases:** (1) IR + lowering + build-time refusals; (2) result mapping + sub-select aggregate
+  grouping; (3) `positionOf` + lifted refusals; (4) types incl. grouped and preload; (5) live
+  dependencies, docs, minor changeset listing every moved row.
 
 ### S9 — 112: inline-filter and nested size lowering edges
 - **Depends on:** S2 landed (same lowering). **Report:** 122. **Backlog:** 112.
@@ -201,16 +248,16 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 
 | Step | Scope | Deps | Status | Landed | Report | Notes |
 |---|---|---|---|---|---|---|
-| S1 | 108 outer refs / filtered size | – | done | e6ef1a0..0bf69f6 | 115 | 2 goldens changed (encoded the bug); follow-ups 111, 112 |
+| S1 | 108 outer refs / filtered size | – | done | e6ef1a0..0bf69f6, d208c9e | 115 | 2 goldens changed (encoded the bug); follow-ups 111, 112 |
 | S4 | 019 thenBy | – | done | 6b0915c..afd7fe4 | 116 | builder-only; wire 1.11; follow-up 109 |
 | S6 | 049 keyed cached | – | done | c416562..b04ab29 | 117 | 13 new tests |
 | S7 | 070 measure | – | findings with owner | not landed (branch `--s7`, local) | – | delete-by-id 12 ms at 300 shapes; cache 4–11× |
 | S5 | 088 relation field type | – | done | b6aa386..448c188 | 120 | follow-up 110 → S8 |
-| S2 | 079 refuse agg in EXISTS + 111 items 1–2 | S1 | in progress | | 118 | |
-| S3 | 023 duplicate fields | S1 | in progress | | 119 | |
-| S8 | 110 object-form rows follow their keys | S3 | todo | | 121 | |
-| S9 | 112 inline-filter / size lowering edges | S2 | todo | | 122 | |
-| W1 | wave 1 run + review of S1 | – | in progress | | – | |
+| S2 | 079 refuse agg in EXISTS + 111 items 1–2 | S1 | done | bb31db3..b9d4429 | 118 | refusal also covers inline filter + minus; toJSON refuses outer-reading quantifiers; review running |
+| S3 | 023 duplicate fields | S1 | done | 3e328a2..f462e96 | 119 | fix round: decision 17 |
+| S8 | 110 object-form rows follow their keys | S3 | in progress | | 121 | plan doc 007 |
+| S9 | 112 inline-filter / size lowering edges | S2 | in progress | | 122 | + decision 22 |
+| W1 | wave 1 run + review of S1 | – | done | fixes d208c9e | – | 2938 passed, 0 failed (Fuseki skipped); review: 3 wrong answers, fixed |
 
 ## Progress
 
