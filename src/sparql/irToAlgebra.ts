@@ -1559,7 +1559,7 @@ export function selectToAlgebra(
   // 7b. Include traversal aliases needed for result grouping
   //     When nested results are projected (e.g. p.friends.name), the result
   //     mapping needs the traversal alias variable (?a1) in the bindings to
-  //     group nested rows by entity. Without this, mapNestedRows() can't
+  //     group nested rows by entity. Without this, the result mapping can't
   //     identify which nested fields belong to which traversed entity.
   const projectedNames = new Set<string>();
   for (const p of projection) {
