@@ -215,7 +215,7 @@ describe('a quantifier reading the outer subject (backlog 111 items 1–2)', () 
   });
 
   test('in a preloaded component, the component\'s subject (where the host preloads it)', () => {
-    const component = (fn: (c: any) => unknown) => ({query: Person.select((c) => ({fr: fn(c)}))}) as never;
+    const component = (fn: (c: any) => any) => ({query: Person.select((c) => ({fr: fn(c)}))}) as never;
     expect(sparqlOf(Person.select((p) => p.bestFriend.preloadFor(component((c) =>
       c.friends.where((f: any) => f.friends.some((g: any) => g.name.equals(c.name))).name)))))
       .toContain('FILTER(?a3_name = ?a1_name)');

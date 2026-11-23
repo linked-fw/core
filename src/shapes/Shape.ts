@@ -7,6 +7,7 @@ import type {NodeShapeData, PropertyShapeData} from './nodeShapeData.js';
 import type {
   QueryBuildFn,
   QueryResponseToResultType,
+  SelectResponse,
   SelectAllQueryResponse,
   WhereClause,
 } from '../queries/SelectQuery.js';
@@ -165,7 +166,7 @@ export abstract class Shape {
    */
   static select<
     S extends Shape,
-    R = unknown,
+    R extends SelectResponse = any,
     ResultType = QueryResponseToResultType<R, S>[],
   >(
     this: ShapeConstructor<S>,

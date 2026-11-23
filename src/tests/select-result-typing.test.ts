@@ -100,7 +100,9 @@ describe('select result types (compile-time)', () => {
 
   test('a sub-select keeps the object of its selected fields', () => {
     type Row = Awaited<ReturnType<typeof queries.keyedSubSelect>>[number];
-    type Info = Row['info']['bestFriend'];
+    // The key holds the best friend's row itself.
+    type Info = Row['info'];
+    assertType<Equals<Info['id'], string>>();
     assertType<Equals<Info['name'], string>>();
     assertType<Equals<Info['friend'], {id: string}>>();
   });

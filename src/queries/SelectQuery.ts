@@ -130,6 +130,20 @@ export type InlinePrimitiveWhere =
   | ExistsCondition
   | ((value: {equals(otherValue: ComparisonValue): ExpressionNode}) => ExpressionNode | ExistsCondition);
 
+/** One value of a select's response: a path, sub-select, preload, size() or expression. */
+type SelectFieldValue = QueryBuilderObject | FieldSet<any, any> | ExpressionNode | null | undefined;
+
+/**
+ * What a select callback may return: one value, an array of them (the array form), or an object
+ * of them under keys (the object form). Each key is a field of the row, so a value that is itself
+ * a plain object or an array (`{info: {friend: p.bestFriend}}`) has no field to become, and `id`
+ * is the row's identity: neither compiles (and both are refused at runtime too).
+ */
+export type SelectResponse =
+  | SelectFieldValue
+  | readonly SelectFieldValue[]
+  | ({readonly [key: string]: SelectFieldValue} & {readonly id?: never});
+
 export type QueryBuildFn<T extends Shape, ResponseType> = (
   p: ToQueryBuilderObject<T>,
 ) => ResponseType;
@@ -282,10 +296,12 @@ export type WherePath = WhereExpressionPath | WhereExistsPath;
  * Or a wherePath in the case of some() or every() (e.g. x.where(x.friends.some(f => f.age > 18) -> the argument is a wherePath)
  */
 export type QueryComponentLike<ShapeType extends Shape, CompQueryResult> = {
+  // `CompQueryResult` is the component query's response (its select callback's return), so the
+  // fields the component selects are in the type of the rows that preload it.
   query:
-    | QueryBuilder<ShapeType>
-    | FieldSet
-    | Record<string, QueryBuilder<ShapeType>>;
+    | QueryBuilder<ShapeType, CompQueryResult>
+    | FieldSet<CompQueryResult>
+    | Record<string, QueryBuilder<ShapeType, CompQueryResult>>;
   fields?: FieldSet;
 };
 
@@ -546,10 +562,57 @@ export type CreateShapeSetQResult<
  * Ignores the source and property, and returns the converted value
  */
 export type ObjectToPlainResult<T> = {
-  //passing true as sourceOverwrite will mean that the original source is ignored and so the converted value will not be wrapped in a QResult
-  // [P in keyof T]: QueryResponseToResultType<T[P], null, true>;
-  [P in keyof T]: QueryResponseToResultType<T[P], Shape, true>;
+  [P in keyof T]: KeyedFieldResult<T[P]>;
 };
+
+/**
+ * Whether a query value is read through a multi-valued hop: the value itself or a node on its
+ * source chain is a set (`p.friends`, `p.friends.bestFriend`). The root (`null` source) ends the
+ * walk; an unknown (`any`) source counts as single.
+ */
+// A QueryShape is tested first: a QShape (shape + its property proxies) also matches QueryShapeSet
+// structurally, as `CreateQResult` already relies on.
+type CrossesSet<Source> = 0 extends 1 & Source
+  ? false
+  : Source extends QueryShape<any, infer Parent, any>
+    ? CrossesSet<Parent>
+    : Source extends QueryShapeSet<any, any, any>
+      ? true
+      : false;
+
+/** `T`, or `T[]` when the value is read through a multi-valued hop. */
+type PluralThrough<Source, T> = CrossesSet<Source> extends true ? T[] : T;
+
+/**
+ * The value of one key of the object form: a field of the row the object is written in, holding
+ * the expression's yield. Through single-valued hops only, the leaf (or `null` at runtime);
+ * through any multi-valued hop, an array of the distinct values. A node is `{id}` (the subject
+ * itself included), `size()` a number, a sub-select or preload the member row(s) `{id, …fields}`.
+ * Intermediate hops never appear.
+ */
+export type KeyedFieldResult<V> =
+  V extends FieldSet<infer Response, infer Source>
+    ? PluralThrough<Source, QueryResponseToResultType<Response>>
+    : V extends BoundComponent<infer Source, infer CompQueryResult>
+      ? PluralThrough<Source, Prettify<QResult<Shape, ComponentFields<CompQueryResult>>>>
+      : V extends SetSize<any>
+        ? number
+        : V extends QueryPrimitiveSet<infer QPrim>
+          ? QPrim extends QueryPrimitive<infer Primitive, any, any>
+            ? NormaliseBoolean<Primitive>[]
+            : never
+          : V extends QueryPrimitive<infer Primitive, infer Source, any>
+            ? PluralThrough<Source, NormaliseBoolean<Primitive>>
+            : V extends QueryShape<any, infer Source, any>
+              ? PluralThrough<Source, {id: string}>
+              : V extends QueryShapeSet<any, any, any>
+                ? {id: string}[]
+                : QueryResponseToResultType<V, Shape, true>;
+
+/** The fields a preloaded component's query selects (without the `id` its row has anyway). */
+type ComponentFields<CompQueryResult> = unknown extends CompQueryResult
+  ? {}
+  : Omit<QueryResponseToResultType<CompQueryResult>, 'id'>;
 
 type GetNestedQueryResultType<Response, Source> =
   Source extends QueryBuilderObject
@@ -1319,7 +1382,7 @@ export class QueryShapeSet<
     return this.proxy;
   }
 
-  select<QF = unknown>(
+  select<QF extends SelectResponse = any>(
     subQueryFn: QueryBuildFn<S, QF>,
   ): FieldSet<QF, QueryShapeSet<S, Source, Property>> {
     const parentSegments = FieldSet.collectPropertySegments(this);
@@ -1557,7 +1620,7 @@ export class QueryShape<
     );
   }
 
-  select<QF = unknown>(
+  select<QF extends SelectResponse = any>(
     subQueryFn: QueryBuildFn<S, QF>,
   ): FieldSet<QF, QueryShape<S, Source, Property>> {
     // A sub-select on a project-authored value shape has no authored class, so fall

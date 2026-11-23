@@ -80,12 +80,11 @@ const t2 = promiseFrom(Person).select((p) => ({
 }));
 type T2Result = Awaited<typeof t2>;
 const _t2: T2Result = null as any;
-// Custom object keys are preserved at the outer level
-// But inner results use source property names: friendNames contains {friends: [...]}
-// and bestFriendInfo contains {bestFriend: {...}}
-expectType<string | null | undefined>(_t2[0].friendNames.friends[0].name);
-expectType<string | null | undefined>(_t2[0].bestFriendInfo.bestFriend.name);
-expectType<string | null | undefined>(_t2[0].bestFriendInfo.bestFriend.hobby);
+// A key names the sub-select's member rows: friendNames holds the friends' rows,
+// bestFriendInfo the best friend's row (no relation key in between).
+expectType<string | null | undefined>(_t2[0].friendNames[0].name);
+expectType<string | null | undefined>(_t2[0].bestFriendInfo.name);
+expectType<string | null | undefined>(_t2[0].bestFriendInfo.hobby);
 
 // =============================================================================
 // TEST 3: Sub-select with .size() in same custom object
@@ -302,8 +301,7 @@ expectType<string | null | undefined>(_t18[0].friends[0].bestFriend.hobby);
 
 // =============================================================================
 // TEST 19: QueryBuilder (real) — multiple sub-selects in custom object
-// Same behavior as TEST 2: custom keys preserved, but inner results use
-// source property names. So bestFriendHobby contains {bestFriend: {hobby: ...}}
+// Same behavior as TEST 2: each key holds the member row(s) of its sub-select.
 // =============================================================================
 const t19 = QueryBuilder.from(Person).select((p) => ({
   friendNames: p.friends.select((f) => f.name),
@@ -311,8 +309,8 @@ const t19 = QueryBuilder.from(Person).select((p) => ({
 }));
 type T19Result = Awaited<typeof t19>;
 const _t19: T19Result = null as any;
-expectType<string | null | undefined>(_t19[0].friendNames.friends[0].name);
-expectType<string | null | undefined>(_t19[0].bestFriendHobby.bestFriend.hobby);
+expectType<string | null | undefined>(_t19[0].friendNames[0].name);
+expectType<string | null | undefined>(_t19[0].bestFriendHobby.hobby);
 
 // =============================================================================
 // TEST 20: QueryBuilder (real) — sub-select with count in custom object

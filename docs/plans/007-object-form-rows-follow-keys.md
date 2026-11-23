@@ -176,7 +176,13 @@ Full gate at review: the step's landing gate (plan 006 + task prompt).
   and `subExpr` now give per-member rows (fixtures). All 26 cases OK on oxigraph; all `[fuseki]`
   suites on oxigraph: no new failure vs the integration branch (only lib-dependent suites differ,
   the worktree has no build).
-- Phase 4: pending
+- Phase 4: done — `KeyedFieldResult` (plurality from the source chain; `{id}` for nodes and the
+  subject; member rows for sub-selects and preloads), `SelectResponse` constraint on the select
+  callbacks (nested object, array value, key `id` do not compile), `preloadFor` infers the
+  component's response (array form typed too), `GroupKeyValue` reduced to unwrapping an array.
+  Pinned old shapes updated: `select-result-typing` (keyed sub-select), `type-probe-deep-nesting`
+  TEST 2/19 (TEST 3/20 compile unchanged and now match the rows), one test helper typed `any`
+  instead of `unknown` (`quantifier-outer-refs…`). Typecheck exit 0.
 - Phase 5: pending
 
 ## Deviations
@@ -200,4 +206,6 @@ Full gate at review: the step's landing gate (plan 006 + task prompt).
 | 8 | phase 2, scope | `{x: p.friends.select((f) => ({e: f.name.equals('Moa')}))}` drops a person without friends (the expression makes the hop required) | Leave to S9 (decision 22: same mechanism as `{e: p.bestFriend.name.concat('!')}`); re-check after rebasing over S9 | Fix here | Same lowering S9 owns; avoids conflicting edits |
 | 9 | phase 3, messages | The "keys of the object form nest under the relation" advice no longer holds | Dropped; keyed position conflicts say "give each a key of its own", others point at the object form, pagination conflicts keep their own advice | Keep three keyed variants | The object form now keeps reads apart; one advice per real remedy |
 | 10 | phase 3, scope (S9 note, 112.3) | A count through a hop or a filter in a sub-select beside a sibling field was missing from member rows | Covered by phase 2's per-member placement: the count is a field of the member row (key = counted relation's label, as for a direct count) | Nest it under the hop (`bestFriend: {friends}`) | It is computed per member (grouped by the member), so the member row is where it is true; the array form had no row for it before |
+| 11 | phase 4, types | How to refuse a nested object / key `id` in the type | A constraint `SelectResponse` on the select callback's response (top-level select, sub-selects); violations fail to compile at the offending key | An error-branded result type | A compile error at the call is a refusal; a branded type compiles and fails only on use |
+| 12 | phase 4, types | A callback typed to return `unknown` (generic helpers) no longer satisfies the constraint | Accept; such helpers type their callback `any` (one test helper changed) | Leave the constraint off `unknown` | The constraint is what refuses nested objects; `unknown` cannot be checked |
 | 5 | phase 1, lowering | Container aliases must not change traversal order (array-form goldens) | Resolve a seed's container after its own path is lowered (`aliasAfterPath` then shares the traversal); a members seed lowers its steps with their inline filters | Resolve while collecting seeds | Eager resolution renumbers traversals of array-form selects |

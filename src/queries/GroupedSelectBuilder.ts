@@ -21,8 +21,6 @@ import type {QueryBuilderJSON, SelectBuilder} from './QueryBuilder.js';
 import type {RawSelectInput} from './IRDesugar.js';
 import type {
   ObjectToPlainResult,
-  QueryShape,
-  QueryShapeSet,
   SetSize,
   WherePath,
 } from './SelectQuery.js';
@@ -86,18 +84,12 @@ export type PlainFieldNames<R> = Exclude<keyof R & string, AggregateFieldNames<R
  */
 export type GroupedRow<R, Keys extends string> = {
   [P in keyof ObjectToPlainResult<R>]: P extends Keys & keyof R
-    ? GroupKeyValue<R[P], ObjectToPlainResult<R>[P]>
+    ? GroupKeyValue<ObjectToPlainResult<R>[P]>
     : ObjectToPlainResult<R>[P];
 };
 
-/**
- * A key's value in a row. A node (a relation, or the subject itself) is its `{id}`: stated here
- * because the object form of select types the subject as a field (`{person: p}`) as a malformed
- * object rather than `{id}` (backlog 110). A multi-valued path's key is one value.
- */
-type GroupKeyValue<Q, V> = Q extends QueryShape<any, any, any> | QueryShapeSet<any, any, any>
-  ? {id: string}
-  : V extends readonly (infer E)[] ? E : V;
+/** A key's value in a row: the field's value, one value of it for a multi-valued path. */
+type GroupKeyValue<V> = V extends readonly (infer E)[] ? E : V;
 
 /**
  * What `groupBy` returns when the grouping cannot be built: no builder methods, so the next

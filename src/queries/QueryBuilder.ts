@@ -6,6 +6,7 @@ import {
   type WhereClause,
   type QResult,
   type QueryResponseToResultType,
+  type SelectResponse,
   type SelectAllQueryResponse,
   type QueryComponentLike,
   processWhereClause,
@@ -248,7 +249,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
   // ---------------------------------------------------------------------------
 
   /** Set the select projection via a callback, labels, or FieldSet. */
-  select<NewR>(fn: QueryBuildFn<S, NewR>): SelectBuilder<S, NewR, QueryResponseToResultType<NewR, S>[]>;
+  select<NewR extends SelectResponse>(fn: QueryBuildFn<S, NewR>): SelectBuilder<S, NewR, QueryResponseToResultType<NewR, S>[]>;
   select(labels: string[]): SelectBuilder<S>;
   select<NewR>(fieldSet: FieldSet<NewR>): SelectBuilder<S, NewR, QueryResponseToResultType<NewR, S>[]>;
   select<NewR = R>(fnOrLabelsOrFieldSet: QueryBuildFn<S, NewR> | string[] | FieldSet<any>): SelectBuilder<S, NewR, any> {

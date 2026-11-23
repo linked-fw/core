@@ -10,6 +10,7 @@
 import {beforeAll, afterAll, describe, expect, test} from '@jest/globals';
 import {readFileSync} from 'fs';
 import {Person} from '../test-helpers/query-fixtures';
+import {Expr} from '../expressions/Expr';
 import {lower} from '../queries/lower';
 import {QueryBuilder} from '../queries/QueryBuilder';
 import {FieldSet} from '../queries/FieldSet';
@@ -38,6 +39,73 @@ const entries = (factory: () => unknown): IRResultMapEntry[] =>
 /** The projected expression an entry reads. */
 const expressionOf = (ir: IRSelectQuery, entry: IRResultMapEntry) =>
   ir.projection.find((p) => p.alias === entry.alias)?.expression;
+
+type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+const assertType = <T extends true>(): T | undefined => undefined;
+type Row<K extends ObjectFormCase> = Awaited<ReturnType<(typeof objectFormCases)[K]>> extends readonly (infer R)[]
+  ? R
+  : Awaited<ReturnType<(typeof objectFormCases)[K]>>;
+type Node = {id: string};
+
+describe('object form: the row types equal the rows (compile-time)', () => {
+  test('a key on a path holds its yield; plural through a multi-valued hop', () => {
+    assertType<Equals<Row<'n'>['n'], string>>();
+    assertType<Equals<Row<'bb'>['bb'], Node>>();
+    assertType<Equals<Row<'names'>['names'], string[]>>();
+    assertType<Equals<Row<'fbf'>['fbf'], string[]>>();
+    assertType<Equals<Row<'fb'>['fb'], Node[]>>();
+    assertType<Equals<Row<'w'>['w'], Node[]>>();
+    assertType<Equals<Row<'wName'>['w'], string[]>>();
+    assertType<Equals<Row<'person'>['person'], Node>>();
+    assertType<Equals<keyof Row<'nAndB'>, 'n' | 'b' | 'id'>>();
+    assertType<Equals<Row<'allAndCarls'>['moaHobby'], string[]>>();
+  });
+
+  test('a keyed sub-select or preload holds the member row(s)', () => {
+    type X = Row<'xFriends'>['x'];
+    assertType<Equals<X[number]['bf'], Node>>();
+    assertType<Equals<X[number]['n'] | X[number]['id'], string>>();
+    assertType<Equals<Row<'xBestFriend'>['x']['n'], string>>();
+    assertType<Equals<Row<'xFriendsArray'>['x'][number]['name'], string>>();
+    assertType<Equals<Row<'pre'>['pre'], {name: string; id: string}>>();
+    assertType<Equals<Row<'preFriends'>['pre'], {name: string; id: string}[]>>();
+    assertType<Equals<Row<'subSize'>['x'][number]['c'], number>>();
+    assertType<Equals<Row<'subExpr'>['x'][number]['e'], boolean>>();
+    assertType<Equals<Row<'deepSub'>['x'][number]['y']['n'], string>>();
+  });
+
+  test('.one() and .for(id)', () => {
+    assertType<Equals<Row<'one'>['n'], string>>();
+    assertType<Equals<Row<'forP1'>['names'], string[]>>();
+  });
+
+  test('the array form of preloadFor carries the component fields', () => {
+    const q = () => Person.select((p) => p.bestFriend.preloadFor(nameCard));
+    type R = Awaited<ReturnType<typeof q>>[number];
+    assertType<Equals<R['bestFriend']['name'], string>>();
+  });
+
+  test('grouped: a key is one value, a node its id', () => {
+    const q = () => Person.select((p) => ({fn: p.friends.name, f: p.friends, person: p, n: Expr.count()})).groupBy('fn', 'f', 'person');
+    type R = Awaited<ReturnType<typeof q>>[number];
+    assertType<Equals<R['fn'], string>>();
+    assertType<Equals<R['f'], Node>>();
+    assertType<Equals<R['person'], Node>>();
+    assertType<Equals<R['n'], number>>();
+  });
+
+  test('a nested plain object, an array value and the key id do not compile', () => {
+    // @ts-expect-error a nested plain object
+    const nested = () => Person.select((p) => ({info: {friend: p.bestFriend}}));
+    // @ts-expect-error an array as a value
+    const array = () => Person.select((p) => ({both: [p.name, p.hobby]}));
+    // @ts-expect-error the key id
+    const id = () => Person.select((p) => ({id: p.name}));
+    // @ts-expect-error inside a sub-select too
+    const inner = () => Person.select((p) => p.friends.select((f) => ({info: {n: f.name}})));
+    expect([nested, array, id, inner]).toHaveLength(4);
+  });
+});
 
 describe('object form: the result map (IR)', () => {
   test('a key on a deeper path is a keyed field of the root row', () => {
