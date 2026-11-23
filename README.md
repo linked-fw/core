@@ -1321,7 +1321,18 @@ const sorted = await Person.select((p) => p.name).orderBy((p) => p.name, 'ASC');
 const limited = await Person.select((p) => p.name).limit(1);
 const single = await Person.select((p) => p.name).one();
 const page3 = await Person.select((p) => [p.name, p.nickNames]).orderBy((p) => p).limit(20).offset(40);
+// Several keys, each with its own direction: newest first, then by name
+const byDateThenName = await Person.select((p) => [p.name, p.birthDate])
+  .orderBy((p) => p.birthDate, 'DESC')
+  .thenBy((p) => p.name);
 ```
+
+`orderBy(fn, direction)` sets the sort, replacing any earlier one. Its callback may return several
+keys (`orderBy((p) => [p.hobby, p.name], 'DESC')`), all sorted in that one direction.
+`thenBy(fn, direction = 'ASC')` adds one key after the sort so far, with its own direction: it
+orders the instances that tie on every earlier key. Chain it once per key; it needs a preceding
+`orderBy` (alone it throws), and its callback returns one path or expression, not an array. A
+grouped select sorts its groups with its own `orderBy` (below), which has no `thenBy`.
 
 `limit(n)` and `offset(m)` page over the selected **instances** (the root subjects), not over
 the rows a store returns: a page holds `n` instances after the first `m`, and each has every
@@ -1345,7 +1356,7 @@ last).
 
 An `orderBy` on a multi-valued or nested path (`p.nickNames`, `p.friends.name`) gives each
 instance one sort value: its first value in that direction, the lowest ascending and the
-highest descending, of the values it has. Each `orderBy` key is taken this way on its own, and
+highest descending, of the values it has. Each sort key (`orderBy` or `thenBy`) is taken this way on its own, in its own direction, and
 on a page ties are broken by the instance's IRI, so consecutive pages neither repeat nor skip
 an instance. Without an `orderBy` the order of the instances, and so which ones a page holds,
 is the store's.

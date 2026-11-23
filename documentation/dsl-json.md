@@ -51,8 +51,10 @@ Every envelope carries a wire-format version under `v`:
 
 `fromJSON` checks it with `assertWireVersion`: a mismatched **major** is rejected; a missing
 `v` is tolerated (treated as the current major). Bump the major only for breaking wire changes.
-The current version is 1.10 (a terms read is `kind: "triples_terms"`, and every read goes to
-`readQuery`; see [Triples reads](#triples-reads)); 1.9 let a triples read list `objects` or
+The current version is 1.11 (a select's `sortBy` may mix directions across its keys, as
+`orderBy(…).thenBy(…, 'DESC')` builds it; the entry forms are unchanged, see below); 1.10 made a
+terms read `kind: "triples_terms"`, and every read goes to
+`readQuery` (see [Triples reads](#triples-reads)); 1.9 let a triples read list `objects` or
 `predicates` (the terms read, now its own kind); 1.8 carried a quantifier key's relation cast, `pets.as(Dog).some`,
 `as(X)` casts in condition and `sortBy` paths as fields carry them, and a `sortBy` filter on any
 relation segment; 1.7 added `sortBy` entries for a computed expression and a filtered path, and a quantifier
@@ -79,6 +81,20 @@ key sorts after every one with a value, in both directions, whether the path is 
 (`name`) or nested (`bestFriend.name`). A `sortBy` on a multi-valued or nested path sorts each
 subject by its first value in that direction (lowest `ASC`, highest `DESC`), of the values it
 has; keys are taken one by one, and ties are broken by the subject IRI when paging.
+
+Every `sortBy` entry carries its own direction, so a multi-key sort with mixed directions is the
+array of its keys in precedence order. `Person.select((p) => p.name).orderBy((p) => p.hobby,
+'DESC').thenBy((p) => p.name)` is
+
+```json
+"sortBy": [ { "hobby": "DESC" }, { "name": "ASC" } ]
+```
+
+and `orderBy((p) => [p.hobby, p.name], 'DESC')` is the same array with `"DESC"` twice. Since 1.11
+a sender may mix directions (`thenBy`); the form is the one every earlier 1.x envelope used, and a
+reader that takes per-entry directions (all current ones) sorts each key its own way.
+`SelectBuilder.fromJSON` restores the whole array as the builder's sort: a `.thenBy()` on the
+restored builder appends to it, an `.orderBy()` replaces it.
 
 A `sortBy` entry is a path, `{ "bestFriend.name": "ASC" }`; a path with a filtered segment, written
 as a field's is (`where` on segment `whereIndex`; an index that names no segment of the path is

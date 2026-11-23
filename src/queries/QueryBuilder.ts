@@ -327,7 +327,7 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
    * instances that tie on every earlier key.
    *
    * ```ts
-   * Person.select((p) => [p.name, p.age]).orderBy((p) => p.age, 'DESC').thenBy((p) => p.name);
+   * Person.select((p) => [p.name, p.birthDate]).orderBy((p) => p.birthDate, 'DESC').thenBy((p) => p.name);
    * ```
    *
    * Each call appends one key (the callback returns one path or expression, not an array),
@@ -1018,11 +1018,10 @@ export class SelectBuilder<S extends Shape = Shape, R = any, Result = any>
       overrides._where = deserializeWherePath(nodeShape, json.where);
     }
 
-    // Restore sort key + direction (direction rides on the ordered sortBy array)
+    // Restore the sort keys, each with its own direction (the ordered sortBy array). A later
+    // `.thenBy()` appends to them; a later `.orderBy()` replaces them.
     if (json.sortBy && json.sortBy.length > 0 && nodeShape) {
-      const sortBy = deserializeSortByPath(nodeShape, json.sortBy);
-      overrides._sortBy = sortBy;
-      overrides.sortDirection = sortBy.directions[0];
+      overrides._sortBy = deserializeSortByPath(nodeShape, json.sortBy);
     }
 
     // Restore minus entries
