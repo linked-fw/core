@@ -228,6 +228,12 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 - **Phases:** (1) IR + lowering + build-time refusals; (2) result mapping + sub-select aggregate
   grouping; (3) `positionOf` + lifted refusals; (4) types incl. grouped and preload; (5) live
   dependencies, docs, minor changeset listing every moved row.
+- **Also (from S9, report 122):** backlog 112 item 3 is this step's lone sub-select aggregate
+  (`p.friends.select((f) => ({n: f.friends.size()}))` groups by `?a0` only and lands at the root
+  row). Beside a sibling field the SPARQL already groups per member, but the count is missing from
+  the rows when it reads a hop or a filter (`p.friends.select((f) => [f.name,
+  f.bestFriend.friends.size()])`, `…f.friends.where(…).size()`: `?a2_agg` is projected, the
+  member rows carry only `name`; oxigraph, report 122).
 
 ### S9 — 112: inline-filter and nested size lowering edges
 - **Depends on:** S2 landed (same lowering). **Report:** 122. **Backlog:** 112.
@@ -267,7 +273,7 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 - [x] S2 — report 118
 - [x] S3 — report 119
 - [ ] S8 — report 121
-- [ ] S9 — report 122
+- [x] S9 — report 122
 - [x] S5 — report 120
 
 ## Starter prompt template

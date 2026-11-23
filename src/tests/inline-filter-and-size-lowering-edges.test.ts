@@ -18,6 +18,7 @@ import {describe, expect, test, beforeAll, afterAll} from '@jest/globals';
 import {Person, tmpEntityBase, personClass, propBase} from '../test-helpers/query-fixtures';
 import {lower} from '../queries/lower';
 import {selectToSparql} from '../sparql/irToAlgebra';
+import {fromJSON} from '../queries/fromJSON';
 import {mapSparqlSelectResult} from '../sparql/resultMapping';
 import type {IRSelectQuery, ResultRow} from '../queries/IntermediateRepresentation';
 import {createTestDataset, loadTestData, executeSparqlQuery, clearAllData} from '../test-helpers/fuseki-test-store';
@@ -189,6 +190,13 @@ describe('an inline filter on a quantified relation or a path read as a value', 
     expect(sparqlOf(Person.select().where((p) => p.friends.where(chess).every(carl)))).toContain(
       'FILTER(?a1_hobby = "Chess" && !(?a1_name = "Carl"))',
     );
+  });
+
+  test('round-trips through DSL-JSON with its filter', () => {
+    const q = someChessPlayerIsCarl();
+    const back = fromJSON(JSON.parse(JSON.stringify(q.toJSON())) as never);
+    expect(sparqlOf(back)).toBe(sparqlOf(q));
+    expect(sparqlOf(back)).toContain('?a1_hobby = "Chess"');
   });
 
   test('a filter that is itself a quantifier', () => {
