@@ -130,19 +130,37 @@ export type InlinePrimitiveWhere =
   | ExistsCondition
   | ((value: {equals(otherValue: ComparisonValue): ExpressionNode}) => ExpressionNode | ExistsCondition);
 
-/** One value of a select's response: a path, sub-select, preload, size() or expression. */
-type SelectFieldValue = QueryBuilderObject | FieldSet<any, any> | ExpressionNode | null | undefined;
+/**
+ * The result type of a select the object form cannot answer: reading such a row does not compile,
+ * and `__error` says why. The select is refused at runtime too (when it is built).
+ */
+export type SelectError<Message extends string> = {readonly __error: Message};
+
+/** Whether a value under a key is a plain object or an array (no field of a row can hold one). */
+type IsNestedValue<V> = 0 extends 1 & V
+  ? false
+  : V extends QueryBuilderObject | FieldSet<any, any> | ExpressionNode
+    ? false
+    : V extends readonly unknown[]
+      ? true
+      : V extends object
+        ? true
+        : false;
+
+/** The keys of an object-form response whose value is a plain object or an array. */
+type NestedValueKeys<T> = {[K in keyof T]-?: IsNestedValue<T[K]> extends true ? K : never}[keyof T];
 
 /**
- * What a select callback may return: one value, an array of them (the array form), or an object
- * of them under keys (the object form). Each key is a field of the row, so a value that is itself
- * a plain object or an array (`{info: {friend: p.bestFriend}}`) has no field to become, and `id`
- * is the row's identity: neither compiles (and both are refused at runtime too).
+ * The row of an object-form response, or the error a key makes: a nested plain object or array as
+ * a value (`{info: {friend: p.bestFriend}}`), or the key `id` (every row's identity).
  */
-export type SelectResponse =
-  | SelectFieldValue
-  | readonly SelectFieldValue[]
-  | ({readonly [key: string]: SelectFieldValue} & {readonly id?: never});
+type ObjectFormRow<T, QShapeType extends Shape> = [NestedValueKeys<T>] extends [never]
+  ? string extends keyof T
+    ? QResult<QShapeType, Prettify<ObjectToPlainResult<T>>>
+    : 'id' extends keyof T
+      ? SelectError<'"id" cannot be a key of the object form: every row already holds its id under `id`'>
+      : QResult<QShapeType, Prettify<ObjectToPlainResult<T>>>
+  : SelectError<`the value of key "${NestedValueKeys<T> & string}" is a plain object or an array: map each key to a path, sub-select, preload or expression`>;
 
 export type QueryBuildFn<T extends Shape, ResponseType> = (
   p: ToQueryBuilderObject<T>,
@@ -348,7 +366,7 @@ export type QueryResponseToResultType<
         : T extends ExpressionNode
         ? boolean
         : T extends Object
-          ? QResult<QShapeType, Prettify<ObjectToPlainResult<T>>>
+          ? ObjectFormRow<T, QShapeType>
           : never & {__error: 'QueryResponseToResultType: unmatched query response type'};
 
 /**
@@ -1382,7 +1400,7 @@ export class QueryShapeSet<
     return this.proxy;
   }
 
-  select<QF extends SelectResponse = any>(
+  select<QF = unknown>(
     subQueryFn: QueryBuildFn<S, QF>,
   ): FieldSet<QF, QueryShapeSet<S, Source, Property>> {
     const parentSegments = FieldSet.collectPropertySegments(this);
@@ -1620,7 +1638,7 @@ export class QueryShape<
     );
   }
 
-  select<QF extends SelectResponse = any>(
+  select<QF = unknown>(
     subQueryFn: QueryBuildFn<S, QF>,
   ): FieldSet<QF, QueryShape<S, Source, Property>> {
     // A sub-select on a project-authored value shape has no authored class, so fall

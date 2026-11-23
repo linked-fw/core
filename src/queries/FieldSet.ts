@@ -1007,6 +1007,12 @@ export class FieldSet<R = any, Source = any> {
    */
   private static keyedEntry(rootShape: NodeShapeData, key: string, value: unknown): FieldSetEntry {
     assertResultKey(key);
+    if (value === null || value === undefined) {
+      throw new Error(
+        `Select: the value of key "${key}" is ${value}; the object form maps each key to a path, ` +
+        'sub-select or expression. Leave the key out instead.',
+      );
+    }
     if (
       Array.isArray(value) ||
       (value !== null &&

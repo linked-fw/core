@@ -152,7 +152,7 @@ export type {
 } from './expressions/ExpressionMethods.js';
 
 // Phase 5 — Component query integration
-export type {LinkedComponentInterface, QueryComponentLike, SelectResponse} from './queries/SelectQuery.js';
+export type {LinkedComponentInterface, QueryComponentLike, SelectError} from './queries/SelectQuery.js';
 
 
 // Mutation DSL-JSON serialization (create/update/delete to/from JSON)

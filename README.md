@@ -954,7 +954,8 @@ Through single-valued hops a key holds the value (or `null`); through any multi-
 array of distinct values. A sub-select or `preloadFor` under a key holds the member row(s), and a
 `size()` or expression inside a sub-select is computed per member. A key's value must be a path,
 sub-select, preload, `size()` or expression — a nested plain object (`{info: {friend: …}}`) and the
-key `id` (every row's identity) are refused, by the type and when the select is built.
+key `id` (every row's identity) are refused when the select is built; their row type is a
+`SelectError` naming the reason, so reading such a row does not compile.
 
 #### Sub-queries
 ```typescript

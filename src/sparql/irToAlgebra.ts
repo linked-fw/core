@@ -1579,8 +1579,9 @@ export function selectToAlgebra(
   // The rows of keyed sub-selects and the members a field is computed per (`{x: p.friends.select((f)
   // => ({c: f.friends.size()}))}` counts per friend) are told apart by their aliases: projected,
   // so they are GROUP BY keys too, even when an aggregate's output name collided with one. A
-  // count beside them is a `COUNT(DISTINCT …)` of its own variable, which a finer group does not
-  // change.
+  // count beside them must not count over a traversal those keys (or any other projected field)
+  // read: lowering gives such a count a traversal of its own (`countOverOwnTraversals`), so each
+  // group still sees all of the row's members.
   const rowAliases = new Set<string>();
   for (const entry of query.resultMap ?? []) {
     for (const alias of [entry.container, entry.members ? entry.alias : undefined]) {

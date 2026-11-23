@@ -8,6 +8,7 @@
 import {describe, expect, test} from '@jest/globals';
 import {queryDependencies} from '../queries/queryDependencies';
 import {AskBuilder} from '../queries/AskBuilder';
+import {QueryBuilder} from '../queries/QueryBuilder';
 import {
   Employee,
   Person,
@@ -90,6 +91,24 @@ describe('queryDependencies — projection', () => {
     const sub = deps(Person.select((p) => ({x: p.friends.select((f) => ({n: f.name}))})).for(ids.P1));
     expect(sub.narrow).toEqual(p('friend', 'name'));
     expect(sub.hidden).toEqual([]);
+  });
+
+  test('object form: a keyed sub-select across a hop holds the members, not the hop', () => {
+    // The rows hold the friends of the best friend; the best friend's `friend` is read on a node
+    // the row does not hold: hidden. The hop read on the root itself stays narrow.
+    const d = deps(Person.select((p) => ({x: p.bestFriend.friends.select((f) => ({n: f.name}))})).for(ids.P1));
+    expect(d.hidden).toEqual(p('friend'));
+    expect(d.narrow).toEqual(p('bestFriend', 'friend', 'name'));
+  });
+
+  test('object form: a members entry does not shadow a projection alias (DSL-JSON)', () => {
+    const query = QueryBuilder.fromJSON({
+      shape: PERSON,
+      fields: ['age', 'bestFriend.name', {friends: {as: 'x', fields: ['name']}}],
+    } as any);
+    const d = deps(query);
+    expect(d.narrow).toEqual(expect.arrayContaining(p('age', 'bestFriend', 'name', 'friend')));
+    expect(d.hidden).toEqual([]);
   });
 
   test('as() cast', () => {

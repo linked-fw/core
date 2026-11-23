@@ -64,6 +64,13 @@ export const objectFormCases = {
     Person.select((p) =>
       p.friends.where((f) => f.hobby.equals('Golf')).select((f) => ({x: f.name.concat('!'), n: f.name})),
     ),
+  countBesideName: () => Person.select((p) => ({fn: p.friends.name, c: p.friends.size()})),
+  countBesideHop: () => Person.select((p) => ({c: p.friends.size(), fb: p.friends.bestFriend.name})),
+  subCountBeside: () =>
+    Person.select((p) => ({x: p.friends.select((f) => ({fn: f.friends.name, c: f.friends.size()}))})),
+  countBesideMembers: () => Person.select((p) => ({x: p.friends.select((f) => ({n: f.name})), c: p.friends.size()})),
+  filteredCountBeside: () =>
+    Person.select((p) => ({w: p.friends.where(isMoa).name, c: p.friends.where(isMoa).size()})),
   deepSub: () =>
     Person.select((p) => ({x: p.friends.select((f) => ({y: f.bestFriend.select((b) => ({n: b.name}))}))})),
   twoSubsOneRelation: () =>
@@ -146,6 +153,23 @@ export const objectFormRows: Record<ObjectFormCase, ResultRow[] | ResultRow | nu
     {id: p2, friends: []},
     {id: p3, friends: []},
   ],
+  countBesideName: [
+    {id: p1, fn: ['Jinx', 'Moa'], c: 2},
+    {id: p2, fn: ['Jinx'], c: 1},
+    {id: p3, fn: [], c: 0},
+  ],
+  countBesideHop: [{id: p1, c: 2, fb: ['Jinx']}, {id: p2, c: 1, fb: []}, {id: p3, c: 0, fb: []}],
+  subCountBeside: [
+    {id: p1, x: [{id: p2, fn: ['Jinx'], c: 1}, {id: p3, fn: [], c: 0}]},
+    {id: p2, x: [{id: p3, fn: [], c: 0}]},
+    {id: p3, x: []},
+  ],
+  countBesideMembers: [
+    {id: p1, x: [{id: p2, n: 'Moa'}, {id: p3, n: 'Jinx'}], c: 2},
+    {id: p2, x: [{id: p3, n: 'Jinx'}], c: 1},
+    {id: p3, x: [], c: 0},
+  ],
+  filteredCountBeside: [{id: p1, w: ['Moa'], c: 1}, {id: p2, w: [], c: 0}, {id: p3, w: [], c: 0}],
   deepSub: [
     {id: p1, x: [{id: p2, y: {id: p3, n: 'Jinx'}}, {id: p3, y: null}]},
     {id: p2, x: [{id: p3, y: null}]},

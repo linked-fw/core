@@ -17,6 +17,7 @@ import {FieldSet} from '../queries/FieldSet';
 import {selectToSparql} from '../sparql/irToAlgebra';
 import {mapSparqlSelectResult, type SparqlJsonResults} from '../sparql/resultMapping';
 import type {IRResultMapEntry, IRSelectQuery} from '../queries/IntermediateRepresentation';
+import type {SelectError} from '../queries/SelectQuery';
 import {
   nameCard,
   normalizeRows,
@@ -94,16 +95,46 @@ describe('object form: the row types equal the rows (compile-time)', () => {
     assertType<Equals<R['n'], number>>();
   });
 
-  test('a nested plain object, an array value and the key id do not compile', () => {
-    // @ts-expect-error a nested plain object
+  test('a nested plain object, an array value and the key id give an error row type', () => {
     const nested = () => Person.select((p) => ({info: {friend: p.bestFriend}}));
-    // @ts-expect-error an array as a value
     const array = () => Person.select((p) => ({both: [p.name, p.hobby]}));
-    // @ts-expect-error the key id
     const id = () => Person.select((p) => ({id: p.name}));
-    // @ts-expect-error inside a sub-select too
     const inner = () => Person.select((p) => p.friends.select((f) => ({info: {n: f.name}})));
-    expect([nested, array, id, inner]).toHaveLength(4);
+    type RowOf<F extends () => unknown> = Awaited<ReturnType<F>> extends readonly (infer R)[] ? R : never;
+    assertType<Equals<RowOf<typeof nested>, SelectError<'the value of key "info" is a plain object or an array: map each key to a path, sub-select, preload or expression'>>>();
+    assertType<Equals<RowOf<typeof array>['__error'], 'the value of key "both" is a plain object or an array: map each key to a path, sub-select, preload or expression'>>();
+    assertType<Equals<RowOf<typeof id>['__error'], '"id" cannot be a key of the object form: every row already holds its id under `id`'>>();
+    // Reading a field of such a row does not compile.
+    assertType<Equals<'info' extends keyof RowOf<typeof nested> ? true : false, false>>();
+    assertType<Equals<'info' extends keyof RowOf<typeof inner>['friends'][number] ? true : false, false>>();
+  });
+
+  test('callbacks that compiled before still compile (no constraint on select)', () => {
+    const fUnknown = (p: any): unknown => p.name;
+    const fObject = (p: any): object => ({n: p.name});
+    interface Named {
+      n: unknown;
+    }
+    const fNamed = (p: any): Named => ({n: p.name});
+    function wrap<R>(fn: (p: any) => R) {
+      return Person.select(fn);
+    }
+    function wrapSub<R>(fn: (f: any) => R) {
+      return Person.select((p) => p.friends.select(fn));
+    }
+    const built = [
+      () => Person.select(fUnknown),
+      () => Person.select(fObject),
+      () => Person.select(fNamed),
+      () => QueryBuilder.from(Person).select(fUnknown),
+      () => wrap((p) => ({n: p.name})),
+      () => wrapSub((f) => ({n: f.name})),
+      () => Person.select((p) => p.friends.select(fUnknown)),
+    ];
+    expect(built.map((f) => typeof f)).toEqual(Array(7).fill('function'));
+    // Still typed through: a wrapper keeps its row type.
+    type Wrapped = Awaited<ReturnType<typeof wrap<{n: string}>>>;
+    assertType<Equals<Wrapped extends unknown[] ? true : false, true>>();
   });
 });
 
@@ -247,6 +278,25 @@ describe('object form: refused at build time', () => {
     expect(() => build(() => Person.select((p) => ({both: [p.name, p.hobby]}) as any))).toThrow(
       /value of key "both" is an array/,
     );
+  });
+
+  test('null as a value (top level), naming the key', () => {
+    expect(() => build(() => Person.select((p) => ({n: p.name, z: null}) as any))).toThrow(/value of key "z" is null/);
+  });
+
+  test('a preload of a relation also selected under a key', () => {
+    expect(() =>
+      build(() => Person.select((p) => ({x: p.friends.select((f) => ({n: f.name}))})).preload('friends', nameCard)),
+    ).toThrow(/"friends" is selected under the key "x" and, apart from it, nested under its own name/);
+    // Nested under the key itself it is one row: allowed.
+    expect(() =>
+      build(() => Person.select((p) => ({x: p.friends.select((f) => f.bestFriend.select((b) => b.name))}))),
+    ).not.toThrow();
+  });
+
+  test('a key colliding with a preload names both readings', () => {
+    expect(() => build(() => Person.select((p) => ({friends: p.friends.name})).preload('friends', nameCard)))
+      .toThrow('(friends: friends.name and friends.select(name: name))');
   });
 
   test('the key id', () => {

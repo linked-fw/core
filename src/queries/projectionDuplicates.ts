@@ -203,7 +203,14 @@ const written = (seed: ProjectionSeed): string => {
   if (seed.kind === 'expression') parts.push(`${seed.key}: <expression>`);
   if (seed.kind === 'members') parts[parts.length - 1] += '.select(…)';
   if (Object.keys(seed.context).length > 0 && parts.length > 0) parts[parts.length - 1] += ' (paginated sub-select)';
-  return parts.join('.') || 'the subject';
+  // A key the user wrote, and the sub-select a field is selected in (a preload's fields too), so two
+  // fields over one path read apart: `friends: friends.name` and `friends.select(name: name)`.
+  const key = seed.kind === 'path' && seed.key ? `${seed.key}: ` : '';
+  const inRow = seed.kind === 'path' ? seed.row.steps.filter((step) => step.kind === 'property_step').length : 0;
+  if (inRow > 0 && inRow < parts.length) {
+    return `${parts.slice(0, inRow).join('.')}.select(${key}${parts.slice(inRow).join('.')})`;
+  }
+  return key + (parts.join('.') || 'the subject');
 };
 
 /** A position as a dotted key (a filtered relation's own entry has no key of its own). */

@@ -826,15 +826,104 @@ export const lowerSelectQuery = (
     return alias;
   };
 
+  /**
+   * A size() counts the members of its relation, per row. Its members are a traversal another
+   * field may read too (`{fn: p.friends.name, c: p.friends.size()}`), and a variable that field
+   * projects is a GROUP BY key of the select, which would split the count per value (each group
+   * would count one friend). Such a count reads a traversal of its own (filtered like the counted
+   * relation): every group of a row then sees all of its members.
+   */
+  function countOverOwnTraversals(counted: {index: number; steps: DesugaredStep[]}[]): void {
+    if (counted.length === 0) return;
+    const countIndexes = new Set(counted.map((c) => c.index));
+    // The aliases the other fields read (and the traversals leading to them), and the rows.
+    const read = new Set<string>();
+    const markUp = (alias: string | undefined) => {
+      for (let a = alias; a && a !== ctx.rootAlias && !read.has(a); a = ctx.traversalTo(a)?.from) read.add(a);
+    };
+    const collect = (expr: IRExpression): void => {
+      if (expr.kind === 'property_expr') markUp(expr.sourceAlias);
+      else if (expr.kind === 'alias_expr') markUp(expr.alias);
+      for (const value of Object.values(expr)) {
+        if (Array.isArray(value)) value.forEach((v) => v && typeof v === 'object' && 'kind' in v && collect(v as IRExpression));
+        else if (value && typeof value === 'object' && 'kind' in value) collect(value as IRExpression);
+      }
+    };
+    projection.forEach((item, i) => {
+      if (!countIndexes.has(i)) collect(item.expression);
+    });
+    for (const entry of resultMapEntries) {
+      markUp(entry.container);
+      if (entry.members) markUp(entry.alias);
+    }
+    for (const {index, steps} of counted) {
+      const aggregate = projection[index].expression;
+      if (aggregate.kind !== 'aggregate_expr' || aggregate.args.length !== 1) continue;
+      const arg = aggregate.args[0];
+      const countStep = steps[steps.length - 1] as Extract<DesugaredStep, {kind: 'count_step'}>;
+      const step = countStep.path[0];
+      if (!step) continue;
+      const source = arg.kind === 'property_expr' ? arg.sourceAlias : ctx.traversalTo((arg as {alias: string}).alias)?.from;
+      const shared = arg.kind === 'property_expr'
+        ? ctx.existingTraversal(arg.sourceAlias, arg.property)
+        : arg.kind === 'alias_expr' ? arg.alias : undefined;
+      if (!source || !shared || !read.has(shared)) continue;
+      const own = ctx.createTraversal(source, step.propertyShapeId, step.pathExpr, step.maxCount);
+      if (step.where) inlineFilterHandler(own, step.where);
+      projection[index] = {...projection[index], expression: {...aggregate, args: [{kind: 'alias_expr', alias: own}]}};
+    }
+  }
+
+  /**
+   * A keyed sub-select's members are a traversal shared with any other read of that relation, so
+   * the member alias names the keyed rows. A field placed in a row reached through those members
+   * but not selected under that key (a `.preload('friends', c)` beside `{x: p.friends.select(…)}`)
+   * would land inside the keyed rows: refused, naming both.
+   */
+  function fieldName(seed: ProjectionSeed): string {
+    return seed.kind === 'path' && !seed.key ? labelOfId(projectionKeyFromPath(seed.path)) : seed.key!;
+  }
+
+  function refuseRowsSharedWithAKey(): void {
+    const keyOfMembers = new Map<string, {key: string; seed: ProjectionSeed}>();
+    for (const {seed, container} of placed) {
+      if (seed.kind === 'members') {
+        const members = resultMapEntries.find((e) => e.members && e.key === seed.key && e.container === container);
+        if (members) keyOfMembers.set(members.alias, {key: seed.key, seed});
+      }
+    }
+    if (keyOfMembers.size === 0) return;
+    for (const {seed, container} of placed) {
+      for (let alias: string | undefined = container; alias && alias !== ctx.rootAlias; alias = ctx.traversalTo(alias)?.from) {
+        const owner = keyOfMembers.get(alias);
+        if (!owner || owner.seed === seed) continue;
+        const inside = seed.row.groups.some((group) => aliasAfterPath(group.steps) === alias);
+        if (!inside) {
+          const relation = (owner.seed as Extract<ProjectionSeed, {kind: 'members'}>).path
+            .map((step) => (step.kind === 'property_step' ? labelOfId(step.propertyShapeId) : '')).filter(Boolean).join('.');
+          throw new Error(
+            `Select: "${relation}" is selected under the key "${owner.key}" and, apart from it, nested under ` +
+            `its own name (a preload or an unkeyed sub-select of it, for "${fieldName(seed)}"); one select ` +
+            `cannot hold both rows of one relation yet. Select it once, or put both under one key.`,
+          );
+        }
+      }
+    }
+  }
+
+  const placed: {seed: ProjectionSeed; container: string}[] = [];
+  const counts: {index: number; steps: DesugaredStep[]}[] = [];
   for (const seed of projectionSeeds) {
     if (seed.kind === 'members') {
-      resultMapEntries.push({
+      const entry: IRResultMapEntry = {
         key: seed.key,
         alias: membersAlias(seed.path),
         ...containerOf(seed.row),
         keyed: true,
         members: true,
-      });
+      };
+      resultMapEntries.push(entry);
+      placed.push({seed, container: entry.container!});
       continue;
     }
     const key = seed.kind === 'path'
@@ -844,19 +933,27 @@ export const lowerSelectQuery = (
     const expression = seed.kind === 'path'
       ? lowerSelectionPathExpression(seed.path, pathOptions, inlineFilterHandler)
       : seed.expression;
+    if (seed.kind === 'path' && seed.path.steps[seed.path.steps.length - 1]?.kind === 'count_step') {
+      counts.push({index: projection.length, steps: seed.path.steps});
+    }
     projection.push({alias, expression});
     // Where the field sits (see `IRResultMapEntry`): a keyed field in the row it is written in; an
     // unkeyed one there only inside a keyed sub-select, or when it is computed per member (an
     // expression or aggregate inside a sub-select); otherwise under its hops from the root.
     const keyed = seed.kind === 'path' ? !!seed.key : seed.keyed;
     const perMember = expression.kind !== 'property_expr' && expression.kind !== 'alias_expr' && seed.row.steps.length > 0;
-    resultMapEntries.push({
+    const entry: IRResultMapEntry = {
       key,
       alias,
       ...(keyed || seed.row.underKey || perMember ? containerOf(seed.row) : {}),
       ...(keyed ? {keyed: true as const} : {}),
-    });
+    };
+    resultMapEntries.push(entry);
+    if (entry.container) placed.push({seed, container: entry.container});
   }
+  refuseRowsSharedWithAKey();
+
+  if (!canonical.group) countOverOwnTraversals(counts);
 
   // The where shares the projection's traversals, except a nested select's page (see
   // `conditionResolver`).

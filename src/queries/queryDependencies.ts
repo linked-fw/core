@@ -312,6 +312,21 @@ class DependencyCollector {
    * the value, not the ids of the nodes it was read on, so the hops below the row and the value's
    * own predicate are hidden (matched by predicate); the hops above the row are narrow.
    */
+  collectMembers(membersAlias: string, container: string): void {
+    // A hop is read on its `from` node: on the row's own node it is narrow, below it hidden.
+    for (let alias = membersAlias; alias !== container; ) {
+      const info = this.traverseByTo.get(alias);
+      if (!info) break;
+      this.reached.add(info.pattern);
+      addAll(
+        info.pattern.from === container ? this.deps.narrow : this.deps.hidden,
+        predicatesOf(info.pattern.property, info.pattern.pathExpr),
+      );
+      alias = info.pattern.from;
+    }
+    addAll(this.deps.narrow, this.chain(container));
+  }
+
   collectKeyed(expr: IRExpression, container: string): void {
     const source = expr.kind === 'property_expr' ? expr.sourceAlias : expr.kind === 'alias_expr' ? expr.alias : undefined;
     if (source === undefined || source === container) {
@@ -438,7 +453,14 @@ export function queryDependencies(
   for (const pattern of ir.patterns) collector.walkPattern(pattern, false);
 
   if (ir.kind === 'select') {
-    const entryOf = new Map((ir.resultMap ?? []).map((entry) => [entry.alias, entry]));
+    // A members entry names a traversal, not a projection item (their aliases can coincide).
+    const entryOf = new Map((ir.resultMap ?? []).filter((entry) => !entry.members).map((entry) => [entry.alias, entry]));
+    // The rows of a keyed sub-select or preload hold their members' ids, not those of the nodes
+    // between the row the key is in and the members (`{x: p.bestFriend.friends.select(…)}` holds
+    // the friends, not the best friend): those hops are hidden.
+    for (const entry of ir.resultMap ?? []) {
+      if (entry.members) collector.collectMembers(entry.alias, entry.container ?? ir.root.alias);
+    }
     for (const item of ir.projection) {
       const entry = entryOf.get(item.alias);
       if (entry?.keyed) collector.collectKeyed(item.expression, entry.container ?? ir.root.alias);

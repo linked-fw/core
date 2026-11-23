@@ -1,12 +1,12 @@
 ---
 summary: >
-  Two leftovers seen while making object-form rows follow their keys (report 121): an array-form
-  count through a hop lands on the root row while its type nests it, and two Fuseki aggregation
-  tests assert two rows where OPTIONAL gives every person.
+  Three leftovers seen while making object-form rows follow their keys (report 121): an array-form
+  count through a hop lands on the root row while its type nests it, a Fuseki aggregation test
+  asserts two rows where OPTIONAL gives every person, and computed fields are typed `boolean`.
 packages: [core]
 ---
 
-# 114 — Array-form count through a hop; Fuseki count tests' row counts
+# 114 — Array-form count through a hop; Fuseki count test; computed field types
 
 Source: report 121 (plan 006 step S8). Neither changed there: S8's contract leaves the array form
 as it is, and the tests are not S8's.
@@ -23,3 +23,10 @@ as it is, and the tests are not S8's.
    gives one row per person (4) on oxigraph, on the integration branch before report 121 too
    (`countLabel` asserted the same and was rewritten by report 121). Check on the CI Fuseki whether
    the suite runs and what it answers; fix the assertion (4 rows, counts 2/0/0/0).
+
+3. **A computed field is typed `boolean` whatever it computes.** `{e: p.bestFriend.name.concat('!')}`
+   answers a string, typed `boolean`: `QueryResponseToResultType` maps every `ExpressionNode` that
+   is not an aggregate to `boolean`, and the expression methods (`concat`, `ucase`, `plus`,
+   `strlen`, …) all return a plain `ExpressionNode`. Fix: give `ExpressionNode` a result type
+   parameter (`ExpressionNode<string>`) set by each method in `ExpressionMethods.ts`, and read it in
+   `QueryResponseToResultType` / `KeyedFieldResult`. Pre-existing (review of report 121).
