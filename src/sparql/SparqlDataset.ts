@@ -566,8 +566,9 @@ export abstract class SparqlDataset implements IDataset {
     if (ir.kind === 'create') return withGraph(routed);
     const readSet = routing.readGraphsForShape(ir.shape);
     if (readSet.length <= 1) return withGraph(readSet[0] ?? routed);
-    // The subject may live in any graph of the read set; an upsert creates in the routed graph.
-    return withGraph(ir.kind === 'upsert' ? routed : graphs.default, readSet);
+    // The subject may live in any graph of the read set; an upsert creates in the routed graph. The
+    // IR gets a copy: the routing's read sets are frozen and shared, the IR is the caller's.
+    return withGraph(ir.kind === 'upsert' ? routed : graphs.default, [...readSet]);
   }
 
   async createQuery(query: CreateQuery): Promise<CreateResult> {

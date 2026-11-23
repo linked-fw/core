@@ -392,11 +392,15 @@ type RegistryMemo = {
   referringGraphs: Map<string, string[]>;
 };
 
-/** The routing's own answer to {@link referringGraphsForShape}, memoized with its read sets. */
-const REFERRING_GRAPHS = Symbol('referringGraphs');
-type BuiltRouting = ShapeGraphRouting & {[REFERRING_GRAPHS](shapeId: string): string[]};
+/**
+ * Built routing → its own answer to {@link referringGraphsForShape}, memoized with its read sets.
+ * Keyed by the routing object itself, never carried on it: a store that overrides `graphRouting()`
+ * may wrap a built routing (spread, `Object.create`) with read sets of its own, and the wrapper
+ * must be answered from those.
+ */
+const builtReferringGraphs = new WeakMap<ShapeGraphRouting, (shapeId: string) => string[]>();
 
-function buildRouting(table: Map<string, string>): BuiltRouting {
+function buildRouting(table: Map<string, string>): ShapeGraphRouting {
   const globalMemo: RegistryMemo = {readSets: new Map(), referringGraphs: new Map()};
   const catalogMemos = new WeakMap<object, RegistryMemo>();
   // Read when a method runs, not when the routing is built: a routing obtained outside a catalog
@@ -470,14 +474,15 @@ function buildRouting(table: Map<string, string>): BuiltRouting {
     m.referringGraphs.set(shapeId, out);
     return out;
   };
-  return {
+  const routing: ShapeGraphRouting = {
     graphForShape,
     readGraphsForShape,
     allGraphs(): string[] {
       return sortGraphSet([graphs.default, ...table.values()]);
     },
-    [REFERRING_GRAPHS]: referringGraphs,
   };
+  builtReferringGraphs.set(routing, referringGraphs);
+  return routing;
 }
 
 /** The shape, its super-shapes and its sub-shapes. */
@@ -554,8 +559,9 @@ export function sortGraphSet(set: Iterable<string>): string[] {
  * left out: mutations never write those graphs.
  */
 export function referringGraphsForShape(routing: ShapeGraphRouting, shapeId: string): string[] {
-  const own = (routing as Partial<BuiltRouting>)[REFERRING_GRAPHS];
+  const own = builtReferringGraphs.get(routing);
   if (own) return own(shapeId);
-  // A routing from elsewhere (a store that overrides its graphRouting()): nothing kept.
+  // A routing from elsewhere (a store that overrides its graphRouting(), or wraps a built one):
+  // its own read sets, nothing kept.
   return referringGraphsVia(referrerIndex(), (id) => routing.readGraphsForShape(id), shapeId);
 }

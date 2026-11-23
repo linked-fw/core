@@ -189,3 +189,42 @@ shapes.
 | 4 | Phase 2, unrouted dataset | A cache lookup reads the root, which an unrouted dataset never read | Return `undefined` before the lookup, with no entry | Cache `undefined` too | Backward compatibility (no new `dataRoot()` calls); unrouted lookups were already cheap |
 | 5 | Phase 1, test oracle | The earlier recursive form is exponential on a dense graph | Dense equality fixture of 12 shapes (3 edges each), plus the hand-built cycle | 40 shapes (did not finish within 5 min) | The oracle must finish; 12 shapes with cycles already exercise the memo reuse |
 | 6 | Benchmark | Where to keep it | `src/tests/routing-cost.bench.test.ts`, skipped unless `ROUTING_BENCH` is set | A script outside jest | Uses the jest/ts setup as is; one skipped suite in the regular run |
+
+## Addendum — review fixes
+
+An independent review confirmed that the read sets match exactly (8 random cyclic fixtures and a
+catalog) and that every input change inside core moves the cache key. Three findings were fixed or
+recorded.
+
+- **MEDIUM 1 (regression, fixed).** The routing's own `referringGraphsForShape` answer was carried
+  on an enumerable symbol property. A store that overrides `graphRouting()` and wraps the built
+  routing (`{...graphRoutingFor(this), readGraphsForShape: …}`, or `Object.create`) copied or
+  inherited that symbol. Delete by id and the live check then used the inner read sets, so links
+  in a graph the wrapper adds were never cleaned. The answer now lives in a module WeakMap keyed
+  by the built routing object itself, so any wrapper is answered from its own
+  `readGraphsForShape`. Tests in `graph-routing-cache.test.ts`:
+  - spread and `Object.create` wrappers;
+  - a delete by id through a store whose wrapper adds a graph to a referrer's read set.
+
+  Both fail with the earlier symbol.
+- **LOW 1 (decision 33, fixed).** `SparqlDataset.resolveWriteGraph` put the frozen, shared read set
+  into `ir.writeGraphs`. The IR now gets a copy, so hooks that sort or push work as before. The
+  frozen arrays stay internal to the routing and to direct callers. The changeset is reworded to
+  match. A test checks that `writeGraphs` is not frozen, and that pushing to it leaves the
+  routing's read set unchanged; it fails without the copy.
+- **LOW 2 (pre-existing, recorded).** A mutation lowered in a shape catalog takes its write graphs
+  from the global registry's read sets, because `LinkedStorage` sends it outside any catalog. A
+  probe (catalog-only `Owner contains Item`, update and delete of an `Item` by id) produced the
+  same SPARQL on 0981f9a, before this work, as with the cache: `WITH <…/g/item>`, without the
+  owner's graph. So the cache did not introduce it. Recorded as backlog
+  [115](../backlog/115-catalog-write-graphs-from-global-read-sets.md).
+
+Verification of the fix round:
+- `npx tsc -p tsconfig-tests.json --noEmit` → `TSC_OK`.
+- The 37 routing / live-query / LinkedStorage suites:
+  `Test Suites: 5 skipped, 32 passed, 32 of 37 total` / `Tests: 66 skipped, 569 passed, 635 total`.
+- Full set after `npm run build`:
+  `Test Suites: 20 skipped, 172 passed, 172 of 192 total` / `Tests: 698 skipped, 3178 passed, 3876 total`.
+
+The Details section above describes the symbol mechanism that this addendum replaces.
+`referringGraphsForShape` now looks the routing up in `builtReferringGraphs`.

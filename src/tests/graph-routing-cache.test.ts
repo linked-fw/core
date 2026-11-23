@@ -17,6 +17,9 @@ import {
 import {dataGraph, graphs} from '../ontologies/graphs';
 import {shacl} from '../ontologies/shacl';
 import type {IDataset} from '../interfaces/IDataset';
+import {SparqlDataset} from '../sparql/SparqlDataset';
+import type {SparqlQueryResults} from '../sparql/resultMapping';
+import {DeleteBuilder} from '../queries/DeleteBuilder';
 
 const NS = 'https://example.org/routing-cache/';
 const shape = (local: string) => `${NS}shape/${local}`;
@@ -194,5 +197,77 @@ describe('a routing from elsewhere', () => {
     };
     expect(referringGraphsForShape(foreign, shape('WrapItem'))).toEqual(referringGraphsForShape(routing, shape('WrapItem')));
     expect(referringGraphsForShape(routing, shape('WrapItem'))).toEqual(['https://cache.example/graph/linker', G_OWNER].sort());
+  });
+});
+
+describe('a store that wraps the routing with read sets of its own', () => {
+  const G_EXTRA = 'https://cache.example/graph/extra';
+  const G_LINKER = 'https://cache.example/graph/wrap-linker';
+
+  function wrappedRoutings(): [string, ShapeGraphRouting][] {
+    registerRuntimeShape(wire('WrapperItem'));
+    registerRuntimeShape(wire('WrapperLinker', [{label: 'item', valueShape: shape('WrapperItem')}]));
+    const ds = fakeDataset();
+    setShapeGraphs(ds, {[shape('WrapperLinker')]: G_LINKER});
+    const inner = graphRoutingFor(ds)!;
+    // The wrapper adds a graph to the linker's read set only: the item's own read set stays as is.
+    const extra = (id: string) =>
+      id === shape('WrapperLinker') ? [...inner.readGraphsForShape(id), G_EXTRA] : inner.readGraphsForShape(id);
+    const created = Object.create(inner) as ShapeGraphRouting;
+    created.readGraphsForShape = extra;
+    return [
+      ['spread', {...inner, readGraphsForShape: extra}],
+      ['Object.create', created],
+    ];
+  }
+
+  test('referringGraphsForShape reads the wrapper read sets, not the inner routing', () => {
+    for (const [name, routing] of wrappedRoutings()) {
+      expect([name, referringGraphsForShape(routing, shape('WrapperItem'))]).toEqual([name, [G_EXTRA, G_LINKER].sort()]);
+    }
+  });
+
+  test('a delete by id cleans links in the graphs the wrapper adds', async () => {
+    const [[, spread]] = wrappedRoutings();
+    class WrappingStore extends SparqlDataset {
+      updates: string[] = [];
+      protected override graphRouting() {
+        return spread;
+      }
+      protected async executeSparqlSelect(): Promise<SparqlQueryResults> {
+        return {head: {vars: []}, results: {bindings: []}};
+      }
+      protected async executeSparqlUpdate(sparql: string): Promise<void> {
+        this.updates.push(sparql);
+      }
+    }
+    const store = new WrappingStore({mapGraphName: (iri) => (iri === graphs.default ? 'urn:x-arq:DefaultGraph' : null)});
+    await DeleteBuilder.from(shape('WrapperItem'), {id: `${NS}item/1`}).exec(store);
+    expect(store.updates[0]).toContain(`<${G_EXTRA}>`);
+    expect(store.updates[0]).toContain(`<${G_LINKER}>`);
+  });
+});
+
+describe('the IR a store builds keeps its own arrays', () => {
+  test('writeGraphs is a copy of the read set, not the frozen shared array', () => {
+    registerRuntimeShape(wire('IrItem'));
+    registerRuntimeShape(wire('IrOwner', [{label: 'item', valueShape: shape('IrItem'), contains: true}]));
+    class ExposingStore extends SparqlDataset {
+      writeIr<T extends {kind: string; shape: string; graph?: string}>(ir: T): T {
+        return this.resolveWriteGraph(ir);
+      }
+      protected async executeSparqlSelect(): Promise<SparqlQueryResults> {
+        return {head: {vars: []}, results: {bindings: []}};
+      }
+      protected async executeSparqlUpdate(): Promise<void> {}
+    }
+    const store = new ExposingStore();
+    setShapeGraphs(store, {[shape('IrOwner')]: G_OWNER, [shape('IrItem')]: G_ITEM});
+    const ir = store.writeIr({kind: 'update', shape: shape('IrItem'), id: `${NS}item/1`}) as {writeGraphs?: string[]};
+    expect(ir.writeGraphs).toEqual([G_ITEM, G_OWNER].sort());
+    expect(Object.isFrozen(ir.writeGraphs)).toBe(false);
+    expect(Object.isFrozen(graphRoutingFor(store)!.readGraphsForShape(shape('IrItem')))).toBe(true);
+    ir.writeGraphs!.push('https://cache.example/graph/pushed');
+    expect(graphRoutingFor(store)!.readGraphsForShape(shape('IrItem'))).toEqual([G_ITEM, G_OWNER].sort());
   });
 });

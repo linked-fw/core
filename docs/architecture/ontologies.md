@@ -508,7 +508,7 @@ every call). A shape edited in place, without registering it again, is not seen:
 then re-register it. A routing that throws (a root the store lacks) is not kept. What the routing
 derives from the registry (owners, read sets, the shapes that may link to a shape) is kept per
 shape catalog, so a compile inside `withShapeCatalog` never shares sets with the global registry.
-Read sets are frozen arrays shared by every caller. A copy of core older than this cache writes the
+Read sets are frozen arrays shared by every caller (an IR a store builds gets its own copy of one). A copy of core older than this cache writes the
 shared route table without moving the version, so a route it sets is seen only after another
 change.
 
