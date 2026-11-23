@@ -52,9 +52,10 @@ listing every moved row.
 - `src/sparql/irToAlgebra.ts` — a row's alias (a keyed sub-select's members, the member a field is
   computed per) is projected, so a per-member aggregate groups by it; a `members` entry is never
   renamed with a colliding projection alias.
-- `src/queries/SelectQuery.ts` — `KeyedFieldResult` (the type of a key), `SelectResponse`
-  (constraint on select callbacks; exported), `QueryComponentLike` infers the component's response.
-  `src/queries/QueryBuilder.ts`, `src/shapes/Shape.ts` — the constraint on `select`.
+- `src/queries/SelectQuery.ts` — `KeyedFieldResult` (the type of a key), `SelectError` /
+  `ObjectFormRow` (the error row type of a nested object or the key `id`; exported),
+  `QueryComponentLike` infers the component's response. (`QueryBuilder.ts` and `Shape.ts` carried a
+  `SelectResponse` constraint in the first landing; the fix round removed it.)
   `src/queries/GroupedSelectBuilder.ts` — `GroupKeyValue` reduced to unwrapping an array.
 - `src/queries/queryDependencies.ts` — a keyed value read below its row: hops below and the
   value's predicate `hidden`, hops above `narrow`.
