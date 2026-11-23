@@ -117,6 +117,9 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 | 27 | S9 review MEDIUM 4 | Under `every`, a member lacking the predicate's hop passes | It is a counterexample (fails the predicate), for plain and filtered `every`; `some`/`none` unchanged | Document today's behaviour | Correctness: "every friend's best friend is Erik" is false for a friend without one |
 | 28 | S8 review MEDIUM 4 | The array form changed (per-member sizes/expressions in sub-selects) contrary to the contract | Keep the new (correct) rows; list them in report 121 and the changeset | Restore the old rows | Correctness; the old rows were wrong |
 | 29 | S8 review MEDIUM 5 | A `SelectResponse` constraint on every `select` signature broke code that compiled (`unknown` callbacks, generic wrappers, interfaces) | Remove the constraint; a nested object / `id` key yields an exported `SelectError` row type; the build-time refusal stays | Keep the constraint | Backward compatibility, with the protection kept at the result type and at runtime |
+| 30 | 070, owner (1A) | What to build from the S7 measurement | Fix the delete-by-id read-set recursion, then cache routing per dataset with the referring-shapes index | Fix only / park | Owner's choice |
+| 31 | 070, owner (2) | When the cache refreshes | On route set/unset, on any shape (re)registration (registry version), and when the data root changes. One routing object per dataset is rebuilt whole on its next use (ownership crosses shapes). No `invalidateGraphRouting` export; documented rule: change a shape → re-register it | Per-shape invalidation; an explicit invalidate API | Owner: small and simple; an app editing shapes changes code and re-registers |
+| 32 | 070, owner (3A) | Keep the prototype | Pushed as `ccr-88cd3a37-okakn0--s7` (benchmark branch, never merged) | Patch in backlog | Owner's choice |
 
 ## Contracts
 
@@ -253,12 +256,40 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 - **Depends on:** S2 landed (same lowering). **Report:** 122. **Backlog:** 112.
   Plan-mode detail is filled in when wave 3 starts.
 
+### S11 — 070: delete-by-id read-set recursion and a routing cache per dataset
+- **Depends on:** none (wave 4). **Report:** 124. **Size:** medium (2 phases). **Backlog:** 070.
+- **Start from** the prototype on branch `ccr-88cd3a37-okakn0--s7` (commit a22ce68:
+  `src/utils/graphRouting.ts`, `src/tests/routing-cost.bench.test.ts`) and S7's findings below.
+- **Phase 1 — the defect:** `referringGraphsForShape` → `readGraphsForShape` recursion never
+  memoizes read sets computed during recursion (`visiting.size > 0`), so owner chains are
+  recomputed per referrer and `contains` cycles make it near-exponential (12 ms per delete by id at
+  300 shapes with dense ownership). Memoize with cycles in mind, so results are identical to today.
+- **Phase 2 — the cache (decisions 30, 31):** the routing object per dataset (WeakMap), keyed by a
+  route version (bumped by `setShapeGraphs` and by `unsetShapeGraph` when it removes), the shape
+  registry version (`getRegistryVersion()`, `utils/registryCache.ts`), the active catalog, and
+  `dataRootOf(dataset)` (read on every call, as today). The value-shape → referring-shapes index
+  lives on the cached object. Cached read-set arrays are frozen. Strip the prototype's
+  `__linkedRoutingCacheOff` switch and profiling counters; keep the benchmark as an opt-in test
+  (`ROUTING_BENCH`). No invalidate export. Document in README (graph routing): routing is cached per
+  dataset; it refreshes when routes change, when a shape is registered or re-registered, or when the
+  data root changes; a shape changed in place must be re-registered.
+- **Known risks (S7):** in-place `NodeShapeData` edits without re-registration go stale (documented
+  rule); an older copy of core writing the shared routes WeakMap does not bump the version (note
+  it); the read-set memo must not be shared across catalogs; routes that throw are not cached.
+- **Verify:** typecheck; routing / live dependency / LinkedStorage suites (the 29 suites S7 ran:
+  grep `graphRoutingFor`, `setShapeGraphs`, `queryDependencies`, `LinkedStorage` in `src/tests`);
+  new tests: the cache refreshes on route set/unset, on re-registration of a shape (an added
+  `contains` edge changes the owners' read sets), on data-root change; delete-by-id read sets equal
+  before/after the memo on a cyclic `contains` fixture; benchmark numbers before/after quoted
+  (`ROUTING_BENCH=300`), including delete-by-id on the first call.
+
 ## Waves
 
 - **Wave 1:** S1, S4, S6, S7 (S7 is read-mostly). S4 and S1 both touch `IRLower.ts`; the second
   to land rebases.
 - **Wave 2:** S2, S3 (after S1). S5 ran in wave 1 (decision 11).
-- **Wave 3:** S8 (after S3), S9 (after S2).
+- **Wave 3:** S8 (after S3), S9 (after S2), S10 (after S9).
+- **Wave 4:** S11 (070, owner's choice 1A).
 - **Wave run** after each wave (test agent): `npm run build && npm test` in a fresh worktree of
   the integration branch; Fuseki suites skipped (no Docker), CI covers them.
 - **Independent review** per wave of the lowering steps (S1–S4): silent wrong answers are this
@@ -271,7 +302,8 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 | S1 | 108 outer refs / filtered size | – | done | e6ef1a0..0bf69f6, d208c9e | 115 | 2 goldens changed (encoded the bug); follow-ups 111, 112 |
 | S4 | 019 thenBy | – | done | 6b0915c..afd7fe4 | 116 | builder-only; wire 1.11; follow-up 109 |
 | S6 | 049 keyed cached | – | done | c416562..b04ab29 | 117 | 13 new tests |
-| S7 | 070 measure | – | findings with owner | not landed (branch `--s7`, local) | – | delete-by-id 12 ms at 300 shapes; cache 4–11× |
+| S7 | 070 measure | – | done | not landed (branch `--s7`, pushed) | – | delete-by-id 12 ms at 300 shapes; cache 4–11×; owner chose 1A → S11 |
+| S11 | 070 delete-by-id recursion + routing cache | – | in progress | | 124 | |
 | S5 | 088 relation field type | – | done | b6aa386..448c188 | 120 | follow-up 110 → S8 |
 | S2 | 079 refuse agg in EXISTS + 111 items 1–2 | S1 | done | bb31db3..b9d4429, 2e2f82e | 118 | review: `.as()` cast regression, fixed |
 | S3 | 023 duplicate fields | S1 | done | 3e328a2..f462e96 | 119 | fix round: decision 17 |
@@ -292,6 +324,7 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 - [x] S9 — report 122
 - [x] S5 — report 120
 - [x] S10 — report 123
+- [ ] S11 — report 124
 
 ## Starter prompt template
 
