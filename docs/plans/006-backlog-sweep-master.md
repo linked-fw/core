@@ -88,6 +88,19 @@ Only the master pushes the integration branch.
    worktree, and reports numbers and a recommendation to the master. It does not land; the owner
    decides.
 
+## Autonomous decisions
+
+Mode: master keep-going (owner, 2026-11-23). Step agents inherit keep-going. Exception set by the
+owner: S7 (070) never lands without the owner; its findings go to the owner for a joint decision.
+
+| # | Where | Problem | Choice | Alternative | Rationale |
+|---|-------|---------|--------|-------------|-----------|
+| 1–8 | Decisions above | Design of each step | Decisions 1–8 | See each decision | Correctness first, then simplicity and backward compatibility |
+| 9 | Where steps land | No linked app; one repo | Integration branch in place (`ccr-88cd3a37-okakn0`), git worktrees, no PRs | Standalone PR per step | Session may push only this branch; one release later |
+| 10 | Testing | No Docker, so no live Fuseki | oxigraph (scratch, not a dependency) to execute generated SPARQL; CI runs Fuseki suites | Skip runtime checks | Proves SPARQL validity and answers without touching the repo's deps |
+| 11 | Waves | S5 independent of every other step | Start S5 during wave 1 | Wait for wave 2 | Types-only, no shared files; shortens the run |
+| 12 | Draft PR | Wrapup skill opens a backup draft PR per integration branch | None | Open one | Session rule: no PR unless the owner asks |
+
 ## Contracts
 
 - C1 (steps 1, 2, 3): lowering changes in `src/queries/IRLower.ts` and `src/sparql/irToAlgebra.ts`
@@ -170,13 +183,13 @@ Only the master pushes the integration branch.
 
 | Step | Scope | Deps | Status | Landed | Report | Notes |
 |---|---|---|---|---|---|---|
-| S1 | 108 outer refs / filtered size | – | todo | | 115 | |
-| S4 | 019 thenBy | – | todo | | 116 | |
-| S6 | 049 keyed cached | – | todo | | 117 | |
-| S7 | 070 measure | – | todo | not landed | – | owner decides |
+| S1 | 108 outer refs / filtered size | – | in progress | | 115 | |
+| S4 | 019 thenBy | – | in progress | | 116 | |
+| S6 | 049 keyed cached | – | in progress | | 117 | |
+| S7 | 070 measure | – | in progress | not landed | – | owner decides |
 | S2 | 079 refuse agg in EXISTS | S1 | todo | | 118 | |
 | S3 | 023 duplicate fields | S1 | todo | | 119 | |
-| S5 | 088 relation field type | – | todo | | 120 | |
+| S5 | 088 relation field type | – | in progress | | 120 | |
 
 ## Progress
 
