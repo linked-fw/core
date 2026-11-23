@@ -100,6 +100,10 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 | 10 | Testing | No Docker, so no live Fuseki | oxigraph (scratch, not a dependency) to execute generated SPARQL; CI runs Fuseki suites | Skip runtime checks | Proves SPARQL validity and answers without touching the repo's deps |
 | 11 | Waves | S5 independent of every other step | Start S5 during wave 1 | Wait for wave 2 | Types-only, no shared files; shortens the run |
 | 12 | Draft PR | Wrapup skill opens a backup draft PR per integration branch | None | Open one | Session rule: no PR unless the owner asks |
+| 13 | S5 follow-up, backlog 110 | Object-form rows differ from their types (deeper-path key moved to the leaf, sub-select / preloadFor key dropped, nested plain object throws) | New step S8: the runtime honours the keys the user wrote, as the types promise; a construct the runtime cannot answer is refused at build time, never a throw at mapping | Change the types to match today's rows | The keys are what the user asked for; the types already promise them (correctness, no API change) |
+| 14 | S1 follow-up, backlog 111 items 1–2 | A quantifier reading the outer subject compares the member with itself (silent wrong answer) | Add to S2 (same EXISTS lowering): resolve to the outer alias, which EXISTS sees in scope; refuse what cannot resolve | Leave in backlog 111 | Silent wrong answer in the code S2 already touches |
+| 15 | S1 follow-up, backlog 112 | Older silent wrong answers in inline-filter / nested size lowering | New step S9 (wave 3): fix each, or refuse it loudly where a fix needs design | Leave in backlog | Correctness first; same area, context fresh |
+| 16 | S4 deviation | Wire version bumped to 1.11 with no wire change | Accept | Revert to 1.10 | Harmless; reverting churns the docs and tests again |
 
 ## Contracts
 
@@ -124,8 +128,13 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
   named X appears with count 0; existing `sparql-select-golden`, `ir-select-golden` pass.
 
 ### S2 — 079: aggregates inside EXISTS refused
-- **Depends on:** S1 landed (same files). **Report:** 118. **Size:** small. **Backlog:** 079 → 042.
+- **Depends on:** S1 landed (same files). **Report:** 118. **Size:** medium (2 phases). **Backlog:** 079 → 042.
 - **Goal:** decision 3. Move the "answer it" half into backlog 042's text; delete 079.
+- **Also (decision 14):** backlog 111 items 1 and 2 — a quantifier (`some`/`every`/`none`) whose
+  callback reads the outer subject (`p.friends.some((f) => f.name.equals(p.name))`) resolves to the
+  outer alias (EXISTS sees the outer bindings), in a top-level where and inside an inline filter;
+  what cannot resolve is refused. Remove items 1–2 from backlog 111 (keep 3–5). Builds on report
+  115's `src/queries/traceScopes.ts`.
 - **Files:** `src/sparql/irToAlgebra.ts` (EXISTS building), possibly `src/queries/IRLower.ts`.
 - **Verify:** test that `Person.select().where(p => p.friends.some(f => f.friends.size().equals(1)))`
   throws the named error; top-level aggregate where still works (existing tests).
@@ -169,11 +178,20 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
   with ~10 and ~300 registered shapes; prototype a per-dataset cache keyed by route version,
   registry version and data root; measure again; list invalidation risks.
 
+### S8 — 110: object-form rows follow their keys
+- **Depends on:** S3 landed (both touch result mapping). **Report:** 121. **Backlog:** 110.
+  Plan-mode detail is filled in when wave 3 starts.
+
+### S9 — 112: inline-filter and nested size lowering edges
+- **Depends on:** S2 landed (same lowering). **Report:** 122. **Backlog:** 112.
+  Plan-mode detail is filled in when wave 3 starts.
+
 ## Waves
 
 - **Wave 1:** S1, S4, S6, S7 (S7 is read-mostly). S4 and S1 both touch `IRLower.ts`; the second
   to land rebases.
-- **Wave 2:** S2, S3 (after S1), S5.
+- **Wave 2:** S2, S3 (after S1). S5 ran in wave 1 (decision 11).
+- **Wave 3:** S8 (after S3), S9 (after S2).
 - **Wave run** after each wave (test agent): `npm run build && npm test` in a fresh worktree of
   the integration branch; Fuseki suites skipped (no Docker), CI covers them.
 - **Independent review** per wave of the lowering steps (S1–S4): silent wrong answers are this
@@ -183,13 +201,16 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 
 | Step | Scope | Deps | Status | Landed | Report | Notes |
 |---|---|---|---|---|---|---|
-| S1 | 108 outer refs / filtered size | – | in progress | | 115 | |
-| S4 | 019 thenBy | – | in progress | | 116 | |
-| S6 | 049 keyed cached | – | in progress | | 117 | |
-| S7 | 070 measure | – | in progress | not landed | – | owner decides |
-| S2 | 079 refuse agg in EXISTS | S1 | todo | | 118 | |
-| S3 | 023 duplicate fields | S1 | todo | | 119 | |
-| S5 | 088 relation field type | – | in progress | | 120 | |
+| S1 | 108 outer refs / filtered size | – | done | e6ef1a0..0bf69f6 | 115 | 2 goldens changed (encoded the bug); follow-ups 111, 112 |
+| S4 | 019 thenBy | – | done | 6b0915c..afd7fe4 | 116 | builder-only; wire 1.11; follow-up 109 |
+| S6 | 049 keyed cached | – | done | c416562..b04ab29 | 117 | 13 new tests |
+| S7 | 070 measure | – | findings with owner | not landed (branch `--s7`, local) | – | delete-by-id 12 ms at 300 shapes; cache 4–11× |
+| S5 | 088 relation field type | – | done | b6aa386..448c188 | 120 | follow-up 110 → S8 |
+| S2 | 079 refuse agg in EXISTS + 111 items 1–2 | S1 | in progress | | 118 | |
+| S3 | 023 duplicate fields | S1 | in progress | | 119 | |
+| S8 | 110 object-form rows follow their keys | S3 | todo | | 121 | |
+| S9 | 112 inline-filter / size lowering edges | S2 | todo | | 122 | |
+| W1 | wave 1 run + review of S1 | – | in progress | | – | |
 
 ## Progress
 
@@ -198,6 +219,8 @@ owner: S7 (070) never lands without the owner; its findings go to the owner for 
 - [x] S6 — report 117
 - [ ] S2 — report 118
 - [ ] S3 — report 119
+- [ ] S8 — report 121
+- [ ] S9 — report 122
 - [x] S5 — report 120
 
 ## Starter prompt template
