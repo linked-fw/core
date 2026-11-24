@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.0.0
+
+### Major Changes
+
+- [#424](https://github.com/linked-fw/core/pull/424) [`3a64295`](https://github.com/linked-fw/core/commit/3a6429585e761f05fcb9785984654bdbdbddea72) Thanks [@flyon](https://github.com/flyon)! - Prefixes are the app's, and ontologies register with one call per package.
+  
+  - `registerOntologies(ontologies, moduleUrl)` replaces `linkedOntology`, which is removed. A package's `src/ontologies/index.ts` imports its terms modules (only `{id}` literals) and registers them all: `registerOntologies([{name, namespace, terms, data?, suggestedPrefix?}], import.meta.url)`, `data` relative to `moduleUrl`. It registers no prefix. `OntologyRegistration` has `namespace` and `suggestedPrefix` instead of `ns`; `suggestedPrefixes()` lists `{packageName, name, namespace, prefix}`.
+  - `registerInstalledOntologies` imports `<pkg>/ontologies/index` instead of `ontologies/*.register` modules.
+  - No ontology registers a prefix, core's own included (`rdf`, `rdfs`, `owl`, `xsd`, `shacl`, `sd`, `prov`, `core`; the deprecated `linked_core` label is gone). An app loads its map with `Prefix.load(map)` (replaces the map in use; `PrefixMap` is `Record<prefix, namespace>`); `Prefix.toMap()` returns it.
+  - An unknown prefix throws `UnknownPrefixError` (naming the prefix and the value) wherever a prefixed name is expanded: `Prefix.toFull`, query subjects (`.for('ex:a')`), `update().for` and `delete` ids (which were never expanded before), and property path steps (which were written as `<p:x>` with a warning). A string with `://` or the scheme `http`, `https`, `urn`, `mailto`, `did`, `file` or `data` is a full IRI (`Prefix.isFullIri`).
+  - Expansion and compaction take an optional explicit map, for code acting for another app: `Prefix.toFull`, `toPrefixed`, `toPrefixedIfPossible`, `getFullURI`, `getPrefix`, `findMatch`, `resolveUriOrThrow`, `resolveNodeId`, `pathRefIri`, `expandPrefixedName`.
+  - Removed: `Prefix.toFullIfPossible`, `resolvePrefixedUri`, `expandRegisteredPrefixedName` (now `expandPrefixedName`, which throws), `linked-core.register`. `linked-core.ts` exports `coreOntology` only (no `ns`, `_self`, `dataFiles`, `loadData`).
+
+### Minor Changes
+
+- [#424](https://github.com/linked-fw/core/pull/424) [`7e2ca24`](https://github.com/linked-fw/core/commit/7e2ca245eae87c7f77df96d763b8c10a951e05fb) Thanks [@flyon](https://github.com/flyon)! - `linkedOntology(terms, ns, name, loadData?, dataFiles?)`: the third argument is the ontology's name within its package (unique in the package, need not equal the module's file name), not a prefix. `OntologyRegistration.prefix` is now `.name`, and the registry is keyed by package and name. A registration an older copy of core wrote (a `prefix`, no `name`) is skipped with one warning. `linkedOntology` still registers the name as a prefix with `Prefix`.
+
+### Patch Changes
+
+- [#424](https://github.com/linked-fw/core/pull/424) [`50ef261`](https://github.com/linked-fw/core/commit/50ef2618982cf85fab47ec6f63010d2bd83d1362) Thanks [@flyon](https://github.com/flyon)! - Comments state the IRI and routing rules inline.
+
+- [#424](https://github.com/linked-fw/core/pull/424) [`6fb74a6`](https://github.com/linked-fw/core/commit/6fb74a6aa2ad18b0f01666c0358220a16beb281f) Thanks [@flyon](https://github.com/flyon)! - `@_linked/core/ontology/loadOntologyFiles`: its documentation describes how `registerOntologies` loads an ontology's `data` files.
+
+- [#424](https://github.com/linked-fw/core/pull/424) [`7eac669`](https://github.com/linked-fw/core/commit/7eac6694a267ee3fcc851eba388fe04e1a77ec85) Thanks [@flyon](https://github.com/flyon)! - The ontology is declared in `package.json` `"linkedOntologies"` and its data states its suggested prefix and namespace (`vann:preferredNamespacePrefix`, `vann:preferredNamespaceUri`); the module stays hand-written (`"generated": false`). No import path or export changes.
+
 ## 2.48.0
 
 ### Minor Changes
