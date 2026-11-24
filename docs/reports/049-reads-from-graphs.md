@@ -6,7 +6,7 @@ summary: >
   `invalidateGraphRegistry`, re-read after 30 s; `graphs.default` alone as today; `graphs.union`
   through `mapGraphName`) and compiles one graph as `GRAPH <iri>`, several as `FROM NAMED` with one
   `GRAPH ?g` block per subject; the store option `isolateLinkedTypeChecks` (second block for a
-  linked type check, inert today). CN plan 071, sub-plan 004.
+  linked type check, inert today). The host app's named-graphs plan, sub-plan 004.
 packages: [core]
 ---
 
@@ -14,8 +14,8 @@ packages: [core]
 
 ## Why
 
-CN plan 071 moves each package's ontology data into its own named graph. Readers of labels and
-classes (CN's term readers first) must then read those graphs, and the routed reads of phase 2
+The host app's named-graphs plan moves each package's ontology data into its own named graph. Readers of labels and
+classes (the host app's term readers first) must then read those graphs, and the routed reads of phase 2
 need the generator that does it cheaply. Decision 9 of the master plan settled the form: one
 `GRAPH ?gN` block per subject group inside a `FROM NAMED` set the store adds, a fixed `GRAPH
 <iri>` for one graph, and a store option for a second block on linked type checks. Sub-plan
@@ -87,7 +87,7 @@ uses `{baseUrl}/{dataset}` (F2's `FusekiStore` should do the same, and V1's push
 ## Breaking changes (changeset `reads-from-graphs.md`, minor)
 
 - `SparqlGraph` is `{iri} | {variable}`; code reading `node.iri` of a graph node must handle the
-  variable form (no dependent in CN's checkouts reads it).
+  variable form (no dependent in the host app's checkouts reads it).
 - `.from()` with `graphs.default`/`graphs.union` among other graphs is refused.
 
 ## Contract notes for the master
@@ -95,7 +95,7 @@ uses `{baseUrl}/{dataset}` (F2's `FusekiStore` should do the same, and V1's push
 §Contracts "Reads with `.from()`" is implemented as written; additions inside it:
 `invalidateGraphRegistry` is both a `SparqlDataset` method (`dataset?` defaults to the store's
 key) and a package export by key; the key is `graphRegistryKey()`, which F2 and V1 should set to
-the dataset identity CN pushes. Decision 9's limit and §Graph routing's "the default graph's
+the dataset identity the host app pushes. Decision 9's limit and §Graph routing's "the default graph's
 store name in the set" need `VALUES`, not `FROM NAMED`, on Jena (backlog 066).
 
 ## Verification

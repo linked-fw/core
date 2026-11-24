@@ -9,7 +9,7 @@ packages: [core]
 
 # 070 — Graph routing: per-read cost of the route table and the owner scan
 
-Source: CN plan 071 §Graph routing, core report 051 (graph routing, review lows) and its review
+Source: core report 051 (graph routing, review lows) and its review
 fixes.
 
 ## Problem
@@ -37,6 +37,6 @@ cached routing object (like `ownersOf`), removes both.
 - Cache the routing object per dataset, keyed by a version that changes when a route is set or
   unset (`setShapeGraphs`, `unsetShapeGraph`), when the shape registry changes (core already has
   registry versions, `utils/registryCache.ts`) and when the dataset's data root changes
-  (`dataRootOf` is read late on purpose: CN's store learns its root after construction).
+  (`dataRootOf` is read late on purpose: a host app's store learns its root after construction).
 - Measure first: compile-time share of a routed point read and a routed create with the current
   code, against the same with a cached routing (decision 9's fixture, report 051).

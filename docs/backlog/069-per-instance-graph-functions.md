@@ -9,7 +9,7 @@ packages: [core]
 
 # 069 — Per-instance graph functions
 
-Source: CN plan 071 §Open questions 5 (1c-i, owner, 2026-10-23), core report 053 (routing forms).
+Source: an owner decision on routing (2026-10-23), core report 053 (routing forms).
 
 ## Problem
 
@@ -25,7 +25,7 @@ function, e.g. `{graph: (node) => dataGraph(`customers/${node.customer.slug}`)}`
   when only its id is linked), so it may be async and run queries. Where does it run (the store, on
   the server only), and what may it read (its own dataset, the graph it is choosing)?
 - **The registry.** Does every instance graph get a registry record (a `NamedGraph` per customer,
-  created on the first write into it), so `graphs.union`, the hierarchy and CN's graph overview see
+  created on the first write into it), so `graphs.union`, the hierarchy and a host app's graph overview see
   them? Who removes a record when its graph empties?
 - **Reads.** A shape's read set is static today (its graph, its sub-shapes', its owners'). With
   instance graphs, a select of the shape must enumerate them: from the registry (by a record kind or
@@ -41,5 +41,5 @@ function, e.g. `{graph: (node) => dataGraph(`customers/${node.customer.slug}`)}`
 
 ## First step
 
-A short ideation against one concrete app need (per-customer graphs in a CN app), measuring reads
+A short ideation against one concrete app need (per-customer graphs in a hosted app), measuring reads
 over a realistic number of instance graphs before choosing the API.

@@ -52,7 +52,7 @@ allowed through.
 |---|---|---|---|
 | D1 | Semantics | Replace the **named properties** and ensure the type triple; not a whole-node replace | Matches what every hand-rolled branch approximates and reuses the update lowering unchanged. Whole-node replace is a different, more destructive promise nobody asked for. |
 | D2 | Round-trips | **One**, via the existing DELETE/INSERT/WHERE + `OPTIONAL` | B1 shows the algebra already carries it. Two round-trips and the race between them are the defects being removed; a precheck would reintroduce both. |
-| D3 | Name | `upsert` | The term used by the backlog, CN's own comments and every comparable library. `ensure`/`save` read as synonyms for `create` — 038 warns against exactly that. |
+| D3 | Name | `upsert` | The term used by the backlog, consumer apps' own comments and every comparable library. `ensure`/`save` read as synonyms for `create` — 038 warns against exactly that. |
 | D4 | API shape | `Shape.upsert(values).for({id})` | Mirrors `Shape.update(values).for({id})`, so there is one shape to learn. The id is **required** — an upsert with no known identity is a `create`. |
 | D5 | Builder | Reuse `UpdateBuilder` in an upsert **mode**; no new builder class | id/set/serialisation/dispatch/thenable machinery is identical; a parallel class would duplicate ~200 lines and drift. `.where()` and `.forAll()` are rejected in this mode — an upsert targets one known node. |
 | D6 | IR | A distinct **`kind: 'upsert'`**, sharing `updateToAlgebra`'s body internally | A flag on `IRUpdateMutation` is less code but degrades silently: a consumer that ignores it writes an untyped node and reports success. A distinct kind makes TS exhaustiveness enforce handling at compile time and makes unaware consumers fail loudly. Chosen for maintainability over raw line count. |
@@ -267,7 +267,7 @@ which is D7 falling out of the types rather than being enforced by hand.
 **A better outcome than planned on D8.** `Shape.upsert`'s signature deliberately omits
 `update`'s expression-callback overload, so typed callers cannot express an expression at
 all — the failure is a compile error, not a runtime throw. The runtime guard stayed, because
-it still covers untyped call sites (CN calls shapes as `any`) and expressions arriving over
+it still covers untyped call sites (a consumer app calls shapes as `any`) and expressions arriving over
 DSL-JSON. Both are pinned, the compile-time one with `@ts-expect-error` so the test fails if
 the overload is ever widened.
 
@@ -337,7 +337,7 @@ Three findings survived the pass.
 B1 and never addressed: it is the *pre-existing* behaviour this feature was built beside, not
 something this work introduced. A caller who reaches for `update` on a node that turns out not to
 exist gets triples written under an id with no `rdf:type`, so every shape-scoped select misses it —
-and the write reports success. This is plausibly the mechanism behind the CN production incident
+and the write reports success. This is plausibly the mechanism behind the consumer-app production incident
 that motivated backlog 038 in the first place, and core currently documents it nowhere.
 
 **R2 — the `contains` cascade under upsert is untested.** The plan's own pitfall 3 said to assert
@@ -349,7 +349,7 @@ suite exists to check, and this one governs whether replaced owned nodes orphan.
 carries its own `rdf:type` from the create path; only the *subject* ever lacked one), but nothing
 pins it.
 
-Not addressed here, deliberately: migrating CN's `LinkedDocumentRepository` off its six
+Not addressed here, deliberately: migrating a consumer app's `LinkedDocumentRepository` off its six
 create-or-update branches. That is consumer work in another repo and wants its own change.
 
 ## Iteration 1 — Ideation

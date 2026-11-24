@@ -21,7 +21,7 @@ missing.
 
 ## Problem
 
-The original regression showed up in [Signin.tsx](/Users/abdi/Dev/create-now/packages/the-game/src/pages/Signin.tsx)
+The original regression showed up in an app's sign-in page
 through `EventProvider.getActive()`.
 
 Two independent behaviors combined into an empty response:
@@ -88,7 +88,7 @@ That aligns the storage bootstrap with the actual test dataset layout.
 
 ## File Responsibilities
 
-### [packages/core/src/sparql/irToAlgebra.ts](/Users/abdi/Dev/create-now/packages/core/src/sparql/irToAlgebra.ts:1)
+### `packages/core/src/sparql/irToAlgebra.ts`
 
 Primary implementation file.
 
@@ -103,7 +103,7 @@ Responsibilities after this change:
 - keep required traversal semantics for filtered or otherwise required paths
 - stay ESM-safe by using normal imports rather than runtime `require(...)`
 
-### [packages/core/src/tests/sparql-algebra.test.ts](/Users/abdi/Dev/create-now/packages/core/src/tests/sparql-algebra.test.ts:1)
+### `packages/core/src/tests/sparql-algebra.test.ts`
 
 Structural coverage for the algebra tree:
 
@@ -111,14 +111,14 @@ Structural coverage for the algebra tree:
 - sibling optional traversal isolation
 - no child-triple escape into unrelated traversal branches
 
-### [packages/core/src/tests/sparql-select-golden.test.ts](/Users/abdi/Dev/create-now/packages/core/src/tests/sparql-select-golden.test.ts:1)
+### `packages/core/src/tests/sparql-select-golden.test.ts`
 
 Serialized SPARQL coverage:
 
 - nested `OPTIONAL` structure for nullable projected traversals
 - resolved ontology/path IRIs in emitted queries
 
-### [packages/core/src/tests/sparql-fuseki.test.ts](/Users/abdi/Dev/create-now/packages/core/src/tests/sparql-fuseki.test.ts:1)
+### `packages/core/src/tests/sparql-fuseki.test.ts`
 
 Behavioral coverage against a real SPARQL runtime:
 
@@ -126,7 +126,7 @@ Behavioral coverage against a real SPARQL runtime:
 - missing nested objects map to `null`
 - sibling nullable traversals do not remove the root row
 
-### [packages/fuseki/src/shapes/FusekiStore.ts](/Users/abdi/Dev/create-now/packages/fuseki/src/shapes/FusekiStore.ts:1)
+### `packages/fuseki/src/shapes/FusekiStore.ts`
 
 Runtime transport fix:
 
@@ -134,7 +134,7 @@ Runtime transport fix:
 - keeps update/import behavior unchanged except for using the same graph option
   where applicable
 
-### [packages/the-game/scripts/storage-config.js](/Users/abdi/Dev/create-now/packages/the-game/scripts/storage-config.js:1)
+### The app's `scripts/storage-config.js`
 
 App bootstrap fix:
 
@@ -234,11 +234,8 @@ Reason:
 
 ## Architecture Compliance
 
-Reviewed against:
-
-- [03-packages-and-governance]( /Users/abdi/Dev/create-now/docs/architecture/03-packages-and-governance.md:1)
-- [04-storage-model]( /Users/abdi/Dev/create-now/docs/architecture/04-storage-model.md:1)
-- [10-code-structure]( /Users/abdi/Dev/create-now/docs/architecture/10-code-structure.md:1)
+Reviewed against the host app's architecture docs on packages and governance, the storage
+model and code structure.
 
 Findings:
 

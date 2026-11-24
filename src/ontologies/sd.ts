@@ -4,7 +4,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
-import {Prefix} from '../utils/Prefix.js';
 
 /**
  * The two SPARQL 1.1 Service Description terms core's graph registry uses. Core does not mirror
@@ -14,7 +13,6 @@ const base = 'http://www.w3.org/ns/sparql-service-description#';
 export const ns = (term: string): NodeReferenceValue => ({id: base + term});
 
 export const _ontologyResource = ns('');
-Prefix.add('sd', base);
 
 const NamedGraph = ns('NamedGraph');
 const name = ns('name');

@@ -2,7 +2,7 @@
 summary: >
   Lists can page by subject: `.orderBy((p) => p)` survives the DSL-JSON wire (the subject sorts
   as the empty path), and a node in a query gains `str()`, so a page continues after the last IRI
-  with `.where((p) => p.str().gt(lastId))`. CN plan 070, §C4 (CN's instance lists page by key).
+  with `.where((p) => p.str().gt(lastId))`. The host app's plan, §C4 (its instance lists page by key).
 packages: [core]
 ---
 
@@ -10,8 +10,8 @@ packages: [core]
 
 ## Why
 
-CN's instance lists page with `OFFSET`, which costs 0.5-1 s deep into a class of ~87k instances
-(CN plan 070, decision 9) and is not even stable without an order. Paging by key needs an order
+The host app's instance lists page with `OFFSET`, which costs 0.5-1 s deep into a class of ~87k instances
+(the host app's plan, decision 9) and is not even stable without an order. Paging by key needs an order
 and a cursor. Measured on core's `store-inference` tip before this change:
 
 - `.orderBy((p) => p)` already lowered to `ORDER BY ASC(?a0)` in process, but its wire form
@@ -51,5 +51,5 @@ tsc -p tsconfig-tests.json                          exit 0
 
 The failures are not this change: `two-copies-built.test.ts` (core backlog 060, fails on `main`
 too) and four Jena SHACL cases of `sparql-fuseki-shape-sync.test.ts`, which fail identically on
-the integration tip against the same Fuseki (a CN compose Fuseki, which serves no `ds` dataset
+the integration tip against the same Fuseki (the host app's compose Fuseki, which serves no `ds` dataset
 with the `shacl` endpoint those cases validate through).

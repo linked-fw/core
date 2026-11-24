@@ -259,5 +259,5 @@ to implement (noted in the changeset for consumers).
 ## 10. Consumers
 
 `@_linked/shape-ui`'s `selectInstances` uses this to return a row total alongside a page so a host can
-paginate server-side — the reason `toCount()` is public. Create Now's backlog item
-`docs/backlog/049-overview-page-back-onto-the-dsl-read.md` (in the `create_now` repo) depends on it.
+paginate server-side — the reason `toCount()` is public. A host app's
+backlog item (moving an overview page back onto the DSL read) depends on it.

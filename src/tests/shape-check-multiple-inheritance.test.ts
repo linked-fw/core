@@ -1,7 +1,7 @@
 /*
  * Direction I with multiple inheritance: one in-scope superclass shape on the extends chain
- * satisfies it, and each superclass shape off the chain is a warning. CN's `Dataset`
- * (`createNow:Dataset ⊑ dcat:Dataset, schema:CreativeWork`) extends `CreativeWork`; dcat ships a
+ * satisfies it, and each superclass shape off the chain is a warning. An app's `Dataset`
+ * (`app:Dataset ⊑ dcat:Dataset, schema:CreativeWork`) extends `CreativeWork`; dcat ships a
  * `Resource` shape and no `Dataset` shape.
  */
 import {beforeAll, describe, expect, test} from '@jest/globals';
@@ -13,11 +13,11 @@ import type {HierarchyTriple} from '../ontology/hierarchy';
 
 const SCHEMA = 'http://example.org/mi/schema/';
 const DCAT = 'http://example.org/mi/dcat#';
-const CN = 'http://example.org/mi/createNow/';
+const APP = 'http://example.org/mi/app/';
 
 const schema = linkedPackage('mi-schema');
 const dcat = linkedPackage('mi-dcat');
-const cn = linkedPackage('mi-create-now');
+const app = linkedPackage('mi-app');
 
 @schema.linkedShape
 class Thing extends Shape {
@@ -35,21 +35,21 @@ class Article extends CreativeWork {
 class Resource extends Shape {
   static targetClass = {id: `${DCAT}Resource`};
 }
-/** CN's case: extends CreativeWork; dcat's Resource is off the chain. */
-@cn.linkedShape
+/** The app's case: extends CreativeWork; dcat's Resource is off the chain. */
+@app.linkedShape
 class Dataset extends CreativeWork {
-  static targetClass = {id: `${CN}Dataset`};
+  static targetClass = {id: `${APP}Dataset`};
 }
 /** The same classes, extending nothing: the chain satisfies nothing. */
-@cn.linkedShape
+@app.linkedShape
 class Catalogue extends Shape {
-  static targetClass = {id: `${CN}Catalogue`};
+  static targetClass = {id: `${APP}Catalogue`};
 }
 /** A Report is an Article, but its shape extends CreativeWork: Article is below the chain's
  * anchor, so extending it instead is possible and the missing link stays an error. */
-@cn.linkedShape
+@app.linkedShape
 class Report extends CreativeWork {
-  static targetClass = {id: `${CN}Report`};
+  static targetClass = {id: `${APP}Report`};
 }
 
 const t = (s: string, o: string): HierarchyTriple => ({s, o});
@@ -57,13 +57,13 @@ const HIERARCHY: HierarchyTriple[] = [
   t(`${SCHEMA}CreativeWork`, `${SCHEMA}Thing`),
   t(`${SCHEMA}Article`, `${SCHEMA}CreativeWork`),
   t(`${DCAT}Dataset`, `${DCAT}Resource`),
-  t(`${CN}Dataset`, `${DCAT}Dataset`),
-  t(`${CN}Dataset`, `${SCHEMA}CreativeWork`),
-  t(`${CN}Catalogue`, `${DCAT}Dataset`),
-  t(`${CN}Catalogue`, `${SCHEMA}CreativeWork`),
-  t(`${CN}Report`, `${SCHEMA}Article`),
+  t(`${APP}Dataset`, `${DCAT}Dataset`),
+  t(`${APP}Dataset`, `${SCHEMA}CreativeWork`),
+  t(`${APP}Catalogue`, `${DCAT}Dataset`),
+  t(`${APP}Catalogue`, `${SCHEMA}CreativeWork`),
+  t(`${APP}Report`, `${SCHEMA}Article`),
 ];
-const DEPENDENCIES = {'mi-create-now': ['mi-schema', 'mi-dcat']};
+const DEPENDENCIES = {'mi-app': ['mi-schema', 'mi-dcat']};
 
 const id = (cls: {shape: NodeShapeData}) => cls.shape.id;
 const directionI = (findings: ShapeCheckFinding[], shape: {shape: NodeShapeData}) =>
@@ -78,7 +78,7 @@ beforeAll(async () => {
 });
 
 describe('direction I with multiple inheritance', () => {
-  test("CN's Dataset: extending CreativeWork satisfies it; dcat's Resource is a warning", () => {
+  test("the app's Dataset: extending CreativeWork satisfies it; dcat's Resource is a warning", () => {
     expect(directionI(findings, Dataset)).toEqual([{iri: `${DCAT}Resource`, severity: 'warning'}]);
     const warning = findings.find((f) => f.shape === id(Dataset))!;
     expect(warning.message).toMatch(/multiple inheritance/);

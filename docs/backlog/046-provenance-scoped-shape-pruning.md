@@ -41,7 +41,7 @@ With `'none'`, nothing is ever removed:
 - a shape **renamed** in code is written under its new IRI, and the old IRI stays in the store with
   its property shapes, lists and paths;
 - a shape **deleted** from code stays;
-- consumers that list shapes from the store (e.g. Create Now's shape catalog, `/api/shapes`) keep
+- consumers that list shapes from the store (e.g. a host app's shape catalog, `/api/shapes`) keep
   showing them.
 
 Today the only cleanup is a manual `orphanScope: 'all'` run from a process that has loaded every
@@ -51,7 +51,7 @@ shape the dataset should hold — which is exactly the precondition that is hard
 
 1. **Tag on write.** Every writer tags each NodeShape it materializes, e.g.
    `<shape> linked:materializedBy <writerId>`. `writerId` identifies the writer, not the process:
-   an app, a package, or a CN capability (`bindShape` / `enableCapability`).
+   an app, a package, or a host app's capability (`bindShape` / `enableCapability`).
 2. **New mode `orphanScope: 'owned'`** (taking a `writerId`). Pruning candidates are only the store
    shapes tagged with *this* writer's id that are not in its current code. Untagged shapes and
    shapes tagged by other writers are never touched.
@@ -78,7 +78,7 @@ assumes a writer owns whole packages; `'owned'` assumes only that a writer owns 
   `'owned'` sync sees in code) cannot tell a live shape from a stale one. Is a one-off migration
   (explicit `'all'` from a known-complete process, then tag) the answer?
 - **Writer-id stability.** What is the id — package name, app IRI, deployment? It must survive
-  renames of the app, branches (arch-06), and redeploys; a changed id orphans every shape the old
+  renames of the app, branches, and redeploys; a changed id orphans every shape the old
   id tagged, and they would then never be pruned.
 - **Graph placement vs the delete→recreate cascade.** `syncShapes` deletes each code shape with its
   owned subtree and recreates it. A tag stored as a property of the NodeShape is deleted by that

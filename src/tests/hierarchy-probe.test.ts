@@ -4,6 +4,7 @@
  * probe; the answer cached per dataset, the probe cleaned up even when it fails, and stale probes
  * swept.
  */
+import {registerTestOntology} from '../test-helpers/register-test-ontology';
 import {beforeEach, describe, expect, jest, test} from '@jest/globals';
 import {linkedPackage} from '../utils/Package';
 import {createNameSpace} from '../utils/NameSpace';
@@ -26,13 +27,7 @@ import {readQueryOf} from '../test-helpers/read-double';
 const NS = 'http://example.org/probe-sync/';
 const SUB = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
 const PKG = 'probe-sync-a';
-linkedPackage(PKG).linkedOntology(
-  {},
-  createNameSpace(`http://example.org/ns/${PKG}/`),
-  PKG,
-  async () => [`@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n<${NS}A> rdfs:subClassOf <${NS}B> .`],
-  '../data/probe-sync-a.ttl',
-);
+registerTestOntology(PKG, {name: PKG, namespace: `http://example.org/ns/${PKG}/`, load: async () => [`@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n<${NS}A> rdfs:subClassOf <${NS}B> .`], files: '../data/probe-sync-a.ttl'});
 
 const shapeOf = (query: any): string | undefined => {
   const shape = query?.root?.shape ?? query?.shape;

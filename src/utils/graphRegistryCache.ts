@@ -13,8 +13,8 @@
  *   dataset's key; concurrent reads share one load.
  * - **Own writes:** a store that runs a graph query updates its own entry in the same step
  *   ({@link noteGraphQuery}), so its next read sees the change.
- * - **Pushed invalidation:** a process told that another one changed a dataset's graphs (CN pushes
- *   this to the apps it runs) drops the entry with {@link invalidateGraphRegistry}.
+ * - **Pushed invalidation:** a process told that another one changed a dataset's graphs (a host
+ *   pushes this to the apps it runs) drops the entry with {@link invalidateGraphRegistry}.
  * - **Backstop:** an entry older than {@link GRAPH_REGISTRY_MAX_AGE_MS} is re-read, for writes
  *   nobody pushes (scripts, standalone apps).
  *
@@ -87,7 +87,7 @@ export async function readGraphRegistry(
 
 /**
  * Drop the cached registry of the dataset `key` (every dataset's when omitted): the next read
- * re-reads it. Called when another process changed a dataset's graphs (CN's push to an app).
+ * re-reads it. Called when another process changed a dataset's graphs (a host's push to an app).
  */
 export function invalidateGraphRegistry(key?: string): void {
   const keys = key === undefined ? [...new Set([...entries.keys(), ...loads.keys()])] : [key];

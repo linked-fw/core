@@ -49,16 +49,16 @@ export {
 
 /**
  * Default identity root for shape & package IRIs. Public/first-party packages
- * publish under `linked.cm` (arch-02 §Domains). Packages may override per-package
- * via `linkedPackage(name, { baseUri })` — CN injects a workspace-scoped root
- * (`{workspaceSlug}.id.create.now`) for private packages; first-party packages
+ * publish under `linked.cm`. Packages may override per-package
+ * via `linkedPackage(name, { baseUri })` — a host app may inject a workspace-scoped root
+ * (`{workspaceSlug}.id.example.org`) for private packages; first-party packages
  * keep this default.
  */
 export const LINKED_DATA_ROOT: string = 'https://linked.cm/';
 
 /**
  * Derive the public package slug — the npm package **basename** with the
- * `@scope/` dropped, kebab-cased (arch-02 §Slug rules: `^[a-z0-9]+(?:-[a-z0-9]+)*$`).
+ * `@scope/` dropped, kebab-cased (the slug rule: `^[a-z0-9]+(?:-[a-z0-9]+)*$`).
  * The package name is the single source of truth; there is no separate slug.
  *   `@_linked/core` → `core`, `@linked.cm/blog` → `blog`, `mypkg` → `mypkg`.
  *
@@ -77,8 +77,8 @@ export function packageNameToSlug(packageName: string): string {
 /**
  * Where each package publishes its IRIs (the identity root). The slug is always
  * derived from the package name; only the root is configurable — `linkedPackage`
- * defaults it to `LINKED_DATA_ROOT` (linked.cm), and CN injects a workspace-scoped
- * root (`{workspaceSlug}.id.create.now`) for private packages. Shared by every copy of core,
+ * defaults it to `LINKED_DATA_ROOT` (linked.cm), and a host app may inject a workspace-scoped
+ * root (`{workspaceSlug}.id.example.org`) for private packages. Shared by every copy of core,
  * so a private package's root holds whichever copy derives its IRIs.
  */
 const packageBaseUri = sharedState('@_linked/core', 'SHACL.packageBaseUri', () => new Map<string, string>());
@@ -96,7 +96,7 @@ function resolveBaseUri(packageName: string): string {
   return packageBaseUri.get(packageName) ?? LINKED_DATA_ROOT;
 }
 
-/** Public/first-party package IRI — arch-02: `{baseUri}pkg/{slug}`. */
+/** Public/first-party package IRI: `{baseUri}pkg/{slug}`. */
 export function getPackageUri(packageName: string): string {
   return `${resolveBaseUri(packageName)}pkg/${packageNameToSlug(packageName)}`;
 }
@@ -1108,7 +1108,7 @@ export function disallowProperty(
 }
 
 export function getNodeShapeUri(packageName: string, shapeName: string): string {
-  // arch-02: `{baseUri}shape/{packageSlug}/{ShapeName}` — ShapeName kept PascalCase
+  // The shape IRI scheme: `{baseUri}shape/{packageSlug}/{ShapeName}` — ShapeName kept PascalCase
   // (it is a class name, already URI-safe), packageSlug derived from the name.
   return `${resolveBaseUri(packageName)}shape/${packageNameToSlug(packageName)}/${shapeName}`;
 }

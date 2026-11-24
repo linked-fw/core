@@ -2,6 +2,7 @@
  * The shape check: shape `extends` and the class hierarchy agree; a shape does not borrow
  * another's class; a mirror package uses only its standard's terms; overrides narrow the class.
  */
+import {registerTestOntology} from '../test-helpers/register-test-ontology';
 import {beforeAll, describe, expect, jest, test} from '@jest/globals';
 import {linkedPackage} from '../utils/Package';
 import {createNameSpace} from '../utils/NameSpace';
@@ -283,19 +284,13 @@ describe('mirror-undefined-term', () => {
     const std = createNameSpace(STD);
     const mirror = linkedPackage('check-mirror', {mirrors: STD});
     const terms = {standard: {Defined: std('Defined'), Invented: std('Invented')}, _self: std('')};
-    mirror.linkedOntology(
-      terms,
-      std,
-      'std',
-      async () => [
+    registerTestOntology(mirror.packageName, {name: 'std', namespace: std('').id, terms: terms, load: async () => [
         `@prefix std: <${STD}> .\n@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n` +
           `std:Defined a rdfs:Class .\nstd:name a rdf:Property .\n`.replace(
             'rdf:Property',
             '<http://www.w3.org/1999/02/22-rdf-syntax-ns#Property>',
           ),
-      ],
-      '../data/std.ttl',
-    );
+      ], files: '../data/std.ttl'});
     @mirror.linkedShape
     class StdThing extends Shape {
       static targetClass = std('Defined');

@@ -71,8 +71,8 @@ values last in both directions.
   `shape-graphs-fuseki` fail once (a Jena SHACL report, untouched code); it passes alone (`5
   passed`) and in the final run.
 - `npx linked build`: `✔ Build successful`.
-- CN main checkout, core landed and built there: `npm run typecheck:gate`: `No new type errors.
-  0 pre-existing errors still in the baseline.` `CN_TEST_PORT=4597 npm run test:feature --
+- The host app's main checkout, core landed and built there: `npm run typecheck:gate`: `No new type errors.
+  0 pre-existing errors still in the baseline.` `npm run test:feature --
   data,apps,ontologies --tier smoke`: typecheck:gate PASS, `unit (vitest, 137 files) PASS`
   (`1433 passed | 2 skipped`), gateway package PASS (`67 passed`), `playwright (11 specs, smoke)
   PASS` (`12 passed`), total PASS.
@@ -85,10 +85,9 @@ values last in both directions.
 - A computed field's or sort expression's `@path` values still write label paths (no shape at
   hand there); conditions write casts.
 
-### CN impact
+### Host app impact
 
-`FieldSet.pathToStringWithCasts`/`walkPathWithCasts` had no caller in CN. CN's `sortBy` and where
-envelopes (`src/backend/ai/dataQuery.ts`, `src/utils/prompts.ts`) use no deep filters or casts; an
+`FieldSet.pathToStringWithCasts`/`walkPathWithCasts` had no caller in the host app. Its AI data queries' `sortBy` and where envelopes use no deep filters or casts; an
 LLM `where: {}` now fails with a clear message instead of invalid SPARQL.
 
 ### Follow-ups
@@ -207,7 +206,7 @@ suite with live Fuseki; `npx linked build`.
 
 #### Phase 3: review and fixes
 
-Independent review; fix medium and up. Validation: whole suite again; CN typecheck gate and smoke.
+Independent review; fix medium and up. Validation: whole suite again; the host app's typecheck gate and smoke.
 
 Dependency: phases in order; within phase 2 item 1 is independent of items 2–4.
 
@@ -252,7 +251,7 @@ Independent read-only review, round 1 (probes against this commit and the one be
 | R5 | low | An inline filter reading the outer subject (`where(f => f.name.equals(p.name))`) compares the member with itself (older) | Follow-up (backlog 108) |
 | R6 | low | `p.bestFriend.friends.where(…).size()` ignores the filter (older) | Follow-up (backlog 108) |
 | R7 | low | Stale test title (wire 1.7), stale comment on filtered traversals | Fixed |
-| R8 | low | `FieldSet` cast statics removed in a minor | Kept: internal, no caller in CN; in the changeset |
+| R8 | low | `FieldSet` cast statics removed in a minor | Kept: internal, no caller in the host app; in the changeset |
 | R9 | low | Missing tests (required parent, sub-SELECT parent, field index, filter before cast) | Added |
 
 Deviation found on the way: a filter on a literal segment exists (`p.hobby.where((h) => …)`, the

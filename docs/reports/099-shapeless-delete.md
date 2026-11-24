@@ -25,7 +25,7 @@ await Shape.delete(ids)._keepingIncoming().exec(dataset); // their own triples o
 
 It deletes in the graphs the dataset routes (its graph routing's named graphs). It never deletes in
 the default graph or `graphs.union`, which is the scoping rule the shapeless triples reads have
-behind CN's gateway (CN report 361). A dataset without routing refuses it (`graph-not-routed`):
+behind the host app's gateway (the host app's report). A dataset without routing refuses it (`graph-not-routed`):
 it has nowhere to delete. There is no type guard and no blank-value or owned cascade, since there
 is no shape to read them from. `.where()`, `.all()` and `.into()` are refused on it.
 
@@ -118,9 +118,9 @@ It covers:
 ### Deviations
 
 - `_includingDefaultGraph()` is an internal exception to the rule that a shapeless delete never
-  touches the default graph. Create Now's undo-import and Remove-documents deletes need it: an
+  touches the default graph. The host app's undo-import and Remove-documents deletes need it: an
   unrouted app shape's instances live in the default graph. They first refuse every IRI outside
-  the project's own data root (CN report 375). It is server-side only and never serialized.
+  the project's own data root (the host app's report). It is server-side only and never serialized.
 - A delete without a target goes to every dataset, as a shapeless ask does. The first refusal
   stops it, and the datasets before it have already deleted.
 
@@ -128,15 +128,15 @@ It covers:
 
 - Blank nodes that a deleted subject points at are left in place, because there is no shape to
   cascade from. Home: this report.
-- `TriplesQuery` has no predicate filter, so CN's gateway reads a subject's whole description to
-  learn its types (CN report 375). A types read (`typesOf(ids)`) would make that one small query.
-  Home: CN backlog 091, item 2.
+- `TriplesQuery` has no predicate filter, so the host app's gateway reads a subject's whole description to
+  learn its types (the host app's report). A types read (`typesOf(ids)`) would make that one small query.
+  Home: the host app's backlog, item 2.
 
 ## Details
 
-The review of this step was independent and covered this diff and CN's together. Its core
+The review of this step was independent and covered this diff and the host app's together. Its core
 findings were fixed:
 - live effects in catalogs (medium);
 - a reserved routed graph refusing a narrowed delete (low).
 
-The access rule and its review are in CN report 375.
+The access rule and its review are in the host app's report.

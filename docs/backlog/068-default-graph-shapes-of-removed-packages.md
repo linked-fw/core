@@ -9,7 +9,7 @@ packages: [core]
 
 # 068 — Default-graph shapes of removed packages
 
-Source: CN plan 071 §Shape graphs, core report 052 (shape graphs).
+Source: core report 052 (shape graphs).
 
 ## Problem
 
@@ -21,7 +21,7 @@ are left:
 - A package (or a shape) removed from code before the app moved to shape graphs: its old
   default-graph shapes stay, because no package of the run names them. The earlier sync left them
   too unless it ran with an orphan scope.
-- A dataset with several writers (CN's app data): another writer's default-graph shapes are
+- A dataset with several writers (a host app's app data): another writer's default-graph shapes are
   deliberately not touched; they move when that writer moves to shape graphs.
 
 ## First questions
@@ -29,12 +29,12 @@ are left:
 - Should `orphanScope: 'all'` also delete every default-graph `NodeShape` that has a
   `core:shapeHash` and is not in a shape graph? Only safe for a dataset with one writer, as the
   existing orphan scope.
-- Or is a one-off script (CN's reset, `scripts/…`) the better home, once every writer is on shape
+- Or is a one-off script (a host app's reset, `scripts/…`) the better home, once every writer is on shape
   graphs?
 
 ## Also: ontology terms in the `'default'` mode when routing moves a package
 
-Source: CN plan 282 (M10), core report 084 (sync follows routing).
+Source: core report 084 (sync follows routing).
 
 The routed ontology sync (`syncOntologiesRouted`) runs the `'default'` mode per dataset with the
 packages routed there. That mode keeps one combined hash per dataset and sweeps only the namespaces

@@ -169,7 +169,7 @@ export function graphSyncTargets(): GraphSyncTargets {
   for (const [name, registrations] of registrationsByPackage()) {
     const withData = registrations.filter((r) => typeof r.load === 'function');
     if (!withData.length) continue;
-    const namespaces = withData.map((r) => r.ns('').id).filter((ns): ns is string => typeof ns === 'string' && !!ns);
+    const namespaces = withData.map((r) => r.namespace).filter((ns): ns is string => typeof ns === 'string' && !!ns);
     const using = new Set<IDataset>();
     for (const shapeClass of classes.values()) {
       const target = targetClassOf(shapeClass);

@@ -10,7 +10,7 @@ status: open
 
 # 049 — `cached()` misses for every inline function
 
-Found by Create Now plan 059. Checked against `src/utils/cached.ts` on
+Found in a consumer app. Checked against `src/utils/cached.ts` on
 `feat/relation-shape-resolver` (2026-10-07).
 
 ## Context
@@ -23,7 +23,7 @@ Found by Create Now plan 059. Checked against `src/utils/cached.ts` on
   `Map<string, …>` was keyed by the args alone. That worked for inline functions, but two
   different functions with the same args collided. The test in `src/tests/gap1-fixes.test.ts`
   ("two different functions with identical args do not collide") uses named functions only.
-- Core itself does not call `cached()`. Create Now does, both times with inline arrows:
+- Core itself does not call `cached()`. A consumer app does, both times with inline arrows:
   `shapeCatalogCached(projectId)` (`src/backend/shapes/ProjectProvider.ts:394`, `[projectId]`)
   and `getInstanceData` (`:1907`, `[projectId, shapeId, instanceId]`). Neither ever hits.
 
@@ -46,5 +46,5 @@ it has already cached (the inline-arrow case). Add an `invalidate(key, args?)` e
    that is the case that fails.
 2. Where `fn` is async, should a rejected promise be evicted? Today the rejected promise is
    stored as a value. `alsoCacheErrors` only covers synchronous throws.
-3. Does Create Now want these caches back (with invalidation on shape edits), or should it remove
+3. Does the consumer app want these caches back (with invalidation on shape edits), or should it remove
    them now that the catalog is read fresh?

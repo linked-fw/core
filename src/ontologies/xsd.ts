@@ -4,13 +4,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
-import {Prefix} from '../utils/Prefix.js';
 
 const base = 'http://www.w3.org/2001/XMLSchema#';
 export const ns = (term: string): NodeReferenceValue => ({id: base + term});
 
 export const _ontologyResource = ns('');
-Prefix.add('xsd', base);
 
 const string = ns('string');
 const boolean = ns('boolean');

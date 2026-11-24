@@ -311,8 +311,8 @@ export interface SyncShapesOptions {
    *   here" is then taken to mean "deleted from code".
    * - `'ownedNamespaces'` — prune a store-only shape ONLY if its IRI falls within a namespace
    *   this process actually writes (the package-namespace of one of its code-registered shapes,
-   *   i.e. the IRI prefix up to the last `/` or `#`). Protects other writers' packages (arch-04:
-   *   one app-data dataset, several writers), but NOT the rest of a package the process only
+   *   i.e. the IRI prefix up to the last `/` or `#`). Protects other writers' packages (a dataset
+   *   of app data can have several writers), but NOT the rest of a package the process only
    *   partially loaded — the namespace is the whole package, so a deep import of one shape file
    *   still claims all of it.
    *
@@ -342,8 +342,9 @@ function shapeNamespace(iri: string): string {
 
 /**
  * Plan an idempotent sync of all code-registered NodeShapes into the store as SHACL data — the
- * forward (code → graph) materialization of arch-05 "code is canonical". Core's built-in
- * shapes are included, like any package's; other shapes in the core package are not.
+ * forward (code → graph) materialization of the rule that code is canonical and the store mirrors
+ * it. Core's built-in shapes are included, like any package's; other shapes in the core package
+ * are not.
  *
  * Returns built-but-unexecuted thunks; the caller controls execution and batching:
  * ```ts
@@ -364,8 +365,8 @@ function shapeNamespace(iri: string): string {
  * **Shapes in the store but not registered in this process are left alone by default**
  * (`orphanScope: 'none'`). The registry only holds what this process happened to import, and
  * that is routinely a subset of what the dataset holds: shapes are deep-importable one file at a
- * time, and an app-data dataset also holds shapes other writers materialized (CN's
- * `bindShape` / `enableCapability`). "Not registered here" therefore does not mean "deleted from
+ * time, and an app-data dataset also holds shapes other writers materialized (e.g. a
+ * host app's `bindShape` / `enableCapability`). "Not registered here" therefore does not mean "deleted from
  * code". Measured against a dataset holding the 36 `@_linked/schema` shapes: a process that
  * imported only `@_linked/schema/shapes/Thing` (11 shapes registered) deleted the other 25 under
  * both `'all'` and `'ownedNamespaces'`, and a process that imported no shapes deleted all 36.

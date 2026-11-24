@@ -3,7 +3,7 @@ date: 2026-10-31
 summary: >
   Addendum to report 096: the dispatch-side feature check (`requiredFeatures`) evaluated the
   select and where callbacks before the dataset was asked, so a callback that throws made `exec`
-  reject even on a dataset that never lowers the query (CN's shape-ui catalog test). The check now
+  reject even on a dataset that never lowers the query (the host app's shape-ui catalog test). The check now
   reports no features when a callback throws and leaves the error to lowering. Patch.
 packages: [core]
 ---
@@ -20,7 +20,7 @@ evaluation is the same one lowering does (`processWhereClause`, the same proxy a
 changed is **when** it happens: before the dataset is asked, instead of when the dataset lowers
 or serializes the query.
 
-CN's `src/data/CnDataManagerHost.catalog.test.tsx` failed with
+The host app's data-manager host catalog test failed with
 `TypeError: instance[label.label].contains is not a function`
 (`@_linked/shape-ui/src/search.ts:54`). Its `Todo.title` has no `maxCount`, so it is a
 multi-valued literal (`QueryPrimitiveSet`), which has no `contains()`. The test's dataset records
@@ -52,8 +52,8 @@ its callbacks were already evaluated by `groupBy()`, and it always requires `gro
 - `npx linked build`: `✔ Build successful`. Full jest against an own Fuseki:
   `Tests: 122 skipped, 3106 passed, 3228 total`, `[fuseki] live tests: 437 total — 435 passed,
   0 failed, 2 skipped`. `npm run check:dts`: clean.
-- CN, after landing and building core in the main checkout:
-  `node_modules/.bin/vitest run src/data/CnDataManagerHost.catalog.test.tsx` →
+- The host app, after landing and building core in the main checkout:
+  `vitest run` on that catalog test →
   `Test Files  1 passed (1)`, `Tests  3 passed (3)` (before: `Tests  1 failed | 2 passed (3)`).
 
 ### Deviations
@@ -65,7 +65,7 @@ None.
 - `@_linked/shape-ui` `searchInstancesWithDsl` (`src/search.ts:54`) calls `.contains()` on the
   label path. When the label property is multi-valued that path is a set, which has no
   `contains()`, so search throws on any dataset that lowers the query. It needs
-  `.some((v) => v.contains(query))` for a set. Home: shape-ui's backlog, to be filed by the CN
+  `.some((v) => v.contains(query))` for a set. Home: shape-ui's backlog, to be filed by the host app
   session.
 
 ## Details

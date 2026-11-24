@@ -16,7 +16,6 @@ import {createNodeShapeData, type NodeShapeData} from '../shapes/nodeShapeData.j
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
 import {List} from '../shapes/List.class.js';
 import {PropertyGroup} from '../shapes/PropertyGroup.class.js';
-import {Prefix} from './Prefix.js';
 import {sharedState} from './sharedState.js';
 import {coreOntology} from '../ontologies/linked-core.js';
 import {rdf} from '../ontologies/rdf.js';
@@ -25,6 +24,14 @@ import {shacl} from '../ontologies/shacl.js';
 import {rdfs} from '../ontologies/rdfs.js';
 import {xsd} from '../ontologies/xsd.js';
 import type {NodeReferenceValue} from './NodeReference.js';
+// Through the package specifier, not a relative path: the `browser` and `react-native` export
+// conditions of this subpath give a client build the stub, and a relative import ignores them.
+import {loadOntologyFiles} from '@_linked/core/ontology/loadOntologyFiles';
+
+/** An ontology's name within its package. */
+const ONTOLOGY_NAME = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
+/** A suggested prefix: a SPARQL/Turtle `PN_PREFIX` (ASCII subset). */
+const SUGGESTED_PREFIX = /^[A-Za-z](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?$/;
 
 //global tree
 declare var _linked: any;
@@ -35,25 +42,64 @@ declare var global;
 // var packageParsePromises: Map<string,Promise<any>> = new Map();
 // var loadedPackages: Set<NamedNode> = new Set();
 /**
- * One `linkedOntology(...)` call, as the ontology registry records it. The ontology sync and the
- * shape check read the registry through {@link getRegisteredOntologies}.
+ * One ontology a package declares to {@link LinkedPackageObject.registerOntologies}: what its
+ * generated `src/ontologies/index.ts` lists for each ontology of `package.json` `linkedOntologies`.
+ */
+export interface OntologyDeclaration {
+  /**
+   * The ontology's name within its package: unique in the package, lowercase letters and digits
+   * in words joined by `-` or `_` (`my-vocab`). With the package's npm name it addresses the
+   * ontology; it is not a prefix and need not equal the terms module's file name.
+   */
+  name: string;
+  /** The ontology's namespace IRI (`https://example.org/ont/my-vocab/`). */
+  namespace: string;
+  /** The terms module (`import * as myVocab from './my-vocab.js'`): its `{id}` terms. */
+  terms: Record<string, unknown>;
+  /**
+   * The ontology's Turtle data files, relative to the `moduleUrl` given to `registerOntologies`
+   * (`['../data/my-vocab.ttl']`). Read on a server only, when the ontology sync or the shape
+   * check asks. Omit it for an ontology without data.
+   */
+  data?: string[];
+  /**
+   * The prefix the ontology suggests for its namespace (its data's `vann:preferredNamespacePrefix`).
+   * Registers nothing: an app adds it to its own prefix map. Read with {@link suggestedPrefixes}.
+   */
+  suggestedPrefix?: string;
+}
+
+/**
+ * One registered ontology, as the ontology registry records it. The ontology sync and the shape
+ * check read the registry through {@link getRegisteredOntologies}.
  */
 export interface OntologyRegistration {
   /** The npm name of the package that registered the ontology. */
   packageName: string;
-  /** The ontology's prefix, which is also its module's file name. */
-  prefix: string;
-  /** The namespace function: `ns('Term')` is the term's `{id}` reference. */
-  ns: (term: string) => NodeReferenceValue;
+  /** The ontology's name within its package (see {@link OntologyDeclaration.name}). */
+  name: string;
+  /** The ontology's namespace IRI. */
+  namespace: string;
+  /** The prefix the ontology suggests (see {@link OntologyDeclaration.suggestedPrefix}). */
+  suggestedPrefix?: string;
   /** Reads the package's Turtle data (`loadOntologyFiles`); absent for an ontology without data. */
   load?: () => Promise<unknown>;
-  /** The data files `load` reads, relative to the ontology module; names them in errors. */
+  /** The data files `load` reads, relative to the registering module; names them in errors. */
   files: string[];
   /**
-   * The ontology module's exports as registered (the namespace object of terms, `ns`, …). The
-   * shape check reads the `{id}` terms of a mirror package from it.
+   * The terms module as registered. The shape check reads the `{id}` terms of a mirror package
+   * from it.
    */
   terms: Record<string, unknown>;
+}
+
+/** A suggested prefix of a registered ontology (see {@link suggestedPrefixes}). */
+export interface SuggestedPrefix {
+  packageName: string;
+  /** The ontology's name within its package. */
+  name: string;
+  namespace: string;
+  prefix: string;
 }
 
 /**
@@ -62,8 +108,9 @@ export interface OntologyRegistration {
  * through either sets the limit both read.
  */
 const packageState = sharedState('@_linked/core', 'Package', () => ({
-  ontologies: new Set<any>(),
-  /** Keyed by `packageName + prefix`, so a module evaluated twice registers once. */
+  /** Unused by this copy; an older copy of core sharing the container writes to it. */
+  ontologies: new Set<unknown>(),
+  /** Keyed by `packageName + name`, so a module evaluated twice registers once. */
   ontologyRegistry: new Map<string, OntologyRegistration>(),
   /** Package name → the namespaces it mirrors (`linkedPackage(name, {mirrors})`). */
   packageMirrors: new Map<string, string[]>(),
@@ -76,14 +123,34 @@ packageState.defaultLimit ??= 12;
 packageState.limitBindings ??= new Set();
 packageState.ontologyRegistry ??= new Map();
 packageState.packageMirrors ??= new Map();
-const ontologies = packageState.ontologies;
 
 /**
- * Every ontology registered with `linkedOntology`, in registration order. Several entries may
+ * Every ontology registered with `registerOntologies`, in registration order. Several entries may
  * share a package (one per ontology module); the sync groups them by `packageName`.
  */
 export function getRegisteredOntologies(): OntologyRegistration[] {
   return [...packageState.ontologyRegistry.values()];
+}
+
+/**
+ * Record one ontology registration, replacing an earlier one of the same package and name.
+ * `registerOntologies` is the way a package registers; this is its last step, open to test
+ * helpers that register an ontology whose data is held in memory.
+ * @internal
+ */
+export function setOntologyRegistration(registration: OntologyRegistration): void {
+  packageState.ontologyRegistry.set(`${registration.packageName}\u0000${registration.name}`, registration);
+}
+
+/**
+ * The prefix each registered ontology suggests for its namespace, in registration order (an
+ * ontology without one is left out). Nothing registers these: a tool building an app's prefix map
+ * reads them, and the app loads its map with `Prefix.load`.
+ */
+export function suggestedPrefixes(): SuggestedPrefix[] {
+  return getRegisteredOntologies()
+    .filter((r) => typeof r.suggestedPrefix === 'string' && r.suggestedPrefix !== '')
+    .map((r) => ({packageName: r.packageName, name: r.name, namespace: r.namespace, prefix: r.suggestedPrefix!}));
 }
 
 /**
@@ -213,52 +280,48 @@ export interface LinkedPackageObject
    */
   linkedUtil: (constructor: any) => any;
   /**
-   * Registers an ontology of this package: its prefix (registered with `Prefix`), its terms
-   * (registered in the package tree under the prefix) and, when the package ships data, how to
-   * read it. The data is Turtle, one file per vocabulary under `src/data/`, read by
-   * `loadOntologyFiles` (`@_linked/core/ontology/loadOntologyFiles`). Nothing is loaded at
+   * Registers every ontology of this package, each under its name within the package: its terms
+   * (registered in the package tree under the name), its namespace, its suggested prefix and, when
+   * the package ships data, where the data is. The data is Turtle, one file per vocabulary under
+   * `src/data/`, read with `loadOntologyFiles` relative to `moduleUrl`. Nothing is loaded at
    * registration: the ontology sync (`@_linked/core/ontology/syncOntologies`) reads the data,
    * writes each package's class hierarchy into the store, and the store infers over it.
    *
-   * Call it from a sibling `<prefix>.register.ts` module, never from the ontology module
-   * itself (a module cannot import its own namespace once a bundler is involved).
+   * It registers no prefix. Prefixes are the app's: the suggested prefix is read with
+   * `suggestedPrefixes()`, and the app loads its own map with `Prefix.load`.
    *
-   * @param allFileExports - every export of the ontology module (`import * as terms from './my-vocab.js'`)
-   * @param nameSpace - the namespace function (`createNameSpace`), so consumers can build terms the module does not list
-   * @param suggestedPrefixAndFileName - the prefix; it MUST match the ontology module's file name
-   * @param loadDataFunction - reads the Turtle data: `() => loadOntologyFiles(import.meta.url, files)`. Omit it for an ontology without data
-   * @param dataSource - the data file(s) `loadDataFunction` reads, relative to the ontology module (named in errors)
+   * Called once per package, from the generated `src/ontologies/index.ts` (which the package's
+   * entry imports); the terms modules hold only `{id}` literals and import nothing.
+   *
+   * @param ontologies one declaration per ontology of the package (`package.json` `linkedOntologies`)
+   * @param moduleUrl the calling module's `import.meta.url`: what each `data` path is relative to
+   * @throws when a name is not a valid ontology name or appears twice, a namespace is empty, or a
+   *   suggested prefix is not a valid prefix
    * @example
    * ```ts
-   * // src/ontologies/my-vocab.ts
-   * import {createNameSpace} from '@_linked/core/utils/NameSpace';
-   * import {loadOntologyFiles} from '@_linked/core/ontology/loadOntologyFiles';
-   * import type {NodeReferenceValue} from '@_linked/core/utils/NodeReference';
+   * // src/ontologies/my-vocab.ts (terms only)
+   * export const ExampleClass = {id: 'https://example.org/ont/my-vocab/ExampleClass'};
+   * export const exampleProperty = {id: 'https://example.org/ont/my-vocab/exampleProperty'};
    *
-   * export const ns = createNameSpace('http://www.my-ontology.com/');
-   * export const _self: NodeReferenceValue = ns('');
-   * export const dataFiles = ['../data/my-vocab.ttl'];
-   * export const loadData = () => loadOntologyFiles(import.meta.url, dataFiles);
+   * // src/ontologies/index.ts
+   * import * as myVocab from './my-vocab.js';
+   * import {registerOntologies} from '../package.js';
    *
-   * const ExampleClass = ns('ExampleClass');
-   * const exampleProperty = ns('exampleProperty');
-   * export const myVocab = {ExampleClass, exampleProperty};
-   *
-   * // src/ontologies/my-vocab.register.ts
-   * import * as terms from './my-vocab.js';
-   * import {dataFiles, loadData, ns} from './my-vocab.js';
-   * import {linkedOntology} from '../package.js';
-   *
-   * linkedOntology(terms, ns, 'my-vocab', loadData, dataFiles);
+   * registerOntologies(
+   *   [
+   *     {
+   *       name: 'my-vocab',
+   *       namespace: 'https://example.org/ont/my-vocab/',
+   *       terms: myVocab,
+   *       data: ['../data/my-vocab.ttl'],
+   *       suggestedPrefix: 'myvocab',
+   *     },
+   *   ],
+   *   import.meta.url,
+   * );
    * ```
    */
-  linkedOntology: (
-    allFileExports,
-    nameSpace: (term: string) => NodeReferenceValue,
-    suggestedPrefixAndFileName: string,
-    loadDataFunction?: () => Promise<unknown>,
-    dataSource?: string | string[],
-  ) => void;
+  registerOntologies: (ontologies: OntologyDeclaration[], moduleUrl: string) => void;
   /**
    * Low level method used by other decorators to write to the modules' object in the LINCD tree.
    * You should typically not need this.
@@ -339,8 +402,8 @@ export function linkedPackage(
 ): LinkedPackageObject
 {
   // Declare the package's publish root before any shape/metadata IRI is built.
-  // The slug is derived from `packageName`; only `baseUri` is configurable — CN
-  // injects a workspace-scoped root for private packages, first-party packages
+  // The slug is derived from `packageName`; only `baseUri` is configurable — a host
+  // app may inject a workspace-scoped root for private packages, first-party packages
   // default to linked.cm.
   setPackagePublishConfig(packageName, options);
   if (options?.mirrors) {
@@ -552,53 +615,54 @@ export function linkedPackage(
     };
   }
 
-  /**
-   * Registers an ontology module: its prefix, its namespace, its exported terms and, when the
-   * package ships data, how to read it. See {@link LinkedPackageObject.linkedOntology}.
-   *
-   * @param exports all exports of the ontology module (`import * as terms from './x.js'`)
-   * @param nameSpace the namespace function of the ontology
-   * @param prefixAndFileName the prefix, which MUST match the module's file name
-   * @param loadData reads the ontology's Turtle data: `() => loadOntologyFiles(import.meta.url, files)`
-   * @param dataSource the data file(s) `loadData` reads, relative to the ontology module
-   */
-  let linkedOntology = function(
-    exports,
-    nameSpace: (term: string) => NodeReferenceValue,
-    prefixAndFileName: string,
-    loadData?: () => Promise<unknown>,
-    dataSource?: string | string[],
-  ) {
-    let exportsCopy = {...exports};
-    //store specifics in exports. And make sure we can detect this as an ontology later
-    exportsCopy['_ns'] = nameSpace;
-    exportsCopy['_prefix'] = prefixAndFileName;
-    exportsCopy['_load'] = loadData;
-    exportsCopy['_data'] = dataSource;
-
-    //register the prefix here (so just calling linkedOntology with a prefix will automatically register that prefix)
-    if (prefixAndFileName)
-    {
-      //run the namespace without any term name, this will give back a named node with just the namespace as URI, then get that URI to provide it as full URI
-      Prefix.add(prefixAndFileName,nameSpace('').id);
+  /** See {@link LinkedPackageObject.registerOntologies}. */
+  let registerOntologies = function(ontologies: OntologyDeclaration[], moduleUrl: string) {
+    if (!Array.isArray(ontologies)) {
+      throw new Error(`registerOntologies (${packageName}): expected an array of ontology declarations.`);
+    }
+    const seen = new Set<string>();
+    for (const ontology of ontologies) {
+      const name = ontology?.name;
+      if (typeof name !== 'string' || !ONTOLOGY_NAME.test(name)) {
+        throw new Error(
+          `registerOntologies (${packageName}): ${JSON.stringify(name)} is not a valid ontology name ` +
+            '(lowercase letters and digits in words joined by "-" or "_").',
+        );
+      }
+      if (seen.has(name)) {
+        throw new Error(`registerOntologies (${packageName}): the ontology name "${name}" is declared twice.`);
+      }
+      seen.add(name);
+      if (typeof ontology.namespace !== 'string' || ontology.namespace === '') {
+        throw new Error(`registerOntologies (${packageName}): the ontology "${name}" has no namespace.`);
+      }
+      const prefix = ontology.suggestedPrefix;
+      if (prefix !== undefined && (typeof prefix !== 'string' || !SUGGESTED_PREFIX.test(prefix))) {
+        throw new Error(
+          `registerOntologies (${packageName}): the suggested prefix ${JSON.stringify(prefix)} of "${name}" ` +
+            'is not a valid prefix.',
+        );
+      }
+      if (ontology.data !== undefined && (!Array.isArray(ontology.data) || ontology.data.length === 0)) {
+        throw new Error(`registerOntologies (${packageName}): "data" of "${name}" must be a non-empty array of files.`);
+      }
+      if (ontology.data && typeof moduleUrl !== 'string') {
+        throw new Error(`registerOntologies (${packageName}): pass import.meta.url, the base of "${name}"'s data files.`);
+      }
     }
 
-    ontologies.add(exportsCopy);
-    //register all the exports under the prefix. NOTE: this means the file name HAS to match the prefix
-    registerInPackageTree(prefixAndFileName,exportsCopy);
-
-    // The registry the ontology sync and the shape check read. Keyed by package and prefix:
-    // a module Vite evaluates twice, or two copies of core, register the ontology once.
-    const files = dataSource === undefined ? [] : Array.isArray(dataSource) ? dataSource : [dataSource];
-    const registration: OntologyRegistration = {
-      packageName,
-      prefix: prefixAndFileName,
-      ns: nameSpace,
-      files,
-      terms: exportsCopy,
-    };
-    if (loadData) registration.load = loadData;
-    packageState.ontologyRegistry.set(`${packageName}\u0000${prefixAndFileName}`, registration);
+    for (const ontology of ontologies) {
+      const {name, namespace, terms, data, suggestedPrefix} = ontology;
+      // The package tree holds the terms under the ontology's name.
+      registerInPackageTree(name, terms);
+      // The registry the ontology sync and the shape check read. Keyed by package and name:
+      // a module Vite evaluates twice, or two copies of core, register the ontology once.
+      const files = data ? [...data] : [];
+      const registration: OntologyRegistration = {packageName, name, namespace, files, terms: {...terms}};
+      if (suggestedPrefix !== undefined) registration.suggestedPrefix = suggestedPrefix;
+      if (data) registration.load = () => loadOntologyFiles(moduleUrl, files);
+      setOntologyRegistration(registration);
+    }
   };
 
   /**
@@ -618,7 +682,7 @@ export function linkedPackage(
   return {
     linkedShape,
     linkedUtil,
-    linkedOntology,
+    registerOntologies,
     registerPackageExport,
     registerPackageModule,
     getPackageShape,

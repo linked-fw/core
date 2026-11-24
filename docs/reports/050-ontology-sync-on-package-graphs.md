@@ -5,7 +5,7 @@ summary: >
   one graph query per changed package with an N-Triples body, skipped by a `/2` hash over the
   raw file texts; it removes what the earlier default-graph sync kept for a package (its
   `OntologySync` node's lines, except those another node lists) and keeps that sync as the
-  fallback for stores without graph queries. CN plan 071, sub-plan 004.
+  fallback for stores without graph queries. The host app's named-graphs plan, sub-plan 004.
 packages: [core]
 ---
 
@@ -13,7 +13,7 @@ packages: [core]
 
 ## Why
 
-CN plan 071 moves each package's ontology data out of the default graph into its own ontology
+The host app's named-graphs plan moves each package's ontology data out of the default graph into its own ontology
 graph, recorded in the graph registry, so the store builds its class hierarchy from the graphs the
 registry marks (fuseki image `6.2.0-2`, fuseki report 002) and readers can find labels and
 comments per package. Report 048 provided the graph queries; this step makes the sync use them.
@@ -119,7 +119,7 @@ Full gate (before the rebase check; `named-graphs` had not moved):
   graph queries through `RemoteDataset` and the plane is V1 (master §V1). Until V1 lands, an app
   whose dataset is a `RemoteDataset` built against this core has no `graphQuery` and takes the
   default-graph path.
-- Readers of ontology terms in the default graph (CN's term readers) move to
+- Readers of ontology terms in the default graph (the host app's term readers) move to
   `graphs.allOntologies` in C2.
 
 ## Incident

@@ -71,17 +71,10 @@ describe('SEC4 — path steps are never written verbatim', () => {
     expect(pathExprToSparql('ex:')).toBe('ex:');
   });
 
-  test('a prefixed name whose prefix is not registered is written as an IRI, with one warning', () => {
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      expect(pathExprToSparql({seq: ['nope:a', 'ex:b']})).toBe('<nope:a>/ex:b');
-      expect(pathExprToSparql('nope:c')).toBe('<nope:c>');
-      expect(pathExprToSparql('urn:prop:a')).toBe('<urn:prop:a>');
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0][0])).toMatch(/prefix 'nope', which is not registered/);
-    } finally {
-      warn.mockRestore();
-    }
+  test('a prefixed name whose prefix is not in the map throws; an IRI scheme is an IRI', () => {
+    expect(() => pathExprToSparql({seq: ['nope:a', 'ex:b']})).toThrow('Unknown prefix "nope"');
+    expect(() => pathExprToSparql('nope:c')).toThrow('Unknown prefix "nope"');
+    expect(pathExprToSparql('urn:prop:a')).toBe('<urn:prop:a>');
   });
 
   test('a short form with a registered prefix declares its PREFIX', () => {

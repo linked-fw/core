@@ -19,8 +19,8 @@ describe('pathExprToSparql', () => {
     expect(pathExprToSparql('ex:name')).toBe('ex:name');
   });
 
-  it('writes a step with an unregistered prefix as an IRI', () => {
-    expect(pathExprToSparql('zz:name')).toBe('<zz:name>');
+  it('throws on a step whose prefix is not in the map', () => {
+    expect(() => pathExprToSparql('zz:name')).toThrow('Unknown prefix "zz"');
   });
 
   it('renders a full IRI string in angle brackets', () => {

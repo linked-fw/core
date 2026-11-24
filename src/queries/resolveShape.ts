@@ -23,7 +23,7 @@ export function resolveShape<S extends Shape>(
     return shapeClass as ShapeConstructor<S>;
   }
   // Inside a catalog the catalog's data is the authority for every IRI it holds, so an
-  // authored class for one of them (CN's compiled `Person` for a project's `Person`)
+  // authored class for one of them (a host's compiled `Person` for a project's `Person`)
   // resolves to the catalog's shape. A class the catalog does not hold is kept as is.
   const catalog = getActiveShapeCatalog();
   if (catalog !== undefined) {

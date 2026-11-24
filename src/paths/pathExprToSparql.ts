@@ -8,11 +8,7 @@ import type {PathExpr, PathRef} from './PropertyPathExpr.js';
 import {isPathRef} from './PropertyPathExpr.js';
 import {formatUri} from '../sparql/sparqlUtils.js';
 import {Prefix} from '../utils/Prefix.js';
-import {
-  expandRegisteredPrefixedName,
-  isPrefixedNameToken,
-  pathRefIri,
-} from './propertyPathSafety.js';
+import {isPrefixedNameToken, pathRefIri} from './propertyPathSafety.js';
 
 // ---------------------------------------------------------------------------
 // Precedence levels (higher = tighter binding)
@@ -24,39 +20,18 @@ const PREC_PRIMARY = 4;
 
 /**
  * Write one path step. Every step goes through `formatUri` (angle brackets, `assertSafeIri`,
- * prefix shortening): a string step is read as a prefixed name only when it is one SPARQL
- * prefixed-name token with a registered prefix, and is expanded first. Any other string is an
- * IRI — `urn:prop:a` included, which is not a prefixed name unless `urn` is registered. Nothing
- * from a step reaches the query text verbatim, so a stored `sh:path` step cannot add patterns.
+ * prefix shortening): a string step that is one SPARQL prefixed-name token is expanded against
+ * the app's prefix map first, and an unknown prefix throws (`UnknownPrefixError`). A token with an
+ * IRI scheme (`urn:prop:a`) and any other string are IRIs. Nothing from a step reaches the query
+ * text verbatim, so a stored `sh:path` step cannot add patterns.
  */
 function refToSparql(ref: PathRef): string {
-  if (typeof ref === 'string') warnOnUnregisteredPrefix(ref);
   return formatUri(pathRefIri(ref));
 }
 
 /**
- * IRI schemes a string step commonly uses bare (`urn:prop:a`). A prefixed-name token with any
- * other unregistered prefix is far more likely a misspelt or not-yet-imported prefix than an IRI,
- * and as `<shcema:name>` it matches nothing — so it warns, once per prefix.
- */
-const BARE_IRI_SCHEMES = new Set(['urn', 'mailto', 'tag', 'did', 'data', 'tel', 'uuid', 'geo', 'info']);
-const warnedPrefixes = new Set<string>();
-
-function warnOnUnregisteredPrefix(ref: string): void {
-  if (!isPrefixedNameToken(ref) || expandRegisteredPrefixedName(ref) !== undefined) return;
-  const prefix = ref.slice(0, ref.indexOf(':'));
-  if (BARE_IRI_SCHEMES.has(prefix.toLowerCase()) || warnedPrefixes.has(prefix)) return;
-  warnedPrefixes.add(prefix);
-  console.warn(
-    `[linked] Property path step '${ref}' has the prefix '${prefix}', which is not registered, so it ` +
-      `is written as the IRI <${ref}>. Import the ontology module that registers '${prefix}', or ` +
-      `write the step as a full IRI.`,
-  );
-}
-
-/**
  * Collect every IRI a PathExpr AST names, as `pathExprToSparql` writes it: string and `{id}`
- * steps alike, with a registered prefixed name expanded to its full IRI. The PREFIX block of a
+ * steps alike, with a prefixed name expanded to its full IRI. The PREFIX block of a
  * query is built from these, so a step written in its short form gets its declaration.
  */
 export function collectPathUris(expr: PathExpr): string[] {
@@ -105,13 +80,21 @@ type RefFormatter = (ref: PathRef) => string;
 /**
  * Absolute, prefix-independent rendering of a single path reference.
  *
- * BOTH spellings are expanded. A `{id}` ref usually carries a full IRI, but not always — the
- * shape catalog and hand-written fixtures both produce `{id: 'schema:name'}`. Expanding only the
- * string form would give one path two different keys depending on how it was spelled, which is
- * the one thing a canonical key may never do.
+ * A string step is expanded strictly (an unknown prefix throws). A `{id}` ref usually carries a
+ * full IRI, but not always — the shape catalog and hand-written fixtures both produce
+ * `{id: 'schema:name'}` — so a `{id}` that is a prefixed name whose prefix is in the map is
+ * expanded too; any other `{id}` is an IRI. Expanding only the string form would give one path two
+ * different keys depending on how it was spelled, which is the one thing a canonical key may never do.
  */
-const absoluteIri = (ref: PathRef): string =>
-  Prefix.toFullIfPossible(typeof ref === 'string' ? ref : ref.id);
+const absoluteIri = (ref: PathRef): string => {
+  if (typeof ref === 'string') return pathRefIri(ref);
+  const id = ref.id;
+  if (isPrefixedNameToken(id) && !Prefix.isFullIri(id)) {
+    const namespace = Prefix.getFullURI(id.slice(0, id.indexOf(':')));
+    if (namespace !== undefined) return namespace + id.slice(id.indexOf(':') + 1);
+  }
+  return id;
+};
 
 function refToAbsolute(ref: PathRef): string {
   return `<${absoluteIri(ref)}>`;

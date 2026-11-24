@@ -7,20 +7,20 @@
 /**
  * Registers the ontologies of installed packages, for whoever syncs or checks them.
  *
- * A package registers its ontology data from `ontologies/<prefix>.register.js`, which its package
- * index and `shapes/index` import. An app that deep-imports one shape file
+ * A package registers its ontologies from `ontologies/index.js` (one `registerOntologies` call),
+ * which its package entry imports. An app that deep-imports one shape file
  * (`@_linked/schema/shapes/Person`) never evaluates those modules, so the package's data would be
  * missing from the registry the ontology sync and the shape check read. The server's boot and
- * control route, and the cli's build check, therefore import every register module of every
- * package directory they know before they sync or check.
+ * control route, and the cli's build check, therefore import the ontology index of every package
+ * directory they know before they sync or check.
  *
  * In `linked start` (dev) the app runs in Vite's SSR module runner, and the cli sets a host loader on
  * `globalThis` (`MODULE_LOADER_KEY`, `Symbol.for('@_linked/core:importModule')`, read through
- * `utils/importPackageModule`, which `loadStores` uses too). A register
- * module imported by file path would then be a second copy of its package: Node's next to the
+ * `utils/importPackageModule`, which `loadStores` uses too). An ontology index
+ * imported by file path would then be a second copy of its package: Node's next to the
  * runner's, or the built `lib` next to the workspace `src` the app imports. With the host loader
- * set, each register module is imported through it by package specifier with `importPackageModule`
- * (`<name>/ontologies/<prefix>.register`), so it is the module the app's own import of it gets.
+ * set, each index is imported through it by package specifier with `importPackageModule`
+ * (`<name>/ontologies/index`), so it is the module the app's own import of it gets.
  *
  * Server only: it reads the file system (imported dynamically, as `loadOntologyFiles` does).
  *
@@ -43,15 +43,16 @@ async function nodeModule<T>(specifier: string): Promise<T> {
 
 /** Where the cli's build puts a package's ontology modules, relative to the package root. */
 const ONTOLOGIES_DIR = ['lib', 'esm', 'ontologies'];
-const REGISTER_SUFFIX = '.register.js';
+/** The module that registers a package's ontologies, built. */
+const INDEX_FILE = 'index.js';
 /** Where an unbuilt (source) package keeps them, relative to the package root. */
 const SOURCE_ONTOLOGIES_DIR = ['src', 'ontologies'];
-const SOURCE_REGISTER_SUFFIX = '.register.ts';
+const SOURCE_INDEX_FILE = 'index.ts';
 
 export type RegisterInstalledOptions = {
   /**
-   * Imports a source register module (`src/ontologies/*.register.ts`) of a package directory that
-   * has no built ones, e.g. Vite's `ssrLoadModule` in dev. It gets an absolute path with `/`
+   * Imports the source ontology index (`src/ontologies/index.ts`) of a package directory that
+   * has no built one, e.g. Vite's `ssrLoadModule` in dev. It gets an absolute path with `/`
    * separators (`C:/…` on Windows), a module id rather than a native path. Without it such a
    * directory is skipped.
    */
@@ -59,25 +60,24 @@ export type RegisterInstalledOptions = {
 };
 
 /**
- * Import `<dir>/lib/esm/ontologies/*.register.js` of each of `packageDirs` (package roots), in
- * the order given and, within a package, by file name, so each package registers its ontologies
- * (`linkedOntology`). Returns the names (`package.json` `name`, else the directory's name) of the
- * packages whose register modules were imported. A directory without them is skipped silently;
- * a directory given twice (also through a symlink) is imported once. A register module that
- * throws is reported in one warning naming the file, and its package is left out of the result.
+ * Import `<dir>/lib/esm/ontologies/index.js` of each of `packageDirs` (package roots), in the
+ * order given, so each package registers its ontologies (`registerOntologies`). Returns the names
+ * (`package.json` `name`, else the directory's name) of the packages whose index was imported. A
+ * directory without one is skipped silently; a directory given twice (also through a symlink) is
+ * imported once. An index that throws is reported in one warning naming the file, and its package
+ * is left out of the result.
  *
- * A directory without built register modules but with `src/ontologies/*.register.ts` (a
- * workspace package in dev, never built) is imported through `options.importModule` when given,
- * and skipped otherwise.
+ * A directory without a built index but with `src/ontologies/index.ts` (a workspace package in
+ * dev, never built) is imported through `options.importModule` when given, and skipped otherwise.
  *
  * When a host loader is set (`linked start`; see the module comment), a package that the app
  * resolves to the given directory (its name, looked up in `node_modules` from the working directory
  * upwards, is that directory) and that exports `./*` or `./ontologies/*` (or has no `exports`) is
- * imported through the host loader by specifier instead, built or not:
- * `<name>/ontologies/<prefix>.register` for each register module in `src/ontologies`, else in
- * `lib/esm/ontologies`. Any other directory (a nested copy, the app itself) is imported as above.
+ * imported through the host loader by specifier instead, built or not: `<name>/ontologies/index`
+ * when `src/ontologies` or `lib/esm/ontologies` has an index. Any other directory (a nested copy,
+ * the app itself) is imported as above.
  *
- * Registration is idempotent (keyed by package and prefix), so a package the app already
+ * Registration is idempotent (keyed by package and ontology name), so a package the app already
  * imported registers again without effect.
  */
 export async function registerInstalledOntologies(
@@ -107,66 +107,55 @@ export async function registerInstalledOntologies(
       hostCanImport(manifest) &&
       (await resolvesFromCwd(fs, path, name, dir));
     if (viaHost) {
-      // The host resolves each specifier as the app's own import of it: to `lib`, or to `src`
-      // for a workspace package. List the register modules from `src` when it has them, so a
-      // stale `lib` does not decide which ones exist.
-      let ontologiesDir = path.join(dir, ...SOURCE_ONTOLOGIES_DIR);
-      let suffix = SOURCE_REGISTER_SUFFIX;
-      let files = await registerFiles(fs, ontologiesDir, suffix);
-      if (files.length === 0) {
-        ontologiesDir = path.join(dir, ...ONTOLOGIES_DIR);
-        suffix = REGISTER_SUFFIX;
-        files = await registerFiles(fs, ontologiesDir, suffix);
-      }
-      if (files.length === 0) continue;
-      const specifiers = files.map((file) => `${name}/ontologies/${file.slice(0, -suffix.length)}.register`);
-      const describe = (specifier: string) => `${specifier} (through the host loader)`;
-      if (await importAll(specifiers, importPackageModule, describe)) {
+      // The host resolves the specifier as the app's own import of it: to `lib`, or to `src`
+      // for a workspace package. Either having an index is enough.
+      const hasIndex =
+        (await fileExists(fs, path.join(dir, ...SOURCE_ONTOLOGIES_DIR), SOURCE_INDEX_FILE)) ||
+        (await fileExists(fs, path.join(dir, ...ONTOLOGIES_DIR), INDEX_FILE));
+      if (!hasIndex) continue;
+      const specifier = `${name}/ontologies/index`;
+      if (await importOne(specifier, importPackageModule, `${specifier} (through the host loader)`)) {
         registered.push(name);
       }
       continue;
     }
 
-    let ontologiesDir = path.join(dir, ...ONTOLOGIES_DIR);
-    let files = await registerFiles(fs, ontologiesDir, REGISTER_SUFFIX);
+    let file: string | undefined;
     let load = (filePath: string): Promise<unknown> =>
       import(/* @vite-ignore */ /* webpackIgnore: true */ pathToFileURL(filePath).href);
-    const importModule = options.importModule;
-    if (files.length === 0 && importModule) {
-      ontologiesDir = path.join(dir, ...SOURCE_ONTOLOGIES_DIR);
-      files = await registerFiles(fs, ontologiesDir, SOURCE_REGISTER_SUFFIX);
-      load = (filePath) => importModule(slashedPath(filePath));
+    const builtDir = path.join(dir, ...ONTOLOGIES_DIR);
+    if (await fileExists(fs, builtDir, INDEX_FILE)) {
+      file = path.join(builtDir, INDEX_FILE);
+    } else if (options.importModule) {
+      const sourceDir = path.join(dir, ...SOURCE_ONTOLOGIES_DIR);
+      if (await fileExists(fs, sourceDir, SOURCE_INDEX_FILE)) {
+        file = path.join(sourceDir, SOURCE_INDEX_FILE);
+        const importModule = options.importModule;
+        load = (filePath) => importModule(slashedPath(filePath));
+      }
     }
-    if (files.length === 0) continue;
-    const ok = await importAll(
-      files.map((file) => path.join(ontologiesDir, file)),
-      load,
-      (filePath) => filePath,
-    );
-    if (ok) registered.push(name);
+    if (!file) continue;
+    if (await importOne(file, load, file)) registered.push(name);
   }
   return registered;
 }
 
-/** Imports each module in order; warns once per module that throws. Whether all imported. */
-async function importAll(
-  modules: string[],
+/** Imports one module; warns when it throws. Whether it imported. */
+async function importOne(
+  module: string,
   load: (module: string) => Promise<unknown>,
-  describe: (module: string) => string,
+  description: string,
 ): Promise<boolean> {
-  let ok = true;
-  for (const module of modules) {
-    try {
-      await load(module);
-    } catch (error) {
-      console.warn(
-        `[linked] Could not import the ontology register module ${describe(module)}; its package's ` +
-          `ontology is not registered: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      ok = false;
-    }
+  try {
+    await load(module);
+    return true;
+  } catch (error) {
+    console.warn(
+      `[linked] Could not import the ontology index ${description}; its package's ` +
+        `ontologies are not registered: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
   }
-  return ok;
 }
 
 /**
@@ -177,11 +166,11 @@ export function slashedPath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
 }
 
-async function registerFiles(fs: Fs, dir: string, suffix: string): Promise<string[]> {
+async function fileExists(fs: Fs, dir: string, file: string): Promise<boolean> {
   try {
-    return (await fs.readdir(dir)).filter((f) => f.endsWith(suffix)).sort();
+    return (await fs.readdir(dir)).includes(file);
   } catch {
-    return [];
+    return false;
   }
 }
 
@@ -214,7 +203,7 @@ async function readManifest(fs: Fs, path: Path, dir: string): Promise<Manifest> 
 }
 
 /**
- * Whether `<name>/ontologies/<prefix>.register` can resolve: the package has no `exports`, or
+ * Whether `<name>/ontologies/index` can resolve: the package has no `exports`, or
  * exports `./*` or `./ontologies/*` (as every package the cli creates does).
  */
 function hostCanImport({exports}: Manifest): boolean {

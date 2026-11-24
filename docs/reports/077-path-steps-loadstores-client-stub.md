@@ -60,8 +60,8 @@ The store constructor call is wrapped; an error is rethrown as
   its two small gaps are one paragraph in `docs/backlog/README.md`).
 - 032 is rewritten down to what remains: bundlers other than the cli's Vite config, and no build
   step that injects `@linkedShape({name})`.
-- 060 is corrected: the crash comes from Create Now's hoisted jest 29.7, not jest 30; under core's
-  own jest 30 `two-copies-built` passes. The fix is in Create Now.
+- 060 is corrected: the crash comes from the host app's hoisted jest 29.7, not jest 30; under core's
+  own jest 30 `two-copies-built` passes. The fix is in the host app.
 
 ## Proof for the client stub
 
@@ -102,7 +102,7 @@ does not (older behaviour, left); the 040 gaps live in the README, not an item (
 
 - The 040 gaps (duplicate parent through an undecorated intermediate class; data-only shapes absent
   from `get*ShapesClasses`): `docs/backlog/README.md`.
-- 032 (other bundlers, injected names) and 060 (CN's jest): their backlog items.
+- 032 (other bundlers, injected names) and 060 (the host app's jest): their backlog items.
 - The cli react-native template drops its `rejectComputedImports` Babel plugin once this is
   released (cli PR).
 
@@ -124,7 +124,7 @@ does not (older behaviour, left); the 040 gaps live in the README, not an item (
   conditions pointing to a stub that rejects ("server only") and has no `import()`. Core's own
   ontology modules import it by package specifier so the conditions apply to them too.
 - **Backlog.** Deleted 008, 040 (gaps recorded in the backlog README), 044, 074; narrowed 032;
-  corrected 060 (CN's hoisted jest 29.7, not jest 30).
+  corrected 060 (the host app's hoisted jest 29.7, not jest 30).
 
 **Verification**
 

@@ -4,6 +4,7 @@
  * app's IRIs. The first sync, a changed one (each rebuilds the whole ontology in one update), and an
  * unchanged one. The instance data is untouched.
  */
+import {registerTestOntology} from '../test-helpers/register-test-ontology';
 import {afterAll, beforeAll, expect, test} from '@jest/globals';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
@@ -17,13 +18,7 @@ import {setGraphTargets} from '../utils/graphTargets';
 
 const fixture = readFileSync(path.resolve(process.cwd(), 'src/tests/fixtures/ontology-data/schema-hierarchy.ttl'), 'utf8');
 let data = fixture;
-linkedPackage('gmode-measure-schema').linkedOntology(
-  {},
-  createNameSpace('http://schema.org/'),
-  'gmode-measure-schema',
-  async () => [data],
-  '../data/schema-hierarchy.ttl',
-);
+registerTestOntology('gmode-measure-schema', {name: 'gmode-measure-schema', namespace: 'http://schema.org/', load: async () => [data], files: '../data/schema-hierarchy.ttl'});
 
 class CountingStore extends FusekiStore {
   updates = 0;

@@ -9,7 +9,7 @@ import path from 'node:path';
 import {Parser} from 'n3';
 import {coreOntology} from '../ontologies/linked-core';
 import {rdf} from '../ontologies/rdf';
-import '../ontologies/linked-core.register';
+import '../ontologies/index';
 import {getRegisteredOntologies} from '../utils/Package';
 
 const CORE = 'https://linked.cm/ont/core/';
@@ -41,7 +41,7 @@ describe('core: package kinds', () => {
     expect(quads.some((q) => q.subject.value === `${CORE}packageName`)).toBe(false);
     expect(turtle).not.toContain('purl.org/on/npm');
     const coreRegistrations = getRegisteredOntologies().filter((r) => r.packageName === '@_linked/core');
-    expect(coreRegistrations.map((r) => r.prefix)).toEqual(['core']);
+    expect(coreRegistrations.map((r) => r.name)).toEqual(['core']);
   });
 });
 

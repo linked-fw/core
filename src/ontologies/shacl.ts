@@ -4,12 +4,10 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
-import {Prefix} from '../utils/Prefix.js';
 import {createNameSpace} from '../utils/NameSpace.js';
 
 const base = 'http://www.w3.org/ns/shacl#';
 export const _ontologyResource: NodeReferenceValue = {id: base};
-Prefix.add('shacl', base);
 
 export const ns = createNameSpace(base);
 

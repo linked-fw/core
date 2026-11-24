@@ -58,7 +58,7 @@ describe('callers of importPackageModule', () => {
       rmSync(app, {recursive: true, force: true});
     });
 
-    test('imports each register module by specifier through it', async () => {
+    test('imports the ontology index by specifier through it', async () => {
       const at = path.join(app, 'node_modules', SOURCE_NAME);
       mkdirSync(path.dirname(at), {recursive: true});
       symlinkSync(SOURCE, at, 'dir');
@@ -68,7 +68,7 @@ describe('callers of importPackageModule', () => {
 
       expect(await registerInstalledOntologies([SOURCE])).toEqual([SOURCE_NAME]);
       expect(importPackageModule.mock.calls.map((c) => c[0])).toEqual([
-        `${SOURCE_NAME}/ontologies/birds.register`,
+        `${SOURCE_NAME}/ontologies/index`,
       ]);
     });
 

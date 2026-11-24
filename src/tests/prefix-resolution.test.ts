@@ -1,5 +1,5 @@
 import {Prefix} from '../utils/Prefix';
-import {toNodeReference, resolvePrefixedUri, resolveUriOrThrow} from '../utils/NodeReference';
+import {toNodeReference, resolveUriOrThrow} from '../utils/NodeReference';
 
 // Register test prefixes before tests run
 const FOAF_NS = 'http://xmlns.com/foaf/0.1/';
@@ -13,36 +13,6 @@ beforeAll(() => {
 afterAll(() => {
   Prefix.delete('foaf');
   Prefix.delete('xsd');
-});
-
-// ---------------------------------------------------------------------------
-// resolvePrefixedUri
-// ---------------------------------------------------------------------------
-
-describe('resolvePrefixedUri', () => {
-  it('resolves a registered prefixed name to full IRI', () => {
-    expect(resolvePrefixedUri('foaf:Person')).toBe(`${FOAF_NS}Person`);
-  });
-
-  it('resolves xsd prefix', () => {
-    expect(resolvePrefixedUri('xsd:string')).toBe(`${XSD_NS}string`);
-  });
-
-  it('passes through full IRIs unchanged', () => {
-    expect(resolvePrefixedUri('http://example.org/foo')).toBe('http://example.org/foo');
-  });
-
-  it('passes through strings without colons (plain IDs)', () => {
-    expect(resolvePrefixedUri('plain-id')).toBe('plain-id');
-  });
-
-  it('passes through unregistered prefixes unchanged', () => {
-    expect(resolvePrefixedUri('unknown:foo')).toBe('unknown:foo');
-  });
-
-  it('passes through URN-style strings unchanged', () => {
-    expect(resolvePrefixedUri('urn:uuid:12345')).toBe('urn:uuid:12345');
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -86,6 +56,17 @@ describe('resolveUriOrThrow', () => {
 
   it('throws on unregistered prefix', () => {
     expect(() => resolveUriOrThrow('unknown:foo')).toThrow('Unknown prefix');
+  });
+
+  it('passes through IRIs with a non-hierarchical scheme (urn:, mailto:, did:, data:)', () => {
+    expect(resolveUriOrThrow('urn:uuid:12345')).toBe('urn:uuid:12345');
+    expect(resolveUriOrThrow('mailto:a@example.org')).toBe('mailto:a@example.org');
+    expect(resolveUriOrThrow('did:web:example.org')).toBe('did:web:example.org');
+    expect(resolveUriOrThrow('data:,x')).toBe('data:,x');
+  });
+
+  it('throws on a plain id without a colon', () => {
+    expect(() => resolveUriOrThrow('plain-id')).toThrow('Unknown prefix "plain-id"');
   });
 
   it('throws on typo prefix', () => {

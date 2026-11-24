@@ -52,7 +52,7 @@ class SguSub extends SguThing {
 }
 
 const G = ShapesGraph.iriFor(PKG);
-const APP = 'https://acme.id.create.now/app/demo/graph/shapes';
+const APP = 'https://acme.id.example.org/app/demo/graph/shapes';
 
 /** The shape a select reads (the IR's root, or the DSL-JSON's `shape`). */
 const shapeOf = (query: any): string | undefined => {

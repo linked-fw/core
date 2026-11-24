@@ -1,7 +1,7 @@
 ---
 date: 2026-10-27
 summary: >
-  Step C of CN plan 181 (backlog batch): node callbacks run for a shape without decorated
+  Step C of the host app's backlog-batch plan: node callbacks run for a shape without decorated
   properties (backlog 061); `.some()` / `.every()` / `.none()` and property access on a plural
   relation to a data-only or `sh:class`-only shape no longer throw, and `isRegisteredPackage` /
   `getRegisteredPackageNames` are public (backlog 050); `registerInstalledOntologies` hands
@@ -14,8 +14,8 @@ summary: >
 
 ### Summary
 
-Four small core backlog items from CN plan 181, step C. Two bug fixes in shape registration and
-the query DSL, one additive public API (Create Now switches to it), one Windows path fix. Backlog
+Four small core backlog items from the host app's backlog-batch plan, step C. Two bug fixes in shape registration and
+the query DSL, one additive public API (the host app switches to it), one Windows path fix. Backlog
 051 needed no code: the four version-keyed caches it names were already folded into
 `RegistryCache` (`src/utils/registryCache.ts`, commit 84ddff8, the ShapeCatalog work).
 
@@ -43,9 +43,9 @@ the query DSL, one additive public API (Create Now switches to it), one Windows 
   module's absolute path with `/` separators (`slashedPath`, `C:/…` on Windows), a module id
   Vite's `ssrLoadModule` resolves; documented on the option. The built path already used
   `pathToFileURL`.
-- **Create Now** `src/utils/shapeUtils.ts`: `isRegisteredPackageName` and
+- **The host app**: its `isRegisteredPackageName` and
   `registeredPackageNamesForSlug` use the two new functions instead of
-  `globalThis._linked._packages` (CN report 192).
+  `globalThis._linked._packages`.
 
 ### Verification
 
@@ -61,18 +61,18 @@ tests fail without their fix: `tighten-only` "a property-less value shape regist
 override is compared once it is" (1 failed, 13 passed without the `Package.ts` change), and all 5
 of `data-only-relation-some.test.ts` without the `SelectQuery.ts` change.
 
-`npx linked build` of core: `✔ Build successful`. `npx linked build-all` in the CN worktree:
-`Successfully built: @_linked/core, @_linked/maps, @_linked/access, @semantu/execution-gateway,
+`npx linked build` of core: `✔ Build successful`. `npx linked build-all` in the host app's worktree:
+`Successfully built: @_linked/core, @_linked/maps, @_linked/access, the app's execution gateway,
 @_linked/documents`.
 
-CN `npm run test:regular`: quoted in CN report 192. It runs after this commit lands: in a worktree
-with only core checked out, CN's typecheck sees two copies of core (the worktree's, and the main
+The host app's `npm run test:regular`: quoted in its report. It runs after this commit lands: in a worktree
+with only core checked out, the host app's typecheck sees two copies of core (the worktree's, and the main
 checkout's through `@_linked/server` and `@_linked/fuseki`), and the gate fails with 77
 `typeof X is not assignable to typeof Shape` errors unrelated to the change.
 
 ### Deviations
 
-- **Order of verification.** Core landed before CN's regular set ran (see Verification); the set
+- **Order of verification.** Core landed before the host app's regular set ran (see Verification); the set
   ran against this landed commit.
 - **051 needed no change.** The caches were already one helper (`RegistryCache`), and
   `predicateTermCacheSize` no longer exists. The doc's open question (other registry-version

@@ -5,7 +5,7 @@ summary: >
   on a dataset without it is a select `LIMIT 1`); the built-in shapes `NamedGraph`,
   `OntologyGraph`, `ShapesGraph`, `DraftGraph` with the graph API and automatic registry records;
   portable graph names; registry terms; `SparqlDataset.graphQuery` as one SPARQL update per
-  query; typed refusals; `deleteInsertPlanToSparql` honours `plan.graph`. CN plan 071, sub-plan
+  query; typed refusals; `deleteInsertPlanToSparql` honours `plan.graph`. The host app's named-graphs plan, sub-plan
   004.
 packages: [core]
 ---
@@ -14,11 +14,11 @@ packages: [core]
 
 ## Why
 
-CN plan 071 puts each package's ontology data in its own named graph, recorded in a graph
+The host app's named-graphs plan puts each package's ontology data in its own named graph, recorded in a graph
 registry, and has every store and caller change whole graphs through one interface method. This
 step provides that method, the API that builds its queries, the vocabulary, and the SPARQL
 implementation; the later steps read graphs (`.from()`), sync ontologies into them, carry graph
-queries through the server and CN, and route data to graphs. Sub-plan
+queries through the server and the host app, and route data to graphs. Sub-plan
 [004](../plans/004-named-graphs.md) holds the plan-mode detail and the contracts.
 
 ## What
@@ -122,14 +122,14 @@ core never calls a missing method):
 | Repository | Implementer | Missing | Step |
 |---|---|---|---|
 | server | `RemoteDataset` (`src/shapes/quadstores/RemoteDataset.ts`) | `graphQuery` | V1 |
-| CN | `AppDataRouter` (`src/data/AppDataRouter.ts`) | `graphQuery` | C1 |
-| CN | `ExecutionGateway` (`packages/execution-gateway/src/ExecutionGateway.ts`) | `graphQuery` | C1 |
-| CN | `withAccess` (server-utils `QueryAccess.ts`, generic proxy) | the graph arm (types compile) | U1, C1 |
-| CN, react, shape-ui | test doubles typed `IDataset` (`cnMainStore.test.ts`, `appGatewayRoutes.test.ts`, `AppDataRouter.requireWrite.test.ts`, `ExecutionGateway.test.ts`, react `tests/fixtures.ts`, shape-ui `catalog.test.ts`) | the now-required methods | C1 (CN); core backlog 063 (react, shape-ui) |
+| host app | `AppDataRouter` | `graphQuery` | C1 |
+| host app | `ExecutionGateway` | `graphQuery` | C1 |
+| host app | `withAccess` (server-utils `QueryAccess.ts`, generic proxy) | the graph arm (types compile) | U1, C1 |
+| host app, react, shape-ui | test doubles typed `IDataset` (the host app's store, gateway-route, router and gateway tests, react `tests/fixtures.ts`, shape-ui `catalog.test.ts`) | the now-required methods | C1 (host app); core backlog 063 (react, shape-ui) |
 | webid.email | no `IDataset` implementer found in `webid.email/src` or `semantu-webid-email/src` | — | — |
 
-Subclasses of `SparqlDataset` inherit a working `graphQuery`: fuseki's `FusekiStore` (and CN's
-`AppDataFusekiStore` through it) and CN's `HostAgentForwarder` (which would forward the update to
+Subclasses of `SparqlDataset` inherit a working `graphQuery`: fuseki's `FusekiStore` (and the host app's
+`AppDataFusekiStore` through it) and its `HostAgentForwarder` (which would forward the update to
 the host agent; C1 decides whether that arm is allowed).
 
 ## Verification
@@ -177,7 +177,7 @@ Fixed: the ask fallback (a row or `null` is answered; test against a `SparqlData
 patch refused at the boundary and treated as record-only by the store, the "leaf module" comment,
 the sub-plan's `sources` wording, the changeset's dispatch-event line.
 
-**Decided and fixed** (coordinator, recorded in master §Contracts at CN `d10d95b69`):
+**Decided and fixed** (coordinator, recorded in master §Contracts):
 store-native names are refused by `SparqlDataset`'s protected `isReservedGraphName(iri)`, checked
 on every graph query before any SPARQL is built (default: `urn:x-arq:` → `graph-name-read-only`;
 tests for `urn:x-arq:DefaultGraph` and `urn:x-arq:UnionGraph`, unit and `[fuseki]`).

@@ -1,7 +1,7 @@
 ---
 date: 2026-10-29
 summary: >
-  Component index vocabulary for CN plan 282 step CI (K8): `core:Component`, `core:SetComponent`,
+  Component index vocabulary for the host app's master plan, step CI (K8): `core:Component`, `core:SetComponent`,
   `core:ComponentsGraph`, `core:definesComponent`, `core:exportName`, `core:startShape`,
   `core:queryShape`, `core:query` and `rdf:JSON`; `QueryBuilder.fromJSON` reads a `nullSubject`
   query back without an added limit. Minor + patch. The whole step: cli report 042.
@@ -34,7 +34,7 @@ Commits `136e858`, `860834b`.
 
 ### Verification
 
-In `/Users/rene/web/wt/hub-imports--ci/packages-local/_linked-core`: `jest
+In the step worktree's `packages-local/_linked-core` (`hub-imports--ci`): `jest
 src/tests/core-ontology.test.ts` → `Tests: 17 passed, 17 total`; `jest serialization
 query-builder ask-wire count-wire` → `Tests: 25 skipped, 359 passed, 384 total`; `npm test` →
 `Test Suites: 16 skipped, 137 passed, 137 of 153 total` / `Tests: 534 skipped, 2558 passed, 3092
@@ -47,4 +47,4 @@ sync files step SY changes.
 
 ### Follow-ups
 
-None in core. CN stores the index (CN plan 282, step CX).
+None in core. The host app stores the index (its master plan, step CX).

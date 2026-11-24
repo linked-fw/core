@@ -2,6 +2,7 @@
  * graphContent: the text and hash of each package graph and of the app graph equal what the
  * 'package'-mode syncs write and record, and it writes nothing.
  */
+import {registerTestOntology} from '../test-helpers/register-test-ontology';
 import {describe, expect, test} from '@jest/globals';
 import {linkedPackage} from '../utils/Package';
 import {createNameSpace} from '../utils/NameSpace';
@@ -19,16 +20,10 @@ const X = 'http://example.org/gc#';
 const SUB = 'http://www.w3.org/2000/01/rdf-schema#subClassOf';
 
 // Two data files with the same blank node label: joined as Turtle they would be one node.
-linkedPackage('gc-onto').linkedOntology(
-  {},
-  createNameSpace(NS),
-  'gc-onto',
-  async () => [
+registerTestOntology('gc-onto', {name: 'gc-onto', namespace: NS, load: async () => [
     `@prefix ex: <${NS}> .\nex:A <${SUB}> ex:B .\nex:A ex:note _:n .\n_:n ex:text "one" .`,
     `@prefix ex: <${NS}> .\nex:C <${SUB}> ex:B .\nex:C ex:note _:n .\n_:n ex:text "two" .`,
-  ],
-  ['../data/a.ttl', '../data/b.ttl'],
-);
+  ], files: ['../data/a.ttl', '../data/b.ttl']});
 
 const {linkedShape} = linkedPackage('gc-shapes');
 

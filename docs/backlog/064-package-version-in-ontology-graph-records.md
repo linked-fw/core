@@ -9,7 +9,7 @@ packages: [core]
 
 # 064 — The package version in ontology graph records
 
-Source: CN plan 071 §Ontology sync (`update(...).set({version}).replaceContent`), core report 050.
+Source: ontology sync (`update(...).set({version}).replaceContent`), core report 050.
 
 ## Problem
 

@@ -3,8 +3,8 @@
  * a legal SPARQL `PN_LOCAL`.
  *
  * The failure mode is silent at generation time and loud only at the store: `#`
- * is not in `PN_LOCAL`, so `create-now:access#PolicyRegistry` is tokenized as
- * `create-now:access` followed by a COMMENT, which eats the triple terminator
+ * is not in `PN_LOCAL`, so `my-app:access#PolicyRegistry` is tokenized as
+ * `my-app:access` followed by a COMMENT, which eats the triple terminator
  * and makes the store reject the query at the FOLLOWING line. These two queries
  * shipped broken for months because `@_linked/fuseki` 2.x turned the rejection
  * into an empty result set.
@@ -24,10 +24,10 @@ import {describeFuseki} from '../test-helpers/fuseki-live';
 import '../ontologies/rdf';
 import '../ontologies/xsd';
 
-// The backend's registry, reproduced: `create-now:` is registered and is a
+// The backend's registry, reproduced: `my-app:` is registered and is a
 // proper STRING PREFIX of the access namespace, whose own prefix is not.
-const DATA_ROOT = 'https://data.create.now/';
-const ACCESS = 'https://data.create.now/access#';
+const DATA_ROOT = 'https://data.example.org/';
+const ACCESS = 'https://data.example.org/access#';
 const ns = createNameSpace(ACCESS);
 
 @linkedShape
@@ -43,8 +43,8 @@ class RegistryEntity extends Shape {
   @literalProperty({path: ns('version'), maxCount: 1}) get version(): string { return '0'; }
 }
 
-beforeAll(() => Prefix.add('create-now', DATA_ROOT));
-afterAll(() => Prefix.delete('create-now'));
+beforeAll(() => Prefix.add('my-app', DATA_ROOT));
+afterAll(() => Prefix.delete('my-app'));
 
 // ---------------------------------------------------------------------------
 // The rule itself
@@ -57,7 +57,7 @@ describe('PN_LOCAL validity', () => {
   });
 
   test('a legal local part still compacts', () => {
-    expect(formatUri(`${DATA_ROOT}Project`)).toBe('create-now:Project');
+    expect(formatUri(`${DATA_ROOT}Project`)).toBe('my-app:Project');
     expect(formatUri('http://www.w3.org/1999/02/22-rdf-syntax-ns#type')).toBe('rdf:type');
   });
 
@@ -74,7 +74,7 @@ describe('PN_LOCAL validity', () => {
 
   test('collectPrefixes does not declare a prefix the terms will not use', () => {
     expect(collectPrefixes([`${ACCESS}PolicyRegistry`])).toEqual({});
-    expect(collectPrefixes([`${DATA_ROOT}Project`])).toEqual({'create-now': DATA_ROOT});
+    expect(collectPrefixes([`${DATA_ROOT}Project`])).toEqual({'my-app': DATA_ROOT});
   });
 });
 
@@ -98,7 +98,7 @@ const grantsForActor = () =>
     .exec();
 
 describe('policy repository queries (plan-041)', () => {
-  test('readVersion emits full IRIs, not `create-now:access#...`', async () => {
+  test('readVersion emits full IRIs, not `my-app:access#...`', async () => {
     const sparql = await golden(readVersion);
     expect(sparql).toBe(
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -112,7 +112,7 @@ WHERE {
 }`);
   });
 
-  test('grantsForActor emits full IRIs, not `create-now:access#...`', async () => {
+  test('grantsForActor emits full IRIs, not `my-app:access#...`', async () => {
     const sparql = await golden(grantsForActor);
     expect(sparql).toBe(
 `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>

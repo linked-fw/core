@@ -5,7 +5,7 @@ summary: >
   loading the SHACL metamodel does not register `List`. Only the core entry, `syncShapes`,
   `PathNode` and `serializePathToNodeData` load it, and core's `sideEffects` lets a bundler drop
   it even then. Any query or create that touches `in` throws "Shape class not found" wherever
-  `List` was not loaded. Create Now's production client bundle is one such place today.
+  `List` was not loaded. The host app's production client bundle is one such place today.
 packages: [core]
 ---
 
@@ -34,8 +34,8 @@ Was backlog 045 (done; moved to reports on 2026-10-30).
 > against the old `Package.ts`.
 >
 > The open questions below are answered: no stopgap release is needed; the cli check found
-> no other by-name references in core. Create Now's browser confirmation is still open, and
-> moot once CN takes this release.
+> no other by-name references in core. The host app's browser confirmation is still open, and
+> moot once the host app takes this release.
 
 ## The declaration
 
@@ -104,7 +104,7 @@ the binding.
 
 ## Why it matters
 
-- **Precedent.** Create Now's production server showed "No organizations found". schema's
+- **Precedent.** The host app's production server showed "No organizations found". schema's
   `Thing.image → ImageObject` was a by-name reference, nothing in the server bundle loaded
   `ImageObject`, and the query threw `Shape class not found`. A blanket `catch` turned that into
   an empty list. That was fixed per package in schema#39, sioc#29 and auth#51. This item is the
@@ -112,22 +112,22 @@ the binding.
 - **Tooling.** The cli build step "Checking shape references", which is being written now, flags
   every by-name `shape: [pkg, name]` whose module does not register the named shape. This
   declaration will be flagged.
-- **Create Now is affected today**, in the production client. See below.
+- **The host app is affected today**, in the production client. See below.
 
-## Create Now impact (measured 2026-09-29)
+## The host app impact (measured 2026-09-29)
 
-- **Who reads `in`.** CN's `src/utils/shapeCatalogQuery.ts` `fetchShapeCatalog()` selects `ps.in`
+- **Who reads `in`.** The host app's shape catalog query `fetchShapeCatalog()` selects `ps.in`
   inside `NodeShape.select(ns => [ns.properties.select(ps => [...])])`. It deep-imports
   `NodeShape` from `@_linked/core/shapes/SHACL`. The client calls it:
-  `src/data/CnDataManagerHost.tsx` → `loadShapeCatalog` → `fetchShapeCatalog()`, which has no
+  the app's data-manager host → `loadShapeCatalog` → `fetchShapeCatalog()`, which has no
   store and is forwarded to the backend.
-- **Who loads the entry.** In CN's own source, the only runtime imports of the `@_linked/core`
+- **Who loads the entry.** In the host app's own source, the only runtime imports of the `@_linked/core`
   entry are `validate` (in `instanceReadiness.ts`, a document-studio file) and `syncShape` (in
   `ProjectProvider.ts`, on the server). Everything else, 63 files, deep-imports `shapes/SHACL`.
 - **Production server: covered.** The release backend (`lib/`) keeps `@_linked/*` external, and
   `lib/backend/shapes/ProjectProvider.js:12` has `import { syncShape } from "@_linked/core"`.
   Node evaluates the whole entry, so `List` is registered.
-- **Production client: not covered.** CN's client bundle is `public/bundles/assets`, 86 chunks,
+- **Production client: not covered.** The host app's client bundle is `public/bundles/assets`, 86 chunks,
   built 16:03, before that day's dependency bump.
   - The declaration is present: `linked-c7ca9e3b.js` contains
     `ue({path:v.in,shape:["@_linked/core","List"],maxCount:1,contains:!0},"in",…)`.
@@ -175,8 +175,8 @@ Alternatives considered:
   split lands?
 - Are there other by-name `shape: [pkg, name]` references in core? The scan found only this one.
   The cli check will confirm.
-- CN: confirm the symptom in a browser against a `NODE_ENV=production` build (the shape catalog
-  or data table fails to load). Also decide whether CN should register `List` in
+- The host app: confirm the symptom in a browser against a `NODE_ENV=production` build (the shape catalog
+  or data table fails to load). Also decide whether the host app should register `List` in
   `src/shapes/register.ts` until core ships the fix, like the stopgap used for `ImageObject` in
   b6271647. Copying that stopgap exactly will not work. b6271647 used a bare import, and the
   control above shows core's `List.js` is dropped from a bare import. The stopgap must use the

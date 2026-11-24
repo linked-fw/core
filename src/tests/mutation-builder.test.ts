@@ -331,7 +331,7 @@ describe('Shape.upsert — builder and guards', () => {
 
   test('expression-valued fields are rejected at runtime too, naming the property', () => {
     // The type signature covers typed callers; this guard covers the ones that reach the
-    // builder untyped (CN calls shapes as `any`) and values arriving over DSL-JSON.
+    // builder untyped (an app calling shapes as `any`) and values arriving over DSL-JSON.
     // An expression reads the node's current value; when upsert creates the node that ref
     // is unbound and SPARQL drops the triple, storing nothing while reporting success.
     const untyped = Person as any;

@@ -3,6 +3,7 @@
  * graphs land in both, unchanged on a second run; once routing sends nothing of it to the
  * default dataset any more, its graphs are dropped there and stay in the other one.
  */
+import {registerTestOntology} from '../test-helpers/register-test-ontology';
 import {afterAll, beforeAll, expect, test} from '@jest/globals';
 import {createDataset, DATASET_NAME, deleteDataset, FUSEKI_BASE_URL} from '../test-helpers/fuseki-test-store';
 import {describeFuseki} from '../test-helpers/fuseki-live';
@@ -22,9 +23,9 @@ const X = 'http://example.org/srf#';
 const PKG = 'srf-shapes';
 const ONTO = 'srf-onto';
 
-linkedPackage(ONTO).linkedOntology({}, createNameSpace(NS), ONTO, async () => [
+registerTestOntology(ONTO, {name: ONTO, namespace: NS, load: async () => [
   `<${NS}Single> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <${NS}Work> .`,
-], '../data/srf-onto.ttl');
+], files: '../data/srf-onto.ttl'});
 
 const {linkedShape} = linkedPackage(PKG);
 @linkedShape

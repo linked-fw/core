@@ -17,7 +17,7 @@ packages: [core]
 `Shape.select(...).limit(n)` lowered to a plain `LIMIT n` on the outer query. A subject with a
 multi-valued property, or values reached through a multi-valued traversal, spans one solution row
 per value, so a page held fewer than `n` instances and an instance could be split across two
-pages (CN report 366, `/api/instances`).
+pages (the host app's report, `/api/instances`).
 
 Now `limit(n)`/`offset(m)` page over the root subjects. When a subject can span several rows, the
 select is lowered as
@@ -78,7 +78,7 @@ Semantics (README "Sorting, limiting, one", `documentation/dsl-json.md`,
   `[fuseki] live tests: 449 total — 447 passed, 0 failed, 2 skipped`; `npm run typecheck`
   (part of `npm test`): clean.
 - Two independent review rounds (below).
-- CN: see CN's report for this change (typecheck gate, `data,apps` smoke, the `/api/instances`
+- The host app: see the host app's report for this change (typecheck gate, `data,apps` smoke, the `/api/instances`
   spec now asserting subject paging).
 
 ### Deviations

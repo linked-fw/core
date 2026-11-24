@@ -1,4 +1,5 @@
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
+import {resolveNodeId} from '../utils/NodeReference.js';
 import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import {resolveShape} from './resolveShape.js';
@@ -25,6 +26,9 @@ type DeleteMode = 'ids' | 'all' | 'where' | 'shapeless';
 
 /** A node to delete: a concrete id, a `{id}` ref, or a live query-context reference. */
 export type DeleteId = NodeId | PendingQueryContext;
+
+/** A prefixed-name id is expanded against the app's prefix map (an unknown prefix throws). */
+const expandId = (id: DeleteId): DeleteId => (typeof id === 'string' ? resolveNodeId(id) : id);
 
 /**
  * Internal state bag for DeleteBuilder.
@@ -109,7 +113,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
       // Normalize any context reference (unset PendingQueryContext or a resolved
       // context shape) to a {@ctx} marker so set/unset behave identically.
       const idsArray = (Array.isArray(ids) ? ids : [ids]).map(
-        (id) => asContextRef(id) ?? id,
+        (id) => asContextRef(id) ?? expandId(id),
       );
       return new DeleteBuilder<S>({shape: resolved, ids: idsArray, mode: 'ids'});
     }
@@ -127,7 +131,7 @@ export class DeleteBuilder<S extends Shape = Shape, R = DeleteResponse>
     if (list.length === 0) {
       throw new Error('Shape.delete(ids) needs at least one id.');
     }
-    const idsArray = list.map((id) => asContextRef(id) ?? id);
+    const idsArray = list.map((id) => asContextRef(id) ?? expandId(id));
     return new DeleteBuilder<Shape>({ids: idsArray, mode: 'shapeless'});
   }
 

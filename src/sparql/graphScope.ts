@@ -451,7 +451,7 @@ class SubjectGraphScoper {
   }
 
   /*
-   * Why the second block (decision 9 of CN plan 071, measured on Jena 6.2):
+   * Why the second block (measured on Jena 6.2):
    *
    * Two GRAPH blocks on the same variable mean exactly what one block with both patterns means
    * (same graph, same subject, both required). They exist for speed. The inferred type check is

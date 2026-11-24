@@ -1,5 +1,5 @@
 ---
-summary: Framework code that discovers and imports modules of installed or workspace packages loads them by specifier through the host's module loader (importPackageModule), never a bare import(), so a package Vite bundles in dev is not loaded a second time by Node. Why the loader exists, who installs it, how stores and ontology register modules use it, and what happens without one.
+summary: Framework code that discovers and imports modules of installed or workspace packages loads them by specifier through the host's module loader (importPackageModule), never a bare import(), so a package Vite bundles in dev is not loaded a second time by Node. Why the loader exists, who installs it, how stores and ontology indexes use it, and what happens without one.
 ---
 
 # Loading package modules
@@ -46,9 +46,9 @@ loads differently with one.
 
 - **Stores** (`loadStores`): each `store` specifier of a datasets file goes through
   `importPackageModule` unchanged.
-- **Ontology register modules** (`registerInstalledOntologies`): with a loader installed, each
-  register module of a package that the app resolves to the given directory is imported through
-  it by specifier, `<name>/ontologies/<prefix>.register`, so it is the module the app's own import
+- **Ontology indexes** (`registerInstalledOntologies`): with a loader installed, the ontology
+  index of a package that the app resolves to the given directory is imported through it by
+  specifier, `<name>/ontologies/index`, so it is the module the app's own import
   of it gets (Vite's `lib` or a workspace's `src`, never a file path next to it). A directory the
   app does not resolve the package to (a nested copy), and every call without a loader, imports
   the built files by path. See [Ontologies](./ontologies.md#installed-packages-register-explicitly).

@@ -71,7 +71,7 @@ class SgEmployee extends SgPerson {
 
 const G = ShapesGraph.iriFor(PKG);
 const CORE_G = ShapesGraph.iriFor('@_linked/core');
-const APP = 'https://acme.id.create.now/app/sg-live/graph/shapes';
+const APP = 'https://acme.id.example.org/app/sg-live/graph/shapes';
 const REG = graphs.registry;
 const CORE = 'https://linked.cm/ont/core/';
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';

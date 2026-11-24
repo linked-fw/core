@@ -29,10 +29,10 @@ describe('ontology terms', () => {
     expect(coreOntology.PathNode.id).toBe(`${LC}PathNode`);
   });
 
-  test('core prefix compacts to core:, deprecated linked_core: still resolves', () => {
+  test('with core: in the prefix map, core terms compact to core:', () => {
     expect(Prefix.toPrefixed(`${LC}displayRank`)).toBe('core:displayRank');
     expect(Prefix.toFull('core:displayRank')).toBe(`${LC}displayRank`);
-    // Deprecated alias resolves to the NEW IRI; old full IRIs are not matched.
-    expect(Prefix.toFull('linked_core:displayRank')).toBe(`${LC}displayRank`);
+    // Core registers no prefix itself: the deprecated linked_core alias is gone.
+    expect(() => Prefix.toFull('linked_core:displayRank')).toThrow('Unknown prefix "linked_core"');
   });
 });

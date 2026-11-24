@@ -13,7 +13,7 @@ PR: [linked-fw/core#PR](https://github.com/linked-fw/core/pulls) → `dev`.
 
 ## The problem
 
-Create Now carries this helper on ~12 save paths, to choose between `create` and `update`:
+The host app carries this helper on ~12 save paths, to choose between `create` and `update`:
 
 ```ts
 async function exists(shape: any, id: string): Promise<boolean> {
@@ -35,7 +35,7 @@ Three things are wrong with it, and only the third is about SPARQL:
 
 ### On the reported malformed query
 
-The brief attributed the CN failure to an empty projection — `SELECT  WHERE {…}`, rejected by
+The brief attributed the host app's failure to an empty projection — `SELECT  WHERE {…}`, rejected by
 Fuseki at column 3. **That does not reproduce on 2.17.0.** `selectToAlgebra` has unconditionally
 projected the root alias since `4aba4da` (Mar 2026):
 
@@ -44,9 +44,9 @@ projected the root alias since `4aba4da` (Mar 2026):
 projection.push({kind: 'variable', name: rootAlias});
 ```
 
-A probe of the exact CN call shape against this tree emits valid SPARQL, `Person.select()` has a
-golden test asserting `SELECT DISTINCT ?a0`, and CN's installed `lib/esm` (2.17.0) contains the
-same line. So on current core the workaround is *functionally* fine — which means whatever CN is
+A probe of the exact host app call shape against this tree emits valid SPARQL, `Person.select()` has a
+golden test asserting `SELECT DISTINCT ?a0`, and the host app's installed `lib/esm` (2.17.0) contains the
+same line. So on current core the workaround is *functionally* fine — which means whatever the host app is
 hitting (an older core, a shape without a resolvable scan IRI, or an unrelated failure) was
 **hidden by the `.catch`**. That sharpens the case for this work rather than weakening it: the
 defect is the swallow, and the swallow existed because the API offered nothing better.
@@ -215,7 +215,7 @@ because it needs none, lowering to an ordinary SELECT.
 
 ## Downstream
 
-Create Now's `src/features/document-studio/services/LinkedDocumentRepository.ts` should drop its
+The host app's linked document repository should drop its
 local `exists()` helper for `Shape.exists({id})` once this is released. **Not changed here** — that
 file is owned elsewhere. The important part of the migration is deleting the `.catch(() => null)`,
 not the call-shape change.

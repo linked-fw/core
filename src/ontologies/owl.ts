@@ -4,7 +4,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import type {NodeReferenceValue} from '../utils/NodeReference.js';
-import {Prefix} from '../utils/Prefix.js';
 
 //Important note: the actual ontology node is WITHOUT HASH, because in the ontology itself, that is how the node is defined
 //(other than RDF and RDFS who DO define their URL INCLUDING HASH as ontologies)
@@ -12,7 +11,6 @@ import {Prefix} from '../utils/Prefix.js';
 let base = 'http://www.w3.org/2002/07/owl';
 export const _ontologyResource: NodeReferenceValue = {id: base};
 base += '#';
-Prefix.add('owl', base);
 
 const ObjectProperty = {id: base + 'ObjectProperty'};
 const DataProperty = {id: base + 'DataProperty'};

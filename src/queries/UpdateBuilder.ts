@@ -1,4 +1,5 @@
 import {Shape, type ShapeConstructor} from '../shapes/Shape.js';
+import {resolveNodeId} from '../utils/NodeReference.js';
 import {captureCatalog, getActiveShapeCatalog, withShapeCatalog} from '../utils/ShapeClass.js';
 import type {ShapeCatalog} from '../utils/ShapeCatalog.js';
 import {resolveShape} from './resolveShape.js';
@@ -168,12 +169,15 @@ export class UpdateBuilder<S extends Shape = Shape, U extends UpdatePartial<S> =
   // Fluent API
   // ---------------------------------------------------------------------------
 
-  /** Target a specific entity by ID. */
+  /**
+   * Target a specific entity by ID. A prefixed name is expanded against the app's prefix map (an
+   * unknown prefix throws).
+   */
   for(id: string | NodeReferenceValue | PendingQueryContext): UpdateBuilder<S, U, AddId<U>> {
     if (isLinkedInstance(id, PendingQueryContext)) {
       return this.clone({targetContextName: id.contextName, targetId: undefined, mode: 'for'}) as unknown as UpdateBuilder<S, U, AddId<U>>;
     }
-    const resolvedId = typeof id === 'string' ? id : id.id;
+    const resolvedId = typeof id === 'string' ? resolveNodeId(id) : id.id;
     return this.clone({targetId: resolvedId, targetContextName: undefined, mode: 'for'}) as unknown as UpdateBuilder<S, U, AddId<U>>;
   }
 

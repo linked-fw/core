@@ -54,7 +54,7 @@ Colliding names today: `equals`, `as`, `if`, `select`, `selectAll`, `where`, `id
 `equals` is not hypothetical — **the SHACL meta-shape itself uses it.** `Package.ts`
 registers the `sh:equals` constraint under the label `equals` (while
 `PropertyShapeData` calls the field `equalsConstraint`), so
-`PropertyShape.select(ps => [ps.equals])` cannot be written. Create Now's shape catalog
+`PropertyShape.select(ps => [ps.equals])` cannot be written. The host app's shape catalog
 hit this the first time it was run against a real store, and had to drop the constraint
 from its projection.
 

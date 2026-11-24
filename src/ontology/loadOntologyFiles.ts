@@ -5,17 +5,20 @@
  */
 
 /**
- * The `loadData` a package's ontology module passes to `linkedOntology`: reads the package's
- * Turtle data files relative to the module that names them.
+ * Reads a package's ontology data: the Turtle files `registerOntologies` names in an ontology's
+ * `data`, relative to the module that registers them.
  *
  * ```ts
- * // src/ontologies/schema.ts
- * export const loadData = () =>
- *   loadOntologyFiles(import.meta.url, ['../data/schema.ttl', '../data/schema-added.ttl']);
+ * // src/ontologies/index.ts
+ * registerOntologies(
+ *   [{name: 'schema', namespace: 'https://schema.org/', terms: schema, data: ['../data/schema.ttl']}],
+ *   import.meta.url,
+ * );
+ * // core then loads them with loadOntologyFiles(import.meta.url, ['../data/schema.ttl'])
  * ```
  *
- * Every package's ontology module imports this one, and those modules are reachable from a
- * client bundle. A client build never gets this module: the `browser` and `react-native` export
+ * Every package's ontology index reaches this module through core, and that index is reachable
+ * from a client bundle. A client build never gets this module: the `browser` and `react-native` export
  * conditions of `@_linked/core/ontology/loadOntologyFiles` resolve to `loadOntologyFiles.browser`,
  * a stub that rejects and holds no `import()`. Import it by that package specifier, never by a
  * relative path (which ignores the conditions). On a server, `node:fs/promises` is imported

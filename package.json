@@ -107,5 +107,12 @@
         "lib/esm/*"
       ]
     }
+  },
+  "linkedOntologies": {
+    "core": {
+      "namespace": "https://linked.cm/ont/core/",
+      "module": "linked-core",
+      "generated": false
+    }
   }
 }

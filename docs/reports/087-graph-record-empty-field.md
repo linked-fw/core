@@ -3,7 +3,7 @@ date: 2026-10-29
 summary: >
   A graph-registry record field given an empty list is left out of the SPARQL that
   `graphQueryToSparql` generates (it wrote `<p> ;`, a parse error); an update still deletes the
-  field's old values. Patch. Closes backlog 085. Found by CN plan 282 (CN report 289, third
+  field's old values. Patch. Closes backlog 085. Found by the host app's master plan (its report, third
   addendum); the whole plan: report 088.
 ---
 
@@ -16,7 +16,7 @@ summary: >
 `graphQueryToSparql` serialised a record field whose value is an empty list as `<p> ;` (an
 `a, b` list joined from nothing). Fuseki answers 400, so the graph's create or update failed as a
 whole. The ontology sync hit it for a registration without data files (`sources: []`, backlog
-085), and CN's hub sync hit it for an app's single-owner graph (CN report 289). An empty field now
+085), and the host app's hub sync hit it for an app's single-owner graph. An empty field now
 writes no triple; on `graph_replace`/`graph_patch` its old values are still deleted, so `set({x: []})`
 clears the field, and when no field is left to insert the INSERT is omitted.
 
@@ -46,5 +46,5 @@ None.
 ## Details
 
 The fix sits in the serializer rather than in the ontology sync, so every record class and every
-caller (the syncs, CN's `datasetGraphTarget.write`) gets it. CN still leaves empty fields out on its
+caller (the syncs, the host app's `datasetGraphTarget.write`) gets it. The host app still leaves empty fields out on its
 side; that is now redundant but harmless.

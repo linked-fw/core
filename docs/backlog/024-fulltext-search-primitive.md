@@ -19,9 +19,9 @@ The Linked Query DSL today exposes per-property predicates for text matching, al
 
 **Gap**: there is no index-backed FTS primitive. On a Fuseki dataset with the `text:` Apache Jena Lucene extension enabled, queries like `text:query "alice*"` execute in milliseconds against an inverted index. The DSL has no way to express this — callers either use the slow `.contains() / .startsWith()` fallbacks or drop down to raw SPARQL strings.
 
-### Concrete trigger (CN context)
+### Concrete trigger (a consumer app)
 
-Create Now's `InstanceProvider.searchInstances` (in `packages/create-now-js/src/shapes/InstanceProvider.ts`, originally authored by Carlen Young in February 2026 as `ProjectProvider.searchInstances`, then extracted in iter-4) uses raw SPARQL:
+A consumer app's `InstanceProvider.searchInstances` (originally written as `ProjectProvider.searchInstances`, later extracted) uses raw SPARQL:
 
 ```sparql
 PREFIX text: <http://jena.apache.org/text#>
@@ -34,7 +34,7 @@ SELECT DISTINCT ?subject ?label ?image WHERE {
 }
 ```
 
-This powers `CustomMultiSelect` (the multi-select picker for object-property form fields in CN's CMS-mode UI). After CN promoted "raw SPARQL is a smell" to a Phase-1 architectural rule (arch-10), `searchInstances` is one of the sites that must convert — but it can't until the DSL has an index-backed FTS primitive.
+This powers `CustomMultiSelect` (the multi-select picker for object-property form fields in the app's CMS-mode UI). After the app made "raw SPARQL is a smell" an architectural rule, `searchInstances` is one of the sites that must convert — but it can't until the DSL has an index-backed FTS primitive.
 
 ### What exists today in `@_linked/core`
 
@@ -250,13 +250,13 @@ Extend `packages/core/src/tests/sparql-fuseki.test.ts` infrastructure with a Luc
 The integration test infra needs:
 - A Fuseki test container configured with `text:` extension + a Lucene index covering the test dataset's literals.
 - Fixture data that exercises tokenization (multi-word names), case variants, and special characters.
-- `cn-main-test`-style isolation: per-test-run prefixed slugs, drop the test dataset at suite end.
+- Test-dataset isolation: per-test-run prefixed slugs, drop the test dataset at suite end.
 
 ## Status / sequencing
 
-**Currently deferred from CN Phase 1** — the trigger (CN's `InstanceProvider.searchInstances`) is Carlen Young's February 2026 code, predating CN's Phase 1.7 raw-SPARQL cleanup recency cutoff (~2026-03-22). It will be converted when CN's Phase 2 or 3 reviews the CMS feature surface that depends on `searchInstances`.
+**Currently deferred in the consumer app** — the trigger (its `InstanceProvider.searchInstances`) is older code, predating the app's raw-SPARQL cleanup cutoff (~2026-03-22). It will be converted when the app reviews the CMS feature surface that depends on `searchInstances`.
 
-This `@_linked/core` ideation can land independently — the primitive is useful beyond CN's specific trigger (any Linked Query consumer with Lucene-enabled Fuseki can use it immediately).
+This `@_linked/core` ideation can land independently — the primitive is useful beyond this specific trigger (any Linked Query consumer with Lucene-enabled Fuseki can use it immediately).
 
 **Suggested implementation order:**
 
@@ -269,12 +269,12 @@ This `@_linked/core` ideation can land independently — the primitive is useful
 7. Document in `@_linked/core` README.
 
 **Related ideation:**
-- Upsert (`Shape.upsert`, plan `002-shape-upsert.md`) — orthogonal but referenced from CN's Phase 1.7 ideation (we hit a similar upsert gap with `UserProjectContextProvider.setActiveBranch`).
+- Upsert (`Shape.upsert`, plan `002-shape-upsert.md`) — orthogonal, but the same consumer app hit a similar upsert gap (`UserProjectContextProvider.setActiveBranch`).
 - `006-dsl-aggregates-sum-avg-min-max.md` (and the grouping of report 096) — related but distinct (this idea is about WHERE-clause text predicates; those are about SELECT aggregations).
 - `020-distinct.md` — also a WHERE/SELECT modifier; not directly related but similar surface-area question.
 
 ## Notes / open hands
 
-- DSL aesthetics matter more than my analysis says. If `.search()` ever feels wrong in real CN code, revisit.
+- DSL aesthetics matter more than my analysis says. If `.search()` ever feels wrong in real app code, revisit.
 - The shape-wide form (`p.search('al')`) is where most of the implementation complexity lives — it has to enumerate the shape's literal properties at IR-build time. Property-scoped (`p.name.search('al')`) is straightforward.
 - Future modes (fuzzy, phrase-with-tokens, boost/ranking) all extend `options` rather than the method surface — that's the whole point of D3's options-bag choice.
