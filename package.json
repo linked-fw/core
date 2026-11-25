@@ -91,7 +91,7 @@
     "@jest/globals": "^30.0.0",
     "@types/jest": "^30.0.0",
     "@types/n3": "^1.26.4",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.0.0",
     "jest": "^30.0.0",
     "ts-jest": "^29.1.2",
     "typescript": "^5.7.3"
